@@ -1,0 +1,177 @@
+export module Saffron.App;
+
+import std;
+import Saffron.Core;
+import Saffron.Window;
+import Saffron.Rendering;
+import Saffron.Ui;
+
+export namespace se
+{
+    // A Layer is a set of lifecycle callbacks — the runtime "interface" expressed
+    // as a struct of function values (a Go interface's itable), not a virtual base.
+    // Any callback may be left null.
+    struct Layer
+    {
+        std::string name;
+        std::function<void()> onAttach;
+        std::function<void(TimeSpan)> onUpdate;
+        std::function<void()> onUi;
+        std::function<void()> onDetach;
+    };
+
+    struct App
+    {
+        Window window;
+        Renderer renderer;
+        Ui ui;
+        std::vector<Layer> layers;
+        bool running = false;
+    };
+
+    // Client-provided configuration. onCreate runs once the window + renderer
+    // exist (attach layers, wire signals there); onExit runs during teardown.
+    struct AppConfig
+    {
+        WindowConfig window;
+        std::function<void(App&)> onCreate;
+        std::function<void(App&)> onExit;
+    };
+
+    void attachLayer(App& app, Layer layer)
+    {
+        app.layers.push_back(std::move(layer));
+    }
+
+    namespace detail
+    {
+        u64 frameLimitFromEnv()
+        {
+            const char* raw = std::getenv("SAFFRON_EXIT_AFTER_FRAMES");
+            if (raw == nullptr)
+            {
+                return 0;
+            }
+            std::string_view text{ raw };
+            u64 parsed = 0;
+            std::from_chars_result result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+            if (result.ec != std::errc{} || result.ptr != text.data() + text.size())
+            {
+                logError(std::format("invalid SAFFRON_EXIT_AFTER_FRAMES='{}', ignoring", text));
+                return 0;
+            }
+            return parsed;
+        }
+    }
+
+    // Owns the main loop. Returns a process exit code.
+    int run(AppConfig config)
+    {
+        std::expected<Window, std::string> windowResult = newWindow(config.window);
+        if (!windowResult)
+        {
+            logError(std::format("failed to create window: {}", windowResult.error()));
+            return 1;
+        }
+
+        App app;
+        app.window = std::move(*windowResult);
+        app.window.onClose.subscribe([&app](){ app.running = false; return false; });
+
+        std::expected<Renderer, std::string> rendererResult = newRenderer(app.window);
+        if (!rendererResult)
+        {
+            logError(std::format("failed to create renderer: {}", rendererResult.error()));
+            destroyWindow(app.window);
+            return 1;
+        }
+        app.renderer = std::move(*rendererResult);
+
+        std::expected<Ui, std::string> uiResult = newUi(app.renderer, app.window);
+        if (!uiResult)
+        {
+            logError(std::format("failed to create ui: {}", uiResult.error()));
+            destroyRenderer(app.renderer);
+            destroyWindow(app.window);
+            return 1;
+        }
+        app.ui = std::move(*uiResult);
+
+        if (config.onCreate)
+        {
+            config.onCreate(app);
+        }
+        for (Layer& layer : app.layers)
+        {
+            if (layer.onAttach)
+            {
+                layer.onAttach();
+            }
+        }
+
+        const u64 frameLimit = detail::frameLimitFromEnv();
+        u64 frameCount = 0;
+        app.running = true;
+        std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+
+        while (app.running)
+        {
+            pollEvents(app.window);
+            if (app.window.shouldClose)
+            {
+                app.running = false;
+            }
+
+            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+            TimeSpan delta{ std::chrono::duration<f32>(now - last).count() };
+            last = now;
+
+            for (Layer& layer : app.layers)
+            {
+                if (layer.onUpdate)
+                {
+                    layer.onUpdate(delta);
+                }
+            }
+
+            const bool minimized = app.window.width == 0 || app.window.height == 0;
+            if (!minimized && beginFrame(app.renderer))
+            {
+                uiBeginFrame(app.ui);
+                for (Layer& layer : app.layers)
+                {
+                    if (layer.onUi)
+                    {
+                        layer.onUi();
+                    }
+                }
+                uiEndFrame(app.ui);
+                uiRecordDrawData(app.renderer);
+                endFrame(app.renderer);
+            }
+
+            frameCount = frameCount + 1;
+            if (frameLimit != 0 && frameCount >= frameLimit)
+            {
+                logInfo(std::format("frame limit reached ({}), exiting", frameLimit));
+                app.running = false;
+            }
+        }
+
+        for (Layer& layer : app.layers)
+        {
+            if (layer.onDetach)
+            {
+                layer.onDetach();
+            }
+        }
+        if (config.onExit)
+        {
+            config.onExit(app);
+        }
+        destroyUi(app.renderer, app.ui);
+        destroyRenderer(app.renderer);
+        destroyWindow(app.window);
+        return 0;
+    }
+}
