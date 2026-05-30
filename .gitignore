@@ -1,0 +1,19 @@
+# Build output
+/build/
+/out/
+/install/
+
+# CMake / IDE
+CMakeUserPresets.json
+compile_commands.json
+.cache/
+.vs/
+.vscode/
+.idea/
+*.user
+
+# OS
+.DS_Store
+
+# ImGui runtime layout
+imgui.ini
