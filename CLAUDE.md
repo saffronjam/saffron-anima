@@ -109,16 +109,19 @@ SaffronEngine/
 │       ├── rendering/renderer.cppm  # module Saffron.Rendering — Vulkan device/swapchain/frame loop + submit() seam
 │       ├── ui/ui.cppm            # module Saffron.Ui — ImGui docking (SDL3 + Vulkan backends) + Viewport
 │       ├── editor/editor.cppm    # module Saffron.Editor — hierarchy + generic inspector + component registration
+│       ├── control/control.cppm  # module Saffron.Control — unix-socket control plane (commands + screenshots)
 │       └── app/app.cppm          # module Saffron.App — App/Layer/AppConfig + run() main loop
-└── editor/
-    ├── CMakeLists.txt      # SaffronEditor executable
-    └── source/main.cpp     # client app: builds AppConfig, attaches a Layer, calls se::run()
+├── editor/
+│   ├── CMakeLists.txt      # SaffronEditor executable
+│   └── source/main.cpp     # client app: builds AppConfig, attaches a Layer, calls se::run()
+└── tools/se/               # the `se` control CLI (json over the unix socket; no engine dep)
 ```
 
 Modules form a DAG (real imports, not a single chain): `Signal→Core`,
 `Window→{Core,Signal}`, `Scene→Core`, `Rendering→{Core,Window}`,
-`Ui→{Core,Window,Rendering}`, `Editor→{Core,Signal,Scene}`, `App→{Core,Window,Rendering,Ui}`.
-The editor exe links `Saffron::Engine` and imports the modules it needs (Core/App/Window/Rendering/Ui/Editor).
+`Ui→{Core,Window,Rendering}`, `Editor→{Core,Signal,Scene}`,
+`Control→{Core,Window,Rendering,Scene,Editor}`, `App→{Core,Window,Rendering,Ui}`.
+The editor exe links `Saffron::Engine` and imports the modules it needs (Core/App/Window/Rendering/Ui/Editor/Control).
 
 ### Module conventions
 - One namespace: `se`. Engine modules are named `Saffron.<Area>`.
@@ -127,8 +130,8 @@ The editor exe links `Saffron::Engine` and imports the modules it needs (Core/Ap
 - `rendering`, `ui`, and `scene` wrap heavy **C++** third-party headers (Vulkan +
   vk-bootstrap + VMA, ImGui, entt + glm), so they use **classic `#include` in the
   global module fragment and do NOT `import std`** — mixing `import std` with a heavy
-  C++ header in one TU breaks. The editor TU (`main.cpp`) includes `<imgui.h>` the
-  same way. These modules are still consumed normally by the `import std` modules —
+  C++ header in one TU breaks. `editor` and `control` follow the same rule, and the
+  editor TU (`main.cpp`) includes `<imgui.h>` the same way. These modules are still consumed normally by the `import std` modules —
   the BMI carries the std types.
 
 ---
@@ -177,6 +180,10 @@ Working and verified (validation-clean) in the toolbox:
   call, no central edits. See `ecs-architecture` memory.
 - ✅ Editor: **Hierarchy** + generic **Inspector** (add/remove component) + File save/load; selection
   via `SubscriberList<Entity>`.
+- ✅ **Control plane** (`Saffron.Control`) + the `se` CLI: a non-blocking unix socket, drained per
+  frame on the main thread, drives the running editor (list/create/destroy/select entities,
+  add/remove/set component, set-transform, save/load scene, screenshot viewport|window to PNG, quit).
+  See `control-plane` memory.
 
 Not done yet (planned):
 - A **render system** that draws the ECS scene into the Viewport (mesh + material components,
