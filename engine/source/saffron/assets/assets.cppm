@@ -399,6 +399,7 @@ export namespace se
                 lights.push_back(gpu);
             });
         setSceneLighting(renderer, lightDir, lightColor, lightIntensity, lightAmbient, lights);
+        setClusterCamera(renderer, view, proj, nearPlane, farPlane);  // arms the cull dispatch
 
         // Bucket entities by (mesh, albedo texture) so each bucket draws as one
         // instanced call. Linear lookup — bucket count is the number of distinct

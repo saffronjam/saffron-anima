@@ -194,7 +194,30 @@ export namespace se
                 const RenderStats stats = renderStats(ctx.renderer);
                 return json{ { "drawCalls", stats.drawCalls },
                              { "batches", stats.batches },
-                             { "instances", stats.instances } };
+                             { "instances", stats.instances },
+                             { "clustered", clusteredEnabled(ctx.renderer) } };
+            });
+
+        registerCommand(reg, "set-clustered", "set-clustered {0|1} — toggle clustered light culling",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                const json value = positionalOr(params, "enabled", 0);
+                bool enabled = true;
+                if (value.is_number())
+                {
+                    enabled = value.get<double>() != 0.0;
+                }
+                else if (value.is_boolean())
+                {
+                    enabled = value.get<bool>();
+                }
+                else if (value.is_string())
+                {
+                    const std::string s = value.get<std::string>();
+                    enabled = !(s == "0" || s == "false" || s == "off");
+                }
+                setClustered(ctx.renderer, enabled);
+                return json{ { "clustered", enabled } };
             });
 
         registerCommand(reg, "list-entities", "list all entities",

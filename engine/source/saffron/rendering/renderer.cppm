@@ -460,6 +460,18 @@ export namespace se
         // Per-frame punctual-light storage buffer (set 1, binding 1), grown on demand.
         std::array<Ref<Buffer>, MaxFramesInFlight> lightListBuffers;
         std::array<u32, MaxFramesInFlight> lightListCapacity{};
+        // Clustered forward (Forward+): a compute pass culls the punctual lights into a
+        // froxel grid each frame; the fragment loops only its cluster's lights.
+        Ref<Pipeline> cullPipeline;                   // compute light-cull pipeline
+        vk::DescriptorSetLayout clusterSetLayout;     // compute set 0
+        std::array<vk::DescriptorSet, MaxFramesInFlight> clusterSets;     // compute
+        std::array<Ref<Buffer>, MaxFramesInFlight> clusterBuffers;        // per-cluster count + indices
+        std::array<VkBuffer, MaxFramesInFlight> clusterParamBuffers{};    // cluster params UBO
+        std::array<VmaAllocation, MaxFramesInFlight> clusterParamAllocs{};
+        std::array<void*, MaxFramesInFlight> clusterParamMapped{};
+        bool useClustered = true;        // false = fragment loops all lights (reference)
+        u32 frameLightCount = 0;         // punctual lights uploaded this frame
+        bool clusterDispatchPending = false;
         // Per-frame instance storage buffer + set. Grown on demand (never shrunk);
         // capacity is in InstanceData elements. drawInstanced writes it each frame.
         std::array<Ref<Buffer>, MaxFramesInFlight> instanceBuffers;
@@ -550,6 +562,17 @@ export namespace se
     // the UBO and the punctual lights into the storage buffer (grown on demand).
     void setSceneLighting(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity,
                           f32 ambient, const std::vector<GpuLight>& lights);
+
+    // Uploads the camera into the cluster-params UBO and arms the per-frame light-cull
+    // compute dispatch (clustered forward). `proj` is the Y-flipped projection used for
+    // rendering. Call once per frame after setSceneLighting, before endFrame.
+    void setClusterCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj,
+                          f32 nearPlane, f32 farPlane);
+
+    // Toggles clustered light culling. When off, the fragment shader loops every light
+    // (the reference path) — useful for A/B verification.
+    void setClustered(Renderer& renderer, bool enabled);
+    bool clusteredEnabled(const Renderer& renderer);
 
     // A 1x1 white texture; bind it when a material has no albedo.
     const Ref<GpuTexture>& defaultTexture(const Renderer& renderer);
@@ -946,6 +969,27 @@ namespace se
             glm::uvec4 counts;           // x = punctual light count
         };
 
+        // Froxel cluster grid (X x Y screen tiles, Z exponential view-space slices) and
+        // the per-cluster light cap. Must match light_cull.slang + mesh.slang.
+        inline constexpr u32 ClusterGridX = 16;
+        inline constexpr u32 ClusterGridY = 9;
+        inline constexpr u32 ClusterGridZ = 24;
+        inline constexpr u32 ClusterCount = ClusterGridX * ClusterGridY * ClusterGridZ;
+        inline constexpr u32 MaxLightsPerCluster = 64;
+        // One cluster's light list: a count + a fixed slot of indices. Matches the
+        // shader's Cluster struct (std430: tight u32 array).
+        inline constexpr vk::DeviceSize ClusterStride = sizeof(u32) * (1 + MaxLightsPerCluster);
+
+        // Matches both shaders' cluster-params UBO (std140).
+        struct ClusterParams
+        {
+            glm::mat4 view;               // world -> view (cull: light positions; fragment: froxel Z)
+            glm::mat4 inverseProjection;  // clip -> view (cull: tile AABB build)
+            glm::uvec4 gridSize;          // xyz = grid dims, w = punctual light count
+            glm::uvec4 screenSize;        // xy = offscreen pixel dims, z = clustered flag
+            glm::vec4 zPlanes;            // x = near, y = far
+        };
+
         // Initial punctual-light buffer capacity, grown on demand thereafter.
         inline constexpr u32 LightListInitial = 16;
 
@@ -972,6 +1016,73 @@ namespace se
             buffer.mapped = mapped.pMappedData;
             buffer.size = bytes;
             return std::make_shared<Buffer>(std::move(buffer));
+        }
+
+        // A device-local storage buffer (no host access) — for GPU-only scratch like
+        // the compute-written cluster light lists.
+        std::expected<Ref<Buffer>, std::string> makeDeviceStorageBuffer(Renderer& renderer, vk::DeviceSize bytes)
+        {
+            VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+            info.size = bytes;
+            info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+            VmaAllocationCreateInfo alloc{};
+            alloc.usage = VMA_MEMORY_USAGE_AUTO;
+            VkBuffer raw = VK_NULL_HANDLE;
+            VmaAllocation allocation = nullptr;
+            if (vmaCreateBuffer(renderer.allocator, &info, &alloc, &raw, &allocation, nullptr) != VK_SUCCESS)
+            {
+                return std::unexpected(std::string{ "makeDeviceStorageBuffer: vmaCreateBuffer failed" });
+            }
+            Buffer buffer;
+            buffer.allocator = renderer.allocator;
+            buffer.buffer = vk::Buffer{ raw };
+            buffer.alloc = allocation;
+            buffer.size = bytes;
+            return std::make_shared<Buffer>(std::move(buffer));
+        }
+
+        // Builds a compute pipeline from a SPIR-V module (entry "computeMain") + a single
+        // descriptor set layout. Returned as a Ref<Pipeline> (move-only RAII).
+        std::expected<Ref<Pipeline>, std::string> newComputePipeline(
+            Renderer& renderer, std::string_view shaderName, vk::DescriptorSetLayout setLayout)
+        {
+            auto moduleResult = loadShaderModule(renderer.device, assetPath(shaderName));
+            if (!moduleResult)
+            {
+                return std::unexpected(moduleResult.error());
+            }
+            vk::ShaderModule shaderModule = *moduleResult;
+
+            vk::PipelineLayoutCreateInfo layoutInfo{};
+            layoutInfo.setSetLayouts(setLayout);
+            auto layoutResult = checked(renderer.device.createPipelineLayout(layoutInfo), "createPipelineLayout (compute)");
+            if (!layoutResult)
+            {
+                renderer.device.destroyShaderModule(shaderModule);
+                return std::unexpected(layoutResult.error());
+            }
+
+            vk::PipelineShaderStageCreateInfo stage{};
+            stage.stage = vk::ShaderStageFlagBits::eCompute;
+            stage.module = shaderModule;
+            stage.pName = "computeMain";
+
+            vk::ComputePipelineCreateInfo pipelineInfo{};
+            pipelineInfo.stage = stage;
+            pipelineInfo.layout = *layoutResult;
+            vk::ResultValue<vk::Pipeline> created = renderer.device.createComputePipeline(nullptr, pipelineInfo);
+            renderer.device.destroyShaderModule(shaderModule);
+            if (created.result != vk::Result::eSuccess)
+            {
+                renderer.device.destroyPipelineLayout(*layoutResult);
+                return std::unexpected(std::format("createComputePipeline: {}", vk::to_string(created.result)));
+            }
+
+            Pipeline pipeline;
+            pipeline.device = renderer.device;
+            pipeline.pipeline = created.value;
+            pipeline.layout = *layoutResult;
+            return std::make_shared<Pipeline>(std::move(pipeline));
         }
 
         // The shared sampler, material/light set layouts, descriptor pool, and the
@@ -1007,7 +1118,7 @@ namespace se
             }
             renderer.materialSetLayout = *materialLayout;
 
-            std::array<vk::DescriptorSetLayoutBinding, 2> lightBindings{};
+            std::array<vk::DescriptorSetLayoutBinding, 4> lightBindings{};
             lightBindings[0].binding = 0;  // directional + ambient + counts UBO
             lightBindings[0].descriptorType = vk::DescriptorType::eUniformBuffer;
             lightBindings[0].descriptorCount = 1;
@@ -1016,6 +1127,14 @@ namespace se
             lightBindings[1].descriptorType = vk::DescriptorType::eStorageBuffer;
             lightBindings[1].descriptorCount = 1;
             lightBindings[1].stageFlags = vk::ShaderStageFlagBits::eFragment;
+            lightBindings[2].binding = 2;  // per-cluster light lists (read)
+            lightBindings[2].descriptorType = vk::DescriptorType::eStorageBuffer;
+            lightBindings[2].descriptorCount = 1;
+            lightBindings[2].stageFlags = vk::ShaderStageFlagBits::eFragment;
+            lightBindings[3].binding = 3;  // cluster params UBO
+            lightBindings[3].descriptorType = vk::DescriptorType::eUniformBuffer;
+            lightBindings[3].descriptorCount = 1;
+            lightBindings[3].stageFlags = vk::ShaderStageFlagBits::eFragment;
             vk::DescriptorSetLayoutCreateInfo lightLayoutInfo{};
             lightLayoutInfo.setBindings(lightBindings);
             auto lightLayout = checked(renderer.device.createDescriptorSetLayout(lightLayoutInfo), "lightSetLayout");
@@ -1024,6 +1143,28 @@ namespace se
                 return std::unexpected(lightLayout.error());
             }
             renderer.lightSetLayout = *lightLayout;
+
+            std::array<vk::DescriptorSetLayoutBinding, 3> clusterBindings{};
+            clusterBindings[0].binding = 0;  // cluster params UBO
+            clusterBindings[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+            clusterBindings[0].descriptorCount = 1;
+            clusterBindings[0].stageFlags = vk::ShaderStageFlagBits::eCompute;
+            clusterBindings[1].binding = 1;  // punctual light storage buffer (read)
+            clusterBindings[1].descriptorType = vk::DescriptorType::eStorageBuffer;
+            clusterBindings[1].descriptorCount = 1;
+            clusterBindings[1].stageFlags = vk::ShaderStageFlagBits::eCompute;
+            clusterBindings[2].binding = 2;  // per-cluster light lists (write)
+            clusterBindings[2].descriptorType = vk::DescriptorType::eStorageBuffer;
+            clusterBindings[2].descriptorCount = 1;
+            clusterBindings[2].stageFlags = vk::ShaderStageFlagBits::eCompute;
+            vk::DescriptorSetLayoutCreateInfo clusterLayoutInfo{};
+            clusterLayoutInfo.setBindings(clusterBindings);
+            auto clusterLayout = checked(renderer.device.createDescriptorSetLayout(clusterLayoutInfo), "clusterSetLayout");
+            if (!clusterLayout)
+            {
+                return std::unexpected(clusterLayout.error());
+            }
+            renderer.clusterSetLayout = *clusterLayout;
 
             vk::DescriptorSetLayoutBinding instanceBinding{};
             instanceBinding.binding = 0;
@@ -1116,7 +1257,79 @@ namespace se
                     return std::unexpected(instanceAllocated.error());
                 }
                 renderer.instanceSets[i] = (*instanceAllocated)[0];
+
+                // Cluster light-list buffer (device-local, compute-written) + the
+                // cluster params UBO (host-mapped, written each frame).
+                std::expected<Ref<Buffer>, std::string> clusterBuffer =
+                    makeDeviceStorageBuffer(renderer, ClusterCount * ClusterStride);
+                if (!clusterBuffer)
+                {
+                    return std::unexpected(clusterBuffer.error());
+                }
+                renderer.clusterBuffers[i] = *clusterBuffer;
+
+                VkBufferCreateInfo paramInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+                paramInfo.size = sizeof(ClusterParams);
+                paramInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+                VmaAllocationCreateInfo paramAlloc{};
+                paramAlloc.usage = VMA_MEMORY_USAGE_AUTO;
+                paramAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                VmaAllocationInfo paramMapped{};
+                if (vmaCreateBuffer(renderer.allocator, &paramInfo, &paramAlloc, &renderer.clusterParamBuffers[i],
+                                    &renderer.clusterParamAllocs[i], &paramMapped) != VK_SUCCESS)
+                {
+                    return std::unexpected(std::string{ "cluster params vmaCreateBuffer failed" });
+                }
+                renderer.clusterParamMapped[i] = paramMapped.pMappedData;
+
+                // Lighting set bindings 2 (cluster lists) + 3 (cluster params).
+                vk::DescriptorBufferInfo clusterInfo{ (*clusterBuffer)->buffer, 0, (*clusterBuffer)->size };
+                vk::DescriptorBufferInfo paramBufferInfo{ vk::Buffer{ renderer.clusterParamBuffers[i] }, 0, sizeof(ClusterParams) };
+                std::array<vk::WriteDescriptorSet, 2> lightClusterWrites{};
+                lightClusterWrites[0].dstSet = renderer.lightSets[i];
+                lightClusterWrites[0].dstBinding = 2;
+                lightClusterWrites[0].descriptorType = vk::DescriptorType::eStorageBuffer;
+                lightClusterWrites[0].setBufferInfo(clusterInfo);
+                lightClusterWrites[1].dstSet = renderer.lightSets[i];
+                lightClusterWrites[1].dstBinding = 3;
+                lightClusterWrites[1].descriptorType = vk::DescriptorType::eUniformBuffer;
+                lightClusterWrites[1].setBufferInfo(paramBufferInfo);
+                renderer.device.updateDescriptorSets(lightClusterWrites, {});
+
+                // Compute cluster set: params UBO + light list (read) + cluster lists (write).
+                vk::DescriptorSetAllocateInfo clusterAlloc{};
+                clusterAlloc.descriptorPool = renderer.descriptorPool;
+                clusterAlloc.setSetLayouts(renderer.clusterSetLayout);
+                auto clusterAllocated = checked(renderer.device.allocateDescriptorSets(clusterAlloc), "allocate clusterSet");
+                if (!clusterAllocated)
+                {
+                    return std::unexpected(clusterAllocated.error());
+                }
+                renderer.clusterSets[i] = (*clusterAllocated)[0];
+                std::array<vk::WriteDescriptorSet, 3> clusterWrites{};
+                clusterWrites[0].dstSet = renderer.clusterSets[i];
+                clusterWrites[0].dstBinding = 0;
+                clusterWrites[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+                clusterWrites[0].setBufferInfo(paramBufferInfo);
+                clusterWrites[1].dstSet = renderer.clusterSets[i];
+                clusterWrites[1].dstBinding = 1;
+                clusterWrites[1].descriptorType = vk::DescriptorType::eStorageBuffer;
+                clusterWrites[1].setBufferInfo(lightListInfo);
+                clusterWrites[2].dstSet = renderer.clusterSets[i];
+                clusterWrites[2].dstBinding = 2;
+                clusterWrites[2].descriptorType = vk::DescriptorType::eStorageBuffer;
+                clusterWrites[2].setBufferInfo(clusterInfo);
+                renderer.device.updateDescriptorSets(clusterWrites, {});
             }
+
+            // The cull compute pipeline reads/writes the cluster set layout.
+            std::expected<Ref<Pipeline>, std::string> cull =
+                newComputePipeline(renderer, "shaders/light_cull.spv", renderer.clusterSetLayout);
+            if (!cull)
+            {
+                return std::unexpected(cull.error());
+            }
+            renderer.cullPipeline = *cull;
             return {};
         }
     }
@@ -1300,6 +1513,7 @@ namespace se
         renderer.sceneSubmissions.clear();
         renderer.uiSubmissions.clear();
         renderer.defaultWhiteTexture.reset();
+        renderer.cullPipeline.reset();  // RAII frees the compute pipeline + layout
 
         renderer.offscreenViewport.reset();  // free before the allocator/device
         renderer.offscreenDepth.reset();
@@ -1308,10 +1522,16 @@ namespace se
         {
             renderer.instanceBuffers[i].reset();  // RAII frees the SSBO before the allocator
             renderer.lightListBuffers[i].reset();
+            renderer.clusterBuffers[i].reset();
             if (renderer.lightBuffers[i] != VK_NULL_HANDLE)
             {
                 vmaDestroyBuffer(renderer.allocator, renderer.lightBuffers[i], renderer.lightAllocs[i]);
                 renderer.lightBuffers[i] = VK_NULL_HANDLE;
+            }
+            if (renderer.clusterParamBuffers[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(renderer.allocator, renderer.clusterParamBuffers[i], renderer.clusterParamAllocs[i]);
+                renderer.clusterParamBuffers[i] = VK_NULL_HANDLE;
             }
         }
         if (renderer.descriptorPool)
@@ -1329,6 +1549,10 @@ namespace se
         if (renderer.instanceSetLayout)
         {
             renderer.device.destroyDescriptorSetLayout(renderer.instanceSetLayout);
+        }
+        if (renderer.clusterSetLayout)
+        {
+            renderer.device.destroyDescriptorSetLayout(renderer.clusterSetLayout);
         }
         if (renderer.linearSampler)
         {
@@ -1468,6 +1692,29 @@ namespace se
     {
         FrameData& frame = renderer.frames[renderer.frameIndex];
         Image& offscreen = renderer.offscreenViewport;
+
+        // Clustered forward: cull the punctual lights into the froxel grid before the
+        // scene pass. Must run outside any rendering scope, with a compute→fragment
+        // barrier so the fragment shader sees the written cluster light lists.
+        if (renderer.clusterDispatchPending && renderer.cullPipeline)
+        {
+            const u32 f = renderer.frameIndex;
+            frame.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.cullPipeline->pipeline);
+            frame.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                renderer.cullPipeline->layout, 0, renderer.clusterSets[f], {});
+            const u32 groups = (ClusterCount + 63) / 64;
+            frame.commandBuffer.dispatch(groups, 1, 1);
+
+            vk::MemoryBarrier2 barrier{};
+            barrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+            barrier.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite;
+            barrier.dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader;
+            barrier.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead;
+            vk::DependencyInfo dependency{};
+            dependency.setMemoryBarriers(barrier);
+            frame.commandBuffer.pipelineBarrier2(dependency);
+        }
+        renderer.clusterDispatchPending = false;
 
         // Render the scene into the offscreen image. Enter from the image's tracked
         // layout (Undefined on frame 1 / after a recreate; ShaderReadOnly thereafter,
@@ -1955,13 +2202,19 @@ namespace se
         renderer.lightListBuffers[frame] = *buffer;
         renderer.lightListCapacity[frame] = capacity;
 
+        // Both the fragment lighting set (binding 1) and the compute cluster set
+        // (binding 1) read this buffer — rewrite both to the grown allocation.
         vk::DescriptorBufferInfo bufferInfo{ (*buffer)->buffer, 0, (*buffer)->size };
-        vk::WriteDescriptorSet write{};
-        write.dstSet = renderer.lightSets[frame];
-        write.dstBinding = 1;
-        write.descriptorType = vk::DescriptorType::eStorageBuffer;
-        write.setBufferInfo(bufferInfo);
-        renderer.device.updateDescriptorSets(write, {});
+        std::array<vk::WriteDescriptorSet, 2> writes{};
+        writes[0].dstSet = renderer.lightSets[frame];
+        writes[0].dstBinding = 1;
+        writes[0].descriptorType = vk::DescriptorType::eStorageBuffer;
+        writes[0].setBufferInfo(bufferInfo);
+        writes[1].dstSet = renderer.clusterSets[frame];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = vk::DescriptorType::eStorageBuffer;
+        writes[1].setBufferInfo(bufferInfo);
+        renderer.device.updateDescriptorSets(writes, {});
         return {};
     }
 
@@ -2107,6 +2360,37 @@ namespace se
         ubo.counts = glm::uvec4(count, 0, 0, 0);
         std::memcpy(renderer.lightMapped[frame], &ubo, sizeof(ubo));
         vmaFlushAllocation(renderer.allocator, renderer.lightAllocs[frame], 0, sizeof(ubo));
+        renderer.frameLightCount = count;
+    }
+
+    void setClusterCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj,
+                          f32 nearPlane, f32 farPlane)
+    {
+        const u32 frame = renderer.frameIndex;
+        if (renderer.clusterParamMapped[frame] == nullptr)
+        {
+            return;
+        }
+        ClusterParams params;
+        params.view = view;
+        params.inverseProjection = glm::inverse(proj);
+        params.gridSize = glm::uvec4(ClusterGridX, ClusterGridY, ClusterGridZ, renderer.frameLightCount);
+        params.screenSize = glm::uvec4(viewportWidth(renderer), viewportHeight(renderer),
+                                       renderer.useClustered ? 1u : 0u, 0u);
+        params.zPlanes = glm::vec4(nearPlane, farPlane, 0.0f, 0.0f);
+        std::memcpy(renderer.clusterParamMapped[frame], &params, sizeof(params));
+        vmaFlushAllocation(renderer.allocator, renderer.clusterParamAllocs[frame], 0, sizeof(params));
+        renderer.clusterDispatchPending = renderer.useClustered && renderer.frameLightCount > 0;
+    }
+
+    void setClustered(Renderer& renderer, bool enabled)
+    {
+        renderer.useClustered = enabled;
+    }
+
+    bool clusteredEnabled(const Renderer& renderer)
+    {
+        return renderer.useClustered;
     }
 
     std::expected<Ref<GpuTexture>, std::string> uploadTexture(Renderer& renderer, const u8* rgba, u32 width, u32 height, bool srgb)

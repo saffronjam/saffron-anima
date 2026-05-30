@@ -3,9 +3,12 @@
 // a storage buffer (set 2) indexed by the absolute Vulkan InstanceIndex
 // (firstInstance + instance). SV_VulkanInstanceID is that builtin — plain
 // SV_InstanceID is base-relative (excludes firstInstance), which would break batching.
-// The push constant is the camera viewProj. Set 0 is albedo; set 1 is the directional
-// light (binding 0) plus the punctual point/spot lights (binding 1). Shading is
-// base color * albedo * (ambient + directional + sum of punctual contributions).
+// The push constant is the camera viewProj. Set 0 is albedo; set 1 is the lighting set:
+// directional UBO (0), punctual light list (1), per-cluster light lists (2), cluster
+// params UBO (3). Punctual lights are clustered-forward: the fragment loops only its
+// froxel cluster's lights (params.screenSize.z != 0), or every light otherwise.
+
+static const uint MAX_LIGHTS_PER_CLUSTER = 64;
 
 struct VertexInput
 {
@@ -48,6 +51,23 @@ struct GpuLight
 };
 [[vk::binding(1, 1)]] StructuredBuffer<GpuLight> lights;
 
+struct Cluster
+{
+    uint count;
+    uint indices[MAX_LIGHTS_PER_CLUSTER];
+};
+[[vk::binding(2, 1)]] StructuredBuffer<Cluster> clusters;
+
+struct ClusterParams
+{
+    float4x4 view;
+    float4x4 inverseProjection;
+    uint4 gridSize;       // xyz = grid dims, w = light count
+    uint4 screenSize;     // xy = pixels, z = clustered flag
+    float4 zPlanes;       // x = near, y = far
+};
+[[vk::binding(3, 1)]] ConstantBuffer<ClusterParams> clusterParams;
+
 struct Instance
 {
     float4x4 model;
@@ -78,6 +98,44 @@ float distanceAttenuation(float dist, float range)
     return invSquare * t * t;
 }
 
+// One punctual light's diffuse contribution at a world-space surface point.
+float3 punctual(GpuLight lt, float3 worldPos, float3 n)
+{
+    float3 toLight = lt.positionRange.xyz - worldPos;
+    float dist = length(toLight);
+    if (dist > lt.positionRange.w)
+    {
+        return float3(0.0);
+    }
+    float3 l = toLight / max(dist, 0.0001);
+    float nl = max(dot(n, l), 0.0);
+    float attenuation = distanceAttenuation(dist, lt.positionRange.w);
+
+    float cone = 1.0;
+    if (lt.directionType.w > 0.5)
+    {
+        float3 spotDir = normalize(lt.directionType.xyz);
+        float cosAngle = dot(spotDir, -l);
+        cone = smoothstep(lt.spotCos.y, lt.spotCos.x, cosAngle);
+    }
+    return lt.colorIntensity.rgb * lt.colorIntensity.a * nl * attenuation * cone;
+}
+
+// Froxel cluster index for a fragment, from its pixel position + view-space depth.
+uint clusterIndexFor(float2 pixel, float viewZ)
+{
+    float near = clusterParams.zPlanes.x;
+    float far = clusterParams.zPlanes.y;
+    float depth = max(-viewZ, near);
+    uint zSlice = uint(log(depth / near) / log(far / near) * float(clusterParams.gridSize.z));
+    zSlice = min(zSlice, clusterParams.gridSize.z - 1);
+
+    float2 tileSize = float2(clusterParams.screenSize.xy) / float2(clusterParams.gridSize.xy);
+    uint tileX = min(uint(pixel.x / tileSize.x), clusterParams.gridSize.x - 1);
+    uint tileY = min(uint(pixel.y / tileSize.y), clusterParams.gridSize.y - 1);
+    return tileX + tileY * clusterParams.gridSize.x + zSlice * clusterParams.gridSize.x * clusterParams.gridSize.y;
+}
+
 [shader("fragment")]
 float4 fragmentMain(VertexOutput input) : SV_Target
 {
@@ -89,28 +147,23 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float ndotl = max(dot(n, -lightDir), 0.0);
     float3 lit = globals.colorIntensity.rgb * globals.colorIntensity.a * ndotl + globals.directionAmbient.w;
 
-    // Punctual point/spot lights.
-    for (uint i = 0; i < globals.counts.x; i = i + 1)
+    // Punctual lights — clustered when enabled, else loop every light.
+    if (clusterParams.screenSize.z != 0)
     {
-        GpuLight lt = lights[i];
-        float3 toLight = lt.positionRange.xyz - input.worldPos;
-        float dist = length(toLight);
-        if (dist > lt.positionRange.w)
+        float viewZ = mul(clusterParams.view, float4(input.worldPos, 1.0)).z;
+        uint clusterIndex = clusterIndexFor(input.position.xy, viewZ);
+        uint count = clusters[clusterIndex].count;
+        for (uint i = 0; i < count; i = i + 1)
         {
-            continue;
+            lit += punctual(lights[clusters[clusterIndex].indices[i]], input.worldPos, n);
         }
-        float3 l = toLight / max(dist, 0.0001);
-        float nl = max(dot(n, l), 0.0);
-        float attenuation = distanceAttenuation(dist, lt.positionRange.w);
-
-        float cone = 1.0;
-        if (lt.directionType.w > 0.5)
+    }
+    else
+    {
+        for (uint i = 0; i < globals.counts.x; i = i + 1)
         {
-            float3 spotDir = normalize(lt.directionType.xyz);
-            float cosAngle = dot(spotDir, -l);
-            cone = smoothstep(lt.spotCos.y, lt.spotCos.x, cosAngle);
+            lit += punctual(lights[i], input.worldPos, n);
         }
-        lit += lt.colorIntensity.rgb * lt.colorIntensity.a * nl * attenuation * cone;
     }
 
     float3 color = tex.rgb * input.baseColor.rgb * lit;
