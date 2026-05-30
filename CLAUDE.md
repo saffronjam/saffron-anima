@@ -57,6 +57,8 @@ code does now — and *why* if it's non-obvious — never by contrast with the p
 | Math | GLM | 1.0.1 | |
 | Serialization | nlohmann/json | 3.12.0 | `JSON_NOEXCEPTION`; scene save/load |
 | Screenshots | stb_image_write | 1.16 | vendored `third_party/stb` + `cmake/stb_impl.cpp` |
+| glTF import | cgltf | 1.15 | vendored single header + impl TU; no-throw C API |
+| OBJ import | tinyobjloader | 1.0.6 | vendored single header + impl TU; no-throw bool API |
 
 **Vulkan via Vulkan-Hpp (`vk::`) with `VULKAN_HPP_NO_EXCEPTIONS`** — every call
 returns a result we convert to `std::expected` and check immediately. We do **not**
@@ -105,23 +107,26 @@ SaffronEngine/
 │       ├── core/core.cppm        # module Saffron.Core  — aliases, TimeSpan, logging
 │       ├── signal/signal.cppm    # module Saffron.Signal — SubscriberList<...> signal/slot
 │       ├── window/window.cppm    # module Saffron.Window — SDL3 window + typed event signals
+│       ├── geometry/geometry.cppm  # module Saffron.Geometry — Vertex/Mesh/Submesh, glTF+OBJ import, .smesh
 │       ├── scene/scene.cppm      # module Saffron.Scene — entt ECS + ComponentRegistry + JSON serialization
 │       ├── rendering/renderer.cppm  # module Saffron.Rendering — Vulkan device/swapchain/frame loop + submit() seam
 │       ├── ui/ui.cppm            # module Saffron.Ui — ImGui docking (SDL3 + Vulkan backends) + Viewport
+│       ├── assets/assets.cppm    # module Saffron.Assets — AssetServer (Uuid→mesh registry) + importModel + renderScene
 │       ├── editor/editor.cppm    # module Saffron.Editor — hierarchy + generic inspector + component registration
 │       ├── control/control.cppm  # module Saffron.Control — unix-socket control plane (commands + screenshots)
 │       └── app/app.cppm          # module Saffron.App — App/Layer/AppConfig + run() main loop
 ├── editor/
 │   ├── CMakeLists.txt      # SaffronEditor executable
+│   ├── assets/models/      # source models (cube.gltf/.obj), copied next to the exe
 │   └── source/main.cpp     # client app: builds AppConfig, attaches a Layer, calls se::run()
 └── tools/se/               # the `se` control CLI (json over the unix socket; no engine dep)
 ```
 
 Modules form a DAG (real imports, not a single chain): `Signal→Core`,
-`Window→{Core,Signal}`, `Scene→Core`, `Rendering→{Core,Window}`,
-`Ui→{Core,Window,Rendering}`, `Editor→{Core,Signal,Scene}`,
-`Control→{Core,Window,Rendering,Scene,Editor}`, `App→{Core,Window,Rendering,Ui}`.
-The editor exe links `Saffron::Engine` and imports the modules it needs (Core/App/Window/Rendering/Ui/Editor/Control).
+`Window→{Core,Signal}`, `Geometry→{Core}`, `Scene→Core`, `Rendering→{Core,Window,Geometry}`,
+`Ui→{Core,Window,Rendering}`, `Assets→{Core,Geometry,Rendering,Scene}`, `Editor→{Core,Signal,Scene}`,
+`Control→{Core,Window,Rendering,Scene,Editor,Assets}`, `App→{Core,Window,Rendering,Ui}`.
+The editor exe links `Saffron::Engine` and imports the modules it needs (Core/App/Window/Rendering/Ui/Editor/Control/Scene/Assets).
 
 ### Module conventions
 - One namespace: `se`. Engine modules are named `Saffron.<Area>`.
@@ -130,8 +135,9 @@ The editor exe links `Saffron::Engine` and imports the modules it needs (Core/Ap
 - `rendering`, `ui`, and `scene` wrap heavy **C++** third-party headers (Vulkan +
   vk-bootstrap + VMA, ImGui, entt + glm), so they use **classic `#include` in the
   global module fragment and do NOT `import std`** — mixing `import std` with a heavy
-  C++ header in one TU breaks. `editor` and `control` follow the same rule, and the
-  editor TU (`main.cpp`) includes `<imgui.h>` the same way. These modules are still consumed normally by the `import std` modules —
+  C++ header in one TU breaks. `geometry` (cgltf + tinyobjloader + glm), `assets`,
+  `editor`, and `control` follow the same rule, and the editor TU (`main.cpp`)
+  includes `<imgui.h>` the same way. These modules are still consumed normally by the `import std` modules —
   the BMI carries the std types.
 
 ---
@@ -189,9 +195,14 @@ Working and verified (validation-clean) in the toolbox:
 > control command (one `registerCommand` in `control.cppm`) so the running editor stays scriptable and
 > visually debuggable from the CLI. Treat it as part of "done" for a feature, not an afterthought.
 
+- ✅ **Model import + mesh rendering**: `Saffron.Geometry` imports glTF (cgltf) + OBJ (tinyobjloader) into a
+  common `Mesh`, baked to a versioned `.smesh`; `GpuMesh` (VMA vertex/index buffers) + a depth-tested mesh
+  pipeline; `Saffron.Assets` (an `AssetServer` Uuid→mesh registry, persisted to `asset_registry.json`) +
+  `renderScene` draw the ECS scene (`MeshComponent` + `CameraComponent`) through the primary camera. Import via
+  `se import-model`, File ▸ Import, or drag-and-drop. See `mesh-asset-pipeline` memory.
+
 Not done yet (planned):
-- A **render system** that draws the ECS scene into the Viewport (mesh + material components,
-  offscreen depth) — replaces the placeholder triangle; needs vertex/index `Buffer` meta-layer.
+- **Materials + textures** (the `materialSlot`/tangent seams are reserved), then a Slang PBR pass.
 - `RenderGraph`/`RenderPass` frame graph; `Saffron.Physics` (Jolt) RigidBody + system; `resolveRefs`
   + scene-graph parenting; undo/redo.
 - `volk`, multi-viewport ImGui, hardware GPU in the toolbox.
