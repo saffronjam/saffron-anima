@@ -127,6 +127,31 @@ export namespace se
                 return {};
             },
             true);
+
+        registerComponent<DirectionalLightComponent>(reg, "DirectionalLight",
+            [](Scene& s, Entity e)
+            {
+                DirectionalLightComponent& light = getComponent<DirectionalLightComponent>(s, e);
+                ImGui::DragFloat3("Direction", &light.direction.x, 0.01f);
+                ImGui::ColorEdit3("Color", &light.color.x);
+                ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 50.0f);
+                ImGui::DragFloat("Ambient", &light.ambient, 0.01f, 0.0f, 1.0f);
+            },
+            [](const DirectionalLightComponent& c)
+            {
+                return nlohmann::json{ { "direction", vec3ToJson(c.direction) },
+                                       { "color", vec3ToJson(c.color) },
+                                       { "intensity", c.intensity }, { "ambient", c.ambient } };
+            },
+            [](DirectionalLightComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
+            {
+                c.direction = vec3FromJson(j.value("direction", nlohmann::json::object()));
+                c.color = vec3FromJson(j.value("color", nlohmann::json::object()));
+                c.intensity = j.value("intensity", 1.0f);
+                c.ambient = j.value("ambient", 0.15f);
+                return {};
+            },
+            true);
     }
 
     // Heap-owned so EditorContext's heavy destructor (entt/json) is instantiated
@@ -143,6 +168,10 @@ export namespace se
         cameraTransform.translation = glm::vec3(3.0f, 2.5f, 4.0f);
         cameraTransform.rotation =
             glm::quatLookAt(glm::normalize(-cameraTransform.translation), glm::vec3(0.0f, 1.0f, 0.0f));
+
+        Entity sun = createEntity(ctx->scene, "Sun");
+        addComponent<DirectionalLightComponent>(ctx->scene, sun);
+
         setSelection(*ctx, camera);
         return ctx;
     }

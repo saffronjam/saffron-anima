@@ -192,6 +192,25 @@ export namespace se
         proj[1][1] *= -1.0f;  // flip Y into Vulkan clip space
         const glm::mat4 viewProjection = proj * view;
 
+        glm::vec3 lightDir{ -0.5f, -1.0f, -0.3f };
+        glm::vec3 lightColor{ 1.0f };
+        f32 lightIntensity = 1.0f;
+        f32 lightAmbient = 0.15f;
+        bool haveLight = false;
+        forEach<DirectionalLightComponent>(scene, [&](Entity, DirectionalLightComponent& light)
+        {
+            if (haveLight)
+            {
+                return;
+            }
+            lightDir = light.direction;
+            lightColor = light.color;
+            lightIntensity = light.intensity;
+            lightAmbient = light.ambient;
+            haveLight = true;
+        });
+        setDirectionalLight(renderer, lightDir, lightColor, lightIntensity, lightAmbient);
+
         forEach<TransformComponent, MeshComponent>(scene,
             [&](Entity, TransformComponent& transform, MeshComponent& mesh)
             {
@@ -200,7 +219,14 @@ export namespace se
                 {
                     return;
                 }
-                drawMesh(renderer, handle, meshPipeline, viewProjection * transformMatrix(transform));
+                const glm::mat4 model = transformMatrix(transform);
+                DrawParams params;
+                params.mvp = viewProjection * model;
+                params.normal0 = glm::vec4(glm::vec3(model[0]), 0.0f);
+                params.normal1 = glm::vec4(glm::vec3(model[1]), 0.0f);
+                params.normal2 = glm::vec4(glm::vec3(model[2]), 0.0f);
+                params.baseColor = glm::vec4(1.0f);
+                drawMesh(renderer, handle, meshPipeline, defaultTexture(renderer), params);
             });
     }
 }

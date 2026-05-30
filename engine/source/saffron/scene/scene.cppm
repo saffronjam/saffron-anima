@@ -56,6 +56,16 @@ export namespace se
         bool primary = true;    // the scene renders through the first primary camera
     };
 
+    // A directional light; the scene shades through the first one. direction points
+    // the way the light travels.
+    struct DirectionalLightComponent
+    {
+        glm::vec3 direction{ -0.5f, -1.0f, -0.3f };
+        glm::vec3 color{ 1.0f };
+        f32 intensity = 1.0f;
+        f32 ambient = 0.15f;
+    };
+
     glm::mat4 transformMatrix(const TransformComponent& transform)
     {
         glm::mat4 translation = glm::translate(glm::mat4(1.0f), transform.translation);

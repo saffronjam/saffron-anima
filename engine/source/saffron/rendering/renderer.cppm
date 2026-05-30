@@ -257,6 +257,76 @@ export namespace se
         }
     };
 
+    // A device-local sampled texture (image + view), move-only like GpuMesh and
+    // owned by the Renderer (freed before the allocator). The sampler is shared
+    // (renderer.linearSampler), so it is not owned here.
+    struct GpuTexture
+    {
+        vk::Device device;                 // borrowed (frees the view)
+        VmaAllocator allocator = nullptr;  // borrowed (frees the image)
+        vk::Image image;
+        vk::ImageView view;
+        VmaAllocation alloc = nullptr;
+        vk::Extent2D extent;
+        vk::Format format = vk::Format::eUndefined;
+
+        GpuTexture() = default;
+        GpuTexture(const GpuTexture&) = delete;
+        GpuTexture& operator=(const GpuTexture&) = delete;
+
+        GpuTexture(GpuTexture&& other) noexcept
+            : device(other.device), allocator(other.allocator), image(other.image),
+              view(other.view), alloc(other.alloc), extent(other.extent), format(other.format)
+        {
+            other.device = nullptr;
+            other.allocator = nullptr;
+            other.image = nullptr;
+            other.view = nullptr;
+            other.alloc = nullptr;
+        }
+
+        GpuTexture& operator=(GpuTexture&& other) noexcept
+        {
+            if (this != &other)
+            {
+                reset();
+                device = other.device;
+                allocator = other.allocator;
+                image = other.image;
+                view = other.view;
+                alloc = other.alloc;
+                extent = other.extent;
+                format = other.format;
+                other.device = nullptr;
+                other.allocator = nullptr;
+                other.image = nullptr;
+                other.view = nullptr;
+                other.alloc = nullptr;
+            }
+            return *this;
+        }
+
+        ~GpuTexture()
+        {
+            reset();
+        }
+
+        void reset()
+        {
+            if (device && view)
+            {
+                device.destroyImageView(view);
+            }
+            if (allocator != nullptr && image)
+            {
+                vmaDestroyImage(allocator, static_cast<VkImage>(image), alloc);
+            }
+            view = nullptr;
+            image = nullptr;
+            alloc = nullptr;
+        }
+    };
+
     struct Renderer
     {
         // vk-bootstrap keeps the bits we need for clean teardown.
@@ -289,6 +359,20 @@ export namespace se
         std::vector<RenderFn> uiSubmissions;     // replayed into the swapchain pass
         std::vector<Pipeline> pipelines;         // owned; destroyed before the device
         std::vector<GpuMesh> meshes;             // owned; destroyed before the allocator
+        std::vector<GpuTexture> textures;        // owned; destroyed before the allocator
+
+        // Material/light descriptors. One material set per texture (set 0, index-
+        // parallel to textures); one shared per-frame light UBO + set (set 1).
+        vk::Sampler linearSampler;
+        vk::DescriptorSetLayout materialSetLayout;   // set 0: combined image sampler
+        vk::DescriptorSetLayout lightSetLayout;      // set 1: directional light UBO
+        vk::DescriptorPool descriptorPool;
+        std::vector<vk::DescriptorSet> materialSets; // index-parallel to textures
+        vk::DescriptorSet lightSet;
+        VkBuffer lightBuffer = VK_NULL_HANDLE;
+        VmaAllocation lightAlloc = nullptr;
+        void* lightMapped = nullptr;
+        u32 defaultWhiteTexture = ~0u;               // handle into textures (1x1 white)
 
         Image offscreenViewport;       // scene render target shown in the Viewport panel
         Image offscreenDepth;          // depth buffer for the scene pass, sized to the viewport
@@ -324,11 +408,31 @@ export namespace se
     std::expected<u32, std::string> newTrianglePipeline(Renderer& renderer, std::string_view shaderName);
     void drawTriangle(Renderer& renderer, u32 pipelineHandle);
 
-    // Mesh rendering: a vertex-buffer + depth-tested pipeline, a device-local mesh
-    // upload, and a draw recorded via submit() with a model-view-projection.
+    // Per-draw data pushed as a 128-byte push constant. normal0/1/2 are the columns
+    // of mat3(model) (world normal); baseColor is the material factor.
+    struct DrawParams
+    {
+        glm::mat4 mvp;
+        glm::vec4 normal0;
+        glm::vec4 normal1;
+        glm::vec4 normal2;
+        glm::vec4 baseColor;
+    };
+
+    // Mesh rendering: a vertex-buffer + depth-tested pipeline (set 0 = material
+    // albedo, set 1 = directional light), a device-local mesh upload, a texture
+    // upload, and a draw recorded via submit().
     std::expected<u32, std::string> newMeshPipeline(Renderer& renderer, std::string_view shaderName);
     std::expected<u32, std::string> uploadMesh(Renderer& renderer, const Mesh& mesh);
-    void drawMesh(Renderer& renderer, u32 meshHandle, u32 pipelineHandle, const glm::mat4& mvp);
+    std::expected<u32, std::string> uploadTexture(Renderer& renderer, const u8* rgba, u32 width, u32 height, bool srgb);
+    void drawMesh(Renderer& renderer, u32 meshHandle, u32 pipelineHandle, u32 textureHandle, const DrawParams& params);
+
+    // Updates the shared per-frame directional light UBO (set 1). direction points
+    // the way the light travels.
+    void setDirectionalLight(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity, f32 ambient);
+
+    // The handle to a 1x1 white texture; bind it when a material has no albedo.
+    u32 defaultTexture(const Renderer& renderer);
 
     // Copies the offscreen viewport image to a PNG. Synchronous (own submit +
     // waitIdle), safe to call between frames.
@@ -706,6 +810,106 @@ namespace se
             }
             return {};
         }
+
+        // Matches the shader's set 1 light uniform (std140: two vec4).
+        struct LightUbo
+        {
+            glm::vec4 directionAmbient;  // xyz direction, w ambient
+            glm::vec4 colorIntensity;    // rgb color, a intensity
+        };
+
+        // The shared sampler, material/light set layouts, descriptor pool, and the
+        // per-frame light UBO + its set. Called once in newRenderer.
+        std::expected<void, std::string> initDescriptorResources(Renderer& renderer)
+        {
+            vk::SamplerCreateInfo samplerInfo{};
+            samplerInfo.magFilter = vk::Filter::eLinear;
+            samplerInfo.minFilter = vk::Filter::eLinear;
+            samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+            samplerInfo.addressModeU = vk::SamplerAddressMode::eRepeat;
+            samplerInfo.addressModeV = vk::SamplerAddressMode::eRepeat;
+            samplerInfo.addressModeW = vk::SamplerAddressMode::eRepeat;
+            samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+            auto sampler = checked(renderer.device.createSampler(samplerInfo), "createSampler");
+            if (!sampler)
+            {
+                return std::unexpected(sampler.error());
+            }
+            renderer.linearSampler = *sampler;
+
+            vk::DescriptorSetLayoutBinding albedoBinding{};
+            albedoBinding.binding = 0;
+            albedoBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            albedoBinding.descriptorCount = 1;
+            albedoBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+            vk::DescriptorSetLayoutCreateInfo materialLayoutInfo{};
+            materialLayoutInfo.setBindings(albedoBinding);
+            auto materialLayout = checked(renderer.device.createDescriptorSetLayout(materialLayoutInfo), "materialSetLayout");
+            if (!materialLayout)
+            {
+                return std::unexpected(materialLayout.error());
+            }
+            renderer.materialSetLayout = *materialLayout;
+
+            vk::DescriptorSetLayoutBinding lightBinding{};
+            lightBinding.binding = 0;
+            lightBinding.descriptorType = vk::DescriptorType::eUniformBuffer;
+            lightBinding.descriptorCount = 1;
+            lightBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+            vk::DescriptorSetLayoutCreateInfo lightLayoutInfo{};
+            lightLayoutInfo.setBindings(lightBinding);
+            auto lightLayout = checked(renderer.device.createDescriptorSetLayout(lightLayoutInfo), "lightSetLayout");
+            if (!lightLayout)
+            {
+                return std::unexpected(lightLayout.error());
+            }
+            renderer.lightSetLayout = *lightLayout;
+
+            std::array<vk::DescriptorPoolSize, 2> poolSizes{
+                vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 256 },
+                vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, 4 } };
+            vk::DescriptorPoolCreateInfo poolInfo{};
+            poolInfo.maxSets = 260;
+            poolInfo.setPoolSizes(poolSizes);
+            auto pool = checked(renderer.device.createDescriptorPool(poolInfo), "descriptorPool");
+            if (!pool)
+            {
+                return std::unexpected(pool.error());
+            }
+            renderer.descriptorPool = *pool;
+
+            VkBufferCreateInfo bufferInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+            bufferInfo.size = sizeof(LightUbo);
+            bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            VmaAllocationCreateInfo allocInfo{};
+            allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+            allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            VmaAllocationInfo mapped{};
+            if (vmaCreateBuffer(renderer.allocator, &bufferInfo, &allocInfo, &renderer.lightBuffer, &renderer.lightAlloc, &mapped) != VK_SUCCESS)
+            {
+                return std::unexpected(std::string{ "light UBO vmaCreateBuffer failed" });
+            }
+            renderer.lightMapped = mapped.pMappedData;
+
+            vk::DescriptorSetAllocateInfo setAlloc{};
+            setAlloc.descriptorPool = renderer.descriptorPool;
+            setAlloc.setSetLayouts(renderer.lightSetLayout);
+            auto allocated = checked(renderer.device.allocateDescriptorSets(setAlloc), "allocate lightSet");
+            if (!allocated)
+            {
+                return std::unexpected(allocated.error());
+            }
+            renderer.lightSet = (*allocated)[0];
+
+            vk::DescriptorBufferInfo lightBufferInfo{ vk::Buffer{ renderer.lightBuffer }, 0, sizeof(LightUbo) };
+            vk::WriteDescriptorSet lightWrite{};
+            lightWrite.dstSet = renderer.lightSet;
+            lightWrite.dstBinding = 0;
+            lightWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
+            lightWrite.setBufferInfo(lightBufferInfo);
+            renderer.device.updateDescriptorSets(lightWrite, {});
+            return {};
+        }
     }
 
     std::expected<Renderer, std::string> newRenderer(Window& window)
@@ -854,6 +1058,20 @@ namespace se
             frame.inFlight = *fence;
         }
 
+        if (std::expected<void, std::string> descriptors = initDescriptorResources(renderer); !descriptors)
+        {
+            return std::unexpected(descriptors.error());
+        }
+        setDirectionalLight(renderer, glm::vec3(-0.5f, -1.0f, -0.3f), glm::vec3(1.0f), 1.0f, 0.15f);
+
+        const std::array<u8, 4> white{ 255, 255, 255, 255 };
+        std::expected<u32, std::string> whiteTexture = uploadTexture(renderer, white.data(), 1, 1, false);
+        if (!whiteTexture)
+        {
+            return std::unexpected(whiteTexture.error());
+        }
+        renderer.defaultWhiteTexture = *whiteTexture;
+
         logInfo(std::format("vulkan ready — gpu '{}', {} swapchain images",
                             renderer.vkbDevice.physical_device.name,
                             renderer.swapchainImages.size()));
@@ -870,7 +1088,30 @@ namespace se
         renderer.offscreenViewport.reset();  // free before the allocator/device
         renderer.offscreenDepth.reset();
         renderer.meshes.clear();             // RAII frees device buffers before the allocator
+        renderer.textures.clear();           // RAII frees views + images before the allocator
         renderer.pipelines.clear();          // RAII frees them while the device is still alive
+
+        if (renderer.lightBuffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(renderer.allocator, renderer.lightBuffer, renderer.lightAlloc);
+            renderer.lightBuffer = VK_NULL_HANDLE;
+        }
+        if (renderer.descriptorPool)
+        {
+            renderer.device.destroyDescriptorPool(renderer.descriptorPool);
+        }
+        if (renderer.materialSetLayout)
+        {
+            renderer.device.destroyDescriptorSetLayout(renderer.materialSetLayout);
+        }
+        if (renderer.lightSetLayout)
+        {
+            renderer.device.destroyDescriptorSetLayout(renderer.lightSetLayout);
+        }
+        if (renderer.linearSampler)
+        {
+            renderer.device.destroySampler(renderer.linearSampler);
+        }
 
         for (FrameData& frame : renderer.frames)
         {
@@ -1390,11 +1631,13 @@ namespace se
         renderingInfo.depthAttachmentFormat = DepthFormat;
 
         vk::PushConstantRange pushConstant{};
-        pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
+        pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
         pushConstant.offset = 0;
-        pushConstant.size = sizeof(glm::mat4);
+        pushConstant.size = sizeof(DrawParams);
 
+        std::array<vk::DescriptorSetLayout, 2> setLayouts{ renderer.materialSetLayout, renderer.lightSetLayout };
         vk::PipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);
         auto layoutResult = checked(renderer.device.createPipelineLayout(layoutInfo), "createPipelineLayout (mesh)");
         if (!layoutResult)
@@ -1530,22 +1773,35 @@ namespace se
         return handle;
     }
 
-    void drawMesh(Renderer& renderer, u32 meshHandle, u32 pipelineHandle, const glm::mat4& mvp)
+    void drawMesh(Renderer& renderer, u32 meshHandle, u32 pipelineHandle, u32 textureHandle, const DrawParams& params)
     {
         if (meshHandle >= renderer.meshes.size() || pipelineHandle >= renderer.pipelines.size())
+        {
+            return;
+        }
+        if (textureHandle >= renderer.materialSets.size())
+        {
+            textureHandle = renderer.defaultWhiteTexture;
+        }
+        if (textureHandle >= renderer.materialSets.size())
         {
             return;
         }
         const GpuMesh& gpu = renderer.meshes[meshHandle];
         vk::Pipeline pipeline = renderer.pipelines[pipelineHandle].pipeline;
         vk::PipelineLayout layout = renderer.pipelines[pipelineHandle].layout;
+        vk::DescriptorSet materialSet = renderer.materialSets[textureHandle];
+        vk::DescriptorSet lightSet = renderer.lightSet;
         vk::Buffer vertexBuffer = gpu.vertexBuffer;
         vk::Buffer indexBuffer = gpu.indexBuffer;
         std::vector<Submesh> submeshes = gpu.submeshes;
-        submit(renderer, [pipeline, layout, vertexBuffer, indexBuffer, submeshes, mvp](vk::CommandBuffer cmd)
+        submit(renderer, [pipeline, layout, materialSet, lightSet, vertexBuffer, indexBuffer, submeshes, params](vk::CommandBuffer cmd)
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
-            cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &mvp);
+            std::array<vk::DescriptorSet, 2> sets{ materialSet, lightSet };
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, sets, {});
+            cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+                              0, sizeof(DrawParams), &params);
             vk::DeviceSize offset = 0;
             cmd.bindVertexBuffers(0, vertexBuffer, offset);
             cmd.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint32);
@@ -1554,6 +1810,153 @@ namespace se
                 cmd.drawIndexed(submesh.indexCount, 1, submesh.firstIndex, submesh.vertexOffset, 0);
             }
         });
+    }
+
+    u32 defaultTexture(const Renderer& renderer)
+    {
+        return renderer.defaultWhiteTexture;
+    }
+
+    void setDirectionalLight(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity, f32 ambient)
+    {
+        if (renderer.lightMapped == nullptr)
+        {
+            return;
+        }
+        LightUbo ubo;
+        ubo.directionAmbient = glm::vec4(glm::normalize(direction), ambient);
+        ubo.colorIntensity = glm::vec4(color, intensity);
+        std::memcpy(renderer.lightMapped, &ubo, sizeof(ubo));
+        vmaFlushAllocation(renderer.allocator, renderer.lightAlloc, 0, sizeof(ubo));
+    }
+
+    std::expected<u32, std::string> uploadTexture(Renderer& renderer, const u8* rgba, u32 width, u32 height, bool srgb)
+    {
+        if (width == 0 || height == 0)
+        {
+            return std::unexpected(std::string{ "uploadTexture: zero-sized image" });
+        }
+        const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(width) * height * 4;
+
+        VkBufferCreateInfo stagingInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        stagingInfo.size = bytes;
+        stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo stagingAlloc{};
+        stagingAlloc.usage = VMA_MEMORY_USAGE_AUTO;
+        stagingAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation stagingAllocation = nullptr;
+        VmaAllocationInfo stagingMapped{};
+        if (vmaCreateBuffer(renderer.allocator, &stagingInfo, &stagingAlloc, &staging, &stagingAllocation, &stagingMapped) != VK_SUCCESS)
+        {
+            return std::unexpected(std::string{ "uploadTexture: staging vmaCreateBuffer failed" });
+        }
+        std::memcpy(stagingMapped.pMappedData, rgba, bytes);
+        vmaFlushAllocation(renderer.allocator, stagingAllocation, 0, VK_WHOLE_SIZE);
+
+        const vk::Format format = srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+        VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = static_cast<VkFormat>(format);
+        imageInfo.extent = VkExtent3D{ width, height, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo imageAlloc{};
+        imageAlloc.usage = VMA_MEMORY_USAGE_AUTO;
+        imageAlloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        VkImage rawImage = VK_NULL_HANDLE;
+        VmaAllocation imageAllocation = nullptr;
+        if (vmaCreateImage(renderer.allocator, &imageInfo, &imageAlloc, &rawImage, &imageAllocation, nullptr) != VK_SUCCESS)
+        {
+            vmaDestroyBuffer(renderer.allocator, staging, stagingAllocation);
+            return std::unexpected(std::string{ "uploadTexture: vmaCreateImage failed" });
+        }
+
+        vk::CommandBufferAllocateInfo cmdAlloc{};
+        cmdAlloc.commandPool = renderer.frames[0].commandPool;
+        cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
+        cmdAlloc.commandBufferCount = 1;
+        auto cmds = checked(renderer.device.allocateCommandBuffers(cmdAlloc), "uploadTexture: allocateCommandBuffers");
+        if (!cmds)
+        {
+            vmaDestroyImage(renderer.allocator, rawImage, imageAllocation);
+            vmaDestroyBuffer(renderer.allocator, staging, stagingAllocation);
+            return std::unexpected(cmds.error());
+        }
+        vk::CommandBuffer cmd = (*cmds)[0];
+        vk::CommandBufferBeginInfo begin{};
+        begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+        static_cast<void>(cmd.begin(begin));
+        transitionImage(cmd, vk::Image{ rawImage },
+            vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
+        vk::BufferImageCopy region{};
+        region.imageSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
+        region.imageExtent = vk::Extent3D{ width, height, 1 };
+        cmd.copyBufferToImage(vk::Buffer{ staging }, vk::Image{ rawImage }, vk::ImageLayout::eTransferDstOptimal, region);
+        transitionImage(cmd, vk::Image{ rawImage },
+            vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+        static_cast<void>(cmd.end());
+        vk::CommandBufferSubmitInfo cmdInfo{};
+        cmdInfo.commandBuffer = cmd;
+        vk::SubmitInfo2 submitInfo{};
+        submitInfo.setCommandBufferInfos(cmdInfo);
+        static_cast<void>(renderer.graphicsQueue.submit2(submitInfo, nullptr));
+        static_cast<void>(renderer.device.waitIdle());
+        renderer.device.freeCommandBuffers(renderer.frames[0].commandPool, cmd);
+        vmaDestroyBuffer(renderer.allocator, staging, stagingAllocation);
+
+        vk::ImageViewCreateInfo viewInfo{};
+        viewInfo.image = vk::Image{ rawImage };
+        viewInfo.viewType = vk::ImageViewType::e2D;
+        viewInfo.format = format;
+        viewInfo.subresourceRange = vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+        auto view = checked(renderer.device.createImageView(viewInfo), "uploadTexture: createImageView");
+        if (!view)
+        {
+            vmaDestroyImage(renderer.allocator, rawImage, imageAllocation);
+            return std::unexpected(view.error());
+        }
+
+        vk::DescriptorSetAllocateInfo setAlloc{};
+        setAlloc.descriptorPool = renderer.descriptorPool;
+        setAlloc.setSetLayouts(renderer.materialSetLayout);
+        auto allocated = checked(renderer.device.allocateDescriptorSets(setAlloc), "uploadTexture: allocateDescriptorSets");
+        if (!allocated)
+        {
+            renderer.device.destroyImageView(*view);
+            vmaDestroyImage(renderer.allocator, rawImage, imageAllocation);
+            return std::unexpected(allocated.error());
+        }
+        vk::DescriptorSet set = (*allocated)[0];
+        vk::DescriptorImageInfo imageDescriptor{ renderer.linearSampler, *view, vk::ImageLayout::eShaderReadOnlyOptimal };
+        vk::WriteDescriptorSet write{};
+        write.dstSet = set;
+        write.dstBinding = 0;
+        write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        write.setImageInfo(imageDescriptor);
+        renderer.device.updateDescriptorSets(write, {});
+
+        GpuTexture texture;
+        texture.device = renderer.device;
+        texture.allocator = renderer.allocator;
+        texture.image = vk::Image{ rawImage };
+        texture.view = *view;
+        texture.alloc = imageAllocation;
+        texture.extent = vk::Extent2D{ width, height };
+        texture.format = format;
+
+        const u32 handle = static_cast<u32>(renderer.textures.size());
+        renderer.textures.push_back(std::move(texture));
+        renderer.materialSets.push_back(set);
+        return handle;
     }
 
     std::expected<void, std::string> captureViewport(Renderer& renderer, const std::string& path)
