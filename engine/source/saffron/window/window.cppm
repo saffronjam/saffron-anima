@@ -29,6 +29,7 @@ export namespace se
         SubscriberList<u32, u32> onResize;       // width, height (pixels)
         SubscriberList<i32, bool> onKeyPressed;  // keycode, isRepeat
         SubscriberList<i32> onKeyReleased;       // keycode
+        SubscriberList<std::string> onFileDropped;  // dropped file path
 
         // Raw SDL events are forwarded to each sink before typed dispatch.
         // The UI layer uses this to feed ImGui without coupling Window to ImGui.
@@ -103,6 +104,10 @@ export namespace se
             else if (event.type == SDL_EVENT_KEY_UP)
             {
                 window.onKeyReleased.publish(static_cast<i32>(event.key.key));
+            }
+            else if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr)
+            {
+                window.onFileDropped.publish(std::string{ event.drop.data });
             }
         }
     }

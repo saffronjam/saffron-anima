@@ -67,6 +67,24 @@ int main()
             }
         }
 
+        // One import path for both GUI entry points: File > Import and drag-and-drop.
+        auto importAndSpawn = [state, &app](const std::string& path)
+        {
+            std::expected<se::Uuid, std::string> id = se::importModel(state->assets, app.renderer, path);
+            if (!id)
+            {
+                se::logError(id.error());
+                return;
+            }
+            se::setSelection(*state->editor, se::spawnMesh(state->editor->scene, "Mesh", *id));
+        };
+        state->editor->onImportModel = importAndSpawn;
+        app.window.onFileDropped.subscribe([importAndSpawn](std::string path)
+        {
+            importAndSpawn(path);
+            return false;
+        });
+
         se::Layer layer;
         layer.name = "EditorLayer";
         layer.onUpdate = [state, &app](se::TimeSpan)

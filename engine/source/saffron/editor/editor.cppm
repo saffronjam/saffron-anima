@@ -12,6 +12,7 @@ module;
 
 #include <expected>
 #include <format>
+#include <functional>
 #include <string>
 
 export module Saffron.Editor;
@@ -31,6 +32,11 @@ export namespace se
         Entity selected{ entt::null };
         SubscriberList<Entity> onSelectionChanged;
         std::string scenePath;
+
+        // Set by the client to import a model path (File > Import / drag-and-drop).
+        // The editor has no renderer/assets, so importing is delegated to this hook.
+        std::function<void(const std::string&)> onImportModel;
+        std::string importPath;  // the Import dialog's text buffer
     };
 
     void setSelection(EditorContext& ctx, Entity entity)
@@ -252,47 +258,72 @@ export namespace se
 
     void drawEditorMenuBar(EditorContext& ctx)
     {
-        if (!ImGui::BeginMainMenuBar())
+        bool openImport = false;
+        if (ImGui::BeginMainMenuBar())
         {
-            return;
-        }
-        if (ImGui::BeginMenu("File"))
-        {
-            std::string path = ctx.scenePath;
-            if (path.empty())
+            if (ImGui::BeginMenu("File"))
             {
-                path = "scene.json";
-            }
+                std::string path = ctx.scenePath;
+                if (path.empty())
+                {
+                    path = "scene.json";
+                }
 
-            if (ImGui::MenuItem("Save Scene"))
-            {
-                std::expected<void, std::string> result = writeScene(ctx.registry, ctx.scene, path);
-                if (!result)
+                if (ImGui::MenuItem("Save Scene"))
                 {
-                    logError(result.error());
+                    std::expected<void, std::string> result = writeScene(ctx.registry, ctx.scene, path);
+                    if (!result)
+                    {
+                        logError(result.error());
+                    }
+                    else
+                    {
+                        ctx.scenePath = path;
+                        logInfo(std::format("saved scene to {}", path));
+                    }
                 }
-                else
+                if (ImGui::MenuItem("Load Scene"))
                 {
-                    ctx.scenePath = path;
-                    logInfo(std::format("saved scene to {}", path));
+                    std::expected<void, std::string> result = readScene(ctx.registry, ctx.scene, path);
+                    if (!result)
+                    {
+                        logError(result.error());
+                    }
+                    else
+                    {
+                        ctx.scenePath = path;
+                        setSelection(ctx, Entity{ entt::null });
+                        logInfo(std::format("loaded scene from {}", path));
+                    }
                 }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Import Model..."))
+                {
+                    openImport = true;
+                }
+                ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("Load Scene"))
-            {
-                std::expected<void, std::string> result = readScene(ctx.registry, ctx.scene, path);
-                if (!result)
-                {
-                    logError(result.error());
-                }
-                else
-                {
-                    ctx.scenePath = path;
-                    setSelection(ctx, Entity{ entt::null });
-                    logInfo(std::format("loaded scene from {}", path));
-                }
-            }
-            ImGui::EndMenu();
+            ImGui::EndMainMenuBar();
         }
-        ImGui::EndMainMenuBar();
+
+        if (openImport)
+        {
+            ImGui::OpenPopup("Import Model");
+        }
+        if (ImGui::BeginPopupModal("Import Model", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::InputText("Path", &ctx.importPath);
+            if (ImGui::Button("Import") && ctx.onImportModel)
+            {
+                ctx.onImportModel(ctx.importPath);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
 }
