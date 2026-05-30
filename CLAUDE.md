@@ -99,9 +99,10 @@ SaffronEngine/
 │       ├── core/core.cppm        # module Saffron.Core  — aliases, TimeSpan, logging
 │       ├── signal/signal.cppm    # module Saffron.Signal — SubscriberList<...> signal/slot
 │       ├── window/window.cppm    # module Saffron.Window — SDL3 window + typed event signals
-│       ├── scene/scene.cppm      # module Saffron.Scene — entt ECS, value components, forEach
+│       ├── scene/scene.cppm      # module Saffron.Scene — entt ECS + ComponentRegistry + JSON serialization
 │       ├── rendering/renderer.cppm  # module Saffron.Rendering — Vulkan device/swapchain/frame loop + submit() seam
-│       ├── ui/ui.cppm            # module Saffron.Ui — ImGui docking (SDL3 + Vulkan backends)
+│       ├── ui/ui.cppm            # module Saffron.Ui — ImGui docking (SDL3 + Vulkan backends) + Viewport
+│       ├── editor/editor.cppm    # module Saffron.Editor — hierarchy + generic inspector + component registration
 │       └── app/app.cppm          # module Saffron.App — App/Layer/AppConfig + run() main loop
 └── editor/
     ├── CMakeLists.txt      # SaffronEditor executable
@@ -110,8 +111,8 @@ SaffronEngine/
 
 Modules form a DAG (real imports, not a single chain): `Signal→Core`,
 `Window→{Core,Signal}`, `Scene→Core`, `Rendering→{Core,Window}`,
-`Ui→{Core,Window,Rendering}`, `App→{Core,Window,Rendering,Ui}`. The editor links
-`Saffron::Engine` and imports the modules it needs (Core/App/Window/Scene).
+`Ui→{Core,Window,Rendering}`, `Editor→{Core,Signal,Scene}`, `App→{Core,Window,Rendering,Ui}`.
+The editor exe links `Saffron::Engine` and imports the modules it needs (Core/App/Window/Rendering/Ui/Editor).
 
 ### Module conventions
 - One namespace: `se`. Engine modules are named `Saffron.<Area>`.
@@ -165,11 +166,17 @@ Working and verified (validation-clean) in the toolbox:
   dumps the offscreen image to a PPM.
 - ✅ ImGui docking (SDL3 + Vulkan backends, dynamic rendering).
 - ✅ entt `Scene`/`Entity` + value components + `forEach`.
+- ✅ **Modular `ComponentRegistry`** (struct-of-closures itable; `registerComponent<C>`) driving
+  registry-based **JSON scene save/load** + the editor — adding a component is one `registerComponent`
+  call, no central edits. See `ecs-architecture` memory.
+- ✅ Editor: **Hierarchy** + generic **Inspector** (add/remove component) + File save/load; selection
+  via `SubscriberList<Entity>`.
 
 Not done yet (planned):
-- Scene JSON serialization (nlohmann); `RenderGraph` / `RenderPass` frame graph + `SceneRenderer` facade.
-- Editor panels: entity inspector, hierarchy — wired via signals. Wiring entt entities
-  to actually drive the scene pass (mesh rendering + offscreen depth).
+- A **render system** that draws the ECS scene into the Viewport (mesh + material components,
+  offscreen depth) — replaces the placeholder triangle; needs vertex/index `Buffer` meta-layer.
+- `RenderGraph`/`RenderPass` frame graph; `Saffron.Physics` (Jolt) RigidBody + system; `resolveRefs`
+  + scene-graph parenting; undo/redo.
 - `volk`, multi-viewport ImGui, hardware GPU in the toolbox.
 
 See the memory notes (`build-environment`, `saffron-rewrite-plan`,
