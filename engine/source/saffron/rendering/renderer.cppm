@@ -10,8 +10,10 @@ module;
 #include <VkBootstrap.h>
 #include <vk_mem_alloc.h>
 #include <stb_image_write.h>
+#include <glm/glm.hpp>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -27,9 +29,13 @@ export module Saffron.Rendering;
 
 import Saffron.Core;
 import Saffron.Window;
+import Saffron.Geometry;
 
 export namespace se
 {
+    // Format of the offscreen depth buffer. D32_SFLOAT is universally supported.
+    inline constexpr vk::Format DepthFormat = vk::Format::eD32Sfloat;
+
     // A unit of GPU work recorded into the active command buffer — the deferred
     // submission seam. The backend supplies the command buffer.
     using RenderFn = std::function<void(vk::CommandBuffer)>;
@@ -177,6 +183,80 @@ export namespace se
         }
     };
 
+    // A device-local mesh: vertex + index buffers + the submesh ranges. Move-only
+    // like Pipeline/Image; owned by the Renderer and freed before the allocator.
+    struct GpuMesh
+    {
+        VmaAllocator allocator = nullptr;  // borrowed
+        vk::Buffer vertexBuffer;
+        VmaAllocation vertexAlloc = nullptr;
+        vk::Buffer indexBuffer;
+        VmaAllocation indexAlloc = nullptr;
+        u32 indexCount = 0;
+        std::vector<Submesh> submeshes;
+
+        GpuMesh() = default;
+        GpuMesh(const GpuMesh&) = delete;
+        GpuMesh& operator=(const GpuMesh&) = delete;
+
+        GpuMesh(GpuMesh&& other) noexcept
+            : allocator(other.allocator), vertexBuffer(other.vertexBuffer), vertexAlloc(other.vertexAlloc),
+              indexBuffer(other.indexBuffer), indexAlloc(other.indexAlloc), indexCount(other.indexCount),
+              submeshes(std::move(other.submeshes))
+        {
+            other.allocator = nullptr;
+            other.vertexBuffer = nullptr;
+            other.vertexAlloc = nullptr;
+            other.indexBuffer = nullptr;
+            other.indexAlloc = nullptr;
+        }
+
+        GpuMesh& operator=(GpuMesh&& other) noexcept
+        {
+            if (this != &other)
+            {
+                reset();
+                allocator = other.allocator;
+                vertexBuffer = other.vertexBuffer;
+                vertexAlloc = other.vertexAlloc;
+                indexBuffer = other.indexBuffer;
+                indexAlloc = other.indexAlloc;
+                indexCount = other.indexCount;
+                submeshes = std::move(other.submeshes);
+                other.allocator = nullptr;
+                other.vertexBuffer = nullptr;
+                other.vertexAlloc = nullptr;
+                other.indexBuffer = nullptr;
+                other.indexAlloc = nullptr;
+            }
+            return *this;
+        }
+
+        ~GpuMesh()
+        {
+            reset();
+        }
+
+        void reset()
+        {
+            if (allocator != nullptr)
+            {
+                if (vertexBuffer)
+                {
+                    vmaDestroyBuffer(allocator, static_cast<VkBuffer>(vertexBuffer), vertexAlloc);
+                }
+                if (indexBuffer)
+                {
+                    vmaDestroyBuffer(allocator, static_cast<VkBuffer>(indexBuffer), indexAlloc);
+                }
+            }
+            vertexBuffer = nullptr;
+            indexBuffer = nullptr;
+            vertexAlloc = nullptr;
+            indexAlloc = nullptr;
+        }
+    };
+
     struct Renderer
     {
         // vk-bootstrap keeps the bits we need for clean teardown.
@@ -208,8 +288,10 @@ export namespace se
         std::vector<RenderFn> sceneSubmissions;  // replayed into the offscreen pass
         std::vector<RenderFn> uiSubmissions;     // replayed into the swapchain pass
         std::vector<Pipeline> pipelines;         // owned; destroyed before the device
+        std::vector<GpuMesh> meshes;             // owned; destroyed before the allocator
 
         Image offscreenViewport;       // scene render target shown in the Viewport panel
+        Image offscreenDepth;          // depth buffer for the scene pass, sized to the viewport
         u32 viewportDesiredWidth = 0;  // requested by the UI panel (applied next frame)
         u32 viewportDesiredHeight = 0;
         u32 viewportGeneration = 0;    // bumped whenever the offscreen image is recreated
@@ -239,6 +321,12 @@ export namespace se
     // Creates a pipeline owned by the renderer; returns its handle (index).
     std::expected<u32, std::string> newTrianglePipeline(Renderer& renderer, std::string_view shaderName);
     void drawTriangle(Renderer& renderer, u32 pipelineHandle);
+
+    // Mesh rendering: a vertex-buffer + depth-tested pipeline, a device-local mesh
+    // upload, and a draw recorded via submit() with a model-view-projection.
+    std::expected<u32, std::string> newMeshPipeline(Renderer& renderer, std::string_view shaderName);
+    std::expected<u32, std::string> uploadMesh(Renderer& renderer, const Mesh& mesh);
+    void drawMesh(Renderer& renderer, u32 meshHandle, u32 pipelineHandle, const glm::mat4& mvp);
 
     // Copies the offscreen viewport image to a PNG. Synchronous (own submit +
     // waitIdle), safe to call between frames.
@@ -281,7 +369,8 @@ namespace se
             vk::PipelineStageFlags2 srcStage,
             vk::AccessFlags2 srcAccess,
             vk::PipelineStageFlags2 dstStage,
-            vk::AccessFlags2 dstAccess)
+            vk::AccessFlags2 dstAccess,
+            vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor)
         {
             vk::ImageMemoryBarrier2 barrier{};
             barrier.srcStageMask = srcStage;
@@ -291,7 +380,7 @@ namespace se
             barrier.oldLayout = oldLayout;
             barrier.newLayout = newLayout;
             barrier.image = image;
-            barrier.subresourceRange = vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+            barrier.subresourceRange = vk::ImageSubresourceRange{ aspect, 0, 1, 0, 1 };
 
             vk::DependencyInfo dependency{};
             dependency.setImageMemoryBarriers(barrier);
@@ -498,6 +587,54 @@ namespace se
             return result;
         }
 
+        std::expected<Image, std::string> newDepthImage(Renderer& renderer, u32 width, u32 height)
+        {
+            VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.format = static_cast<VkFormat>(DepthFormat);
+            imageInfo.extent = VkExtent3D{ width, height, 1 };
+            imageInfo.mipLevels = 1;
+            imageInfo.arrayLayers = 1;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VmaAllocationCreateInfo allocInfo{};
+            allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+            allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+
+            VkImage rawImage = VK_NULL_HANDLE;
+            VmaAllocation allocation = nullptr;
+            if (vmaCreateImage(renderer.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) != VK_SUCCESS)
+            {
+                return std::unexpected(std::string{ "vmaCreateImage failed for depth target" });
+            }
+
+            vk::ImageViewCreateInfo viewInfo{};
+            viewInfo.image = vk::Image{ rawImage };
+            viewInfo.viewType = vk::ImageViewType::e2D;
+            viewInfo.format = DepthFormat;
+            viewInfo.subresourceRange = vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1 };
+            vk::ResultValue<vk::ImageView> view = renderer.device.createImageView(viewInfo);
+            if (view.result != vk::Result::eSuccess)
+            {
+                vmaDestroyImage(renderer.allocator, rawImage, allocation);
+                return std::unexpected(std::format("createImageView (depth): {}", vk::to_string(view.result)));
+            }
+
+            Image result;
+            result.device = renderer.device;
+            result.allocator = renderer.allocator;
+            result.image = vk::Image{ rawImage };
+            result.view = view.value;
+            result.alloc = allocation;
+            result.extent = vk::Extent2D{ width, height };
+            result.format = DepthFormat;
+            result.layout = vk::ImageLayout::eUndefined;
+            return result;
+        }
+
         // Host-visible, mapped buffer the caller owns (vmaDestroyBuffer when done).
         std::expected<void, std::string> newHostCaptureBuffer(
             Renderer& renderer, vk::DeviceSize bytes,
@@ -663,6 +800,13 @@ namespace se
         renderer.viewportDesiredHeight = window.height;
         renderer.viewportGeneration = 1;
 
+        auto depth = newDepthImage(renderer, window.width, window.height);
+        if (!depth)
+        {
+            return std::unexpected(depth.error());
+        }
+        renderer.offscreenDepth = std::move(*depth);
+
         for (FrameData& frame : renderer.frames)
         {
             vk::CommandPoolCreateInfo poolInfo{};
@@ -717,6 +861,8 @@ namespace se
         }
 
         renderer.offscreenViewport.reset();  // free before the allocator/device
+        renderer.offscreenDepth.reset();
+        renderer.meshes.clear();             // RAII frees device buffers before the allocator
         renderer.pipelines.clear();          // RAII frees them while the device is still alive
 
         for (FrameData& frame : renderer.frames)
@@ -782,6 +928,15 @@ namespace se
             {
                 renderer.offscreenViewport = std::move(*resized);
                 renderer.viewportGeneration = renderer.viewportGeneration + 1;
+                auto resizedDepth = newDepthImage(renderer, renderer.viewportDesiredWidth, renderer.viewportDesiredHeight);
+                if (resizedDepth)
+                {
+                    renderer.offscreenDepth = std::move(*resizedDepth);
+                }
+                else
+                {
+                    logError(resizedDepth.error());
+                }
             }
             else
             {
@@ -851,6 +1006,16 @@ namespace se
             vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite);
         offscreen.layout = vk::ImageLayout::eColorAttachmentOptimal;
 
+        // Depth is cleared every frame (loadOp clear), so enter from Undefined.
+        Image& depth = renderer.offscreenDepth;
+        transitionImage(
+            frame.commandBuffer, depth.image,
+            vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
+            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+            vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+            vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+            vk::ImageAspectFlagBits::eDepth);
+
         vk::RenderingAttachmentInfo sceneColor{};
         sceneColor.imageView = offscreen.view;
         sceneColor.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
@@ -858,11 +1023,18 @@ namespace se
         sceneColor.storeOp = vk::AttachmentStoreOp::eStore;
         sceneColor.clearValue = vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } };
 
+        vk::RenderingAttachmentInfo sceneDepth{};
+        sceneDepth.imageView = depth.view;
+        sceneDepth.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
+        sceneDepth.loadOp = vk::AttachmentLoadOp::eClear;
+        sceneDepth.storeOp = vk::AttachmentStoreOp::eDontCare;
+        sceneDepth.clearValue = vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } };
+
         vk::RenderingInfo sceneRendering{};
         sceneRendering.renderArea = vk::Rect2D{ vk::Offset2D{ 0, 0 }, offscreen.extent };
         sceneRendering.layerCount = 1;
         sceneRendering.setColorAttachments(sceneColor);
-        // TODO(meshes): add a depth attachment here when geometry needs it.
+        sceneRendering.setPDepthAttachment(&sceneDepth);
         frame.commandBuffer.beginRendering(sceneRendering);
 
         vk::Viewport sceneViewport{ 0.0f, 0.0f,
@@ -1129,6 +1301,240 @@ namespace se
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
             cmd.draw(3, 1, 0, 0);
+        });
+    }
+
+    std::expected<u32, std::string> newMeshPipeline(Renderer& renderer, std::string_view shaderName)
+    {
+        std::string path = assetPath(shaderName);
+        auto moduleResult = loadShaderModule(renderer.device, path);
+        if (!moduleResult)
+        {
+            return std::unexpected(moduleResult.error());
+        }
+        vk::ShaderModule shaderModule = *moduleResult;
+
+        std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
+        stages[0].stage = vk::ShaderStageFlagBits::eVertex;
+        stages[0].module = shaderModule;
+        stages[0].pName = "vertexMain";
+        stages[1].stage = vk::ShaderStageFlagBits::eFragment;
+        stages[1].module = shaderModule;
+        stages[1].pName = "fragmentMain";
+
+        vk::VertexInputBindingDescription binding{};
+        binding.binding = 0;
+        binding.stride = sizeof(Vertex);
+        binding.inputRate = vk::VertexInputRate::eVertex;
+
+        std::array<vk::VertexInputAttributeDescription, 3> attributes{
+            vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
+            vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+
+        vk::PipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.setVertexBindingDescriptions(binding);
+        vertexInput.setVertexAttributeDescriptions(attributes);
+
+        vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+
+        vk::PipelineViewportStateCreateInfo viewportState{};
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+
+        vk::PipelineRasterizationStateCreateInfo raster{};
+        raster.polygonMode = vk::PolygonMode::eFill;
+        raster.cullMode = vk::CullModeFlagBits::eNone;  // enable Back once winding is verified
+        raster.frontFace = vk::FrontFace::eCounterClockwise;
+        raster.lineWidth = 1.0f;
+
+        vk::PipelineMultisampleStateCreateInfo multisample{};
+        multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
+
+        vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp = vk::CompareOp::eLess;
+
+        vk::PipelineColorBlendAttachmentState blendAttachment{};
+        blendAttachment.blendEnable = VK_FALSE;
+        blendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+        vk::PipelineColorBlendStateCreateInfo colorBlend{};
+        colorBlend.setAttachments(blendAttachment);
+
+        std::array<vk::DynamicState, 2> dynamicStates{ vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+        vk::PipelineDynamicStateCreateInfo dynamic{};
+        dynamic.setDynamicStates(dynamicStates);
+
+        vk::PipelineRenderingCreateInfo renderingInfo{};
+        renderingInfo.setColorAttachmentFormats(renderer.swapchainFormat);
+        renderingInfo.depthAttachmentFormat = DepthFormat;
+
+        vk::PushConstantRange pushConstant{};
+        pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
+        pushConstant.offset = 0;
+        pushConstant.size = sizeof(glm::mat4);
+
+        vk::PipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.setPushConstantRanges(pushConstant);
+        auto layoutResult = checked(renderer.device.createPipelineLayout(layoutInfo), "createPipelineLayout (mesh)");
+        if (!layoutResult)
+        {
+            renderer.device.destroyShaderModule(shaderModule);
+            return std::unexpected(layoutResult.error());
+        }
+
+        vk::GraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.pNext = &renderingInfo;
+        pipelineInfo.setStages(stages);
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &raster;
+        pipelineInfo.pMultisampleState = &multisample;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamic;
+        pipelineInfo.layout = *layoutResult;
+
+        vk::ResultValue<vk::Pipeline> created = renderer.device.createGraphicsPipeline(nullptr, pipelineInfo);
+        renderer.device.destroyShaderModule(shaderModule);
+        if (created.result != vk::Result::eSuccess)
+        {
+            renderer.device.destroyPipelineLayout(*layoutResult);
+            return std::unexpected(std::format("createGraphicsPipeline (mesh): {}", vk::to_string(created.result)));
+        }
+
+        Pipeline pipeline;
+        pipeline.device = renderer.device;
+        pipeline.pipeline = created.value;
+        pipeline.layout = *layoutResult;
+        u32 handle = static_cast<u32>(renderer.pipelines.size());
+        renderer.pipelines.push_back(std::move(pipeline));
+        return handle;
+    }
+
+    std::expected<u32, std::string> uploadMesh(Renderer& renderer, const Mesh& mesh)
+    {
+        if (mesh.vertices.empty() || mesh.indices.empty())
+        {
+            return std::unexpected(std::string{ "uploadMesh: empty mesh" });
+        }
+        const vk::DeviceSize vertexBytes = mesh.vertices.size() * sizeof(Vertex);
+        const vk::DeviceSize indexBytes = mesh.indices.size() * sizeof(u32);
+
+        // One staging buffer holds [vertices | indices]; two copies fan it out to
+        // device-local vertex + index buffers.
+        VkBufferCreateInfo stagingInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        stagingInfo.size = vertexBytes + indexBytes;
+        stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo stagingAlloc{};
+        stagingAlloc.usage = VMA_MEMORY_USAGE_AUTO;
+        stagingAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation stagingAllocation = nullptr;
+        VmaAllocationInfo stagingMapped{};
+        if (vmaCreateBuffer(renderer.allocator, &stagingInfo, &stagingAlloc, &staging, &stagingAllocation, &stagingMapped) != VK_SUCCESS)
+        {
+            return std::unexpected(std::string{ "uploadMesh: staging vmaCreateBuffer failed" });
+        }
+        std::memcpy(stagingMapped.pMappedData, mesh.vertices.data(), vertexBytes);
+        std::memcpy(static_cast<char*>(stagingMapped.pMappedData) + vertexBytes, mesh.indices.data(), indexBytes);
+        vmaFlushAllocation(renderer.allocator, stagingAllocation, 0, VK_WHOLE_SIZE);
+
+        auto makeDeviceBuffer = [&](vk::DeviceSize size, VkBufferUsageFlags usage, VkBuffer& outBuffer, VmaAllocation& outAlloc) -> bool
+        {
+            VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+            info.size = size;
+            info.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            VmaAllocationCreateInfo alloc{};
+            alloc.usage = VMA_MEMORY_USAGE_AUTO;
+            return vmaCreateBuffer(renderer.allocator, &info, &alloc, &outBuffer, &outAlloc, nullptr) == VK_SUCCESS;
+        };
+
+        GpuMesh gpu;
+        gpu.allocator = renderer.allocator;
+        gpu.indexCount = static_cast<u32>(mesh.indices.size());
+        gpu.submeshes = mesh.submeshes;
+
+        VkBuffer vertexBuffer = VK_NULL_HANDLE;
+        VkBuffer indexBuffer = VK_NULL_HANDLE;
+        VmaAllocation vertexAlloc = nullptr;
+        VmaAllocation indexAlloc = nullptr;
+        if (!makeDeviceBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertexBuffer, vertexAlloc) ||
+            !makeDeviceBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indexBuffer, indexAlloc))
+        {
+            if (vertexBuffer != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(renderer.allocator, vertexBuffer, vertexAlloc);
+            }
+            vmaDestroyBuffer(renderer.allocator, staging, stagingAllocation);
+            return std::unexpected(std::string{ "uploadMesh: device vmaCreateBuffer failed" });
+        }
+        gpu.vertexBuffer = vk::Buffer{ vertexBuffer };
+        gpu.vertexAlloc = vertexAlloc;
+        gpu.indexBuffer = vk::Buffer{ indexBuffer };
+        gpu.indexAlloc = indexAlloc;
+
+        vk::CommandBufferAllocateInfo cmdAlloc{};
+        cmdAlloc.commandPool = renderer.frames[0].commandPool;
+        cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
+        cmdAlloc.commandBufferCount = 1;
+        auto cmds = checked(renderer.device.allocateCommandBuffers(cmdAlloc), "uploadMesh: allocateCommandBuffers");
+        if (!cmds)
+        {
+            vmaDestroyBuffer(renderer.allocator, staging, stagingAllocation);
+            return std::unexpected(cmds.error());
+        }
+        vk::CommandBuffer cmd = (*cmds)[0];
+
+        vk::CommandBufferBeginInfo begin{};
+        begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+        static_cast<void>(cmd.begin(begin));
+        cmd.copyBuffer(vk::Buffer{ staging }, gpu.vertexBuffer, vk::BufferCopy{ 0, 0, vertexBytes });
+        cmd.copyBuffer(vk::Buffer{ staging }, gpu.indexBuffer, vk::BufferCopy{ vertexBytes, 0, indexBytes });
+        static_cast<void>(cmd.end());
+
+        vk::CommandBufferSubmitInfo cmdInfo{};
+        cmdInfo.commandBuffer = cmd;
+        vk::SubmitInfo2 submitInfo{};
+        submitInfo.setCommandBufferInfos(cmdInfo);
+        static_cast<void>(renderer.graphicsQueue.submit2(submitInfo, nullptr));
+        static_cast<void>(renderer.device.waitIdle());
+        vmaDestroyBuffer(renderer.allocator, staging, stagingAllocation);
+
+        const u32 handle = static_cast<u32>(renderer.meshes.size());
+        renderer.meshes.push_back(std::move(gpu));
+        logInfo(std::format("uploaded mesh: {} vertices, {} indices, {} submeshes",
+                            mesh.vertices.size(), mesh.indices.size(), mesh.submeshes.size()));
+        return handle;
+    }
+
+    void drawMesh(Renderer& renderer, u32 meshHandle, u32 pipelineHandle, const glm::mat4& mvp)
+    {
+        if (meshHandle >= renderer.meshes.size() || pipelineHandle >= renderer.pipelines.size())
+        {
+            return;
+        }
+        const GpuMesh& gpu = renderer.meshes[meshHandle];
+        vk::Pipeline pipeline = renderer.pipelines[pipelineHandle].pipeline;
+        vk::PipelineLayout layout = renderer.pipelines[pipelineHandle].layout;
+        vk::Buffer vertexBuffer = gpu.vertexBuffer;
+        vk::Buffer indexBuffer = gpu.indexBuffer;
+        std::vector<Submesh> submeshes = gpu.submeshes;
+        submit(renderer, [pipeline, layout, vertexBuffer, indexBuffer, submeshes, mvp](vk::CommandBuffer cmd)
+        {
+            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+            cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &mvp);
+            vk::DeviceSize offset = 0;
+            cmd.bindVertexBuffers(0, vertexBuffer, offset);
+            cmd.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint32);
+            for (const Submesh& submesh : submeshes)
+            {
+                cmd.drawIndexed(submesh.indexCount, 1, submesh.firstIndex, submesh.vertexOffset, 0);
+            }
         });
     }
 

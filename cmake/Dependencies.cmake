@@ -93,4 +93,5 @@ target_link_libraries(saffron_third_party INTERFACE
     imgui)
 # The engine bans exceptions; make nlohmann/json turn would-be throws into abort()
 # so any stray .at()/operator[] on missing keys fails loudly instead of throwing.
-target_compile_definitions(saffron_third_party INTERFACE JSON_NOEXCEPTION)
+# GLM_FORCE_DEPTH_ZERO_TO_ONE makes glm::perspective emit Vulkan's [0,1] clip depth.
+target_compile_definitions(saffron_third_party INTERFACE JSON_NOEXCEPTION GLM_FORCE_DEPTH_ZERO_TO_ONE)

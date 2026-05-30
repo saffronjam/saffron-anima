@@ -1,6 +1,8 @@
 // imgui.h is a heavy C++ header, so this TU uses classic includes (no `import
 // std`) — consistent with the engine's rendering/ui/scene modules.
 #include <imgui.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <expected>
 #include <memory>
@@ -14,6 +16,7 @@ import Saffron.Rendering;
 import Saffron.Ui;
 import Saffron.Editor;
 import Saffron.Control;
+import Saffron.Geometry;
 
 namespace
 {
@@ -25,8 +28,9 @@ namespace
     {
         se::EditorContext* editor = nullptr;
         se::ControlContext* control = nullptr;
-        se::u32 trianglePipeline = 0;
-        bool pipelineReady = false;
+        se::u32 meshPipeline = 0;
+        se::u32 cubeMesh = 0;
+        bool meshReady = false;
     };
 }
 
@@ -42,16 +46,29 @@ int main()
         state->editor = se::newEditorContext();
         state->control = se::newControlContext();
 
-        std::expected<se::u32, std::string> pipeline =
-            se::newTrianglePipeline(app.renderer, "shaders/triangle.spv");
-        if (pipeline)
-        {
-            state->trianglePipeline = *pipeline;
-            state->pipelineReady = true;
-        }
-        else
+        std::expected<se::u32, std::string> pipeline = se::newMeshPipeline(app.renderer, "shaders/mesh.spv");
+        if (!pipeline)
         {
             se::logError(pipeline.error());
+        }
+        std::expected<se::Mesh, std::string> cube = se::importModelFile(se::assetPath("models/cube.gltf"));
+        if (!cube)
+        {
+            se::logError(cube.error());
+        }
+        if (pipeline && cube)
+        {
+            std::expected<se::u32, std::string> uploaded = se::uploadMesh(app.renderer, *cube);
+            if (uploaded)
+            {
+                state->meshPipeline = *pipeline;
+                state->cubeMesh = *uploaded;
+                state->meshReady = true;
+            }
+            else
+            {
+                se::logError(uploaded.error());
+            }
         }
 
         se::Layer layer;
@@ -65,10 +82,18 @@ int main()
         };
         layer.onRender = [state, &app]()
         {
-            if (state->pipelineReady)
+            if (!state->meshReady)
             {
-                se::drawTriangle(app.renderer, state->trianglePipeline);  // placeholder Viewport content
+                return;
             }
+            const float aspect = static_cast<float>(app.window.width) / static_cast<float>(app.window.height);
+            glm::mat4 model = glm::rotate(glm::mat4(1.0f), glm::radians(35.0f),
+                                          glm::normalize(glm::vec3(0.4f, 1.0f, 0.2f)));
+            glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f),
+                                         glm::vec3(0.0f, 1.0f, 0.0f));
+            glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
+            proj[1][1] *= -1.0f;  // flip Y into Vulkan clip space
+            se::drawMesh(app.renderer, state->cubeMesh, state->meshPipeline, proj * view * model);
         };
         layer.onUi = [state, &app]()
         {

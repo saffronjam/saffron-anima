@@ -11,3 +11,10 @@ target_link_libraries(SaffronEditor PRIVATE Saffron::Engine)
 saffron_compile_shaders(SaffronEditor
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
     ${SAFFRON_RUNTIME_DIR}/shaders)
+
+# Copy model assets next to the executable so assetPath("models/...") resolves.
+add_custom_command(TARGET SaffronEditor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models
+            ${SAFFRON_RUNTIME_DIR}/models
+    COMMENT "Copying models to the runtime dir")
