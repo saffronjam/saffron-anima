@@ -234,7 +234,13 @@ namespace se
                 {
                     for (cgltf_size i = 0; i < prim.indices->count; i = i + 1)
                     {
-                        mesh.indices.push_back(static_cast<u32>(cgltf_accessor_read_index(prim.indices, i)));
+                        const cgltf_size index = cgltf_accessor_read_index(prim.indices, i);
+                        if (index >= vertexCount)
+                        {
+                            cgltf_free(data);
+                            return std::unexpected(std::format("cgltf: '{}' has an out-of-range index", path));
+                        }
+                        mesh.indices.push_back(static_cast<u32>(index));
                     }
                 }
                 else
@@ -275,7 +281,11 @@ namespace se
         const bool ok = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, path.c_str());
         if (!ok)
         {
-            return std::unexpected(err.empty() ? std::format("tinyobjloader: cannot load '{}'", path) : err);
+            if (err.empty())
+            {
+                return std::unexpected(std::format("tinyobjloader: cannot load '{}'", path));
+            }
+            return std::unexpected(err);
         }
 
         Mesh mesh;
@@ -290,19 +300,26 @@ namespace se
                 auto it = uniqueVertices.find(key);
                 if (it == uniqueVertices.end())
                 {
+                    if (index.vertex_index < 0 ||
+                        static_cast<std::size_t>(3 * index.vertex_index + 2) >= attrib.vertices.size())
+                    {
+                        return std::unexpected(std::format("tinyobjloader: '{}' has an out-of-range vertex index", path));
+                    }
                     Vertex vertex;
                     vertex.position = glm::vec3(
                         attrib.vertices[3 * index.vertex_index + 0],
                         attrib.vertices[3 * index.vertex_index + 1],
                         attrib.vertices[3 * index.vertex_index + 2]);
-                    if (index.normal_index >= 0)
+                    if (index.normal_index >= 0 &&
+                        static_cast<std::size_t>(3 * index.normal_index + 2) < attrib.normals.size())
                     {
                         vertex.normal = glm::vec3(
                             attrib.normals[3 * index.normal_index + 0],
                             attrib.normals[3 * index.normal_index + 1],
                             attrib.normals[3 * index.normal_index + 2]);
                     }
-                    if (index.texcoord_index >= 0)
+                    if (index.texcoord_index >= 0 &&
+                        static_cast<std::size_t>(2 * index.texcoord_index + 1) < attrib.texcoords.size())
                     {
                         // OBJ texture V origin is bottom-left; Vulkan samples top-left.
                         vertex.uv0 = glm::vec2(
@@ -417,10 +434,18 @@ namespace se
         {
             return std::unexpected(std::format("'{}' has an incompatible vertex/index layout", path));
         }
-        const u64 expectedSize = header.submeshesOffset + static_cast<u64>(header.submeshCount) * sizeof(Submesh);
-        if (static_cast<u64>(fileSize) < expectedSize)
+        // Recompute the layout from the counts and require the header offsets to match
+        // and the file to be large enough. This rejects a malformed huge count before
+        // it reaches resize() (which would otherwise abort on a giant allocation).
+        const u64 verticesEnd = static_cast<u64>(sizeof(SMeshHeader)) + static_cast<u64>(header.vertexCount) * sizeof(Vertex);
+        const u64 indicesEnd = verticesEnd + static_cast<u64>(header.indexCount) * sizeof(u32);
+        const u64 submeshesEnd = indicesEnd + static_cast<u64>(header.submeshCount) * sizeof(Submesh);
+        if (header.verticesOffset != sizeof(SMeshHeader) ||
+            header.indicesOffset != verticesEnd ||
+            header.submeshesOffset != indicesEnd ||
+            static_cast<u64>(fileSize) < submeshesEnd)
         {
-            return std::unexpected(std::format("'{}' is truncated", path));
+            return std::unexpected(std::format("'{}' has an inconsistent or truncated layout", path));
         }
 
         Mesh mesh;

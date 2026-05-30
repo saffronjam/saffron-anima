@@ -687,8 +687,13 @@ namespace se
             std::vector<unsigned char> rgb(static_cast<std::size_t>(width) * height * 3);
             for (u32 i = 0; i < width * height; i = i + 1)
             {
-                const u32 r = bgr ? (i * 4 + 2) : (i * 4 + 0);
-                const u32 b = bgr ? (i * 4 + 0) : (i * 4 + 2);
+                u32 r = i * 4 + 0;
+                u32 b = i * 4 + 2;
+                if (bgr)
+                {
+                    r = i * 4 + 2;
+                    b = i * 4 + 0;
+                }
                 rgb[i * 3 + 0] = pixels[r];
                 rgb[i * 3 + 1] = pixels[i * 4 + 1];
                 rgb[i * 3 + 2] = pixels[b];
@@ -1001,9 +1006,9 @@ namespace se
         FrameData& frame = renderer.frames[renderer.frameIndex];
         Image& offscreen = renderer.offscreenViewport;
 
-        // Pass 1: scene -> offscreen image. Enter from the image's tracked layout
-        // (Undefined on frame 1 / after a recreate; ShaderReadOnly thereafter, the
-        // WAR barrier vs last frame's read).
+        // Render the scene into the offscreen image. Enter from the image's tracked
+        // layout (Undefined on frame 1 / after a recreate; ShaderReadOnly thereafter,
+        // the WAR barrier vs last frame's read).
         vk::PipelineStageFlags2 srcStage = vk::PipelineStageFlagBits2::eTopOfPipe;
         vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eNone;
         if (offscreen.layout == vk::ImageLayout::eShaderReadOnlyOptimal)
@@ -1071,7 +1076,7 @@ namespace se
             vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
         offscreen.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
-        // Pass 2: ImGui -> swapchain image.
+        // Render ImGui into the swapchain image.
         transitionImage(
             frame.commandBuffer, renderer.swapchainImages[renderer.imageIndex],
             vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
@@ -1515,6 +1520,7 @@ namespace se
         submitInfo.setCommandBufferInfos(cmdInfo);
         static_cast<void>(renderer.graphicsQueue.submit2(submitInfo, nullptr));
         static_cast<void>(renderer.device.waitIdle());
+        renderer.device.freeCommandBuffers(renderer.frames[0].commandPool, cmd);
         vmaDestroyBuffer(renderer.allocator, staging, stagingAllocation);
 
         const u32 handle = static_cast<u32>(renderer.meshes.size());
@@ -1609,6 +1615,7 @@ namespace se
         submitInfo.setCommandBufferInfos(cmdInfo);
         static_cast<void>(renderer.graphicsQueue.submit2(submitInfo, nullptr));
         static_cast<void>(renderer.device.waitIdle());
+        renderer.device.freeCommandBuffers(renderer.frames[0].commandPool, cmd);
         vmaInvalidateAllocation(renderer.allocator, bufferAllocation, 0, VK_WHOLE_SIZE);
 
         std::expected<void, std::string> wrote = writeBufferToPng(

@@ -313,6 +313,11 @@ export namespace se
             return std::unexpected(std::format("cannot open '{}' for writing", path));
         }
         out << doc.dump(2);
+        out.flush();
+        if (!out)
+        {
+            return std::unexpected(std::format("write failed for '{}'", path));
+        }
         return {};
     }
 
@@ -347,8 +352,8 @@ export namespace se
         scene.registry.clear();
         std::unordered_map<u64, entt::entity> uuidToHandle;
 
-        // Pass 1: create entities (preserving uuids — do NOT use createEntity, which
-        // would mint fresh ones) and deserialize their components.
+        // Create entities preserving uuids (NOT createEntity, which mints fresh ones)
+        // and deserialize their components.
         for (const nlohmann::json& entry : doc["entities"])
         {
             if (!entry.is_object())
@@ -375,8 +380,8 @@ export namespace se
             }
         }
 
-        // Pass 2: resolve cross-entity references (uuid -> live handle). No
-        // reference-holding components exist yet; the hook is ready for them.
+        // Resolve cross-entity references (uuid -> live handle). No reference-holding
+        // components exist yet; the hook is ready for them.
         static_cast<void>(uuidToHandle);
         return {};
     }

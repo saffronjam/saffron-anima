@@ -106,9 +106,15 @@ export namespace se
     // cache miss. Returns false for an unregistered or unreadable asset.
     bool loadMeshAsset(AssetServer& assets, Renderer& renderer, Uuid id, u32& outHandle)
     {
+        constexpr u32 invalidHandle = ~0u;  // negative-cache marker for a failed load
+
         auto cached = assets.meshHandleByUuid.find(id.value);
         if (cached != assets.meshHandleByUuid.end())
         {
+            if (cached->second == invalidHandle)
+            {
+                return false;
+            }
             outHandle = cached->second;
             return true;
         }
@@ -118,20 +124,24 @@ export namespace se
             return false;
         }
         std::expected<Mesh, std::string> mesh = loadMesh(assets.root + "/" + path->second);
-        if (!mesh)
+        if (mesh)
+        {
+            std::expected<u32, std::string> handle = uploadMesh(renderer, *mesh);
+            if (handle)
+            {
+                assets.meshHandleByUuid[id.value] = *handle;
+                outHandle = *handle;
+                return true;
+            }
+            logWarn(std::format("asset {}: {}", id.value, handle.error()));
+        }
+        else
         {
             logWarn(std::format("asset {}: {}", id.value, mesh.error()));
-            return false;
         }
-        std::expected<u32, std::string> handle = uploadMesh(renderer, *mesh);
-        if (!handle)
-        {
-            logWarn(std::format("asset {}: {}", id.value, handle.error()));
-            return false;
-        }
-        assets.meshHandleByUuid[id.value] = *handle;
-        outHandle = *handle;
-        return true;
+        // Negative-cache so a broken registered asset is not retried + re-logged each frame.
+        assets.meshHandleByUuid[id.value] = invalidHandle;
+        return false;
     }
 
     // Creates an entity carrying the given mesh asset.
