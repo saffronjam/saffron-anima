@@ -9,6 +9,7 @@ target_sources(SaffronEngine
             source/saffron/core/core.cppm
             source/saffron/signal/signal.cppm
             source/saffron/window/window.cppm
+            source/saffron/geometry/geometry.cppm
             source/saffron/scene/scene.cppm
             source/saffron/rendering/renderer.cppm
             source/saffron/ui/ui.cppm

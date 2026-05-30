@@ -67,6 +67,16 @@ add_library(stb STATIC ${CMAKE_SOURCE_DIR}/cmake/stb_impl.cpp)
 target_include_directories(stb PUBLIC ${CMAKE_SOURCE_DIR}/third_party/stb)
 target_compile_options(stb PRIVATE -Wno-unused-function)  # stb ships static helpers
 
+# --- Model importers ----------------------------------------------------------
+# Single-header, MIT, exception-free, vendored under third_party. One impl TU
+# each; the Geometry module wraps both into std::expected at the boundary.
+add_library(cgltf STATIC ${CMAKE_SOURCE_DIR}/cmake/cgltf_impl.cpp)         # glTF 2.0, v1.15
+target_include_directories(cgltf PUBLIC ${CMAKE_SOURCE_DIR}/third_party/cgltf)
+target_compile_options(cgltf PRIVATE -Wno-unused-function)
+
+add_library(tinyobjloader STATIC ${CMAKE_SOURCE_DIR}/cmake/tinyobjloader_impl.cpp)  # OBJ, v1.0.6
+target_include_directories(tinyobjloader PUBLIC ${CMAKE_SOURCE_DIR}/third_party/tinyobjloader)
+
 # Convenience interface target aggregating everything the engine links against.
 add_library(saffron_third_party INTERFACE)
 target_link_libraries(saffron_third_party INTERFACE
@@ -78,6 +88,8 @@ target_link_libraries(saffron_third_party INTERFACE
     vk-bootstrap::vk-bootstrap
     vma
     stb
+    cgltf
+    tinyobjloader
     imgui)
 # The engine bans exceptions; make nlohmann/json turn would-be throws into abort()
 # so any stray .at()/operator[] on missing keys fails loudly instead of throwing.
