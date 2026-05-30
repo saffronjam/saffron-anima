@@ -228,16 +228,35 @@ export namespace se
                 {
                     return std::unexpected(std::string{ "missing 'path'" });
                 }
-                std::expected<Uuid, std::string> id = importModel(ctx.assets, ctx.renderer, path);
+                std::expected<ImportResult, std::string> imported = importModel(ctx.assets, ctx.renderer, path);
+                if (!imported)
+                {
+                    return std::unexpected(imported.error());
+                }
+                Entity entity = spawnModel(ctx.editor.scene, "Mesh", *imported);
+                setSelection(ctx.editor, entity);
+                json result = entityRef(ctx.editor.scene, entity);
+                result["mesh"] = imported->mesh.value;
+                result["albedoTexture"] = imported->albedoTexture.value;
+                return result;
+            });
+
+        // Imports an external image into the asset dir; returns its texture id (assign
+        // it with set-material --albedoTexture <id>).
+        registerCommand(reg, "import-texture", "import-texture {path}",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                const std::string path = asString(positionalOr(params, "path", 0), "");
+                if (path.empty())
+                {
+                    return std::unexpected(std::string{ "missing 'path'" });
+                }
+                std::expected<Uuid, std::string> id = importTexture(ctx.assets, ctx.renderer, path);
                 if (!id)
                 {
                     return std::unexpected(id.error());
                 }
-                Entity entity = spawnMesh(ctx.editor.scene, "Mesh", *id);
-                setSelection(ctx.editor, entity);
-                json result = entityRef(ctx.editor.scene, entity);
-                result["asset"] = id->value;
-                return result;
+                return json{ { "texture", id->value } };
             });
 
         registerCommand(reg, "destroy-entity", "destroy-entity {entity}",

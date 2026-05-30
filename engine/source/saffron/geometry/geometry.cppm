@@ -4,6 +4,7 @@ module;
 // includes (no `import std`), like the rendering/scene modules.
 #include <cgltf.h>
 #include <tiny_obj_loader.h>
+#include <stb_image.h>
 #include <glm/glm.hpp>
 
 #include <array>
@@ -50,9 +51,37 @@ export namespace se
 
     inline constexpr u32 MeshFormatVersion = 1;
 
+    // The primary material extracted from a model: a base color factor and, if any,
+    // the encoded (png/jpg) albedo bytes (read from an external file or embedded).
+    struct ImportedMaterial
+    {
+        glm::vec4 baseColor{ 1.0f };
+        std::vector<u8> albedoBytes;
+        std::string albedoExt;  // "png" / "jpg"
+        bool hasAlbedo = false;
+    };
+
+    struct ImportedModel
+    {
+        Mesh mesh;
+        ImportedMaterial material;
+    };
+
+    // Decoded RGBA8 pixels, tightly packed (width*height*4 bytes).
+    struct DecodedImage
+    {
+        std::vector<u8> rgba;
+        u32 width = 0;
+        u32 height = 0;
+    };
+
     std::expected<Mesh, std::string> importGltf(const std::string& path);
     std::expected<Mesh, std::string> importObj(const std::string& path);
     std::expected<Mesh, std::string> importModelFile(const std::string& path);  // dispatch by extension
+
+    std::expected<ImportedModel, std::string> importModelWithMaterial(const std::string& path);
+    std::expected<DecodedImage, std::string> decodeImage(const std::string& path);
+    std::expected<DecodedImage, std::string> decodeImageFromMemory(const std::vector<u8>& encoded);
 
     std::expected<void, std::string> saveMesh(const Mesh& mesh, const std::string& path);  // baked .smesh
     std::expected<Mesh, std::string> loadMesh(const std::string& path);
@@ -120,6 +149,57 @@ namespace se
             }
             return false;
         }
+
+        std::string directoryOf(const std::string& path)
+        {
+            const std::size_t slash = path.find_last_of("/\\");
+            if (slash == std::string::npos)
+            {
+                return std::string{ "." };
+            }
+            return path.substr(0, slash);
+        }
+
+        std::string extensionOf(const std::string& path)
+        {
+            const std::size_t dot = path.find_last_of('.');
+            if (dot == std::string::npos)
+            {
+                return std::string{};
+            }
+            return path.substr(dot + 1);
+        }
+
+        std::string extensionFromMime(const std::string& mime)
+        {
+            if (mime == "image/png")
+            {
+                return std::string{ "png" };
+            }
+            if (mime == "image/jpeg")
+            {
+                return std::string{ "jpg" };
+            }
+            return std::string{ "png" };
+        }
+
+        std::expected<std::vector<u8>, std::string> readBinaryFile(const std::string& path)
+        {
+            std::ifstream in(path, std::ios::binary | std::ios::ate);
+            if (!in)
+            {
+                return std::unexpected(std::format("cannot open '{}'", path));
+            }
+            const std::streamsize size = in.tellg();
+            in.seekg(0);
+            std::vector<u8> bytes(static_cast<std::size_t>(size));
+            in.read(reinterpret_cast<char*>(bytes.data()), size);
+            if (!in)
+            {
+                return std::unexpected(std::format("read failed for '{}'", path));
+            }
+            return bytes;
+        }
     }
 
     void generateNormals(Mesh& mesh)
@@ -157,7 +237,7 @@ namespace se
         }
     }
 
-    std::expected<Mesh, std::string> importGltf(const std::string& path)
+    std::expected<ImportedModel, std::string> importGltfModel(const std::string& path)
     {
         cgltf_options options{};
         cgltf_data* data = nullptr;
@@ -172,6 +252,7 @@ namespace se
         }
 
         Mesh mesh;
+        const cgltf_material* primaryMaterial = nullptr;
         for (cgltf_size m = 0; m < data->meshes_count; m = m + 1)
         {
             const cgltf_mesh& gltfMesh = data->meshes[m];
@@ -205,6 +286,10 @@ namespace se
                 if (positions == nullptr)
                 {
                     continue;
+                }
+                if (primaryMaterial == nullptr && prim.material != nullptr)
+                {
+                    primaryMaterial = prim.material;
                 }
 
                 const i32 vertexOffset = static_cast<i32>(mesh.vertices.size());
@@ -259,6 +344,41 @@ namespace se
                 mesh.submeshes.push_back(submesh);
             }
         }
+        ImportedMaterial material;
+        if (primaryMaterial != nullptr && primaryMaterial->has_pbr_metallic_roughness)
+        {
+            const cgltf_pbr_metallic_roughness& pbr = primaryMaterial->pbr_metallic_roughness;
+            material.baseColor = glm::vec4(pbr.base_color_factor[0], pbr.base_color_factor[1],
+                                           pbr.base_color_factor[2], pbr.base_color_factor[3]);
+            const cgltf_texture_view& albedoView = pbr.base_color_texture;
+            if (albedoView.texture != nullptr && albedoView.texture->image != nullptr)
+            {
+                const cgltf_image* image = albedoView.texture->image;
+                if (image->buffer_view != nullptr)
+                {
+                    const cgltf_buffer_view* bufferView = image->buffer_view;
+                    const u8* src = static_cast<const u8*>(bufferView->buffer->data) + bufferView->offset;
+                    material.albedoBytes.assign(src, src + bufferView->size);
+                    std::string mime;
+                    if (image->mime_type != nullptr)
+                    {
+                        mime = image->mime_type;
+                    }
+                    material.albedoExt = extensionFromMime(mime);
+                    material.hasAlbedo = !material.albedoBytes.empty();
+                }
+                else if (image->uri != nullptr && std::strncmp(image->uri, "data:", 5) != 0)
+                {
+                    const std::string full = directoryOf(path) + "/" + image->uri;
+                    if (std::expected<std::vector<u8>, std::string> bytes = readBinaryFile(full); bytes)
+                    {
+                        material.albedoBytes = std::move(*bytes);
+                        material.albedoExt = extensionOf(image->uri);
+                        material.hasAlbedo = true;
+                    }
+                }
+            }
+        }
         cgltf_free(data);
 
         if (mesh.vertices.empty())
@@ -269,16 +389,27 @@ namespace se
         {
             generateNormals(mesh);
         }
-        return mesh;
+        return ImportedModel{ std::move(mesh), std::move(material) };
     }
 
-    std::expected<Mesh, std::string> importObj(const std::string& path)
+    std::expected<Mesh, std::string> importGltf(const std::string& path)
+    {
+        std::expected<ImportedModel, std::string> model = importGltfModel(path);
+        if (!model)
+        {
+            return std::unexpected(model.error());
+        }
+        return std::move(model->mesh);
+    }
+
+    std::expected<ImportedModel, std::string> importObjModel(const std::string& path)
     {
         tinyobj::attrib_t attrib;
         std::vector<tinyobj::shape_t> shapes;
         std::vector<tinyobj::material_t> materials;
         std::string err;  // tinyobjloader 1.0.6 combines warnings + errors here
-        const bool ok = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, path.c_str());
+        const std::string baseDir = directoryOf(path);  // resolve .mtl + textures next to the obj
+        const bool ok = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, path.c_str(), baseDir.c_str());
         if (!ok)
         {
             if (err.empty())
@@ -356,7 +487,50 @@ namespace se
         {
             generateNormals(mesh);
         }
-        return mesh;
+
+        int primaryMaterialId = -1;
+        for (const tinyobj::shape_t& shape : shapes)
+        {
+            for (int id : shape.mesh.material_ids)
+            {
+                if (id >= 0)
+                {
+                    primaryMaterialId = id;
+                    break;
+                }
+            }
+            if (primaryMaterialId >= 0)
+            {
+                break;
+            }
+        }
+        ImportedMaterial material;
+        if (primaryMaterialId >= 0 && static_cast<std::size_t>(primaryMaterialId) < materials.size())
+        {
+            const tinyobj::material_t& mat = materials[static_cast<std::size_t>(primaryMaterialId)];
+            material.baseColor = glm::vec4(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2], 1.0f);
+            if (!mat.diffuse_texname.empty())
+            {
+                const std::string full = baseDir + "/" + mat.diffuse_texname;
+                if (std::expected<std::vector<u8>, std::string> bytes = readBinaryFile(full); bytes)
+                {
+                    material.albedoBytes = std::move(*bytes);
+                    material.albedoExt = extensionOf(mat.diffuse_texname);
+                    material.hasAlbedo = true;
+                }
+            }
+        }
+        return ImportedModel{ std::move(mesh), std::move(material) };
+    }
+
+    std::expected<Mesh, std::string> importObj(const std::string& path)
+    {
+        std::expected<ImportedModel, std::string> model = importObjModel(path);
+        if (!model)
+        {
+            return std::unexpected(model.error());
+        }
+        return std::move(model->mesh);
     }
 
     std::expected<Mesh, std::string> importModelFile(const std::string& path)
@@ -370,6 +544,56 @@ namespace se
             return importObj(path);
         }
         return std::unexpected(std::format("unsupported model format: '{}' (expected .gltf/.glb/.obj)", path));
+    }
+
+    std::expected<ImportedModel, std::string> importModelWithMaterial(const std::string& path)
+    {
+        if (endsWithIgnoreCase(path, ".gltf") || endsWithIgnoreCase(path, ".glb"))
+        {
+            return importGltfModel(path);
+        }
+        if (endsWithIgnoreCase(path, ".obj"))
+        {
+            return importObjModel(path);
+        }
+        return std::unexpected(std::format("unsupported model format: '{}' (expected .gltf/.glb/.obj)", path));
+    }
+
+    std::expected<DecodedImage, std::string> decodeImage(const std::string& path)
+    {
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        stbi_uc* pixels = stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+        if (pixels == nullptr)
+        {
+            return std::unexpected(std::format("cannot decode image '{}'", path));
+        }
+        DecodedImage image;
+        image.width = static_cast<u32>(width);
+        image.height = static_cast<u32>(height);
+        image.rgba.assign(pixels, pixels + static_cast<std::size_t>(width) * height * 4);
+        stbi_image_free(pixels);
+        return image;
+    }
+
+    std::expected<DecodedImage, std::string> decodeImageFromMemory(const std::vector<u8>& encoded)
+    {
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        stbi_uc* pixels = stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()),
+                                                &width, &height, &channels, STBI_rgb_alpha);
+        if (pixels == nullptr)
+        {
+            return std::unexpected(std::string{ "cannot decode image from memory" });
+        }
+        DecodedImage image;
+        image.width = static_cast<u32>(width);
+        image.height = static_cast<u32>(height);
+        image.rgba.assign(pixels, pixels + static_cast<std::size_t>(width) * height * 4);
+        stbi_image_free(pixels);
+        return image;
     }
 
     std::expected<void, std::string> saveMesh(const Mesh& mesh, const std::string& path)

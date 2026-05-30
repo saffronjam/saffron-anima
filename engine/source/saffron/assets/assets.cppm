@@ -30,8 +30,18 @@ export namespace se
     struct AssetServer
     {
         std::string root;
-        std::unordered_map<u64, std::string> pathByUuid;
-        std::unordered_map<u64, u32> meshHandleByUuid;
+        std::unordered_map<u64, std::string> pathByUuid;          // id -> baked .smesh
+        std::unordered_map<u64, u32> meshHandleByUuid;            // cache of uploaded meshes
+        std::unordered_map<u64, std::string> texturePathByUuid;   // id -> copied texture file
+        std::unordered_map<u64, u32> textureHandleByUuid;         // cache of uploaded textures
+    };
+
+    // What importModel produces: the spawned mesh + its primary material.
+    struct ImportResult
+    {
+        Uuid mesh;
+        glm::vec4 baseColor{ 1.0f };
+        Uuid albedoTexture;  // 0 == none
     };
 
     void writeAssetRegistry(const AssetServer& assets)
@@ -41,10 +51,16 @@ export namespace se
         {
             meshes[std::to_string(uuid)] = path;
         }
+        nlohmann::json textures = nlohmann::json::object();
+        for (const auto& [uuid, path] : assets.texturePathByUuid)
+        {
+            textures[std::to_string(uuid)] = path;
+        }
         std::ofstream out(assets.root + "/asset_registry.json");
         if (out)
         {
-            out << nlohmann::json{ { "version", 1 }, { "meshes", std::move(meshes) } }.dump(2);
+            out << nlohmann::json{ { "version", 1 }, { "meshes", std::move(meshes) },
+                                   { "textures", std::move(textures) } }.dump(2);
         }
     }
 
@@ -55,20 +71,33 @@ export namespace se
         assets.root = std::move(root);
         std::error_code ec;
         std::filesystem::create_directories(assets.root + "/meshes", ec);
+        std::filesystem::create_directories(assets.root + "/textures", ec);
 
         std::ifstream in(assets.root + "/asset_registry.json");
         if (in)
         {
             std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
             nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
-            if (!doc.is_discarded() && doc.contains("meshes") && doc["meshes"].is_object())
+            if (!doc.is_discarded())
             {
-                for (auto it = doc["meshes"].begin(); it != doc["meshes"].end(); ++it)
+                if (doc.contains("meshes") && doc["meshes"].is_object())
                 {
-                    if (it.value().is_string())
+                    for (auto it = doc["meshes"].begin(); it != doc["meshes"].end(); ++it)
                     {
-                        const u64 uuid = std::strtoull(it.key().c_str(), nullptr, 10);
-                        assets.pathByUuid[uuid] = it.value().get<std::string>();
+                        if (it.value().is_string())
+                        {
+                            assets.pathByUuid[std::strtoull(it.key().c_str(), nullptr, 10)] = it.value().get<std::string>();
+                        }
+                    }
+                }
+                if (doc.contains("textures") && doc["textures"].is_object())
+                {
+                    for (auto it = doc["textures"].begin(); it != doc["textures"].end(); ++it)
+                    {
+                        if (it.value().is_string())
+                        {
+                            assets.texturePathByUuid[std::strtoull(it.key().c_str(), nullptr, 10)] = it.value().get<std::string>();
+                        }
                     }
                 }
             }
@@ -76,30 +105,146 @@ export namespace se
         return assets;
     }
 
-    // Imports a source model, bakes it to a .smesh under root, uploads it, registers
-    // the id -> path mapping (persisting the registry), and returns the new id.
-    std::expected<Uuid, std::string> importModel(AssetServer& assets, Renderer& renderer, const std::string& path)
+    // Writes encoded image bytes into assets/textures/<uuid>.<ext>, decodes + uploads
+    // them, registers + persists the mapping, and returns the new texture id.
+    std::expected<Uuid, std::string> registerTextureBytes(AssetServer& assets, Renderer& renderer,
+                                                          const std::vector<u8>& encoded, const std::string& ext)
     {
-        std::expected<Mesh, std::string> mesh = importModelFile(path);
-        if (!mesh)
+        std::expected<DecodedImage, std::string> decoded = decodeImageFromMemory(encoded);
+        if (!decoded)
         {
-            return std::unexpected(mesh.error());
+            return std::unexpected(decoded.error());
         }
-        const Uuid id = newUuid();
-        const std::string relativePath = "meshes/" + std::to_string(id.value) + ".smesh";
-        if (std::expected<void, std::string> baked = saveMesh(*mesh, assets.root + "/" + relativePath); !baked)
-        {
-            return std::unexpected(baked.error());
-        }
-        std::expected<u32, std::string> handle = uploadMesh(renderer, *mesh);
+        std::expected<u32, std::string> handle = uploadTexture(renderer, decoded->rgba.data(), decoded->width, decoded->height, true);
         if (!handle)
         {
             return std::unexpected(handle.error());
         }
-        assets.pathByUuid[id.value] = relativePath;
-        assets.meshHandleByUuid[id.value] = *handle;
+        const Uuid id = newUuid();
+        std::string extension = ext;
+        if (extension.empty())
+        {
+            extension = "png";
+        }
+        const std::string relativePath = "textures/" + std::to_string(id.value) + "." + extension;
+        std::ofstream out(assets.root + "/" + relativePath, std::ios::binary);
+        if (!out)
+        {
+            return std::unexpected(std::format("cannot write texture '{}'", relativePath));
+        }
+        out.write(reinterpret_cast<const char*>(encoded.data()), static_cast<std::streamsize>(encoded.size()));
+        assets.texturePathByUuid[id.value] = relativePath;
+        assets.textureHandleByUuid[id.value] = *handle;
         writeAssetRegistry(assets);
         return id;
+    }
+
+    // Imports an external image file into the asset dir and registers it.
+    std::expected<Uuid, std::string> importTexture(AssetServer& assets, Renderer& renderer, const std::string& path)
+    {
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (!in)
+        {
+            return std::unexpected(std::format("cannot open '{}'", path));
+        }
+        const std::streamsize size = in.tellg();
+        in.seekg(0);
+        std::vector<u8> encoded(static_cast<std::size_t>(size));
+        in.read(reinterpret_cast<char*>(encoded.data()), size);
+        if (!in)
+        {
+            return std::unexpected(std::format("read failed for '{}'", path));
+        }
+        const std::size_t dot = path.find_last_of('.');
+        std::string ext;
+        if (dot != std::string::npos)
+        {
+            ext = path.substr(dot + 1);
+        }
+        return registerTextureBytes(assets, renderer, encoded, ext);
+    }
+
+    // Resolves a texture id to a GPU texture handle, decoding + uploading the copied
+    // file on a cache miss. Returns false (negative-cached) for an unreadable asset.
+    bool loadTextureAsset(AssetServer& assets, Renderer& renderer, Uuid id, u32& outHandle)
+    {
+        constexpr u32 invalidHandle = ~0u;
+        auto cached = assets.textureHandleByUuid.find(id.value);
+        if (cached != assets.textureHandleByUuid.end())
+        {
+            if (cached->second == invalidHandle)
+            {
+                return false;
+            }
+            outHandle = cached->second;
+            return true;
+        }
+        auto path = assets.texturePathByUuid.find(id.value);
+        if (path == assets.texturePathByUuid.end())
+        {
+            return false;
+        }
+        std::expected<DecodedImage, std::string> decoded = decodeImage(assets.root + "/" + path->second);
+        if (decoded)
+        {
+            std::expected<u32, std::string> handle = uploadTexture(renderer, decoded->rgba.data(), decoded->width, decoded->height, true);
+            if (handle)
+            {
+                assets.textureHandleByUuid[id.value] = *handle;
+                outHandle = *handle;
+                return true;
+            }
+            logWarn(std::format("texture {}: {}", id.value, handle.error()));
+        }
+        else
+        {
+            logWarn(std::format("texture {}: {}", id.value, decoded.error()));
+        }
+        assets.textureHandleByUuid[id.value] = invalidHandle;
+        return false;
+    }
+
+    // Imports a source model: bakes its mesh to a .smesh, uploads it, imports its
+    // primary material's albedo texture (if any), and registers + persists everything.
+    std::expected<ImportResult, std::string> importModel(AssetServer& assets, Renderer& renderer, const std::string& path)
+    {
+        std::expected<ImportedModel, std::string> model = importModelWithMaterial(path);
+        if (!model)
+        {
+            return std::unexpected(model.error());
+        }
+        const Uuid meshId = newUuid();
+        const std::string relativePath = "meshes/" + std::to_string(meshId.value) + ".smesh";
+        if (std::expected<void, std::string> baked = saveMesh(model->mesh, assets.root + "/" + relativePath); !baked)
+        {
+            return std::unexpected(baked.error());
+        }
+        std::expected<u32, std::string> handle = uploadMesh(renderer, model->mesh);
+        if (!handle)
+        {
+            return std::unexpected(handle.error());
+        }
+        assets.pathByUuid[meshId.value] = relativePath;
+        assets.meshHandleByUuid[meshId.value] = *handle;
+
+        ImportResult result;
+        result.mesh = meshId;
+        result.baseColor = model->material.baseColor;
+        if (model->material.hasAlbedo)
+        {
+            std::expected<Uuid, std::string> texture =
+                registerTextureBytes(assets, renderer, model->material.albedoBytes, model->material.albedoExt);
+            if (texture)
+            {
+                result.albedoTexture = *texture;
+            }
+            else
+            {
+                logWarn(std::format("model '{}': albedo texture failed: {}", path, texture.error()));
+            }
+        }
+        writeAssetRegistry(assets);
+        return result;
     }
 
     // Resolves an id to a GPU mesh handle, loading + uploading the baked .smesh on a
@@ -149,6 +294,17 @@ export namespace se
     {
         Entity entity = createEntity(scene, std::move(name));
         addComponent<MeshComponent>(scene, entity).mesh = mesh;
+        return entity;
+    }
+
+    // Creates an entity from an import: a mesh + a material (base color + albedo).
+    Entity spawnModel(Scene& scene, std::string name, const ImportResult& result)
+    {
+        Entity entity = createEntity(scene, std::move(name));
+        addComponent<MeshComponent>(scene, entity).mesh = result.mesh;
+        MaterialComponent& material = addComponent<MaterialComponent>(scene, entity);
+        material.baseColor = result.baseColor;
+        material.albedoTexture = result.albedoTexture;
         return entity;
     }
 
@@ -220,9 +376,19 @@ export namespace se
                     return;
                 }
                 glm::vec4 baseColor{ 1.0f };
+                u32 textureHandle = defaultTexture(renderer);
                 if (hasComponent<MaterialComponent>(scene, entity))
                 {
-                    baseColor = getComponent<MaterialComponent>(scene, entity).baseColor;
+                    const MaterialComponent& material = getComponent<MaterialComponent>(scene, entity);
+                    baseColor = material.baseColor;
+                    if (material.albedoTexture.value != 0)
+                    {
+                        u32 resolved = 0;
+                        if (loadTextureAsset(assets, renderer, material.albedoTexture, resolved))
+                        {
+                            textureHandle = resolved;
+                        }
+                    }
                 }
                 const glm::mat4 model = transformMatrix(transform);
                 DrawParams params;
@@ -231,7 +397,7 @@ export namespace se
                 params.normal1 = glm::vec4(glm::vec3(model[1]), 0.0f);
                 params.normal2 = glm::vec4(glm::vec3(model[2]), 0.0f);
                 params.baseColor = baseColor;
-                drawMesh(renderer, handle, meshPipeline, defaultTexture(renderer), params);
+                drawMesh(renderer, handle, meshPipeline, textureHandle, params);
             });
     }
 }

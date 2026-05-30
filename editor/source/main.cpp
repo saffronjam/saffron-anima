@@ -54,11 +54,11 @@ int main()
         else
         {
             state->meshPipeline = *pipeline;
-            std::expected<se::Uuid, std::string> cube =
+            std::expected<se::ImportResult, std::string> cube =
                 se::importModel(state->assets, app.renderer, se::assetPath("models/cube.gltf"));
             if (cube)
             {
-                se::spawnMesh(state->editor->scene, "Cube", *cube);
+                se::spawnModel(state->editor->scene, "Cube", *cube);
                 state->meshReady = true;
             }
             else
@@ -70,13 +70,13 @@ int main()
         // One import path for both GUI entry points: File > Import and drag-and-drop.
         auto importAndSpawn = [state, &app](const std::string& path)
         {
-            std::expected<se::Uuid, std::string> id = se::importModel(state->assets, app.renderer, path);
-            if (!id)
+            std::expected<se::ImportResult, std::string> imported = se::importModel(state->assets, app.renderer, path);
+            if (!imported)
             {
-                se::logError(id.error());
+                se::logError(imported.error());
                 return;
             }
-            se::setSelection(*state->editor, se::spawnMesh(state->editor->scene, "Mesh", *id));
+            se::setSelection(*state->editor, se::spawnModel(state->editor->scene, "Mesh", *imported));
         };
         state->editor->onImportModel = importAndSpawn;
         app.window.onFileDropped.subscribe([importAndSpawn](std::string path)
