@@ -34,10 +34,18 @@ FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
     GIT_TAG v1.92.8-docking GIT_SHALLOW ON)
 
-FetchContent_MakeAvailable(EnTT glm VulkanMemoryAllocator vk-bootstrap nlohmann_json imgui)
+# ImGuizmo — in-viewport translate/rotate/scale gizmo (master tracks current ImGui).
+# SOURCE_SUBDIR points at a dir with no CMakeLists so MakeAvailable only downloads it
+# (we compile ImGuizmo.cpp into the imgui target ourselves, not its own CMake target).
+FetchContent_Declare(imguizmo
+    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
+    GIT_TAG master GIT_SHALLOW ON
+    SOURCE_SUBDIR src)
+
+FetchContent_MakeAvailable(EnTT glm VulkanMemoryAllocator vk-bootstrap nlohmann_json imgui imguizmo)
 
 # --- Dear ImGui static lib (no upstream CMake) --------------------------------
-# Core + SDL3 platform backend + Vulkan renderer backend.
+# Core + SDL3 platform backend + Vulkan renderer backend + ImGuizmo.
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -46,11 +54,15 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp   # ImGui::InputText(std::string*)
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp)
 target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
-    ${imgui_SOURCE_DIR}/misc/cpp)
+    ${imgui_SOURCE_DIR}/misc/cpp
+    ${imguizmo_SOURCE_DIR}/src)
+# ImGuizmo (and our code) use the ImVec2/ImVec4 math operators from imgui.h.
+target_compile_definitions(imgui PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
 target_link_libraries(imgui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 # Enable docking + viewports config flags at the API level (set in code via io.ConfigFlags).
 

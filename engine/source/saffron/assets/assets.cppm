@@ -320,27 +320,8 @@ export namespace se
     // camera, resolving each mesh on demand. A no-op without a camera or viewport.
     void renderScene(Renderer& renderer, Scene& scene, AssetServer& assets, const Ref<Pipeline>& meshPipeline)
     {
-        bool haveCamera = false;
-        glm::mat4 view{ 1.0f };
-        f32 fov = 45.0f;
-        f32 nearPlane = 0.1f;
-        f32 farPlane = 100.0f;
-        forEach<TransformComponent, CameraComponent>(scene,
-            [&](Entity, TransformComponent& transform, CameraComponent& camera)
-            {
-                if (haveCamera || !camera.primary)
-                {
-                    return;
-                }
-                const glm::mat4 cameraModel =
-                    glm::translate(glm::mat4(1.0f), transform.translation) * glm::mat4_cast(transform.rotation);
-                view = glm::inverse(cameraModel);
-                fov = camera.fov;
-                nearPlane = camera.nearPlane;
-                farPlane = camera.farPlane;
-                haveCamera = true;
-            });
-        if (!haveCamera)
+        const CameraView camera = primaryCamera(scene);
+        if (!camera.valid)
         {
             return;
         }
@@ -352,7 +333,8 @@ export namespace se
             return;
         }
         const f32 aspect = static_cast<f32>(width) / static_cast<f32>(height);
-        glm::mat4 proj = glm::perspective(glm::radians(fov), aspect, nearPlane, farPlane);
+        const glm::mat4 view = camera.view;
+        glm::mat4 proj = cameraProjection(camera, aspect);
         proj[1][1] *= -1.0f;  // flip Y into Vulkan clip space
         const glm::mat4 viewProjection = proj * view;
 
@@ -399,7 +381,7 @@ export namespace se
                 lights.push_back(gpu);
             });
         setSceneLighting(renderer, lightDir, lightColor, lightIntensity, lightAmbient, lights);
-        setClusterCamera(renderer, view, proj, nearPlane, farPlane);  // arms the cull dispatch
+        setClusterCamera(renderer, view, proj, camera.nearPlane, camera.farPlane);  // arms the cull dispatch
 
         // Bucket entities by (mesh, albedo texture) so each bucket draws as one
         // instanced call. Linear lookup — bucket count is the number of distinct

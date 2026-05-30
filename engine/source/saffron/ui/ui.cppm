@@ -5,6 +5,7 @@ module;
 #include <vulkan/vulkan.hpp>
 #include <SDL3/SDL.h>
 #include <imgui.h>
+#include <ImGuizmo.h>
 #include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_vulkan.h>
 
@@ -27,6 +28,9 @@ export namespace se
         ImTextureID viewportTexture = 0;   // ImGui handle for the offscreen image
         u32 knownViewportGeneration = 0;   // offscreen generation we last registered
         bool initialized = false;
+        ImVec2 viewportPos{};              // screen-space rect of the viewport image,
+        ImVec2 viewportSize{};             // captured each frame for gizmo overlay
+        bool viewportHovered = false;
     };
 
     std::expected<Ui, std::string> newUi(Renderer& renderer, Window& window);
@@ -36,6 +40,12 @@ export namespace se
     void uiEndFrame(Ui& ui);                    // ImGui::Render()
     void viewportPanel(Ui& ui, Renderer& renderer);  // dockable scene view
     void uiRecordDrawData(Renderer& renderer);  // submit draw data into the frame
+
+    // The viewport image's screen rect + hover state, valid after viewportPanel ran
+    // this frame — used to place the ImGuizmo overlay.
+    ImVec2 viewportContentPos(const Ui& ui);
+    ImVec2 viewportContentSize(const Ui& ui);
+    bool viewportHovered(const Ui& ui);
 }
 
 namespace se
@@ -134,6 +144,7 @@ namespace se
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
+        ImGuizmo::BeginFrame();
         ImGui::DockSpaceOverViewport();
     }
 
@@ -176,8 +187,26 @@ namespace se
         if (ui.viewportTexture != 0 && avail.x > 0.0f && avail.y > 0.0f)
         {
             ImGui::Image(ui.viewportTexture, avail);  // logical size; image is pixel-sized
+            ui.viewportPos = ImGui::GetItemRectMin();
+            ui.viewportSize = ImGui::GetItemRectSize();
+            ui.viewportHovered = ImGui::IsItemHovered();
         }
         ImGui::End();
+    }
+
+    ImVec2 viewportContentPos(const Ui& ui)
+    {
+        return ui.viewportPos;
+    }
+
+    ImVec2 viewportContentSize(const Ui& ui)
+    {
+        return ui.viewportSize;
+    }
+
+    bool viewportHovered(const Ui& ui)
+    {
+        return ui.viewportHovered;
     }
 
     void uiRecordDrawData(Renderer& renderer)

@@ -5,10 +5,13 @@ module;
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 #include <nlohmann/json.hpp>
 #include <imgui.h>
 #include <imgui_stdlib.h>
+#include <ImGuizmo.h>
 
 #include <expected>
 #include <format>
@@ -37,6 +40,11 @@ export namespace se
         // The editor has no renderer/assets, so importing is delegated to this hook.
         std::function<void(const std::string&)> onImportModel;
         std::string importPath;  // the Import dialog's text buffer
+
+        // Spawns the bundled cube mesh (Create > Cube); delegated like onImportModel
+        // because the editor has no AssetServer to resolve/upload the mesh itself.
+        std::function<void()> onCreateCube;
+        ImGuizmo::OPERATION gizmoOp = ImGuizmo::TRANSLATE;  // W/E/R cycle translate/rotate/scale
     };
 
     void setSelection(EditorContext& ctx, Entity entity)
@@ -404,6 +412,46 @@ export namespace se
                 }
                 ImGui::EndMenu();
             }
+
+            if (ImGui::BeginMenu("Create"))
+            {
+                if (ImGui::MenuItem("Empty"))
+                {
+                    setSelection(ctx, createEntity(ctx.scene, "Entity"));
+                }
+                if (ImGui::MenuItem("Cube") && ctx.onCreateCube)
+                {
+                    ctx.onCreateCube();
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Point Light"))
+                {
+                    Entity e = createEntity(ctx.scene, "Point Light");
+                    addComponent<PointLightComponent>(ctx.scene, e);
+                    getComponent<TransformComponent>(ctx.scene, e).translation = glm::vec3(0.0f, 2.0f, 0.0f);
+                    setSelection(ctx, e);
+                }
+                if (ImGui::MenuItem("Spot Light"))
+                {
+                    Entity e = createEntity(ctx.scene, "Spot Light");
+                    addComponent<SpotLightComponent>(ctx.scene, e);
+                    getComponent<TransformComponent>(ctx.scene, e).translation = glm::vec3(0.0f, 4.0f, 0.0f);
+                    setSelection(ctx, e);
+                }
+                if (ImGui::MenuItem("Directional Light"))
+                {
+                    Entity e = createEntity(ctx.scene, "Directional Light");
+                    addComponent<DirectionalLightComponent>(ctx.scene, e);
+                    setSelection(ctx, e);
+                }
+                if (ImGui::MenuItem("Camera"))
+                {
+                    Entity e = createEntity(ctx.scene, "Camera");
+                    addComponent<CameraComponent>(ctx.scene, e);
+                    setSelection(ctx, e);
+                }
+                ImGui::EndMenu();
+            }
             ImGui::EndMainMenuBar();
         }
 
@@ -425,6 +473,53 @@ export namespace se
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
+        }
+    }
+
+    // In-viewport translate/rotate/scale gizmo for the selected entity. `proj` MUST be
+    // the un-flipped projection (the Vulkan Y-flip stays local to the renderer) or the
+    // gizmo mirrors vertically. Call from onUi after viewportPanel, passing the viewport
+    // image's screen rect. W/E/R cycle the operation while hovering the viewport.
+    void drawGizmo(EditorContext& ctx, const glm::mat4& view, const glm::mat4& proj,
+                   ImVec2 panelPos, ImVec2 panelSize, bool hovered)
+    {
+        if (hovered && !ImGuizmo::IsUsing() && !ImGui::IsAnyItemActive())
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_W)) { ctx.gizmoOp = ImGuizmo::TRANSLATE; }
+            if (ImGui::IsKeyPressed(ImGuiKey_E)) { ctx.gizmoOp = ImGuizmo::ROTATE; }
+            if (ImGui::IsKeyPressed(ImGuiKey_R)) { ctx.gizmoOp = ImGuizmo::SCALE; }
+        }
+
+        Entity selected = ctx.selected;
+        if (selected.handle == entt::null || !valid(ctx.scene, selected) ||
+            !hasComponent<TransformComponent>(ctx.scene, selected) ||
+            panelSize.x <= 0.0f || panelSize.y <= 0.0f)
+        {
+            return;
+        }
+
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetDrawlist(ImGui::GetForegroundDrawList());
+        ImGuizmo::SetRect(panelPos.x, panelPos.y, panelSize.x, panelSize.y);
+
+        TransformComponent& transform = getComponent<TransformComponent>(ctx.scene, selected);
+        glm::mat4 model = transformMatrix(transform);
+        ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj),
+                             ctx.gizmoOp, ImGuizmo::WORLD, glm::value_ptr(model));
+
+        if (ImGuizmo::IsUsing())
+        {
+            glm::vec3 translation{ 0.0f };
+            glm::vec3 scale{ 1.0f };
+            glm::vec3 skew{ 0.0f };
+            glm::vec4 perspective{ 0.0f };
+            glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
+            if (glm::decompose(model, scale, rotation, translation, skew, perspective))
+            {
+                transform.translation = translation;
+                transform.rotation = rotation;
+                transform.scale = scale;
+            }
         }
     }
 }

@@ -173,6 +173,46 @@ export namespace se
         }
     }
 
+    // The resolved primary camera: its view matrix + projection parameters. valid is
+    // false when the scene has no primary camera. The projection is left un-flipped;
+    // the renderer applies the Vulkan Y-flip where it samples, and the editor gizmo
+    // consumes it as-is (one source of truth for both).
+    struct CameraView
+    {
+        glm::mat4 view{ 1.0f };
+        f32 fov = 45.0f;
+        f32 nearPlane = 0.1f;
+        f32 farPlane = 100.0f;
+        bool valid = false;
+    };
+
+    CameraView primaryCamera(Scene& scene)
+    {
+        CameraView result;
+        forEach<TransformComponent, CameraComponent>(scene,
+            [&](Entity, TransformComponent& transform, CameraComponent& camera)
+            {
+                if (result.valid || !camera.primary)
+                {
+                    return;
+                }
+                const glm::mat4 model =
+                    glm::translate(glm::mat4(1.0f), transform.translation) * glm::mat4_cast(transform.rotation);
+                result.view = glm::inverse(model);
+                result.fov = camera.fov;
+                result.nearPlane = camera.nearPlane;
+                result.farPlane = camera.farPlane;
+                result.valid = true;
+            });
+        return result;
+    }
+
+    // Un-flipped perspective projection for the resolved camera (GL clip convention).
+    glm::mat4 cameraProjection(const CameraView& camera, f32 aspect)
+    {
+        return glm::perspective(glm::radians(camera.fov), aspect, camera.nearPlane, camera.farPlane);
+    }
+
     // glm <-> json use named fields; quat storage order is config-dependent, so
     // never serialize positionally.
     nlohmann::json vec3ToJson(const glm::vec3& v)

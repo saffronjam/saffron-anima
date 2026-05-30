@@ -1,6 +1,7 @@
 // imgui.h is a heavy C++ header, so this TU uses classic includes (no `import
 // std`) — consistent with the engine's rendering/ui/scene modules.
 #include <imgui.h>
+#include <glm/glm.hpp>
 
 #include <expected>
 #include <memory>
@@ -29,7 +30,6 @@ namespace
         se::ControlContext* control = nullptr;
         se::AssetServer assets;
         se::Ref<se::Pipeline> meshPipeline;
-        bool meshReady = false;
     };
 }
 
@@ -59,7 +59,6 @@ int main()
             if (cube)
             {
                 se::spawnModel(state->editor->scene, "Cube", *cube);
-                state->meshReady = true;
             }
             else
             {
@@ -79,6 +78,10 @@ int main()
             se::setSelection(*state->editor, se::spawnModel(state->editor->scene, "Mesh", *imported));
         };
         state->editor->onImportModel = importAndSpawn;
+        state->editor->onCreateCube = [state, &app, importAndSpawn]()
+        {
+            importAndSpawn(se::assetPath("models/cube.gltf"));
+        };
         app.window.onFileDropped.subscribe([importAndSpawn](std::string path)
         {
             importAndSpawn(path);
@@ -96,7 +99,7 @@ int main()
         };
         layer.onRender = [state, &app]()
         {
-            if (state->meshReady)
+            if (state->meshPipeline)
             {
                 se::renderScene(app.renderer, state->editor->scene, state->assets, state->meshPipeline);
             }
@@ -105,6 +108,21 @@ int main()
         {
             se::drawEditorMenuBar(*state->editor);
             se::viewportPanel(app.ui, app.renderer);
+
+            // Gizmo overlay: drive it from the same camera the scene renders through,
+            // but with the UN-flipped projection (the renderer keeps the Vulkan Y-flip
+            // local). Aspect matches renderScene's (the offscreen viewport dimensions).
+            const se::u32 vw = se::viewportWidth(app.renderer);
+            const se::u32 vh = se::viewportHeight(app.renderer);
+            se::CameraView cam = se::primaryCamera(state->editor->scene);
+            if (cam.valid && vw > 0 && vh > 0)
+            {
+                glm::mat4 proj = se::cameraProjection(cam, static_cast<float>(vw) / static_cast<float>(vh));
+                se::drawGizmo(*state->editor, cam.view, proj,
+                              se::viewportContentPos(app.ui), se::viewportContentSize(app.ui),
+                              se::viewportHovered(app.ui));
+            }
+
             se::hierarchyPanel(*state->editor);
             se::inspectorPanel(*state->editor);
         };
