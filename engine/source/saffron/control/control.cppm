@@ -359,6 +359,84 @@ export namespace se
                 return entityRef(ctx.editor.scene, *entity);
             });
 
+        // Adds/updates the entity's Material, merging the provided fields over its
+        // current value (baseColor as {x,y,z,w}).
+        registerCommand(reg, "set-material", "set-material {entity, baseColor?:{x,y,z,w}, albedoTexture?:uuid}",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                std::expected<Entity, std::string> entity = resolveEntity(ctx, params);
+                if (!entity)
+                {
+                    return std::unexpected(entity.error());
+                }
+                const ComponentTraits* row = findByName(ctx.editor.registry, "Material");
+                if (row == nullptr)
+                {
+                    return std::unexpected(std::string{ "Material component is not registered" });
+                }
+                if (!row->has(ctx.editor.scene, *entity))
+                {
+                    row->addDefault(ctx.editor.scene, *entity);
+                }
+                json body = row->serialize(ctx.editor.scene, *entity);
+                if (params.contains("baseColor")) { body["baseColor"] = params["baseColor"]; }
+                if (params.contains("albedoTexture")) { body["albedoTexture"] = params["albedoTexture"]; }
+                std::expected<void, std::string> result = row->deserialize(ctx.editor.scene, *entity, body);
+                if (!result)
+                {
+                    return std::unexpected(result.error());
+                }
+                return entityRef(ctx.editor.scene, *entity);
+            });
+
+        // Sets the directional light (the given entity, else the first one),
+        // merging provided fields (direction/color as {x,y,z}) over its current value.
+        registerCommand(reg, "set-light", "set-light {entity?, direction?, color?, intensity?, ambient?}",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                const ComponentTraits* row = findByName(ctx.editor.registry, "DirectionalLight");
+                if (row == nullptr)
+                {
+                    return std::unexpected(std::string{ "DirectionalLight component is not registered" });
+                }
+                Entity target{ entt::null };
+                const json selector = positionalOr(params, "entity", 0);
+                if (!selector.is_null())
+                {
+                    std::expected<Entity, std::string> resolved = resolveEntity(ctx, params);
+                    if (!resolved)
+                    {
+                        return std::unexpected(resolved.error());
+                    }
+                    target = *resolved;
+                }
+                else
+                {
+                    forEach<DirectionalLightComponent>(ctx.editor.scene, [&](Entity entity, DirectionalLightComponent&)
+                    {
+                        if (target.handle == entt::null)
+                        {
+                            target = entity;
+                        }
+                    });
+                }
+                if (target.handle == entt::null || !row->has(ctx.editor.scene, target))
+                {
+                    return std::unexpected(std::string{ "no DirectionalLight to set" });
+                }
+                json body = row->serialize(ctx.editor.scene, target);
+                if (params.contains("direction")) { body["direction"] = params["direction"]; }
+                if (params.contains("color")) { body["color"] = params["color"]; }
+                if (params.contains("intensity")) { body["intensity"] = params["intensity"]; }
+                if (params.contains("ambient")) { body["ambient"] = params["ambient"]; }
+                std::expected<void, std::string> result = row->deserialize(ctx.editor.scene, target, body);
+                if (!result)
+                {
+                    return std::unexpected(result.error());
+                }
+                return entityRef(ctx.editor.scene, target);
+            });
+
         registerCommand(reg, "select", "select {entity}",
             [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
             {

@@ -128,6 +128,26 @@ export namespace se
             },
             true);
 
+        registerComponent<MaterialComponent>(reg, "Material",
+            [](Scene& s, Entity e)
+            {
+                MaterialComponent& material = getComponent<MaterialComponent>(s, e);
+                ImGui::ColorEdit4("Base Color", &material.baseColor.x);
+                ImGui::Text("Albedo: %llu", static_cast<unsigned long long>(material.albedoTexture.value));
+            },
+            [](const MaterialComponent& c)
+            {
+                return nlohmann::json{ { "baseColor", vec4ToJson(c.baseColor) },
+                                       { "albedoTexture", c.albedoTexture.value } };
+            },
+            [](MaterialComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
+            {
+                c.baseColor = vec4FromJson(j.value("baseColor", nlohmann::json::object()));
+                c.albedoTexture = Uuid{ j.value("albedoTexture", u64{ 0 }) };
+                return {};
+            },
+            true);
+
         registerComponent<DirectionalLightComponent>(reg, "DirectionalLight",
             [](Scene& s, Entity e)
             {

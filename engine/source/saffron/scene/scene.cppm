@@ -47,6 +47,14 @@ export namespace se
         Uuid mesh;
     };
 
+    // Per-entity material applied to the whole mesh. albedoTexture == 0 means "none"
+    // (the renderer binds its default white texture, so baseColor shows directly).
+    struct MaterialComponent
+    {
+        glm::vec4 baseColor{ 1.0f };
+        Uuid albedoTexture;
+    };
+
     // A perspective camera; its view comes from the entity's TransformComponent.
     struct CameraComponent
     {
@@ -172,6 +180,20 @@ export namespace se
             return glm::quat{ 1.0f, 0.0f, 0.0f, 0.0f };
         }
         return glm::quat{ j.value("w", 1.0f), j.value("x", 0.0f), j.value("y", 0.0f), j.value("z", 0.0f) };
+    }
+
+    nlohmann::json vec4ToJson(const glm::vec4& v)
+    {
+        return nlohmann::json{ { "x", v.x }, { "y", v.y }, { "z", v.z }, { "w", v.w } };
+    }
+
+    glm::vec4 vec4FromJson(const nlohmann::json& j)
+    {
+        if (!j.is_object())
+        {
+            return glm::vec4{ 1.0f };
+        }
+        return glm::vec4{ j.value("x", 1.0f), j.value("y", 1.0f), j.value("z", 1.0f), j.value("w", 1.0f) };
     }
 
     // ComponentTraits is a struct of std::function fields (a Go-interface itable);

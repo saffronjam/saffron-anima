@@ -212,12 +212,17 @@ export namespace se
         setDirectionalLight(renderer, lightDir, lightColor, lightIntensity, lightAmbient);
 
         forEach<TransformComponent, MeshComponent>(scene,
-            [&](Entity, TransformComponent& transform, MeshComponent& mesh)
+            [&](Entity entity, TransformComponent& transform, MeshComponent& mesh)
             {
                 u32 handle = 0;
                 if (!loadMeshAsset(assets, renderer, mesh.mesh, handle))
                 {
                     return;
+                }
+                glm::vec4 baseColor{ 1.0f };
+                if (hasComponent<MaterialComponent>(scene, entity))
+                {
+                    baseColor = getComponent<MaterialComponent>(scene, entity).baseColor;
                 }
                 const glm::mat4 model = transformMatrix(transform);
                 DrawParams params;
@@ -225,7 +230,7 @@ export namespace se
                 params.normal0 = glm::vec4(glm::vec3(model[0]), 0.0f);
                 params.normal1 = glm::vec4(glm::vec3(model[1]), 0.0f);
                 params.normal2 = glm::vec4(glm::vec3(model[2]), 0.0f);
-                params.baseColor = glm::vec4(1.0f);
+                params.baseColor = baseColor;
                 drawMesh(renderer, handle, meshPipeline, defaultTexture(renderer), params);
             });
     }
