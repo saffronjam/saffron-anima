@@ -1,0 +1,258 @@
+module;
+
+// Editor panels: ImGui + entt + glm + json are header-heavy, so this module uses
+// classic includes (no `import std`), like the rendering/ui/scene modules.
+#include <entt/entt.hpp>
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <nlohmann/json.hpp>
+#include <imgui.h>
+#include <imgui_stdlib.h>
+
+#include <expected>
+#include <format>
+#include <string>
+
+export module Saffron.Editor;
+
+import Saffron.Core;
+import Saffron.Signal;
+import Saffron.Scene;
+
+export namespace se
+{
+    // The editor's mutable state: the scene being edited, the component registry
+    // that drives every panel, and the current selection (broadcast as a signal).
+    struct EditorContext
+    {
+        Scene scene;
+        ComponentRegistry registry;
+        Entity selected{ entt::null };
+        SubscriberList<Entity> onSelectionChanged;
+        std::string scenePath;
+    };
+
+    void setSelection(EditorContext& ctx, Entity entity)
+    {
+        ctx.selected = entity;
+        ctx.onSelectionChanged.publish(entity);
+    }
+
+    // Concrete built-in component registration — the imgui draw lambdas + json
+    // serde live here (the one place with both imgui and json). A future physics
+    // or render module registers ITS components the same way; nothing else changes.
+    void registerBuiltinComponents(ComponentRegistry& reg)
+    {
+        registerComponent<NameComponent>(reg, "Name",
+            [](Scene& s, Entity e)
+            {
+                ImGui::InputText("Name", &getComponent<NameComponent>(s, e).name);
+            },
+            [](const NameComponent& c) { return nlohmann::json{ { "name", c.name } }; },
+            [](NameComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
+            {
+                c.name = j.value("name", std::string{});
+                return {};
+            },
+            false);
+
+        registerComponent<TransformComponent>(reg, "Transform",
+            [](Scene& s, Entity e)
+            {
+                TransformComponent& t = getComponent<TransformComponent>(s, e);
+                ImGui::DragFloat3("Translation", &t.translation.x, 0.1f);
+                glm::vec3 euler = glm::degrees(glm::eulerAngles(t.rotation));
+                if (ImGui::DragFloat3("Rotation", &euler.x, 0.5f))
+                {
+                    t.rotation = glm::quat(glm::radians(euler));
+                }
+                ImGui::DragFloat3("Scale", &t.scale.x, 0.1f);
+            },
+            [](const TransformComponent& t)
+            {
+                return nlohmann::json{ { "translation", vec3ToJson(t.translation) },
+                                       { "scale", vec3ToJson(t.scale) },
+                                       { "rotation", quatToJson(t.rotation) } };
+            },
+            [](TransformComponent& t, const nlohmann::json& j) -> std::expected<void, std::string>
+            {
+                t.translation = vec3FromJson(j.value("translation", nlohmann::json::object()));
+                t.scale = vec3FromJson(j.value("scale", nlohmann::json::object()));
+                t.rotation = quatFromJson(j.value("rotation", nlohmann::json::object()));
+                return {};
+            },
+            false);
+    }
+
+    // Heap-owned so EditorContext's heavy destructor (entt/json) is instantiated
+    // here, not in the client TU. The editor holds only the pointer.
+    EditorContext* newEditorContext()
+    {
+        EditorContext* ctx = new EditorContext();
+        registerBuiltinComponents(ctx->registry);
+
+        // Seed a couple of entities so the hierarchy isn't empty on first launch.
+        createEntity(ctx->scene, "Camera");
+        Entity cube = createEntity(ctx->scene, "Cube");
+        getComponent<TransformComponent>(ctx->scene, cube).translation = glm::vec3(0.0f, 0.0f, 0.0f);
+        setSelection(*ctx, cube);
+        return ctx;
+    }
+
+    void destroyEditorContext(EditorContext* ctx)
+    {
+        delete ctx;
+    }
+
+    // --- Scene hierarchy panel -----------------------------------------------
+    void hierarchyPanel(EditorContext& ctx)
+    {
+        ImGui::Begin("Hierarchy");
+
+        if (ImGui::Button("Add Entity"))
+        {
+            setSelection(ctx, createEntity(ctx.scene, "Entity"));
+        }
+
+        Entity toDelete{ entt::null };
+        forEach<IdComponent, NameComponent>(ctx.scene,
+            [&](Entity entity, IdComponent& id, NameComponent& name)
+            {
+                ImGui::PushID(static_cast<int>(id.id.value));
+                const bool isSelected = entity.handle == ctx.selected.handle;
+                if (ImGui::Selectable(name.name.c_str(), isSelected))
+                {
+                    setSelection(ctx, entity);
+                }
+                if (ImGui::BeginPopupContextItem())
+                {
+                    if (ImGui::MenuItem("Delete"))
+                    {
+                        toDelete = entity;
+                    }
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
+            });
+
+        // Structural change deferred until after the iteration above.
+        if (toDelete.handle != entt::null)
+        {
+            if (ctx.selected.handle == toDelete.handle)
+            {
+                setSelection(ctx, Entity{ entt::null });
+            }
+            destroyEntity(ctx.scene, toDelete);
+        }
+
+        ImGui::End();
+    }
+
+    // --- Generic inspector panel (registry-driven; no per-component switch) ---
+    void inspectorPanel(EditorContext& ctx)
+    {
+        ImGui::Begin("Inspector");
+
+        Entity selected = ctx.selected;
+        if (selected.handle == entt::null || !valid(ctx.scene, selected))
+        {
+            ImGui::TextUnformatted("No entity selected");
+            ImGui::End();
+            return;
+        }
+
+        const ComponentTraits* toRemove = nullptr;
+        for (const ComponentTraits& traits : ctx.registry.rows)
+        {
+            if (!traits.has(ctx.scene, selected))
+            {
+                continue;
+            }
+            ImGui::PushID(static_cast<int>(traits.id));
+            const bool open = ImGui::CollapsingHeader(traits.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+            if (traits.removable && ImGui::BeginPopupContextItem())
+            {
+                if (ImGui::MenuItem("Remove component"))
+                {
+                    toRemove = &traits;
+                }
+                ImGui::EndPopup();
+            }
+            if (open)
+            {
+                traits.drawInspector(ctx.scene, selected);
+            }
+            ImGui::PopID();
+        }
+        if (toRemove != nullptr)
+        {
+            toRemove->remove(ctx.scene, selected);
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Add Component"))
+        {
+            ImGui::OpenPopup("AddComponent");
+        }
+        if (ImGui::BeginPopup("AddComponent"))
+        {
+            for (const ComponentTraits& traits : ctx.registry.rows)
+            {
+                if (!traits.has(ctx.scene, selected) && ImGui::MenuItem(traits.name.c_str()))
+                {
+                    traits.addDefault(ctx.scene, selected);
+                }
+            }
+            ImGui::EndPopup();
+        }
+
+        ImGui::End();
+    }
+
+    // --- File menu: save / load the scene ------------------------------------
+    void drawEditorMenuBar(EditorContext& ctx)
+    {
+        if (!ImGui::BeginMainMenuBar())
+        {
+            return;
+        }
+        if (ImGui::BeginMenu("File"))
+        {
+            std::string path = ctx.scenePath;
+            if (path.empty())
+            {
+                path = "scene.json";
+            }
+
+            if (ImGui::MenuItem("Save Scene"))
+            {
+                std::expected<void, std::string> result = writeScene(ctx.registry, ctx.scene, path);
+                if (!result)
+                {
+                    logError(result.error());
+                }
+                else
+                {
+                    ctx.scenePath = path;
+                    logInfo(std::format("saved scene to {}", path));
+                }
+            }
+            if (ImGui::MenuItem("Load Scene"))
+            {
+                std::expected<void, std::string> result = readScene(ctx.registry, ctx.scene, path);
+                if (!result)
+                {
+                    logError(result.error());
+                }
+                else
+                {
+                    ctx.scenePath = path;
+                    setSelection(ctx, Entity{ entt::null });
+                    logInfo(std::format("loaded scene from {}", path));
+                }
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
+}

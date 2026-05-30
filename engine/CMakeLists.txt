@@ -12,6 +12,7 @@ target_sources(SaffronEngine
             source/saffron/scene/scene.cppm
             source/saffron/rendering/renderer.cppm
             source/saffron/ui/ui.cppm
+            source/saffron/editor/editor.cppm
             source/saffron/app/app.cppm)
 
 target_compile_features(SaffronEngine PUBLIC cxx_std_26)

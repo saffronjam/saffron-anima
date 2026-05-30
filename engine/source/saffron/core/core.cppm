@@ -49,6 +49,11 @@ export namespace se
         std::println("[saffron] {}", message);
     }
 
+    void logWarn(std::string_view message)
+    {
+        std::println("[saffron] warn: {}", message);
+    }
+
     void logError(std::string_view message)
     {
         std::println("[saffron] error: {}", message);

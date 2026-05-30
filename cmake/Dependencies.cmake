@@ -44,11 +44,13 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp   # ImGui::InputText(std::string*)
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
 target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends)
+    ${imgui_SOURCE_DIR}/backends
+    ${imgui_SOURCE_DIR}/misc/cpp)
 target_link_libraries(imgui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 # Enable docking + viewports config flags at the API level (set in code via io.ConfigFlags).
 
@@ -69,3 +71,6 @@ target_link_libraries(saffron_third_party INTERFACE
     vk-bootstrap::vk-bootstrap
     vma
     imgui)
+# The engine bans exceptions; make nlohmann/json turn would-be throws into abort()
+# so any stray .at()/operator[] on missing keys fails loudly instead of throwing.
+target_compile_definitions(saffron_third_party INTERFACE JSON_NOEXCEPTION)

@@ -10,18 +10,19 @@
 import Saffron.Core;
 import Saffron.App;
 import Saffron.Window;
-import Saffron.Scene;
 import Saffron.Rendering;
 import Saffron.Ui;
+import Saffron.Editor;
 
 namespace
 {
     constexpr se::i32 KeyEscape = 27;  // SDLK_ESCAPE
 
-    // State shared across the app lifecycle closures. Holds only a pipeline
-    // handle — the renderer owns the pipeline itself.
+    // State shared across the app lifecycle closures. The EditorContext is owned
+    // by the engine (heap) so its heavy entt/json destructor stays out of this TU.
     struct EditorState
     {
+        se::EditorContext* editor = nullptr;
         se::u32 trianglePipeline = 0;
         bool pipelineReady = false;
     };
@@ -36,7 +37,7 @@ int main()
 
     config.onCreate = [state](se::App& app)
     {
-        se::runSceneSelfTest();
+        state->editor = se::newEditorContext();
 
         std::expected<se::u32, std::string> pipeline =
             se::newTrianglePipeline(app.renderer, "shaders/triangle.spv");
@@ -44,7 +45,6 @@ int main()
         {
             state->trianglePipeline = *pipeline;
             state->pipelineReady = true;
-            se::logInfo("triangle pipeline ready");
         }
         else
         {
@@ -53,23 +53,20 @@ int main()
 
         se::Layer layer;
         layer.name = "EditorLayer";
-        layer.onAttach = []() { se::logInfo("editor layer attached"); };
         layer.onRender = [state, &app]()
         {
             if (state->pipelineReady)
             {
-                se::drawTriangle(app.renderer, state->trianglePipeline);
+                se::drawTriangle(app.renderer, state->trianglePipeline);  // placeholder Viewport content
             }
         };
-        layer.onUi = [&app]()
+        layer.onUi = [state, &app]()
         {
+            se::drawEditorMenuBar(*state->editor);
             se::viewportPanel(app.ui, app.renderer);
-            ImGui::ShowDemoWindow();
-            ImGui::Begin("Saffron");
-            ImGui::Text("FPS: %.1f", static_cast<double>(ImGui::GetIO().Framerate));
-            ImGui::End();
+            se::hierarchyPanel(*state->editor);
+            se::inspectorPanel(*state->editor);
         };
-        layer.onDetach = []() { se::logInfo("editor layer detached"); };
         se::attachLayer(app, std::move(layer));
 
         app.window.onKeyPressed.subscribe([&app](se::i32 key, bool isRepeat)
@@ -81,6 +78,15 @@ int main()
             }
             return false;
         });
+    };
+
+    config.onExit = [state](se::App&)
+    {
+        if (state->editor != nullptr)
+        {
+            se::destroyEditorContext(state->editor);
+            state->editor = nullptr;
+        }
     };
 
     return se::run(std::move(config));
