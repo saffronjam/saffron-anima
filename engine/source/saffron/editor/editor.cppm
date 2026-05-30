@@ -5,6 +5,7 @@ module;
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
 #include <nlohmann/json.hpp>
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -82,6 +83,44 @@ export namespace se
                 return {};
             },
             false);
+
+        registerComponent<MeshComponent>(reg, "Mesh",
+            [](Scene& s, Entity e)
+            {
+                MeshComponent& mesh = getComponent<MeshComponent>(s, e);
+                ImGui::Text("Asset: %llu", static_cast<unsigned long long>(mesh.mesh.value));
+            },
+            [](const MeshComponent& c) { return nlohmann::json{ { "mesh", c.mesh.value } }; },
+            [](MeshComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
+            {
+                c.mesh = Uuid{ j.value("mesh", u64{ 0 }) };
+                return {};
+            },
+            true);
+
+        registerComponent<CameraComponent>(reg, "Camera",
+            [](Scene& s, Entity e)
+            {
+                CameraComponent& camera = getComponent<CameraComponent>(s, e);
+                ImGui::DragFloat("FOV", &camera.fov, 0.5f, 1.0f, 179.0f);
+                ImGui::DragFloat("Near", &camera.nearPlane, 0.01f, 0.001f, camera.farPlane);
+                ImGui::DragFloat("Far", &camera.farPlane, 1.0f, camera.nearPlane, 10000.0f);
+                ImGui::Checkbox("Primary", &camera.primary);
+            },
+            [](const CameraComponent& c)
+            {
+                return nlohmann::json{ { "fov", c.fov }, { "near", c.nearPlane },
+                                       { "far", c.farPlane }, { "primary", c.primary } };
+            },
+            [](CameraComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
+            {
+                c.fov = j.value("fov", 45.0f);
+                c.nearPlane = j.value("near", 0.1f);
+                c.farPlane = j.value("far", 100.0f);
+                c.primary = j.value("primary", true);
+                return {};
+            },
+            true);
     }
 
     // Heap-owned so EditorContext's heavy destructor (entt/json) is instantiated
@@ -91,11 +130,14 @@ export namespace se
         EditorContext* ctx = new EditorContext();
         registerBuiltinComponents(ctx->registry);
 
-        // Seed a couple of entities so the hierarchy isn't empty on first launch.
-        createEntity(ctx->scene, "Camera");
-        Entity cube = createEntity(ctx->scene, "Cube");
-        getComponent<TransformComponent>(ctx->scene, cube).translation = glm::vec3(0.0f, 0.0f, 0.0f);
-        setSelection(*ctx, cube);
+        // Seed a camera looking at the origin so a freshly spawned mesh is visible.
+        Entity camera = createEntity(ctx->scene, "Camera");
+        addComponent<CameraComponent>(ctx->scene, camera);
+        TransformComponent& cameraTransform = getComponent<TransformComponent>(ctx->scene, camera);
+        cameraTransform.translation = glm::vec3(3.0f, 2.5f, 4.0f);
+        cameraTransform.rotation =
+            glm::quatLookAt(glm::normalize(-cameraTransform.translation), glm::vec3(0.0f, 1.0f, 0.0f));
+        setSelection(*ctx, camera);
         return ctx;
     }
 

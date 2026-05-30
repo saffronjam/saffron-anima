@@ -1,8 +1,6 @@
 // imgui.h is a heavy C++ header, so this TU uses classic includes (no `import
 // std`) — consistent with the engine's rendering/ui/scene modules.
 #include <imgui.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 
 #include <expected>
 #include <memory>
@@ -16,7 +14,8 @@ import Saffron.Rendering;
 import Saffron.Ui;
 import Saffron.Editor;
 import Saffron.Control;
-import Saffron.Geometry;
+import Saffron.Scene;
+import Saffron.Assets;
 
 namespace
 {
@@ -28,8 +27,8 @@ namespace
     {
         se::EditorContext* editor = nullptr;
         se::ControlContext* control = nullptr;
+        se::AssetServer assets;
         se::u32 meshPipeline = 0;
-        se::u32 cubeMesh = 0;
         bool meshReady = false;
     };
 }
@@ -51,23 +50,19 @@ int main()
         {
             se::logError(pipeline.error());
         }
-        std::expected<se::Mesh, std::string> cube = se::importModelFile(se::assetPath("models/cube.gltf"));
-        if (!cube)
+        else
         {
-            se::logError(cube.error());
-        }
-        if (pipeline && cube)
-        {
-            std::expected<se::u32, std::string> uploaded = se::uploadMesh(app.renderer, *cube);
-            if (uploaded)
+            state->meshPipeline = *pipeline;
+            std::expected<se::Uuid, std::string> cube =
+                se::importModel(state->assets, app.renderer, se::assetPath("models/cube.gltf"));
+            if (cube)
             {
-                state->meshPipeline = *pipeline;
-                state->cubeMesh = *uploaded;
+                se::spawnMesh(state->editor->scene, "Cube", *cube);
                 state->meshReady = true;
             }
             else
             {
-                se::logError(uploaded.error());
+                se::logError(cube.error());
             }
         }
 
@@ -82,18 +77,10 @@ int main()
         };
         layer.onRender = [state, &app]()
         {
-            if (!state->meshReady)
+            if (state->meshReady)
             {
-                return;
+                se::renderScene(app.renderer, state->editor->scene, state->assets, state->meshPipeline);
             }
-            const float aspect = static_cast<float>(app.window.width) / static_cast<float>(app.window.height);
-            glm::mat4 model = glm::rotate(glm::mat4(1.0f), glm::radians(35.0f),
-                                          glm::normalize(glm::vec3(0.4f, 1.0f, 0.2f)));
-            glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f),
-                                         glm::vec3(0.0f, 1.0f, 0.0f));
-            glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
-            proj[1][1] *= -1.0f;  // flip Y into Vulkan clip space
-            se::drawMesh(app.renderer, state->cubeMesh, state->meshPipeline, proj * view * model);
         };
         layer.onUi = [state, &app]()
         {

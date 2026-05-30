@@ -315,6 +315,8 @@ export namespace se
     void setViewportDesiredSize(Renderer& renderer, u32 width, u32 height);
     vk::ImageView viewportImageView(const Renderer& renderer);
     u32 viewportGeneration(const Renderer& renderer);
+    u32 viewportWidth(const Renderer& renderer);
+    u32 viewportHeight(const Renderer& renderer);
 
     std::string assetPath(std::string_view relative);
 
@@ -982,6 +984,16 @@ namespace se
     u32 viewportGeneration(const Renderer& renderer)
     {
         return renderer.viewportGeneration;
+    }
+
+    u32 viewportWidth(const Renderer& renderer)
+    {
+        return renderer.offscreenViewport.extent.width;
+    }
+
+    u32 viewportHeight(const Renderer& renderer)
+    {
+        return renderer.offscreenViewport.extent.height;
     }
 
     void endFrame(Renderer& renderer)

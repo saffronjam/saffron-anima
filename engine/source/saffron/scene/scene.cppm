@@ -41,6 +41,21 @@ export namespace se
         glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };  // (w, x, y, z) identity
     };
 
+    // References a mesh asset by stable id; the AssetServer resolves it to a GPU mesh.
+    struct MeshComponent
+    {
+        Uuid mesh;
+    };
+
+    // A perspective camera; its view comes from the entity's TransformComponent.
+    struct CameraComponent
+    {
+        f32 fov = 45.0f;        // vertical field of view, degrees
+        f32 nearPlane = 0.1f;
+        f32 farPlane = 100.0f;
+        bool primary = true;    // the scene renders through the first primary camera
+    };
+
     glm::mat4 transformMatrix(const TransformComponent& transform)
     {
         glm::mat4 translation = glm::translate(glm::mat4(1.0f), transform.translation);
