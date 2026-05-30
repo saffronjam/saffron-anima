@@ -369,13 +369,19 @@ namespace se
                 }
                 else if (image->uri != nullptr && std::strncmp(image->uri, "data:", 5) != 0)
                 {
-                    const std::string full = directoryOf(path) + "/" + image->uri;
+                    std::string uri = image->uri;
+                    uri.resize(cgltf_decode_uri(uri.data()));  // percent-decode (e.g. %20) in place
+                    const std::string full = directoryOf(path) + "/" + uri;
                     if (std::expected<std::vector<u8>, std::string> bytes = readBinaryFile(full); bytes)
                     {
                         material.albedoBytes = std::move(*bytes);
-                        material.albedoExt = extensionOf(image->uri);
+                        material.albedoExt = extensionOf(uri);
                         material.hasAlbedo = true;
                     }
+                }
+                else if (image->uri != nullptr)
+                {
+                    logWarn(std::format("cgltf: '{}' embeds its albedo as a data: URI (not yet supported)", path));
                 }
             }
         }

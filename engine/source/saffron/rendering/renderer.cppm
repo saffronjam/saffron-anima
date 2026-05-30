@@ -368,10 +368,12 @@ export namespace se
         vk::DescriptorSetLayout lightSetLayout;      // set 1: directional light UBO
         vk::DescriptorPool descriptorPool;
         std::vector<vk::DescriptorSet> materialSets; // index-parallel to textures
-        vk::DescriptorSet lightSet;
-        VkBuffer lightBuffer = VK_NULL_HANDLE;
-        VmaAllocation lightAlloc = nullptr;
-        void* lightMapped = nullptr;
+        // Per-frame light UBO + set (one per in-flight frame), so the host write in
+        // setDirectionalLight never races a frame still reading the light on the GPU.
+        std::array<vk::DescriptorSet, MaxFramesInFlight> lightSets;
+        std::array<VkBuffer, MaxFramesInFlight> lightBuffers{};
+        std::array<VmaAllocation, MaxFramesInFlight> lightAllocs{};
+        std::array<void*, MaxFramesInFlight> lightMapped{};
         u32 defaultWhiteTexture = ~0u;               // handle into textures (1x1 white)
 
         Image offscreenViewport;       // scene render target shown in the Viewport panel
@@ -866,10 +868,10 @@ namespace se
             renderer.lightSetLayout = *lightLayout;
 
             std::array<vk::DescriptorPoolSize, 2> poolSizes{
-                vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 256 },
-                vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, 4 } };
+                vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 1024 },
+                vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, MaxFramesInFlight + 4 } };
             vk::DescriptorPoolCreateInfo poolInfo{};
-            poolInfo.maxSets = 260;
+            poolInfo.maxSets = 1024 + MaxFramesInFlight + 4;
             poolInfo.setPoolSizes(poolSizes);
             auto pool = checked(renderer.device.createDescriptorPool(poolInfo), "descriptorPool");
             if (!pool)
@@ -878,36 +880,39 @@ namespace se
             }
             renderer.descriptorPool = *pool;
 
-            VkBufferCreateInfo bufferInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-            bufferInfo.size = sizeof(LightUbo);
-            bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-            VmaAllocationCreateInfo allocInfo{};
-            allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-            allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            VmaAllocationInfo mapped{};
-            if (vmaCreateBuffer(renderer.allocator, &bufferInfo, &allocInfo, &renderer.lightBuffer, &renderer.lightAlloc, &mapped) != VK_SUCCESS)
+            for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
             {
-                return std::unexpected(std::string{ "light UBO vmaCreateBuffer failed" });
-            }
-            renderer.lightMapped = mapped.pMappedData;
+                VkBufferCreateInfo bufferInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+                bufferInfo.size = sizeof(LightUbo);
+                bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+                VmaAllocationCreateInfo allocInfo{};
+                allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+                allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                VmaAllocationInfo mapped{};
+                if (vmaCreateBuffer(renderer.allocator, &bufferInfo, &allocInfo, &renderer.lightBuffers[i], &renderer.lightAllocs[i], &mapped) != VK_SUCCESS)
+                {
+                    return std::unexpected(std::string{ "light UBO vmaCreateBuffer failed" });
+                }
+                renderer.lightMapped[i] = mapped.pMappedData;
 
-            vk::DescriptorSetAllocateInfo setAlloc{};
-            setAlloc.descriptorPool = renderer.descriptorPool;
-            setAlloc.setSetLayouts(renderer.lightSetLayout);
-            auto allocated = checked(renderer.device.allocateDescriptorSets(setAlloc), "allocate lightSet");
-            if (!allocated)
-            {
-                return std::unexpected(allocated.error());
-            }
-            renderer.lightSet = (*allocated)[0];
+                vk::DescriptorSetAllocateInfo setAlloc{};
+                setAlloc.descriptorPool = renderer.descriptorPool;
+                setAlloc.setSetLayouts(renderer.lightSetLayout);
+                auto allocated = checked(renderer.device.allocateDescriptorSets(setAlloc), "allocate lightSet");
+                if (!allocated)
+                {
+                    return std::unexpected(allocated.error());
+                }
+                renderer.lightSets[i] = (*allocated)[0];
 
-            vk::DescriptorBufferInfo lightBufferInfo{ vk::Buffer{ renderer.lightBuffer }, 0, sizeof(LightUbo) };
-            vk::WriteDescriptorSet lightWrite{};
-            lightWrite.dstSet = renderer.lightSet;
-            lightWrite.dstBinding = 0;
-            lightWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
-            lightWrite.setBufferInfo(lightBufferInfo);
-            renderer.device.updateDescriptorSets(lightWrite, {});
+                vk::DescriptorBufferInfo lightBufferInfo{ vk::Buffer{ renderer.lightBuffers[i] }, 0, sizeof(LightUbo) };
+                vk::WriteDescriptorSet lightWrite{};
+                lightWrite.dstSet = renderer.lightSets[i];
+                lightWrite.dstBinding = 0;
+                lightWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
+                lightWrite.setBufferInfo(lightBufferInfo);
+                renderer.device.updateDescriptorSets(lightWrite, {});
+            }
             return {};
         }
     }
@@ -1091,10 +1096,13 @@ namespace se
         renderer.textures.clear();           // RAII frees views + images before the allocator
         renderer.pipelines.clear();          // RAII frees them while the device is still alive
 
-        if (renderer.lightBuffer != VK_NULL_HANDLE)
+        for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
         {
-            vmaDestroyBuffer(renderer.allocator, renderer.lightBuffer, renderer.lightAlloc);
-            renderer.lightBuffer = VK_NULL_HANDLE;
+            if (renderer.lightBuffers[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(renderer.allocator, renderer.lightBuffers[i], renderer.lightAllocs[i]);
+                renderer.lightBuffers[i] = VK_NULL_HANDLE;
+            }
         }
         if (renderer.descriptorPool)
         {
@@ -1791,7 +1799,7 @@ namespace se
         vk::Pipeline pipeline = renderer.pipelines[pipelineHandle].pipeline;
         vk::PipelineLayout layout = renderer.pipelines[pipelineHandle].layout;
         vk::DescriptorSet materialSet = renderer.materialSets[textureHandle];
-        vk::DescriptorSet lightSet = renderer.lightSet;
+        vk::DescriptorSet lightSet = renderer.lightSets[renderer.frameIndex];
         vk::Buffer vertexBuffer = gpu.vertexBuffer;
         vk::Buffer indexBuffer = gpu.indexBuffer;
         std::vector<Submesh> submeshes = gpu.submeshes;
@@ -1819,15 +1827,18 @@ namespace se
 
     void setDirectionalLight(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity, f32 ambient)
     {
-        if (renderer.lightMapped == nullptr)
+        // Write the current frame's copy; beginFrame already waited on its fence, so
+        // no in-flight frame is reading it.
+        const u32 frame = renderer.frameIndex;
+        if (renderer.lightMapped[frame] == nullptr)
         {
             return;
         }
         LightUbo ubo;
         ubo.directionAmbient = glm::vec4(glm::normalize(direction), ambient);
         ubo.colorIntensity = glm::vec4(color, intensity);
-        std::memcpy(renderer.lightMapped, &ubo, sizeof(ubo));
-        vmaFlushAllocation(renderer.allocator, renderer.lightAlloc, 0, sizeof(ubo));
+        std::memcpy(renderer.lightMapped[frame], &ubo, sizeof(ubo));
+        vmaFlushAllocation(renderer.allocator, renderer.lightAllocs[frame], 0, sizeof(ubo));
     }
 
     std::expected<u32, std::string> uploadTexture(Renderer& renderer, const u8* rgba, u32 width, u32 height, bool srgb)

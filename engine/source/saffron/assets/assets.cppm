@@ -44,7 +44,7 @@ export namespace se
         Uuid albedoTexture;  // 0 == none
     };
 
-    void writeAssetRegistry(const AssetServer& assets)
+    std::expected<void, std::string> writeAssetRegistry(const AssetServer& assets)
     {
         nlohmann::json meshes = nlohmann::json::object();
         for (const auto& [uuid, path] : assets.pathByUuid)
@@ -57,11 +57,17 @@ export namespace se
             textures[std::to_string(uuid)] = path;
         }
         std::ofstream out(assets.root + "/asset_registry.json");
-        if (out)
+        if (!out)
         {
-            out << nlohmann::json{ { "version", 1 }, { "meshes", std::move(meshes) },
-                                   { "textures", std::move(textures) } }.dump(2);
+            return std::unexpected(std::string{ "cannot open asset_registry.json for writing" });
         }
+        out << nlohmann::json{ { "version", 1 }, { "meshes", std::move(meshes) },
+                               { "textures", std::move(textures) } }.dump(2);
+        if (!out)
+        {
+            return std::unexpected(std::string{ "asset_registry.json write failed" });
+        }
+        return {};
     }
 
     // Creates the asset root (+ meshes dir) and loads any existing registry.
@@ -133,10 +139,13 @@ export namespace se
             return std::unexpected(std::format("cannot write texture '{}'", relativePath));
         }
         out.write(reinterpret_cast<const char*>(encoded.data()), static_cast<std::streamsize>(encoded.size()));
+        if (!out)
+        {
+            return std::unexpected(std::format("write failed for texture '{}'", relativePath));
+        }
         assets.texturePathByUuid[id.value] = relativePath;
         assets.textureHandleByUuid[id.value] = *handle;
-        writeAssetRegistry(assets);
-        return id;
+        return id;  // the caller persists the registry (so importModel writes it once)
     }
 
     // Imports an external image file into the asset dir and registers it.
@@ -161,7 +170,16 @@ export namespace se
         {
             ext = path.substr(dot + 1);
         }
-        return registerTextureBytes(assets, renderer, encoded, ext);
+        std::expected<Uuid, std::string> id = registerTextureBytes(assets, renderer, encoded, ext);
+        if (!id)
+        {
+            return std::unexpected(id.error());
+        }
+        if (std::expected<void, std::string> persisted = writeAssetRegistry(assets); !persisted)
+        {
+            logWarn(persisted.error());
+        }
+        return id;
     }
 
     // Resolves a texture id to a GPU texture handle, decoding + uploading the copied
@@ -243,7 +261,10 @@ export namespace se
                 logWarn(std::format("model '{}': albedo texture failed: {}", path, texture.error()));
             }
         }
-        writeAssetRegistry(assets);
+        if (std::expected<void, std::string> persisted = writeAssetRegistry(assets); !persisted)
+        {
+            logWarn(persisted.error());
+        }
         return result;
     }
 
