@@ -195,7 +195,8 @@ Working and verified (validation-clean) in the toolbox:
 - ✅ **Control plane** (`Saffron.Control`) + the `se` CLI: a non-blocking unix socket, drained per
   frame on the main thread, drives the running editor (list/create/destroy/select entities,
   add/remove/set component, set-transform, set-material, save/load scene, import-model/texture,
-  render-stats, set-clustered, screenshot viewport|window to PNG, quit). See `control-plane` memory.
+  render-stats, set-clustered, pick, inspect, list-assets, focus, screenshot viewport|window to PNG,
+  quit). See `control-plane` memory.
 
 > **Keep `se` current.** When a feature adds engine state worth driving or inspecting, add a matching
 > control command (one `registerCommand` in `control.cppm`) so the running editor stays scriptable and
@@ -220,10 +221,16 @@ Working and verified (validation-clean) in the toolbox:
   `endFrame` before the scene pass with a compute→fragment barrier; the mesh fragment loops only its cluster's
   lights. `se set-clustered 0` falls back to a brute-force loop (verified pixel-identical). See `clustered-lighting`
   memory. (Per-cluster cap 64; excess lights are dropped silently.)
-- ✅ **Scene authoring**: in-viewport **ImGuizmo** translate/rotate/scale (un-flipped projection so it is not
-  mirrored; W/E/R cycle; `glm::decompose` write-back) + a **Create** menu (Empty / Cube / Point/Spot/Directional
-  Light / Camera). `primaryCamera`/`cameraProjection` in `Saffron.Scene` are the single camera source for
-  `renderScene` (flipped) and the gizmo (un-flipped).
+- ✅ **Scene authoring**: in-viewport **ImGuizmo** translate/rotate/scale (drawn into the Viewport window so it
+  clips + takes input; un-flipped projection so it is not mirrored; W/E/R cycle; `glm::decompose` delta
+  write-back) + a **Create** menu (Empty / Cube / Point/Spot/Directional Light / Camera). `TransformComponent`
+  rotation is **Euler XYZ radians** (the inspector edits it directly, so it never clips at 90°).
+- ✅ **Editor viewport camera + picking**: a fly-cam `EditorCamera` (the scene-view eye, separate from ECS
+  cameras) — hold RMB to look + WASD move, Shift up / Ctrl down; `renderScene`/gizmo draw through it. Left-click
+  ray-picks the nearest entity by world-space mesh AABB (`pickEntity`; empty space deselects). `se pick`/`focus`.
+- ✅ **Editor shell**: Roboto + Roboto Mono fonts (data fields monospace); a default DockBuilder layout
+  (Hierarchy/Inspector left, Assets bottom, Viewport center); a filesystem **asset browser** that imports
+  models/textures from disk via delegated hooks.
 
 Not done yet (planned):
 - **PBR** (metallic/roughness/normal maps — tangents + `materialSlot` per-submesh multi-material are reserved),
