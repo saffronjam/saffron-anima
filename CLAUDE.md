@@ -239,12 +239,32 @@ Working and verified (validation-clean) in the toolbox:
   (catalog + scene) saves to one **`project.json`** (`saveProject`/`loadProject`; legacy `asset_registry.json`
   migrated on first load). `se list-assets`/`rename-asset`/`assign-asset`/`save-project`/`load-project`.
   See `asset-catalog` memory. (Non-latin names round-trip; rendering them needs a broader font — follow-up.)
+- ✅ **Render graph** (`Saffron.Rendering:RenderGraph`): passes declare resource reads/writes (`RgUsage`) +
+  color/depth attachments; the graph derives all barriers + layout transitions and records each pass body. It
+  replaced the hand-written `endFrame` (the cull→scene→ui frame is now declared, not coded). **App-authorable**:
+  layers add passes via the `onRenderGraph(RenderGraph&)` hook. Single graphics queue, no transient aliasing
+  (right-sized; seams left for aliasing/async). See `render-graph-architecture` memory.
+- ✅ **Post-process** demonstrator: an in-place compute tonemap (Reinhard+gamma) added to the graph from a layer
+  (`se set-postprocess`); proves app-authored passes + RMW transitions derive correctly.
+- ✅ **Draw-item layer**: `renderScene` emits a flat `DrawItem` list; `submitDrawList` batches it + stores a
+  `SceneDrawList` the scene + depth passes consume (decoupled from the `submit()` closure seam).
+- ✅ **Depth pre-pass** (`se set-depth-prepass`): a vertex-only pipeline lays down depth before the scene pass
+  (loadOp Load, eLessOrEqual); the graph auto-inserts the depth barrier.
+- ✅ **Material / PSO cache**: a `Material` selects a shader/variant; the renderer owns mesh PSOs in a keyed
+  cache (`requestMeshPipeline`, build-on-miss) — the client no longer creates pipelines. Übershader: N materials
+  → 1 PSO; an **unlit** permutation via a Slang `vk::constant_id` specialization constant is a 2nd cached PSO.
+  `se render-stats` reports `pipelines`.
+- ✅ **Bindless textures**: one global combined-image-sampler array (set 0, partiallyBound + updateAfterBind,
+  required at device select). `uploadTexture` returns a stable slot; the albedo index is per-instance, so items
+  differing only by texture batch into **one** instanced draw (verified: 2 textures → 1 batch). `GpuTexture`
+  carries a `bindlessIndex` (no per-texture descriptor set).
 
 Not done yet (planned):
 - **PBR** (metallic/roughness/normal maps — tangents + `materialSlot` per-submesh multi-material are reserved),
-  shadows, then a frame graph. Bindless materials (cross-texture instancing), GPU culling, transparency pass.
-- `RenderGraph`/`RenderPass` frame graph; `Saffron.Physics` (Jolt) RigidBody + system; `resolveRefs`
-  + scene-graph parenting; undo/redo.
+  shadows (a shadow pass now slots into the graph), transparency pass.
+- **Transient render-graph resources** (graph-created images + memory aliasing) + async compute; GPU-driven
+  culling (`vkCmdDrawIndexedIndirect`/MDI, mesh shaders) — the graph + draw-item layer leave the seams.
+- `Saffron.Physics` (Jolt) RigidBody + system; `resolveRefs` + scene-graph parenting; undo/redo.
 - `volk`, multi-viewport ImGui (incl. multi-viewport gizmo), hardware GPU in the toolbox.
 
 See the memory notes (`build-environment`, `saffron-rewrite-plan`,
