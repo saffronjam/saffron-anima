@@ -378,7 +378,7 @@ export namespace se
             });
 
         // Routes through the Transform row's deserialize so the wire shape matches
-        // scene files exactly: {translation:{x,y,z}, rotation:{w,x,y,z}, scale:{x,y,z}}.
+        // scene files exactly: {translation:{x,y,z}, rotation:{x,y,z} Euler radians, scale:{x,y,z}}.
         registerCommand(reg, "set-transform", "set-transform {entity, translation?, rotation?, scale?}",
             [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
             {

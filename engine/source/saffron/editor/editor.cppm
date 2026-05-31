@@ -29,8 +29,8 @@ import Saffron.Scene;
 export namespace se
 {
     // The viewport's own fly-camera (the scene-view eye, distinct from any ECS
-    // CameraComponent / game camera). Hold RMB over the viewport to look + WASD/QE to
-    // move. yaw/pitch in degrees; at yaw 0 the camera looks down -Z.
+    // CameraComponent / game camera). Hold RMB over the viewport to look + WASD to move,
+    // Shift up / Ctrl down. yaw/pitch in degrees; at yaw 0 the camera looks down -Z.
     struct EditorCamera
     {
         glm::vec3 position{ 3.0f, 2.5f, 4.0f };
@@ -95,10 +95,10 @@ export namespace se
             {
                 TransformComponent& t = getComponent<TransformComponent>(s, e);
                 ImGui::DragFloat3("Translation", &t.translation.x, 0.1f);
-                glm::vec3 euler = glm::degrees(glm::eulerAngles(t.rotation));
-                if (ImGui::DragFloat3("Rotation", &euler.x, 0.5f))
+                glm::vec3 degrees = glm::degrees(t.rotation);
+                if (ImGui::DragFloat3("Rotation", &degrees.x, 0.5f))
                 {
-                    t.rotation = glm::quat(glm::radians(euler));
+                    t.rotation = glm::radians(degrees);
                 }
                 ImGui::DragFloat3("Scale", &t.scale.x, 0.1f);
             },
@@ -106,13 +106,13 @@ export namespace se
             {
                 return nlohmann::json{ { "translation", vec3ToJson(t.translation) },
                                        { "scale", vec3ToJson(t.scale) },
-                                       { "rotation", quatToJson(t.rotation) } };
+                                       { "rotation", vec3ToJson(t.rotation) } };
             },
             [](TransformComponent& t, const nlohmann::json& j) -> std::expected<void, std::string>
             {
                 t.translation = vec3FromJson(j.value("translation", nlohmann::json::object()));
                 t.scale = vec3FromJson(j.value("scale", nlohmann::json::object()));
-                t.rotation = quatFromJson(j.value("rotation", nlohmann::json::object()));
+                t.rotation = vec3FromJson(j.value("rotation", nlohmann::json::object()));
                 return {};
             },
             false);
@@ -265,8 +265,8 @@ export namespace se
         addComponent<CameraComponent>(ctx->scene, camera);
         TransformComponent& cameraTransform = getComponent<TransformComponent>(ctx->scene, camera);
         cameraTransform.translation = glm::vec3(3.0f, 2.5f, 4.0f);
-        cameraTransform.rotation =
-            glm::quatLookAt(glm::normalize(-cameraTransform.translation), glm::vec3(0.0f, 1.0f, 0.0f));
+        cameraTransform.rotation = glm::eulerAngles(
+            glm::quatLookAt(glm::normalize(-cameraTransform.translation), glm::vec3(0.0f, 1.0f, 0.0f)));
 
         Entity sun = createEntity(ctx->scene, "Sun");
         addComponent<DirectionalLightComponent>(ctx->scene, sun);
@@ -519,8 +519,8 @@ export namespace se
         return result;
     }
 
-    // Fly the editor camera while RMB is held over the viewport: mouse look + WASD move
-    // (Q/E down/up, Shift to sprint). Reads ImGui input, so call from onUi each frame.
+    // Fly the editor camera while RMB is held over the viewport: mouse look + WASD move,
+    // Shift up / Ctrl down (world Y). Reads ImGui input, so call from onUi each frame.
     void updateEditorCamera(EditorCamera& camera, bool viewportHovered, f32 dt)
     {
         ImGuiIO& io = ImGui::GetIO();
@@ -538,17 +538,14 @@ export namespace se
 
         const glm::vec3 forward = editorCameraForward(camera);
         const glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
-        f32 speed = camera.moveSpeed * dt;
-        if (io.KeyShift)
-        {
-            speed *= 3.0f;
-        }
+        const glm::vec3 worldUp{ 0.0f, 1.0f, 0.0f };
+        const f32 speed = camera.moveSpeed * dt;
         if (ImGui::IsKeyDown(ImGuiKey_W)) { camera.position += forward * speed; }
         if (ImGui::IsKeyDown(ImGuiKey_S)) { camera.position -= forward * speed; }
         if (ImGui::IsKeyDown(ImGuiKey_D)) { camera.position += right * speed; }
         if (ImGui::IsKeyDown(ImGuiKey_A)) { camera.position -= right * speed; }
-        if (ImGui::IsKeyDown(ImGuiKey_E)) { camera.position += glm::vec3(0.0f, 1.0f, 0.0f) * speed; }
-        if (ImGui::IsKeyDown(ImGuiKey_Q)) { camera.position -= glm::vec3(0.0f, 1.0f, 0.0f) * speed; }
+        if (io.KeyShift) { camera.position += worldUp * speed; }
+        if (io.KeyCtrl) { camera.position -= worldUp * speed; }
     }
 
     // In-viewport translate/rotate/scale gizmo for the selected entity. `proj` MUST be
@@ -596,8 +593,11 @@ export namespace se
             glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
             if (glm::decompose(model, scale, rotation, translation, skew, perspective))
             {
+                // Apply rotation as a delta on the stored Euler so a pure translate/scale
+                // drag doesn't rewrite (and snap) the rotation.
+                const glm::vec3 deltaEuler = glm::eulerAngles(rotation) - transform.rotation;
                 transform.translation = translation;
-                transform.rotation = rotation;
+                transform.rotation += deltaEuler;
                 transform.scale = scale;
             }
         }

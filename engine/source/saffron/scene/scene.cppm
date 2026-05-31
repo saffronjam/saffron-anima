@@ -38,7 +38,7 @@ export namespace se
     {
         glm::vec3 translation{ 0.0f };
         glm::vec3 scale{ 1.0f };
-        glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };  // (w, x, y, z) identity
+        glm::vec3 rotation{ 0.0f };  // Euler XYZ radians; the editor edits these directly
     };
 
     // References a mesh asset by stable id; the AssetServer resolves it to a GPU mesh.
@@ -98,7 +98,7 @@ export namespace se
     glm::mat4 transformMatrix(const TransformComponent& transform)
     {
         glm::mat4 translation = glm::translate(glm::mat4(1.0f), transform.translation);
-        glm::mat4 rotation = glm::mat4_cast(transform.rotation);
+        glm::mat4 rotation = glm::mat4_cast(glm::quat(transform.rotation));
         glm::mat4 scale = glm::scale(glm::mat4(1.0f), transform.scale);
         return translation * rotation * scale;
     }
@@ -197,7 +197,7 @@ export namespace se
                     return;
                 }
                 const glm::mat4 model =
-                    glm::translate(glm::mat4(1.0f), transform.translation) * glm::mat4_cast(transform.rotation);
+                    glm::translate(glm::mat4(1.0f), transform.translation) * glm::mat4_cast(glm::quat(transform.rotation));
                 result.view = glm::inverse(model);
                 result.fov = camera.fov;
                 result.nearPlane = camera.nearPlane;
@@ -229,19 +229,6 @@ export namespace se
         return glm::vec3{ j.value("x", 0.0f), j.value("y", 0.0f), j.value("z", 0.0f) };
     }
 
-    nlohmann::json quatToJson(const glm::quat& q)
-    {
-        return nlohmann::json{ { "w", q.w }, { "x", q.x }, { "y", q.y }, { "z", q.z } };
-    }
-
-    glm::quat quatFromJson(const nlohmann::json& j)
-    {
-        if (!j.is_object())
-        {
-            return glm::quat{ 1.0f, 0.0f, 0.0f, 0.0f };
-        }
-        return glm::quat{ j.value("w", 1.0f), j.value("x", 0.0f), j.value("y", 0.0f), j.value("z", 0.0f) };
-    }
 
     nlohmann::json vec4ToJson(const glm::vec4& v)
     {
@@ -499,13 +486,13 @@ export namespace se
             {
                 return nlohmann::json{ { "translation", vec3ToJson(t.translation) },
                                        { "scale", vec3ToJson(t.scale) },
-                                       { "rotation", quatToJson(t.rotation) } };
+                                       { "rotation", vec3ToJson(t.rotation) } };
             },
             [](TransformComponent& t, const nlohmann::json& j) -> std::expected<void, std::string>
             {
                 t.translation = vec3FromJson(j.value("translation", nlohmann::json::object()));
                 t.scale = vec3FromJson(j.value("scale", nlohmann::json::object()));
-                t.rotation = quatFromJson(j.value("rotation", nlohmann::json::object()));
+                t.rotation = vec3FromJson(j.value("rotation", nlohmann::json::object()));
                 return {};
             },
             false);
