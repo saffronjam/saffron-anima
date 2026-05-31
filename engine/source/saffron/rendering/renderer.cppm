@@ -42,6 +42,10 @@ export namespace se
     // Format of the offscreen depth buffer. D32_SFLOAT is universally supported.
     inline constexpr vk::Format DepthFormat = vk::Format::eD32Sfloat;
 
+    // Format of the offscreen color target. RGBA8_UNORM (not the swapchain's BGRA8) so
+    // it is a spec-guaranteed storage image — the post-process compute pass writes it.
+    inline constexpr vk::Format OffscreenColorFormat = vk::Format::eR8G8B8A8Unorm;
+
     // A unit of GPU work recorded into the active command buffer — the deferred
     // submission seam. The backend supplies the command buffer.
     using RenderFn = std::function<void(vk::CommandBuffer)>;
@@ -471,6 +475,12 @@ export namespace se
         std::array<Ref<Buffer>, MaxFramesInFlight> lightListBuffers;
         std::array<u32, MaxFramesInFlight> lightListCapacity{};
         Ref<Pipeline> thumbnailPipeline;              // lazy mesh-thumbnail graphics pipeline
+        // Post-process: an in-place compute tonemap on the offscreen color (the
+        // offscreen bound as a storage image). Added to the frame graph by an app layer.
+        Ref<Pipeline> tonemapPipeline;
+        vk::DescriptorSetLayout tonemapSetLayout;     // compute set 0: storage image
+        vk::DescriptorSet tonemapSet;                 // points at the offscreen color view (GENERAL)
+        bool usePostProcess = false;
         // Clustered forward (Forward+): a compute pass culls the punctual lights into a
         // froxel grid each frame; the fragment loops only its cluster's lights.
         Ref<Pipeline> cullPipeline;                   // compute light-cull pipeline
@@ -524,6 +534,9 @@ export namespace se
     // The offscreen color resource in the current frame graph — an app-authored pass
     // (e.g. post-process) declares its reads/writes against this handle.
     RgResource viewportColorResource(const Renderer& renderer);
+    // Add an in-place post-process tonemap pass on the offscreen color (app-authored;
+    // called from a layer's onRenderGraph when post-process is enabled).
+    void addTonemapPass(Renderer& renderer, RenderGraph& graph);
     void endFrame(Renderer& renderer);
 
     // The offscreen Viewport target the editor samples + displays in a panel.
@@ -606,6 +619,8 @@ export namespace se
     // (the reference path) — useful for A/B verification.
     void setClustered(Renderer& renderer, bool enabled);
     bool clusteredEnabled(const Renderer& renderer);
+    void setPostProcess(Renderer& renderer, bool enabled);
+    bool postProcessEnabled(const Renderer& renderer);
 
     // A 1x1 white texture; bind it when a material has no albedo.
     const Ref<GpuTexture>& defaultTexture(const Renderer& renderer);
@@ -819,11 +834,16 @@ namespace se
             return checked(device.createShaderModule(info), std::format("createShaderModule '{}'", path));
         }
 
-        std::expected<Image, std::string> newColorImage(Renderer& renderer, u32 width, u32 height, vk::Format format)
+        std::expected<Image, std::string> newColorImage(Renderer& renderer, u32 width, u32 height,
+                                                        vk::Format format, bool storage = false)
         {
             vk::FormatProperties props = renderer.physicalDevice.getFormatProperties(format);
             vk::FormatFeatureFlags needed =
                 vk::FormatFeatureFlagBits::eColorAttachment | vk::FormatFeatureFlagBits::eSampledImage;
+            if (storage)
+            {
+                needed = needed | vk::FormatFeatureFlagBits::eStorageImage;
+            }
             if ((props.optimalTilingFeatures & needed) != needed)
             {
                 return std::unexpected(std::format("format {} cannot be a sampled color attachment", vk::to_string(format)));
@@ -839,6 +859,10 @@ namespace se
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
             imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            if (storage)
+            {
+                imageInfo.usage = imageInfo.usage | VK_IMAGE_USAGE_STORAGE_BIT;
+            }
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
             VmaAllocationCreateInfo allocInfo{};
@@ -1118,6 +1142,25 @@ namespace se
             return std::make_shared<Pipeline>(std::move(pipeline));
         }
 
+        // Point the tonemap set's storage-image binding at the current offscreen color
+        // view (GENERAL layout). Called after the offscreen color is (re)created.
+        void updateTonemapSet(Renderer& renderer)
+        {
+            if (!renderer.tonemapSet)
+            {
+                return;
+            }
+            vk::DescriptorImageInfo imageInfo{};
+            imageInfo.imageView = renderer.offscreenViewport.view;
+            imageInfo.imageLayout = vk::ImageLayout::eGeneral;
+            vk::WriteDescriptorSet write{};
+            write.dstSet = renderer.tonemapSet;
+            write.dstBinding = 0;
+            write.descriptorType = vk::DescriptorType::eStorageImage;
+            write.setImageInfo(imageInfo);
+            renderer.device.updateDescriptorSets(write, {});
+        }
+
         // The shared sampler, material/light set layouts, descriptor pool, and the
         // per-frame light UBO + its set. Called once in newRenderer.
         std::expected<void, std::string> initDescriptorResources(Renderer& renderer)
@@ -1213,10 +1256,25 @@ namespace se
             }
             renderer.instanceSetLayout = *instanceLayout;
 
-            std::array<vk::DescriptorPoolSize, 3> poolSizes{
+            vk::DescriptorSetLayoutBinding tonemapBinding{};
+            tonemapBinding.binding = 0;  // the offscreen color as a storage image
+            tonemapBinding.descriptorType = vk::DescriptorType::eStorageImage;
+            tonemapBinding.descriptorCount = 1;
+            tonemapBinding.stageFlags = vk::ShaderStageFlagBits::eCompute;
+            vk::DescriptorSetLayoutCreateInfo tonemapLayoutInfo{};
+            tonemapLayoutInfo.setBindings(tonemapBinding);
+            auto tonemapLayout = checked(renderer.device.createDescriptorSetLayout(tonemapLayoutInfo), "tonemapSetLayout");
+            if (!tonemapLayout)
+            {
+                return std::unexpected(tonemapLayout.error());
+            }
+            renderer.tonemapSetLayout = *tonemapLayout;
+
+            std::array<vk::DescriptorPoolSize, 4> poolSizes{
                 vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 1024 },
                 vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, 4 * MaxFramesInFlight + 8 },
-                vk::DescriptorPoolSize{ vk::DescriptorType::eStorageBuffer, 8 * MaxFramesInFlight + 8 } };
+                vk::DescriptorPoolSize{ vk::DescriptorType::eStorageBuffer, 8 * MaxFramesInFlight + 8 },
+                vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 4 } };
             vk::DescriptorPoolCreateInfo poolInfo{};
             poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;  // texture sets freed on Ref drop
             poolInfo.maxSets = 1024 + 8 * MaxFramesInFlight + 16;
@@ -1363,6 +1421,27 @@ namespace se
                 return std::unexpected(cull.error());
             }
             renderer.cullPipeline = *cull;
+
+            // Post-process tonemap: a compute pipeline + a set binding the offscreen
+            // color as a storage image (read+written in place). A layer adds the pass.
+            std::expected<Ref<Pipeline>, std::string> tonemap =
+                newComputePipeline(renderer, "shaders/tonemap.spv", renderer.tonemapSetLayout);
+            if (!tonemap)
+            {
+                return std::unexpected(tonemap.error());
+            }
+            renderer.tonemapPipeline = *tonemap;
+
+            vk::DescriptorSetAllocateInfo tonemapAlloc{};
+            tonemapAlloc.descriptorPool = renderer.descriptorPool;
+            tonemapAlloc.setSetLayouts(renderer.tonemapSetLayout);
+            auto tonemapAllocated = checked(renderer.device.allocateDescriptorSets(tonemapAlloc), "allocate tonemapSet");
+            if (!tonemapAllocated)
+            {
+                return std::unexpected(tonemapAllocated.error());
+            }
+            renderer.tonemapSet = (*tonemapAllocated)[0];
+            updateTonemapSet(renderer);
             return {};
         }
     }
@@ -1456,7 +1535,7 @@ namespace se
 
         // Offscreen scene target shown in the editor Viewport panel. Same format
         // as the swapchain so the scene pipelines need no special format.
-        auto offscreen = newColorImage(renderer, window.width, window.height, renderer.swapchainFormat);
+        auto offscreen = newColorImage(renderer, window.width, window.height, OffscreenColorFormat, true);
         if (!offscreen)
         {
             return std::unexpected(offscreen.error());
@@ -1548,6 +1627,7 @@ namespace se
         renderer.defaultWhiteTexture.reset();
         renderer.cullPipeline.reset();        // RAII frees the compute pipeline + layout
         renderer.thumbnailPipeline.reset();
+        renderer.tonemapPipeline.reset();
 
         renderer.offscreenViewport.reset();  // free before the allocator/device
         renderer.offscreenDepth.reset();
@@ -1587,6 +1667,10 @@ namespace se
         if (renderer.clusterSetLayout)
         {
             renderer.device.destroyDescriptorSetLayout(renderer.clusterSetLayout);
+        }
+        if (renderer.tonemapSetLayout)
+        {
+            renderer.device.destroyDescriptorSetLayout(renderer.tonemapSetLayout);
         }
         if (renderer.linearSampler)
         {
@@ -1651,11 +1735,12 @@ namespace se
         {
             static_cast<void>(renderer.device.waitIdle());
             auto resized = newColorImage(renderer, renderer.viewportDesiredWidth,
-                                         renderer.viewportDesiredHeight, renderer.swapchainFormat);
+                                         renderer.viewportDesiredHeight, OffscreenColorFormat, true);
             if (resized)
             {
                 renderer.offscreenViewport = std::move(*resized);
                 renderer.viewportGeneration = renderer.viewportGeneration + 1;
+                updateTonemapSet(renderer);  // the storage-image binding follows the new view
                 auto resizedDepth = newDepthImage(renderer, renderer.viewportDesiredWidth, renderer.viewportDesiredHeight);
                 if (resizedDepth)
                 {
@@ -1796,6 +1881,23 @@ namespace se
     RgResource viewportColorResource(const Renderer& renderer)
     {
         return renderer.frameSceneColor;
+    }
+
+    void addTonemapPass(Renderer& renderer, RenderGraph& graph)
+    {
+        RgPass pass;
+        pass.name = "tonemap";
+        pass.kind = RgPassKind::Compute;
+        pass.accesses = { RgAccess{ renderer.frameSceneColor, RgUsage::StorageImageRWCompute } };
+        pass.execute = [&renderer](vk::CommandBuffer cmd)
+        {
+            cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.tonemapPipeline->pipeline);
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                renderer.tonemapPipeline->layout, 0, renderer.tonemapSet, {});
+            const vk::Extent2D extent = renderer.offscreenViewport.extent;
+            cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+        };
+        addPass(graph, std::move(pass));
     }
 
     void endFrame(Renderer& renderer)
@@ -1998,7 +2100,7 @@ namespace se
         dynamic.setDynamicStates(dynamicStates);
 
         vk::PipelineRenderingCreateInfo renderingInfo{};
-        renderingInfo.setColorAttachmentFormats(renderer.swapchainFormat);
+        renderingInfo.setColorAttachmentFormats(OffscreenColorFormat);
         renderingInfo.depthAttachmentFormat = DepthFormat;
 
         vk::PushConstantRange pushConstant{};
@@ -2402,6 +2504,16 @@ namespace se
     bool clusteredEnabled(const Renderer& renderer)
     {
         return renderer.useClustered;
+    }
+
+    void setPostProcess(Renderer& renderer, bool enabled)
+    {
+        renderer.usePostProcess = enabled;
+    }
+
+    bool postProcessEnabled(const Renderer& renderer)
+    {
+        return renderer.usePostProcess;
     }
 
     std::expected<Ref<GpuTexture>, std::string> uploadSvgIcon(Renderer& renderer, const std::string& svgPath,

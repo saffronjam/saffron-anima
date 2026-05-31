@@ -267,6 +267,14 @@ int main()
             se::inspectorPanel(*state->editor);
             ImGui::PopFont();
         };
+        // Post-process is an app-authored render-graph pass: add it when enabled.
+        layer.onRenderGraph = [&app](se::RenderGraph& graph)
+        {
+            if (se::postProcessEnabled(app.renderer))
+            {
+                se::addTonemapPass(app.renderer, graph);
+            }
+        };
         se::attachLayer(app, std::move(layer));
 
         app.window.onKeyPressed.subscribe([&app](se::i32 key, bool isRepeat)

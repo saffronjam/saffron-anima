@@ -196,7 +196,8 @@ export namespace se
                 return json{ { "drawCalls", stats.drawCalls },
                              { "batches", stats.batches },
                              { "instances", stats.instances },
-                             { "clustered", clusteredEnabled(ctx.renderer) } };
+                             { "clustered", clusteredEnabled(ctx.renderer) },
+                             { "postProcess", postProcessEnabled(ctx.renderer) } };
             });
 
         registerCommand(reg, "set-clustered", "set-clustered {0|1} — toggle clustered light culling",
@@ -219,6 +220,28 @@ export namespace se
                 }
                 setClustered(ctx.renderer, enabled);
                 return json{ { "clustered", enabled } };
+            });
+
+        registerCommand(reg, "set-postprocess", "set-postprocess {0|1} — toggle the post-process tonemap pass",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                const json value = positionalOr(params, "enabled", 0);
+                bool enabled = true;
+                if (value.is_number())
+                {
+                    enabled = value.get<double>() != 0.0;
+                }
+                else if (value.is_boolean())
+                {
+                    enabled = value.get<bool>();
+                }
+                else if (value.is_string())
+                {
+                    const std::string s = value.get<std::string>();
+                    enabled = !(s == "0" || s == "false" || s == "off");
+                }
+                setPostProcess(ctx.renderer, enabled);
+                return json{ { "postProcess", enabled } };
             });
 
         registerCommand(reg, "list-entities", "list all entities",
