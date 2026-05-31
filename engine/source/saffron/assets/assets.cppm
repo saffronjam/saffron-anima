@@ -26,20 +26,18 @@ import Saffron.Scene;
 
 export namespace se
 {
-    // Resolves mesh assets for the running scene. pathByUuid is the persisted
-    // registry (id -> baked .smesh relative to root); meshRefByUuid is the in-memory
-    // cache of uploaded GPU meshes, so entities sharing an id upload once. A cached
-    // null Ref is the negative-cache marker — a failed asset is not retried each frame.
+    // Owns the project's asset catalog (id -> {name, type, path}) plus uuid-keyed GPU
+    // caches so entities sharing an id upload once. A cached null Ref is the
+    // negative-cache marker — a failed asset is not retried each frame.
     struct AssetServer
     {
         std::string root;
-        std::unordered_map<u64, std::string> pathByUuid;            // id -> baked .smesh
-        std::unordered_map<u64, Ref<GpuMesh>> meshRefByUuid;        // cache of uploaded meshes
-        std::unordered_map<u64, std::string> texturePathByUuid;     // id -> copied texture file
-        std::unordered_map<u64, Ref<GpuTexture>> textureRefByUuid;  // cache of uploaded textures
+        AssetCatalog catalog;                                       // source of truth: id -> {name,type,path}
+        std::unordered_map<u64, Ref<GpuMesh>> meshRefByUuid;        // GPU cache
+        std::unordered_map<u64, Ref<GpuTexture>> textureRefByUuid;  // GPU cache
     };
 
-    // What importModel produces: the spawned mesh + its primary material.
+    // What importModel produces: the imported mesh + its primary material.
     struct ImportResult
     {
         Uuid mesh;
@@ -47,33 +45,60 @@ export namespace se
         Uuid albedoTexture;  // 0 == none
     };
 
-    std::expected<void, std::string> writeAssetRegistry(const AssetServer& assets)
+    const char* assetTypeName(AssetType type)
     {
-        nlohmann::json meshes = nlohmann::json::object();
-        for (const auto& [uuid, path] : assets.pathByUuid)
-        {
-            meshes[std::to_string(uuid)] = path;
-        }
-        nlohmann::json textures = nlohmann::json::object();
-        for (const auto& [uuid, path] : assets.texturePathByUuid)
-        {
-            textures[std::to_string(uuid)] = path;
-        }
-        std::ofstream out(assets.root + "/asset_registry.json");
-        if (!out)
-        {
-            return std::unexpected(std::string{ "cannot open asset_registry.json for writing" });
-        }
-        out << nlohmann::json{ { "version", 1 }, { "meshes", std::move(meshes) },
-                               { "textures", std::move(textures) } }.dump(2);
-        if (!out)
-        {
-            return std::unexpected(std::string{ "asset_registry.json write failed" });
-        }
-        return {};
+        if (type == AssetType::Texture) { return "texture"; }
+        if (type == AssetType::Other) { return "other"; }
+        return "mesh";
     }
 
-    // Creates the asset root (+ meshes dir) and loads any existing registry.
+    AssetType assetTypeFromName(const std::string& name)
+    {
+        if (name == "texture") { return AssetType::Texture; }
+        if (name == "other") { return AssetType::Other; }
+        return AssetType::Mesh;
+    }
+
+    nlohmann::json catalogToJson(const AssetCatalog& catalog)
+    {
+        nlohmann::json assets = nlohmann::json::array();
+        for (const AssetEntry& entry : catalog.entries)
+        {
+            assets.push_back(nlohmann::json{ { "id", entry.id.value }, { "name", entry.name },
+                                             { "type", assetTypeName(entry.type) }, { "path", entry.path } });
+        }
+        return assets;
+    }
+
+    void catalogFromJson(AssetCatalog& catalog, const nlohmann::json& assets)
+    {
+        catalog.entries.clear();
+        catalog.byId.clear();
+        if (!assets.is_array())
+        {
+            return;
+        }
+        for (const nlohmann::json& entry : assets)
+        {
+            if (!entry.is_object())
+            {
+                continue;
+            }
+            AssetEntry parsed;
+            parsed.id = Uuid{ entry.value("id", u64{ 0 }) };
+            parsed.name = entry.value("name", std::string{});
+            parsed.type = assetTypeFromName(entry.value("type", std::string{ "mesh" }));
+            parsed.path = entry.value("path", std::string{});
+            if (parsed.id.value != 0)
+            {
+                putAsset(catalog, std::move(parsed));
+            }
+        }
+    }
+
+    // Creates the asset root (+ subdirs) and migrates any legacy asset_registry.json
+    // into the catalog with synthesized names. The catalog is otherwise loaded from a
+    // project file via loadProject.
     AssetServer newAssetServer(std::string root)
     {
         AssetServer assets;
@@ -89,35 +114,94 @@ export namespace se
             nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
             if (!doc.is_discarded())
             {
-                if (doc.contains("meshes") && doc["meshes"].is_object())
+                auto migrate = [&](const char* key, AssetType type)
                 {
-                    for (auto it = doc["meshes"].begin(); it != doc["meshes"].end(); ++it)
+                    if (!doc.contains(key) || !doc[key].is_object())
                     {
-                        if (it.value().is_string())
-                        {
-                            assets.pathByUuid[std::strtoull(it.key().c_str(), nullptr, 10)] = it.value().get<std::string>();
-                        }
+                        return;
                     }
-                }
-                if (doc.contains("textures") && doc["textures"].is_object())
-                {
-                    for (auto it = doc["textures"].begin(); it != doc["textures"].end(); ++it)
+                    for (auto it = doc[key].begin(); it != doc[key].end(); ++it)
                     {
-                        if (it.value().is_string())
+                        if (!it.value().is_string())
                         {
-                            assets.texturePathByUuid[std::strtoull(it.key().c_str(), nullptr, 10)] = it.value().get<std::string>();
+                            continue;
                         }
+                        const std::string path = it.value().get<std::string>();
+                        AssetEntry entry;
+                        entry.id = Uuid{ std::strtoull(it.key().c_str(), nullptr, 10) };
+                        entry.name = uniqueName(assets.catalog, std::filesystem::path(path).stem().string());
+                        entry.type = type;
+                        entry.path = path;
+                        putAsset(assets.catalog, std::move(entry));
                     }
-                }
+                };
+                migrate("meshes", AssetType::Mesh);
+                migrate("textures", AssetType::Texture);
             }
         }
         return assets;
     }
 
+    // Constant version for the unified project document.
+    inline constexpr int ProjectVersion = 1;
+
+    // Saves the whole project (asset catalog + scene entities) to one JSON file.
+    std::expected<void, std::string> saveProject(AssetServer& assets, ComponentRegistry& reg, Scene& scene,
+                                                 const std::string& path)
+    {
+        nlohmann::json doc;
+        doc["version"] = ProjectVersion;
+        doc["assets"] = catalogToJson(assets.catalog);
+        doc["scene"] = sceneToJson(reg, scene);
+
+        std::ofstream out(path);
+        if (!out)
+        {
+            return std::unexpected(std::format("cannot open '{}' for writing", path));
+        }
+        out << doc.dump(2);
+        out.flush();
+        if (!out)
+        {
+            return std::unexpected(std::format("write failed for '{}'", path));
+        }
+        return {};
+    }
+
+    // Loads a project file: replaces the catalog + scene. Clears the GPU caches (after a
+    // device idle) so stale Refs are dropped and assets re-resolve from the new catalog.
+    std::expected<void, std::string> loadProject(AssetServer& assets, Renderer& renderer, ComponentRegistry& reg,
+                                                 Scene& scene, const std::string& path)
+    {
+        std::ifstream in(path);
+        if (!in)
+        {
+            return std::unexpected(std::format("cannot open '{}'", path));
+        }
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
+        if (doc.is_discarded() || !doc.is_object())
+        {
+            return std::unexpected(std::format("'{}': JSON parse error", path));
+        }
+        const int version = doc.value("version", 0);
+        if (version != ProjectVersion)
+        {
+            return std::unexpected(std::format("unsupported project version {}", version));
+        }
+
+        waitGpuIdle(renderer);
+        assets.meshRefByUuid.clear();
+        assets.textureRefByUuid.clear();
+        catalogFromJson(assets.catalog, doc.value("assets", nlohmann::json::array()));
+        return sceneFromJson(reg, scene, doc.value("scene", nlohmann::json::object()));
+    }
+
     // Writes encoded image bytes into assets/textures/<uuid>.<ext>, decodes + uploads
-    // them, registers + persists the mapping, and returns the new texture id.
+    // them, and adds a Texture entry to the catalog (named, deduped). Returns the id.
     std::expected<Uuid, std::string> registerTextureBytes(AssetServer& assets, Renderer& renderer,
-                                                          const std::vector<u8>& encoded, const std::string& ext)
+                                                          const std::vector<u8>& encoded, const std::string& ext,
+                                                          const std::string& name)
     {
         std::expected<DecodedImage, std::string> decoded = decodeImageFromMemory(encoded);
         if (!decoded)
@@ -146,12 +230,12 @@ export namespace se
         {
             return std::unexpected(std::format("write failed for texture '{}'", relativePath));
         }
-        assets.texturePathByUuid[id.value] = relativePath;
+        putAsset(assets.catalog, AssetEntry{ id, uniqueName(assets.catalog, name), AssetType::Texture, relativePath });
         assets.textureRefByUuid[id.value] = *texture;
-        return id;  // the caller persists the registry (so importModel writes it once)
+        return id;
     }
 
-    // Imports an external image file into the asset dir and registers it.
+    // Imports an external image file into the asset dir + catalog (name = filename stem).
     std::expected<Uuid, std::string> importTexture(AssetServer& assets, Renderer& renderer, const std::string& path)
     {
         std::ifstream in(path, std::ios::binary | std::ios::ate);
@@ -167,22 +251,13 @@ export namespace se
         {
             return std::unexpected(std::format("read failed for '{}'", path));
         }
-        const std::size_t dot = path.find_last_of('.');
-        std::string ext;
-        if (dot != std::string::npos)
+        const std::filesystem::path fsPath{ path };
+        std::string ext = fsPath.extension().string();  // ".png" -> drop the dot
+        if (!ext.empty())
         {
-            ext = path.substr(dot + 1);
+            ext.erase(0, 1);
         }
-        std::expected<Uuid, std::string> id = registerTextureBytes(assets, renderer, encoded, ext);
-        if (!id)
-        {
-            return std::unexpected(id.error());
-        }
-        if (std::expected<void, std::string> persisted = writeAssetRegistry(assets); !persisted)
-        {
-            logWarn(persisted.error());
-        }
-        return id;
+        return registerTextureBytes(assets, renderer, encoded, ext, fsPath.stem().string());
     }
 
     // Resolves a texture id to a GPU texture, decoding + uploading the copied file on
@@ -195,12 +270,12 @@ export namespace se
         {
             return cached->second;  // valid Ref, or a null Ref left by a prior failure
         }
-        auto path = assets.texturePathByUuid.find(id.value);
-        if (path == assets.texturePathByUuid.end())
+        const AssetEntry* entry = findAsset(assets.catalog, id);
+        if (entry == nullptr || entry->type != AssetType::Texture)
         {
             return nullptr;
         }
-        std::expected<DecodedImage, std::string> decoded = decodeImage(assets.root + "/" + path->second);
+        std::expected<DecodedImage, std::string> decoded = decodeImage(assets.root + "/" + entry->path);
         if (decoded)
         {
             std::expected<Ref<GpuTexture>, std::string> texture = uploadTexture(renderer, decoded->rgba.data(), decoded->width, decoded->height, true);
@@ -220,7 +295,8 @@ export namespace se
     }
 
     // Imports a source model: bakes its mesh to a .smesh, uploads it, imports its
-    // primary material's albedo texture (if any), and registers + persists everything.
+    // primary material's albedo texture (if any), and adds catalog entries (named by
+    // the source filename stem). Does not spawn an entity or save the project.
     std::expected<ImportResult, std::string> importModel(AssetServer& assets, Renderer& renderer, const std::string& path)
     {
         std::expected<ImportedModel, std::string> model = importModelWithMaterial(path);
@@ -228,6 +304,7 @@ export namespace se
         {
             return std::unexpected(model.error());
         }
+        const std::string baseName = std::filesystem::path(path).stem().string();
         const Uuid meshId = newUuid();
         const std::string relativePath = "meshes/" + std::to_string(meshId.value) + ".smesh";
         if (std::expected<void, std::string> baked = saveMesh(model->mesh, assets.root + "/" + relativePath); !baked)
@@ -239,7 +316,7 @@ export namespace se
         {
             return std::unexpected(meshRef.error());
         }
-        assets.pathByUuid[meshId.value] = relativePath;
+        putAsset(assets.catalog, AssetEntry{ meshId, uniqueName(assets.catalog, baseName), AssetType::Mesh, relativePath });
         assets.meshRefByUuid[meshId.value] = *meshRef;
 
         ImportResult result;
@@ -247,8 +324,8 @@ export namespace se
         result.baseColor = model->material.baseColor;
         if (model->material.hasAlbedo)
         {
-            std::expected<Uuid, std::string> texture =
-                registerTextureBytes(assets, renderer, model->material.albedoBytes, model->material.albedoExt);
+            std::expected<Uuid, std::string> texture = registerTextureBytes(
+                assets, renderer, model->material.albedoBytes, model->material.albedoExt, baseName + " albedo");
             if (texture)
             {
                 result.albedoTexture = *texture;
@@ -257,10 +334,6 @@ export namespace se
             {
                 logWarn(std::format("model '{}': albedo texture failed: {}", path, texture.error()));
             }
-        }
-        if (std::expected<void, std::string> persisted = writeAssetRegistry(assets); !persisted)
-        {
-            logWarn(persisted.error());
         }
         return result;
     }
@@ -274,12 +347,12 @@ export namespace se
         {
             return cached->second;  // valid Ref, or a null Ref left by a prior failure
         }
-        auto path = assets.pathByUuid.find(id.value);
-        if (path == assets.pathByUuid.end())
+        const AssetEntry* entry = findAsset(assets.catalog, id);
+        if (entry == nullptr || entry->type != AssetType::Mesh)
         {
             return nullptr;
         }
-        std::expected<Mesh, std::string> mesh = loadMesh(assets.root + "/" + path->second);
+        std::expected<Mesh, std::string> mesh = loadMesh(assets.root + "/" + entry->path);
         if (mesh)
         {
             std::expected<Ref<GpuMesh>, std::string> meshRef = uploadMesh(renderer, *mesh);

@@ -67,46 +67,40 @@ int main()
             }
         }
 
-        // One import path for both GUI entry points: File > Import and drag-and-drop.
-        auto importAndSpawn = [state, &app](const std::string& path)
+        // Import a model into the asset catalog (no spawn). File > Import + drag-and-drop.
+        auto importModelToCatalog = [state, &app](const std::string& path)
         {
             std::expected<se::ImportResult, std::string> imported = se::importModel(state->assets, app.renderer, path);
             if (!imported)
             {
                 se::logError(imported.error());
-                return;
             }
-            se::setSelection(*state->editor, se::spawnModel(state->editor->scene, "Mesh", *imported));
         };
-        state->editor->onImportModel = importAndSpawn;
-        state->editor->onCreateCube = [state, &app, importAndSpawn]()
-        {
-            importAndSpawn(se::assetPath("models/cube.gltf"));
-        };
-        // Importing a texture applies it to the selected entity's material if it has one.
+        state->editor->onImportModel = importModelToCatalog;
         state->editor->onImportTexture = [state, &app](const std::string& path)
         {
             std::expected<se::Uuid, std::string> id = se::importTexture(state->assets, app.renderer, path);
             if (!id)
             {
                 se::logError(id.error());
-                return;
-            }
-            se::Scene& scene = state->editor->scene;
-            se::Entity selected = state->editor->selected;
-            if (se::valid(scene, selected) && se::hasComponent<se::MaterialComponent>(scene, selected))
-            {
-                se::getComponent<se::MaterialComponent>(scene, selected).albedoTexture = *id;
-            }
-            else
-            {
-                se::logInfo("imported texture; select a mesh with a Material to apply it");
             }
         };
-        state->editor->assetBrowserDir = se::assetPath("");  // executable dir (models/, textures/, fonts/)
-        app.window.onFileDropped.subscribe([importAndSpawn](std::string path)
+        // Create > Cube imports the bundled cube into the catalog (if needed) and spawns
+        // an entity referencing it.
+        state->editor->onCreateCube = [state, &app]()
         {
-            importAndSpawn(path);
+            std::expected<se::ImportResult, std::string> cube =
+                se::importModel(state->assets, app.renderer, se::assetPath("models/cube.gltf"));
+            if (!cube)
+            {
+                se::logError(cube.error());
+                return;
+            }
+            se::setSelection(*state->editor, se::spawnModel(state->editor->scene, "Cube", *cube));
+        };
+        app.window.onFileDropped.subscribe([importModelToCatalog](std::string path)
+        {
+            importModelToCatalog(path);
             return false;
         });
 
@@ -124,6 +118,10 @@ int main()
         // renderScene records closures the renderer replays in endFrame.
         layer.onUi = [state, &app]()
         {
+            // The inspector pickers + asset panel read the catalog through the scene
+            // (a borrowed pointer, valid only for this frame).
+            state->editor->scene.catalog = &state->assets.catalog;
+
             se::drawEditorMenuBar(*state->editor);
             se::viewportPanel(app.ui, app.renderer);
 

@@ -544,23 +544,83 @@ export namespace se
                 return result;
             });
 
-        registerCommand(reg, "list-assets", "list registered mesh + texture assets",
+        registerCommand(reg, "list-assets", "list the project asset catalog",
             [](EngineContext& ctx, const json&) -> std::expected<json, std::string>
             {
-                auto entries = [](const std::unordered_map<u64, std::string>& paths,
-                                  auto& refCache)
+                json out = json::array();
+                for (const AssetEntry& entry : ctx.assets.catalog.entries)
                 {
-                    json out = json::array();
-                    for (const auto& [id, path] : paths)
+                    out.push_back(json{ { "id", entry.id.value }, { "name", entry.name },
+                                        { "type", assetTypeName(entry.type) }, { "path", entry.path } });
+                }
+                return json{ { "assets", std::move(out) } };
+            });
+
+        registerCommand(reg, "rename-asset", "rename-asset {id|name, newName}",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                const std::string selector = asString(positionalOr(params, "asset", 0), "");
+                const std::string newName = asString(positionalOr(params, "name", 1), "");
+                if (selector.empty() || newName.empty())
+                {
+                    return std::unexpected(std::string{ "usage: rename-asset {id|name} {newName}" });
+                }
+                const u64 byId = std::strtoull(selector.c_str(), nullptr, 10);
+                for (AssetEntry& entry : ctx.assets.catalog.entries)
+                {
+                    if (entry.id.value == byId || entry.name == selector)
                     {
-                        auto cached = refCache.find(id);
-                        const bool loaded = cached != refCache.end() && cached->second != nullptr;
-                        out.push_back(json{ { "id", id }, { "path", path }, { "loaded", loaded } });
+                        entry.name = newName;
+                        return json{ { "id", entry.id.value }, { "name", entry.name } };
                     }
-                    return out;
-                };
-                return json{ { "meshes", entries(ctx.assets.pathByUuid, ctx.assets.meshRefByUuid) },
-                             { "textures", entries(ctx.assets.texturePathByUuid, ctx.assets.textureRefByUuid) } };
+                }
+                return std::unexpected(std::format("no asset '{}'", selector));
+            });
+
+        registerCommand(reg, "assign-asset", "assign-asset {entity, slot:mesh|albedo, id|name}",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                std::expected<Entity, std::string> entity = resolveEntity(ctx, params);
+                if (!entity)
+                {
+                    return std::unexpected(entity.error());
+                }
+                const std::string slot = asString(positionalOr(params, "slot", 1), "");
+                const std::string selector = asString(positionalOr(params, "asset", 2), "");
+                const u64 byId = std::strtoull(selector.c_str(), nullptr, 10);
+                const AssetEntry* match = nullptr;
+                for (const AssetEntry& entry : ctx.assets.catalog.entries)
+                {
+                    if (entry.id.value == byId || entry.name == selector)
+                    {
+                        match = &entry;
+                    }
+                }
+                if (match == nullptr)
+                {
+                    return std::unexpected(std::format("no asset '{}'", selector));
+                }
+                if (slot == "mesh")
+                {
+                    if (!hasComponent<MeshComponent>(ctx.editor.scene, *entity))
+                    {
+                        addComponent<MeshComponent>(ctx.editor.scene, *entity);
+                    }
+                    getComponent<MeshComponent>(ctx.editor.scene, *entity).mesh = match->id;
+                }
+                else if (slot == "albedo")
+                {
+                    if (!hasComponent<MaterialComponent>(ctx.editor.scene, *entity))
+                    {
+                        addComponent<MaterialComponent>(ctx.editor.scene, *entity);
+                    }
+                    getComponent<MaterialComponent>(ctx.editor.scene, *entity).albedoTexture = match->id;
+                }
+                else
+                {
+                    return std::unexpected(std::string{ "slot must be 'mesh' or 'albedo'" });
+                }
+                return json{ { "id", match->id.value }, { "name", match->name }, { "slot", slot } };
             });
 
         registerCommand(reg, "focus", "focus {entity} — aim the editor camera at it",
@@ -606,6 +666,34 @@ export namespace se
                     return std::unexpected(std::string{ "missing 'path'" });
                 }
                 std::expected<void, std::string> result = readScene(ctx.editor.registry, ctx.editor.scene, path);
+                if (!result)
+                {
+                    return std::unexpected(result.error());
+                }
+                ctx.editor.scenePath = path;
+                setSelection(ctx.editor, Entity{ entt::null });
+                return json{ { "path", path } };
+            });
+
+        registerCommand(reg, "save-project", "save-project {path} — assets catalog + scene in one file",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                const std::string path = asString(positionalOr(params, "path", 0), "project.json");
+                std::expected<void, std::string> result = saveProject(ctx.assets, ctx.editor.registry, ctx.editor.scene, path);
+                if (!result)
+                {
+                    return std::unexpected(result.error());
+                }
+                ctx.editor.scenePath = path;
+                return json{ { "path", path } };
+            });
+
+        registerCommand(reg, "load-project", "load-project {path} — assets catalog + scene",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                const std::string path = asString(positionalOr(params, "path", 0), "project.json");
+                std::expected<void, std::string> result =
+                    loadProject(ctx.assets, ctx.renderer, ctx.editor.registry, ctx.editor.scene, path);
                 if (!result)
                 {
                     return std::unexpected(result.error());

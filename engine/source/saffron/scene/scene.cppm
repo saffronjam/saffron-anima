@@ -103,9 +103,95 @@ export namespace se
         return translation * rotation * scale;
     }
 
+    // A project asset (a model imported + baked to a mesh, or a texture). The catalog
+    // maps these by id; each entry carries a human name (UTF-8, renameable) and the
+    // relative path to the baked .smesh / copied texture under the asset root.
+    enum class AssetType { Mesh, Texture, Other };
+
+    struct AssetEntry
+    {
+        Uuid id;
+        std::string name;
+        AssetType type = AssetType::Mesh;
+        std::string path;  // relative to the asset root
+    };
+
+    struct AssetCatalog
+    {
+        std::vector<AssetEntry> entries;
+        std::unordered_map<u64, std::size_t> byId;  // id -> index into entries
+    };
+
+    const AssetEntry* findAsset(const AssetCatalog& catalog, Uuid id)
+    {
+        auto it = catalog.byId.find(id.value);
+        if (it == catalog.byId.end())
+        {
+            return nullptr;
+        }
+        return &catalog.entries[it->second];
+    }
+
+    void putAsset(AssetCatalog& catalog, AssetEntry entry)
+    {
+        auto it = catalog.byId.find(entry.id.value);
+        if (it != catalog.byId.end())
+        {
+            catalog.entries[it->second] = std::move(entry);
+            return;
+        }
+        catalog.byId[entry.id.value] = catalog.entries.size();
+        catalog.entries.push_back(std::move(entry));
+    }
+
+    bool renameAsset(AssetCatalog& catalog, Uuid id, std::string name)
+    {
+        auto it = catalog.byId.find(id.value);
+        if (it == catalog.byId.end())
+        {
+            return false;
+        }
+        catalog.entries[it->second].name = std::move(name);
+        return true;
+    }
+
+    // A name not already used by another entry (appends " (2)", " (3)", … on collision).
+    std::string uniqueName(const AssetCatalog& catalog, const std::string& base)
+    {
+        bool taken = false;
+        for (const AssetEntry& entry : catalog.entries)
+        {
+            if (entry.name == base)
+            {
+                taken = true;
+            }
+        }
+        if (!taken)
+        {
+            return base;
+        }
+        for (u32 suffix = 2; ; suffix = suffix + 1)
+        {
+            std::string candidate = base + " (" + std::to_string(suffix) + ")";
+            bool clash = false;
+            for (const AssetEntry& entry : catalog.entries)
+            {
+                if (entry.name == candidate)
+                {
+                    clash = true;
+                }
+            }
+            if (!clash)
+            {
+                return candidate;
+            }
+        }
+    }
+
     struct Scene
     {
         entt::registry registry;
+        const AssetCatalog* catalog = nullptr;  // borrowed; set per-frame by the client, not owned or serialized
     };
 
     // A lightweight, copyable handle — just an entt id. The Scene is always passed
@@ -374,7 +460,9 @@ export namespace se
         return {};
     }
 
-    std::expected<void, std::string> writeScene(ComponentRegistry& reg, Scene& scene, const std::string& path)
+    // Serializes the scene to a `{version, entities:[{id,components}]}` document (no file
+    // IO), so it can be embedded in a larger project document.
+    nlohmann::json sceneToJson(ComponentRegistry& reg, Scene& scene)
     {
         nlohmann::json doc;
         doc["version"] = SceneVersion;
@@ -386,35 +474,12 @@ export namespace se
             entry["components"] = serializeEntity(reg, scene, entity);
             doc["entities"].push_back(std::move(entry));
         });
-
-        std::ofstream out(path);
-        if (!out)
-        {
-            return std::unexpected(std::format("cannot open '{}' for writing", path));
-        }
-        out << doc.dump(2);
-        out.flush();
-        if (!out)
-        {
-            return std::unexpected(std::format("write failed for '{}'", path));
-        }
-        return {};
+        return doc;
     }
 
-    std::expected<void, std::string> readScene(ComponentRegistry& reg, Scene& scene, const std::string& path)
+    // Replaces the scene's entities from a `sceneToJson` document.
+    std::expected<void, std::string> sceneFromJson(ComponentRegistry& reg, Scene& scene, const nlohmann::json& doc)
     {
-        std::ifstream in(path);
-        if (!in)
-        {
-            return std::unexpected(std::format("cannot open '{}'", path));
-        }
-        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-
-        nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
-        if (doc.is_discarded())
-        {
-            return std::unexpected(std::format("'{}': JSON parse error", path));
-        }
         if (!doc.is_object())
         {
             return std::unexpected(std::string{ "scene root is not an object" });
@@ -464,6 +529,39 @@ export namespace se
         // components exist yet; the hook is ready for them.
         static_cast<void>(uuidToHandle);
         return {};
+    }
+
+    std::expected<void, std::string> writeScene(ComponentRegistry& reg, Scene& scene, const std::string& path)
+    {
+        std::ofstream out(path);
+        if (!out)
+        {
+            return std::unexpected(std::format("cannot open '{}' for writing", path));
+        }
+        out << sceneToJson(reg, scene).dump(2);
+        out.flush();
+        if (!out)
+        {
+            return std::unexpected(std::format("write failed for '{}'", path));
+        }
+        return {};
+    }
+
+    std::expected<void, std::string> readScene(ComponentRegistry& reg, Scene& scene, const std::string& path)
+    {
+        std::ifstream in(path);
+        if (!in)
+        {
+            return std::unexpected(std::format("cannot open '{}'", path));
+        }
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+        nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
+        if (doc.is_discarded())
+        {
+            return std::unexpected(std::format("'{}': JSON parse error", path));
+        }
+        return sceneFromJson(reg, scene, doc);
     }
 
     // Headless round-trip check: build a registry, populate a scene, write + read
