@@ -138,7 +138,11 @@ int main()
             }
 
             se::hierarchyPanel(*state->editor);
+
+            // Numeric/data fields read better in a monospace font.
+            ImGui::PushFont(se::uiMonoFont(app.ui));
             se::inspectorPanel(*state->editor);
+            ImGui::PopFont();
         };
         se::attachLayer(app, std::move(layer));
 

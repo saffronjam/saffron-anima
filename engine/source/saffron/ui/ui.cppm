@@ -11,6 +11,7 @@ module;
 
 #include <array>
 #include <expected>
+#include <filesystem>
 #include <format>
 #include <string>
 
@@ -31,6 +32,7 @@ export namespace se
         ImVec2 viewportPos{};              // screen-space rect of the viewport image,
         ImVec2 viewportSize{};             // captured each frame for gizmo overlay
         bool viewportHovered = false;
+        ImFont* monoFont = nullptr;        // Roboto Mono for numeric/data fields
     };
 
     std::expected<Ui, std::string> newUi(Renderer& renderer, Window& window);
@@ -46,6 +48,9 @@ export namespace se
     ImVec2 viewportContentPos(const Ui& ui);
     ImVec2 viewportContentSize(const Ui& ui);
     bool viewportHovered(const Ui& ui);
+
+    // The Roboto Mono font for numeric/data fields, or null if it failed to load.
+    ImFont* uiMonoFont(const Ui& ui);
 }
 
 namespace se
@@ -75,6 +80,19 @@ namespace se
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         ImGui::StyleColorsDark();
+
+        // Roboto for the UI, Roboto Mono for numeric/data fields. Optional — fall back
+        // to the built-in font if the files are missing.
+        const std::string robotoPath = assetPath("fonts/Roboto-Regular.ttf");
+        if (std::filesystem::exists(robotoPath))
+        {
+            io.FontDefault = io.Fonts->AddFontFromFileTTF(robotoPath.c_str(), 17.0f);
+        }
+        const std::string monoPath = assetPath("fonts/RobotoMono-Regular.ttf");
+        if (std::filesystem::exists(monoPath))
+        {
+            ui.monoFont = io.Fonts->AddFontFromFileTTF(monoPath.c_str(), 16.0f);
+        }
 
         if (!ImGui_ImplSDL3_InitForVulkan(window.handle))
         {
@@ -209,6 +227,11 @@ namespace se
     bool viewportHovered(const Ui& ui)
     {
         return ui.viewportHovered;
+    }
+
+    ImFont* uiMonoFont(const Ui& ui)
+    {
+        return ui.monoFont;
     }
 
     void uiRecordDrawData(Renderer& renderer)
