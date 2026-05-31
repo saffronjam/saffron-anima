@@ -2115,6 +2115,16 @@ namespace se
 
     auto beginFrame(Renderer& renderer) -> bool
     {
+        const u32 winW = renderer.window->width;
+        const u32 winH = renderer.window->height;
+        if (winW > 0 && winH > 0 &&
+            (renderer.swapchainExtent.width != winW || renderer.swapchainExtent.height != winH))
+        {
+            static_cast<void>(renderer.device.waitIdle());
+            recreateSwapchain(renderer);
+            return false;
+        }
+
         FrameData& frame = renderer.frames[renderer.frameIndex];
 
         static_cast<void>(renderer.device.waitForFences(frame.inFlight, VK_TRUE, UINT64_MAX));
