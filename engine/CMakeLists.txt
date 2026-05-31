@@ -20,6 +20,7 @@ target_sources(SaffronEngine
             source/saffron/assets/assets.cppm
             source/saffron/editor/editor_context.cppm
             source/saffron/editor/editor.cppm
+            source/saffron/control/command.cppm
             source/saffron/control/control.cppm
             source/saffron/app/app.cppm)
 
@@ -37,7 +38,11 @@ target_sources(SaffronEngine PRIVATE
     source/saffron/editor/editor_components.cpp
     source/saffron/editor/editor_panels.cpp
     source/saffron/editor/editor_camera.cpp
-    source/saffron/editor/editor_gizmo.cpp)
+    source/saffron/editor/editor_gizmo.cpp
+    source/saffron/control/control_commands_render.cpp
+    source/saffron/control/control_commands_scene.cpp
+    source/saffron/control/control_commands_asset.cpp
+    source/saffron/control/control_server.cpp)
 
 target_compile_features(SaffronEngine PUBLIC cxx_std_26)
 set_target_properties(SaffronEngine PROPERTIES CXX_MODULE_STD ON)
