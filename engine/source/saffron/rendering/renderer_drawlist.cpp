@@ -309,6 +309,8 @@ namespace se
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, renderer.descriptors.bindlessSet, {});
         std::array<vk::DescriptorSet, 2> frameSets{ list.lightSet, list.instanceSet };
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 1, frameSets, {});
+        // Set 3 = IBL (irradiance + prefiltered + BRDF LUT); baked once, always valid.
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 3, renderer.ibl.set, {});
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &list.viewProj);
         for (const DrawBatch& batch : list.batches)
         {

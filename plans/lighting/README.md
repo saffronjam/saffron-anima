@@ -41,7 +41,7 @@ here is `COMPLETED` and deleted, delete the folder.
 | # | Phase | File | Depends on | Runs on llvmpipe? |
 |---|-------|------|-----------|-------------------|
 | 1 | PBR BRDF + HDR offscreen ✅ COMPLETED | `phase-1-pbr-brdf-hdr.md` | — | ✅ full speed |
-| 2 | Image-based lighting (IBL) | `phase-2-image-based-lighting.md` | 1 | ✅ bake-once + cache |
+| 2 | Image-based lighting (IBL) ✅ COMPLETED | `phase-2-image-based-lighting.md` | 1 | ✅ bake-once + cache |
 | 3 | Dynamic shadow maps 🚧 directional done | `phase-3-dynamic-shadow-maps.md` | 1 | ✅ |
 | 4 | Screen-space GI / AO (GTAO, SSGI, SSR) | `phase-4-screen-space-gi-ao.md` | 1, 2, (5 for SSGI) | ✅ low budget |
 | 5 | Temporal AA + history + motion vectors | `phase-5-temporal-aa-history.md` | 4's thin G-buffer | ✅ |

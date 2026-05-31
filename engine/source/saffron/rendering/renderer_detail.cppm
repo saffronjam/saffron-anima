@@ -350,6 +350,65 @@ export namespace se
         return result;
     }
 
+    // A cube-compatible image (6 array layers, N mips) usable both as a sampled cubemap
+    // (the default eCube view) and as a 2D-array storage image (compute fills it via
+    // per-mip transient views). Used for the IBL environment/irradiance/prefiltered cubes.
+    auto newCubeImage(Renderer& renderer, u32 size, u32 mipLevels, vk::Format format) -> Result<Image>
+    {
+        vk::FormatProperties props = renderer.context.physicalDevice.getFormatProperties(format);
+        vk::FormatFeatureFlags needed =
+            vk::FormatFeatureFlagBits::eSampledImage | vk::FormatFeatureFlagBits::eStorageImage;
+        if ((props.optimalTilingFeatures & needed) != needed)
+        {
+            return Err(std::format("format {} cannot be a sampled+storage cube", vk::to_string(format)));
+        }
+
+        VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = static_cast<VkFormat>(format);
+        imageInfo.extent = VkExtent3D{ size, size, 1 };
+        imageInfo.mipLevels = mipLevels;
+        imageInfo.arrayLayers = 6;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        VkImage rawImage = VK_NULL_HANDLE;
+        VmaAllocation allocation = nullptr;
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) != VK_SUCCESS)
+        {
+            return Err(std::string{ "vmaCreateImage failed for cube" });
+        }
+
+        vk::ImageViewCreateInfo viewInfo{};
+        viewInfo.image = vk::Image{ rawImage };
+        viewInfo.viewType = vk::ImageViewType::eCube;
+        viewInfo.format = format;
+        viewInfo.subresourceRange = vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 6 };
+        vk::ResultValue<vk::ImageView> view = renderer.context.device.createImageView(viewInfo);
+        if (view.result != vk::Result::eSuccess)
+        {
+            vmaDestroyImage(renderer.context.allocator, rawImage, allocation);
+            return Err(std::format("createImageView (cube): {}", vk::to_string(view.result)));
+        }
+
+        Image result;
+        result.device = renderer.context.device;
+        result.allocator = renderer.context.allocator;
+        result.image = vk::Image{ rawImage };
+        result.view = view.value;
+        result.alloc = allocation;
+        result.extent = vk::Extent2D{ size, size };
+        result.format = format;
+        result.layout = vk::ImageLayout::eUndefined;
+        return result;
+    }
+
     // (Re)create the multisampled scene color + depth targets at the offscreen extent
     // when MSAA is on; drop them when off. Called after the offscreen is sized + on a
     // sample-count change. The caller has already idled the GPU.
@@ -533,6 +592,17 @@ export namespace se
     inline constexpr u32 ShadowMapSize = 2048;
     inline constexpr f32 ShadowDepthBiasConstant = 1.25f;
     inline constexpr f32 ShadowDepthBiasSlope = 2.0f;
+
+    // IBL bake sizes. The environment is a procedural HDR sky; it is convolved into a
+    // small diffuse-irradiance cube + a roughness-mipped prefiltered specular cube, plus
+    // a split-sum BRDF LUT. All HDR float (rgba16f); the LUT uses only RG. Kept modest so
+    // the one-time bake is quick on llvmpipe.
+    inline constexpr vk::Format IblColorFormat = vk::Format::eR16G16B16A16Sfloat;
+    inline constexpr u32 IblEnvSize = 128;
+    inline constexpr u32 IblIrradianceSize = 32;
+    inline constexpr u32 IblPrefilterSize = 128;
+    inline constexpr u32 IblPrefilterMips = 5;  // mesh.slang's IblPrefilterMaxMip must be this - 1
+    inline constexpr u32 IblLutSize = 256;
 
     // Froxel cluster grid (X x Y screen tiles, Z exponential view-space slices) and
     // the per-cluster light cap. Must match light_cull.slang + mesh.slang.
@@ -1357,6 +1427,326 @@ export namespace se
             return Err(shadowDepth.error());
         }
         renderer.pipelines.shadowDepth = *shadowDepth;
+
+        // IBL set (set 3 in the mesh pipeline): irradiance cube + prefiltered cube + BRDF
+        // LUT, all sampled in the fragment. Created here so the mesh PSO layout + the bind
+        // can reference it; bakeEnvironment fills the images + writes the descriptor.
+        vk::SamplerCreateInfo iblSamplerInfo{};
+        iblSamplerInfo.magFilter = vk::Filter::eLinear;
+        iblSamplerInfo.minFilter = vk::Filter::eLinear;
+        iblSamplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+        iblSamplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+        iblSamplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+        iblSamplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+        iblSamplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+        auto iblSampler = checked(renderer.context.device.createSampler(iblSamplerInfo), "createSampler (ibl)");
+        if (!iblSampler)
+        {
+            return Err(iblSampler.error());
+        }
+        renderer.ibl.sampler = *iblSampler;
+
+        std::array<vk::DescriptorSetLayoutBinding, 3> iblBindings{};
+        for (u32 b = 0; b < 3; b = b + 1)
+        {
+            iblBindings[b].binding = b;
+            iblBindings[b].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            iblBindings[b].descriptorCount = 1;
+            iblBindings[b].stageFlags = vk::ShaderStageFlagBits::eFragment;
+        }
+        vk::DescriptorSetLayoutCreateInfo iblLayoutInfo{};
+        iblLayoutInfo.setBindings(iblBindings);
+        auto iblLayout = checked(renderer.context.device.createDescriptorSetLayout(iblLayoutInfo), "iblSetLayout");
+        if (!iblLayout)
+        {
+            return Err(iblLayout.error());
+        }
+        renderer.ibl.setLayout = *iblLayout;
+
+        vk::DescriptorSetAllocateInfo iblAlloc{};
+        iblAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+        iblAlloc.setSetLayouts(renderer.ibl.setLayout);
+        auto iblSet = checked(renderer.context.device.allocateDescriptorSets(iblAlloc), "allocate iblSet");
+        if (!iblSet)
+        {
+            return Err(iblSet.error());
+        }
+        renderer.ibl.set = (*iblSet)[0];
+        return {};
+    }
+
+    // Bakes the IBL environment: generates the procedural sky cube, convolves it into a
+    // diffuse irradiance cube + a roughness-mipped prefiltered specular cube, integrates
+    // the split-sum BRDF LUT, and writes the persistent set 3. Synchronous one-time work
+    // (own command buffer + waitIdle), like uploadTexture/renderMeshThumbnail. Run once at
+    // startup after initDescriptorResources.
+    auto bakeEnvironment(Renderer& renderer) -> Result<void>
+    {
+        const u32 preMips = IblPrefilterMips;
+        vk::Device device = renderer.context.device;
+
+        auto env = newCubeImage(renderer, IblEnvSize, 1, IblColorFormat);
+        if (!env) { return Err(env.error()); }
+        renderer.ibl.envCube = std::move(*env);
+        auto irr = newCubeImage(renderer, IblIrradianceSize, 1, IblColorFormat);
+        if (!irr) { return Err(irr.error()); }
+        renderer.ibl.irradianceCube = std::move(*irr);
+        auto pre = newCubeImage(renderer, IblPrefilterSize, preMips, IblColorFormat);
+        if (!pre) { return Err(pre.error()); }
+        renderer.ibl.prefilteredCube = std::move(*pre);
+        auto lut = newColorImage(renderer, IblLutSize, IblLutSize, IblColorFormat, true);
+        if (!lut) { return Err(lut.error()); }
+        renderer.ibl.brdfLut = std::move(*lut);
+        renderer.ibl.prefilterMips = preMips;
+
+        // A transient pool + layouts + sets used only for this bake (freed at the end).
+        std::array<vk::DescriptorPoolSize, 2> poolSizes{
+            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 16 },
+            vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 16 } };
+        vk::DescriptorPoolCreateInfo poolInfo{};
+        poolInfo.maxSets = 32;
+        poolInfo.setPoolSizes(poolSizes);
+        auto poolR = checked(device.createDescriptorPool(poolInfo), "ibl bake pool");
+        if (!poolR) { return Err(poolR.error()); }
+        vk::DescriptorPool pool = *poolR;
+
+        vk::DescriptorSetLayoutBinding bindA{};
+        bindA.binding = 0;
+        bindA.descriptorType = vk::DescriptorType::eStorageImage;
+        bindA.descriptorCount = 1;
+        bindA.stageFlags = vk::ShaderStageFlagBits::eCompute;
+        vk::DescriptorSetLayoutCreateInfo layoutAInfo{};
+        layoutAInfo.setBindings(bindA);
+        auto layoutAR = checked(device.createDescriptorSetLayout(layoutAInfo), "ibl layoutA");
+        if (!layoutAR) { device.destroyDescriptorPool(pool); return Err(layoutAR.error()); }
+        vk::DescriptorSetLayout layoutA = *layoutAR;
+
+        std::array<vk::DescriptorSetLayoutBinding, 2> bindB{};
+        bindB[0].binding = 0;
+        bindB[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        bindB[0].descriptorCount = 1;
+        bindB[0].stageFlags = vk::ShaderStageFlagBits::eCompute;
+        bindB[1].binding = 1;
+        bindB[1].descriptorType = vk::DescriptorType::eStorageImage;
+        bindB[1].descriptorCount = 1;
+        bindB[1].stageFlags = vk::ShaderStageFlagBits::eCompute;
+        vk::DescriptorSetLayoutCreateInfo layoutBInfo{};
+        layoutBInfo.setBindings(bindB);
+        auto layoutBR = checked(device.createDescriptorSetLayout(layoutBInfo), "ibl layoutB");
+        if (!layoutBR)
+        {
+            device.destroyDescriptorSetLayout(layoutA);
+            device.destroyDescriptorPool(pool);
+            return Err(layoutBR.error());
+        }
+        vk::DescriptorSetLayout layoutB = *layoutBR;
+
+        auto cleanupLayouts = [&]()
+        {
+            device.destroyDescriptorSetLayout(layoutA);
+            device.destroyDescriptorSetLayout(layoutB);
+            device.destroyDescriptorPool(pool);
+        };
+
+        auto skygenP = newComputePipeline(renderer, "shaders/ibl_skygen.spv", layoutA);
+        if (!skygenP) { cleanupLayouts(); return Err(skygenP.error()); }
+        auto irrP = newComputePipeline(renderer, "shaders/ibl_irradiance.spv", layoutB);
+        if (!irrP) { cleanupLayouts(); return Err(irrP.error()); }
+        auto preP = newComputePipeline(renderer, "shaders/ibl_prefilter.spv", layoutB, static_cast<u32>(sizeof(f32)));
+        if (!preP) { cleanupLayouts(); return Err(preP.error()); }
+        auto lutP = newComputePipeline(renderer, "shaders/ibl_brdf.spv", layoutA);
+        if (!lutP) { cleanupLayouts(); return Err(lutP.error()); }
+
+        // Transient 2D-array storage views (one per cube mip we write) + the per-set allocs.
+        std::vector<vk::ImageView> transientViews;
+        auto makeStorageView = [&](vk::Image image, u32 mip) -> vk::ImageView
+        {
+            vk::ImageViewCreateInfo v{};
+            v.image = image;
+            v.viewType = vk::ImageViewType::e2DArray;
+            v.format = IblColorFormat;
+            v.subresourceRange = vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, mip, 1, 0, 6 };
+            vk::ImageView view = device.createImageView(v).value;
+            transientViews.push_back(view);
+            return view;
+        };
+        vk::ImageView envStore = makeStorageView(renderer.ibl.envCube.image, 0);
+        vk::ImageView irrStore = makeStorageView(renderer.ibl.irradianceCube.image, 0);
+        std::vector<vk::ImageView> preStore;
+        for (u32 m = 0; m < preMips; m = m + 1)
+        {
+            preStore.push_back(makeStorageView(renderer.ibl.prefilteredCube.image, m));
+        }
+
+        auto allocSet = [&](vk::DescriptorSetLayout layout) -> vk::DescriptorSet
+        {
+            vk::DescriptorSetAllocateInfo ai{};
+            ai.descriptorPool = pool;
+            ai.setSetLayouts(layout);
+            return device.allocateDescriptorSets(ai).value[0];
+        };
+        vk::DescriptorSet skygenSet = allocSet(layoutA);
+        vk::DescriptorSet brdfSet = allocSet(layoutA);
+        vk::DescriptorSet irrSet = allocSet(layoutB);
+        std::vector<vk::DescriptorSet> preSets;
+        for (u32 m = 0; m < preMips; m = m + 1)
+        {
+            preSets.push_back(allocSet(layoutB));
+        }
+
+        auto writeStorage = [&](vk::DescriptorSet set, u32 binding, vk::ImageView view)
+        {
+            vk::DescriptorImageInfo ii{};
+            ii.imageView = view;
+            ii.imageLayout = vk::ImageLayout::eGeneral;
+            vk::WriteDescriptorSet w{};
+            w.dstSet = set;
+            w.dstBinding = binding;
+            w.descriptorType = vk::DescriptorType::eStorageImage;
+            w.setImageInfo(ii);
+            device.updateDescriptorSets(w, {});
+        };
+        auto writeSampler = [&](vk::DescriptorSet set, u32 binding, vk::ImageView view)
+        {
+            vk::DescriptorImageInfo ii{ renderer.ibl.sampler, view, vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::WriteDescriptorSet w{};
+            w.dstSet = set;
+            w.dstBinding = binding;
+            w.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            w.setImageInfo(ii);
+            device.updateDescriptorSets(w, {});
+        };
+        writeStorage(skygenSet, 0, envStore);
+        writeStorage(brdfSet, 0, renderer.ibl.brdfLut.view);
+        writeSampler(irrSet, 0, renderer.ibl.envCube.view);
+        writeStorage(irrSet, 1, irrStore);
+        for (u32 m = 0; m < preMips; m = m + 1)
+        {
+            writeSampler(preSets[m], 0, renderer.ibl.envCube.view);
+            writeStorage(preSets[m], 1, preStore[m]);
+        }
+
+        vk::CommandBufferAllocateInfo cmdAlloc{};
+        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
+        cmdAlloc.commandBufferCount = 1;
+        auto cmds = checked(device.allocateCommandBuffers(cmdAlloc), "ibl bake cmd");
+        if (!cmds)
+        {
+            for (vk::ImageView v : transientViews) { device.destroyImageView(v); }
+            cleanupLayouts();
+            return Err(cmds.error());
+        }
+        vk::CommandBuffer cmd = (*cmds)[0];
+        vk::CommandBufferBeginInfo begin{};
+        begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+        static_cast<void>(cmd.begin(begin));
+
+        auto barrier = [&](vk::Image image, vk::ImageLayout oldL, vk::ImageLayout newL,
+                           vk::PipelineStageFlags2 srcS, vk::AccessFlags2 srcA,
+                           vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA,
+                           u32 baseMip, u32 mipCount, u32 layerCount)
+        {
+            vk::ImageMemoryBarrier2 b{};
+            b.srcStageMask = srcS;
+            b.srcAccessMask = srcA;
+            b.dstStageMask = dstS;
+            b.dstAccessMask = dstA;
+            b.oldLayout = oldL;
+            b.newLayout = newL;
+            b.image = image;
+            b.subresourceRange = vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, baseMip, mipCount, 0, layerCount };
+            vk::DependencyInfo d{};
+            d.setImageMemoryBarriers(b);
+            cmd.pipelineBarrier2(d);
+        };
+        const auto group = [](u32 n) -> u32 { return (n + 7) / 8; };
+
+        // Environment sky -> general, dispatch skygen, -> shader-read for the convolutions.
+        barrier(renderer.ibl.envCube.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite, 0, 1, 6);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, skygenP.value()->pipeline);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, skygenP.value()->layout, 0, skygenSet, {});
+        cmd.dispatch(group(IblEnvSize), group(IblEnvSize), 6);
+        barrier(renderer.ibl.envCube.image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead, 0, 1, 6);
+
+        // Diffuse irradiance.
+        barrier(renderer.ibl.irradianceCube.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite, 0, 1, 6);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, irrP.value()->pipeline);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, irrP.value()->layout, 0, irrSet, {});
+        cmd.dispatch(group(IblIrradianceSize), group(IblIrradianceSize), 6);
+        barrier(renderer.ibl.irradianceCube.image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead, 0, 1, 6);
+
+        // Prefiltered specular: one dispatch per mip (roughness = mip / (mips-1)).
+        barrier(renderer.ibl.prefilteredCube.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite, 0, preMips, 6);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, preP.value()->pipeline);
+        for (u32 m = 0; m < preMips; m = m + 1)
+        {
+            u32 mipSize = IblPrefilterSize >> m;
+            if (mipSize == 0) { mipSize = 1; }
+            f32 roughness = preMips > 1 ? static_cast<f32>(m) / static_cast<f32>(preMips - 1) : 0.0f;
+            cmd.pushConstants(preP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(f32), &roughness);
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, preP.value()->layout, 0, preSets[m], {});
+            cmd.dispatch(group(mipSize), group(mipSize), 6);
+        }
+        barrier(renderer.ibl.prefilteredCube.image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead, 0, preMips, 6);
+
+        // Split-sum BRDF LUT (2D, single layer).
+        barrier(renderer.ibl.brdfLut.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite, 0, 1, 1);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, lutP.value()->pipeline);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, lutP.value()->layout, 0, brdfSet, {});
+        cmd.dispatch(group(IblLutSize), group(IblLutSize), 1);
+        barrier(renderer.ibl.brdfLut.image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead, 0, 1, 1);
+
+        static_cast<void>(cmd.end());
+        vk::CommandBufferSubmitInfo cmdInfo{};
+        cmdInfo.commandBuffer = cmd;
+        vk::SubmitInfo2 submitInfo{};
+        submitInfo.setCommandBufferInfos(cmdInfo);
+        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
+        static_cast<void>(device.waitIdle());
+        device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+
+        renderer.ibl.envCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        renderer.ibl.irradianceCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        renderer.ibl.prefilteredCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        renderer.ibl.brdfLut.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+        // Write the persistent set 3 the mesh fragment samples.
+        std::array<vk::DescriptorImageInfo, 3> setImages{
+            vk::DescriptorImageInfo{ renderer.ibl.sampler, renderer.ibl.irradianceCube.view, vk::ImageLayout::eShaderReadOnlyOptimal },
+            vk::DescriptorImageInfo{ renderer.ibl.sampler, renderer.ibl.prefilteredCube.view, vk::ImageLayout::eShaderReadOnlyOptimal },
+            vk::DescriptorImageInfo{ renderer.ibl.sampler, renderer.ibl.brdfLut.view, vk::ImageLayout::eShaderReadOnlyOptimal } };
+        std::array<vk::WriteDescriptorSet, 3> setWrites{};
+        for (u32 b = 0; b < 3; b = b + 1)
+        {
+            setWrites[b].dstSet = renderer.ibl.set;
+            setWrites[b].dstBinding = b;
+            setWrites[b].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            setWrites[b].setImageInfo(setImages[b]);
+        }
+        device.updateDescriptorSets(setWrites, {});
+        renderer.ibl.ready = true;
+
+        for (vk::ImageView v : transientViews) { device.destroyImageView(v); }
+        cleanupLayouts();
+        logInfo(std::format("ibl baked — env {}^2, irradiance {}^2, prefiltered {}^2 x{} mips, lut {}^2",
+                            IblEnvSize, IblIrradianceSize, IblPrefilterSize, preMips, IblLutSize));
         return {};
     }
 }

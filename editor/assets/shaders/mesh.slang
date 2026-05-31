@@ -44,7 +44,7 @@ struct LightGlobals
 {
     float4 directionAmbient;  // xyz = travel direction, w = ambient
     float4 colorIntensity;    // rgb = color, a = intensity
-    uint4 counts;             // x = punctual light count, y = directional shadow enabled (0/1)
+    uint4 counts;             // x = punctual count, y = directional shadow on, z = IBL ambient on
     float4 eyePosition;       // xyz = world-space camera position (for the view vector)
     float4x4 shadowViewProj;  // world -> directional light clip space
 };
@@ -112,6 +112,18 @@ struct Instance
     float4 emissive;  // rgb = emissive radiance (strength baked in)
 };
 [[vk::binding(0, 2)]] StructuredBuffer<Instance> instances;
+
+// Set 3: image-based lighting — diffuse irradiance cube, prefiltered specular cube, and
+// the split-sum BRDF LUT. Sampled for the ambient term when globals.counts.z != 0.
+[[vk::binding(0, 3)]] SamplerCube irradianceMap;
+[[vk::binding(1, 3)]] SamplerCube prefilteredMap;
+[[vk::binding(2, 3)]] Sampler2D brdfLut;
+static const float IblPrefilterMaxMip = 4.0;  // == IblPrefilterMips - 1 (renderer_detail.cppm)
+
+float3 fresnelSchlickRoughness(float cosT, float3 F0, float roughness)
+{
+    return F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(1.0 - cosT, 5.0);
+}
 
 [shader("vertex")]
 VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_VulkanInstanceID)
@@ -271,8 +283,26 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         }
     }
 
-    // Flat scalar ambient is a placeholder for indirect light — phase 2 (IBL) replaces it.
-    float3 ambient = albedo * (1.0 - metallic) * globals.directionAmbient.w;
+    // Indirect (ambient): split-sum IBL when enabled, else the flat scalar fallback.
+    float3 ambient;
+    if (globals.counts.z != 0)
+    {
+        float3 F0 = lerp(float3(0.04), albedo, metallic);
+        float ndotv = max(dot(n, v), 1e-4);
+        float3 F = fresnelSchlickRoughness(ndotv, F0, roughness);
+        float3 kd = (1.0 - F) * (1.0 - metallic);
+        float3 irradiance = irradianceMap.SampleLevel(n, 0.0).rgb;
+        float3 diffuseIBL = kd * irradiance * albedo;
+        float3 R = reflect(-v, n);
+        float3 prefiltered = prefilteredMap.SampleLevel(R, roughness * IblPrefilterMaxMip).rgb;
+        float2 ab = brdfLut.SampleLevel(float2(ndotv, roughness), 0.0).rg;
+        float3 specularIBL = prefiltered * (F0 * ab.x + ab.y);
+        ambient = diffuseIBL + specularIBL;
+    }
+    else
+    {
+        ambient = albedo * (1.0 - metallic) * globals.directionAmbient.w;
+    }
     float3 color = lo + ambient + input.emissive;
     return float4(color, tex.a * input.baseColor.a);
 }

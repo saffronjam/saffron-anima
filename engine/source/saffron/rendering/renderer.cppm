@@ -210,6 +210,12 @@ namespace se
         {
             return Err(descriptors.error());
         }
+        // Bake the IBL environment (procedural sky -> irradiance + prefiltered + BRDF LUT)
+        // once; the mesh ambient samples it via set 3.
+        if (Result<void> baked = bakeEnvironment(renderer); !baked)
+        {
+            return Err(baked.error());
+        }
         setDirectionalLight(renderer, glm::vec3(-0.5f, -1.0f, -0.3f), glm::vec3(1.0f), 1.0f, 0.15f);
 
         const std::array<u8, 4> white{ 255, 255, 255, 255 };
@@ -267,6 +273,10 @@ namespace se
         renderer.targets.offscreen.reset();  // free before the allocator/device
         renderer.targets.depth.reset();
         renderer.targets.shadowMap.reset();
+        renderer.ibl.envCube.reset();
+        renderer.ibl.irradianceCube.reset();
+        renderer.ibl.prefilteredCube.reset();
+        renderer.ibl.brdfLut.reset();
         renderer.targets.msaaColor.reset();
         renderer.targets.msaaDepth.reset();
         renderer.targets.scratch.reset();
@@ -326,6 +336,14 @@ namespace se
         if (renderer.descriptors.shadowSampler)
         {
             renderer.context.device.destroySampler(renderer.descriptors.shadowSampler);
+        }
+        if (renderer.ibl.setLayout)
+        {
+            renderer.context.device.destroyDescriptorSetLayout(renderer.ibl.setLayout);
+        }
+        if (renderer.ibl.sampler)
+        {
+            renderer.context.device.destroySampler(renderer.ibl.sampler);
         }
 
         for (FrameData& frame : renderer.frame.frames)
@@ -829,6 +847,16 @@ namespace se
     auto exposureEv(const Renderer& renderer) -> f32
     {
         return renderer.exposureEv;
+    }
+
+    void setIbl(Renderer& renderer, bool enabled)
+    {
+        renderer.ibl.useIbl = enabled;
+    }
+
+    auto iblEnabled(const Renderer& renderer) -> bool
+    {
+        return renderer.ibl.useIbl && renderer.ibl.ready;
     }
 
     void setShadows(Renderer& renderer, bool enabled)

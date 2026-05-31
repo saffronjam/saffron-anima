@@ -1,7 +1,38 @@
 # Phase 2: Image-Based Lighting (IBL)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+<!--
+DONE 2026-05-31 (validation-clean under a headless weston Wayland display in the toolbox).
+- Cubemap support: newCubeImage (CUBE_COMPATIBLE, 6 layers, N mips, sampled+storage; eCube
+  sample view + transient per-mip e2DArray storage views for the compute writes) in
+  renderer_detail.cppm. The seam for 2D-array / 3D is the same helper.
+- Environment SOURCE is a PROCEDURAL HDR sky (ibl_skygen.slang) — no .hdr asset shipped.
+  The equirect-.hdr loader is the documented follow-up: swap skygen for an equirect→cubemap
+  compute pass writing the same envCube; everything downstream is unchanged.
+- Bake (bakeEnvironment, one-time at startup, own cmd buffer + waitIdle): skygen → env cube;
+  ibl_irradiance.slang → 32² irradiance cube (cosine hemisphere convolution); ibl_prefilter.slang
+  → 128²×5-mip GGX-prefiltered specular (one dispatch per mip, roughness = mip/(mips-1), push
+  constant); ibl_brdf.slang → 256² split-sum (scale,bias) LUT. All rgba16f. Manual sync2
+  barriers between passes (General↔ShaderReadOnly).
+- mesh.slang set 3 = { irradianceCube, prefilteredCube, brdfLut }; ambient replaced with
+  split-sum IBL (fresnelSchlickRoughness, kd diffuse irradiance + prefiltered*(F0*a+b) specular)
+  gated on globals.counts.z; flat scalar ambient kept as the fallback. IblPrefilterMaxMip in the
+  shader must equal IblPrefilterMips-1 in renderer_detail.cppm.
+- se set-ibl {0|1}; render-stats reports ibl. Mesh PSO layout widened to 4 sets; the IBL set is
+  bound once in recordSceneDrawList (baked, always valid).
+- Verified: ambient-only scene (directional intensity 0), IBL on vs off differ (22.8% px); metal
+  row 44→119 brightness (reflects env), dielectric row gains sky-blue tint (93→114 B). Metals
+  with IBL off are ~black (correct: no diffuse, flat ambient excludes metallic).
+
+NOT done (follow-ups, do not block COMPLETED): equirect .hdr loader (uploadTextureFloat +
+equirect→cube pass) to replace the procedural sky; a visible skybox pass (coordinate with
+plans/skybox/); selectable environment asset; spherical-harmonics diffuse alternative; the
+"indirect term as a shader helper later GI phases extend" refactor (currently inline in fsMain —
+phase 4/6 can extract it then).
+-->
+
 
 ## Goal
 

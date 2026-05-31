@@ -590,6 +590,23 @@ export namespace se
         u32 generation = 0;        // bumped whenever the offscreen image is recreated
     };
 
+    // Image-based lighting: a procedural/HDR environment cubemap convolved into a diffuse
+    // irradiance cube + a roughness-mipped prefiltered specular cube + a split-sum BRDF
+    // LUT. Sampled as the mesh ambient (set 3). Baked once at startup.
+    struct Ibl
+    {
+        Image envCube;          // source environment (procedural sky)
+        Image irradianceCube;   // diffuse irradiance convolution
+        Image prefilteredCube;  // GGX-prefiltered specular (one mip per roughness step)
+        Image brdfLut;          // split-sum (scale, bias) table (rgba16f, RG used)
+        u32 prefilterMips = 1;
+        vk::Sampler sampler;                // linear, clamp, mipped — all three sampled in the mesh
+        vk::DescriptorSetLayout setLayout;  // set 3 (irradiance, prefiltered, brdf LUT)
+        vk::DescriptorSet set;
+        bool ready = false;
+        bool useIbl = true;     // false = flat scalar ambient fallback
+    };
+
     // The frame as a render graph + the resource handles app-authored passes reference.
     struct FrameGraphState
     {
@@ -608,6 +625,7 @@ export namespace se
         Instancing instancing;
         Pipelines pipelines;
         Targets targets;
+        Ibl ibl;
         FrameGraphState graph;
 
         bool useDepthPrepass = false;
@@ -724,6 +742,9 @@ export namespace se
     // Tonemap exposure in stops (EV). exp2(ev) scales radiance before the tonemap.
     void setExposure(Renderer& renderer, f32 ev);
     auto exposureEv(const Renderer& renderer) -> f32;
+    // Image-based lighting: toggle split-sum IBL ambient vs the flat scalar fallback.
+    void setIbl(Renderer& renderer, bool enabled);
+    auto iblEnabled(const Renderer& renderer) -> bool;
     // Directional shadow map: toggle + the per-frame light-space transform. renderScene
     // fits the transform to the scene each frame; beginFrameGraph runs the depth pass.
     void setShadows(Renderer& renderer, bool enabled);
