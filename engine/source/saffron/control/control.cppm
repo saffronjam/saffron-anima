@@ -200,7 +200,29 @@ export namespace se
                              { "clustered", clusteredEnabled(ctx.renderer) },
                              { "postProcess", postProcessEnabled(ctx.renderer) },
                              { "depthPrepass", depthPrepassEnabled(ctx.renderer) },
-                             { "pipelines", pipelineCount(ctx.renderer) } };
+                             { "pipelines", pipelineCount(ctx.renderer) },
+                             { "aa", aaMode(ctx.renderer) } };
+            });
+
+        registerCommand(reg, "set-aa", "set-aa {off|msaa2|msaa4|msaa8} — anti-aliasing mode",
+            [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
+            {
+                const json value = positionalOr(params, "mode", 0);
+                std::string mode = "off";
+                if (value.is_string())
+                {
+                    mode = value.get<std::string>();
+                }
+                u32 samples = 1;
+                if (mode == "msaa2") { samples = 2; }
+                else if (mode == "msaa4") { samples = 4; }
+                else if (mode == "msaa8") { samples = 8; }
+                else if (mode != "off")
+                {
+                    return std::unexpected(std::string{ "expected off|msaa2|msaa4|msaa8" });
+                }
+                setAa(ctx.renderer, samples, false);
+                return json{ { "aa", aaMode(ctx.renderer) } };
             });
 
         registerCommand(reg, "set-clustered", "set-clustered {0|1} — toggle clustered light culling",

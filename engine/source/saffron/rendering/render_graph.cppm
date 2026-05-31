@@ -52,12 +52,15 @@ export namespace se
 
     /// A color or depth attachment binding for a graphics pass. The write usage and
     /// the layout transition are derived; only the load/store/clear are declared here.
+    /// `resolve` (color only) is an MSAA resolve target: the multisampled attachment is
+    /// resolved into it at end-of-pass; the graph treats it as a second color write.
     struct RgAttachment
     {
         RgResource resource;
         vk::AttachmentLoadOp loadOp = vk::AttachmentLoadOp::eClear;
         vk::AttachmentStoreOp storeOp = vk::AttachmentStoreOp::eStore;
         vk::ClearValue clearValue{};
+        std::optional<RgResource> resolve;
     };
 
     /// A unit of GPU work: its declared resource usage plus the closure that records
@@ -286,6 +289,12 @@ namespace se
             {
                 applyAccess(graph.resources[pass.color->resource.index], usageInfo(RgUsage::ColorWrite),
                             imageBarriers, memoryBarriers);
+                if (pass.color->resolve)
+                {
+                    // The resolve target is written at end-of-pass — a second color write.
+                    applyAccess(graph.resources[pass.color->resolve->index], usageInfo(RgUsage::ColorWrite),
+                                imageBarriers, memoryBarriers);
+                }
             }
             if (pass.depth)
             {
@@ -316,6 +325,12 @@ namespace se
                     colorInfo.loadOp = pass.color->loadOp;
                     colorInfo.storeOp = pass.color->storeOp;
                     colorInfo.clearValue = pass.color->clearValue;
+                    if (pass.color->resolve)
+                    {
+                        colorInfo.resolveMode = vk::ResolveModeFlagBits::eAverage;
+                        colorInfo.resolveImageView = graph.resources[pass.color->resolve->index].view;
+                        colorInfo.resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+                    }
                     rendering.setColorAttachments(colorInfo);
                 }
                 if (pass.depth)

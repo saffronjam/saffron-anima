@@ -562,6 +562,13 @@ export namespace se
 
         Image offscreenViewport;       // scene render target shown in the Viewport panel
         Image offscreenDepth;          // depth buffer for the scene pass, sized to the viewport
+        // MSAA: when sampleCount > 1 the scene renders to these multisampled targets and
+        // resolves color into offscreenViewport. Sized to the viewport, recreated with it.
+        Image msaaColor;
+        Image msaaDepth;
+        vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1;  // 1 = MSAA off
+        vk::SampleCountFlagBits maxSampleCount = vk::SampleCountFlagBits::e1;  // device cap
+        bool fxaaEnabled = false;      // FXAA post-process (mutually exclusive with MSAA)
         u32 viewportDesiredWidth = 0;  // requested by the UI panel (applied next frame)
         u32 viewportDesiredHeight = 0;
         u32 viewportGeneration = 0;    // bumped whenever the offscreen image is recreated
@@ -681,6 +688,10 @@ export namespace se
     bool postProcessEnabled(const Renderer& renderer);
     void setDepthPrepass(Renderer& renderer, bool enabled);
     bool depthPrepassEnabled(const Renderer& renderer);
+    // Anti-aliasing: msaaSamples is 1 (off) / 2 / 4 / 8 (clamped to the device cap); fxaa
+    // toggles the post-process pass. Recreates the MSAA targets + rebuilds scene PSOs.
+    void setAa(Renderer& renderer, u32 msaaSamples, bool fxaa);
+    std::string aaMode(const Renderer& renderer);  // "off" | "fxaa" | "msaa2|4|8"
 
     // A 1x1 white texture; bind it when a material has no albedo.
     const Ref<GpuTexture>& defaultTexture(const Renderer& renderer);
@@ -895,7 +906,8 @@ namespace se
         }
 
         std::expected<Image, std::string> newColorImage(Renderer& renderer, u32 width, u32 height,
-                                                        vk::Format format, bool storage = false)
+                                                        vk::Format format, bool storage = false,
+                                                        vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1)
         {
             vk::FormatProperties props = renderer.physicalDevice.getFormatProperties(format);
             vk::FormatFeatureFlags needed =
@@ -909,19 +921,25 @@ namespace se
                 return std::unexpected(std::format("format {} cannot be a sampled color attachment", vk::to_string(format)));
             }
 
+            // A multisampled image is a transient resolve source: color attachment only
+            // (never sampled / stored / copied — the resolved 1x image is what we read).
+            const bool multisampled = samples != vk::SampleCountFlagBits::e1;
             VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
             imageInfo.imageType = VK_IMAGE_TYPE_2D;
             imageInfo.format = static_cast<VkFormat>(format);
             imageInfo.extent = VkExtent3D{ width, height, 1 };
             imageInfo.mipLevels = 1;
             imageInfo.arrayLayers = 1;
-            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.samples = static_cast<VkSampleCountFlagBits>(samples);
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-            imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-            if (storage)
+            imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            if (!multisampled)
             {
-                imageInfo.usage = imageInfo.usage | VK_IMAGE_USAGE_STORAGE_BIT;
+                imageInfo.usage = imageInfo.usage | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                if (storage)
+                {
+                    imageInfo.usage = imageInfo.usage | VK_IMAGE_USAGE_STORAGE_BIT;
+                }
             }
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -960,7 +978,8 @@ namespace se
             return result;
         }
 
-        std::expected<Image, std::string> newDepthImage(Renderer& renderer, u32 width, u32 height)
+        std::expected<Image, std::string> newDepthImage(Renderer& renderer, u32 width, u32 height,
+                                                        vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1)
         {
             VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
             imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -968,7 +987,7 @@ namespace se
             imageInfo.extent = VkExtent3D{ width, height, 1 };
             imageInfo.mipLevels = 1;
             imageInfo.arrayLayers = 1;
-            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.samples = static_cast<VkSampleCountFlagBits>(samples);
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
             imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1006,6 +1025,44 @@ namespace se
             result.format = DepthFormat;
             result.layout = vk::ImageLayout::eUndefined;
             return result;
+        }
+
+        // (Re)create the multisampled scene color + depth targets at the offscreen extent
+        // when MSAA is on; drop them when off. Called after the offscreen is sized + on a
+        // sample-count change. The caller has already idled the GPU.
+        void recreateMsaaTargets(Renderer& renderer)
+        {
+            renderer.msaaColor.reset();
+            renderer.msaaDepth.reset();
+            if (renderer.sampleCount == vk::SampleCountFlagBits::e1)
+            {
+                return;
+            }
+            const u32 w = renderer.offscreenViewport.extent.width;
+            const u32 h = renderer.offscreenViewport.extent.height;
+            if (w == 0 || h == 0)
+            {
+                return;
+            }
+            std::expected<Image, std::string> color =
+                newColorImage(renderer, w, h, OffscreenColorFormat, false, renderer.sampleCount);
+            if (color)
+            {
+                renderer.msaaColor = std::move(*color);
+            }
+            else
+            {
+                logError(color.error());
+            }
+            std::expected<Image, std::string> depth = newDepthImage(renderer, w, h, renderer.sampleCount);
+            if (depth)
+            {
+                renderer.msaaDepth = std::move(*depth);
+            }
+            else
+            {
+                logError(depth.error());
+            }
         }
 
         // Host-visible, mapped buffer the caller owns (vmaDestroyBuffer when done).
@@ -1243,7 +1300,7 @@ namespace se
             raster.frontFace = vk::FrontFace::eCounterClockwise;
             raster.lineWidth = 1.0f;
             vk::PipelineMultisampleStateCreateInfo multisample{};
-            multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
+            multisample.rasterizationSamples = renderer.sampleCount;  // match the MSAA target
             vk::PipelineDepthStencilStateCreateInfo depthStencil{};
             depthStencil.depthTestEnable = VK_TRUE;
             depthStencil.depthWriteEnable = VK_TRUE;
@@ -1739,6 +1796,13 @@ namespace se
         renderer.graphicsQueue = vk::Queue{ queueResult.value() };
         renderer.graphicsQueueFamily = renderer.vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
+        // Highest MSAA level the device supports for both color + depth framebuffers (capped at 8x).
+        vk::SampleCountFlags sampleCounts = renderer.physicalDevice.getProperties().limits.framebufferColorSampleCounts &
+                                            renderer.physicalDevice.getProperties().limits.framebufferDepthSampleCounts;
+        if (sampleCounts & vk::SampleCountFlagBits::e8) { renderer.maxSampleCount = vk::SampleCountFlagBits::e8; }
+        else if (sampleCounts & vk::SampleCountFlagBits::e4) { renderer.maxSampleCount = vk::SampleCountFlagBits::e4; }
+        else if (sampleCounts & vk::SampleCountFlagBits::e2) { renderer.maxSampleCount = vk::SampleCountFlagBits::e2; }
+
         VmaAllocatorCreateInfo allocatorInfo{};
         allocatorInfo.instance = renderer.vkbInstance.instance;
         allocatorInfo.physicalDevice = physicalResult.value().physical_device;
@@ -1872,6 +1936,8 @@ namespace se
 
         renderer.offscreenViewport.reset();  // free before the allocator/device
         renderer.offscreenDepth.reset();
+        renderer.msaaColor.reset();
+        renderer.msaaDepth.reset();
 
         for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
         {
@@ -1995,6 +2061,7 @@ namespace se
                 {
                     logError(resizedDepth.error());
                 }
+                recreateMsaaTargets(renderer);  // MSAA targets follow the offscreen extent
             }
             else
             {
@@ -2066,9 +2133,24 @@ namespace se
         // its layout across frames (sampled by ImGui last frame → WAR into this scene).
         renderer.renderGraph = newRenderGraph();
         RenderGraph& graph = renderer.renderGraph;
+        // frameSceneColor is always the offscreen (what ImGui samples + tonemap reads). With
+        // MSAA the scene renders to msaaColor and resolves into it; otherwise it is the direct
+        // scene target. Likewise the scene depth is the multisampled buffer when MSAA is on.
+        const bool msaa = renderer.sampleCount != vk::SampleCountFlagBits::e1 && renderer.msaaColor.image;
         renderer.frameSceneColor = importImage(graph, offscreen.image, offscreen.view,
             vk::ImageAspectFlagBits::eColor, offscreen.layout, &offscreen.layout);
-        RgResource sceneDepth = importImage(graph, depth.image, depth.view,
+        RgResource sceneColorAttachment = renderer.frameSceneColor;
+        if (msaa)
+        {
+            sceneColorAttachment = importImage(graph, renderer.msaaColor.image, renderer.msaaColor.view,
+                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+        }
+        Image* depthTarget = &depth;
+        if (msaa)
+        {
+            depthTarget = &renderer.msaaDepth;
+        }
+        RgResource sceneDepth = importImage(graph, depthTarget->image, depthTarget->view,
             vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
         renderer.frameSwapImage = importImage(graph, renderer.swapchainImages[renderer.imageIndex],
             renderer.swapchainImageViews[renderer.imageIndex], vk::ImageAspectFlagBits::eColor,
@@ -2123,8 +2205,15 @@ namespace se
         {
             scene.accesses = { RgAccess{ clusterBuffer, RgUsage::StorageReadFragment } };
         }
-        scene.color = RgAttachment{ renderer.frameSceneColor, vk::AttachmentLoadOp::eClear,
+        // MSAA: render to the multisampled color, resolve into the offscreen (don't store
+        // the multisampled samples). Otherwise render straight into the offscreen.
+        scene.color = RgAttachment{ sceneColorAttachment, vk::AttachmentLoadOp::eClear,
             vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } } };
+        if (msaa)
+        {
+            scene.color->storeOp = vk::AttachmentStoreOp::eDontCare;
+            scene.color->resolve = renderer.frameSceneColor;
+        }
         // Load the pre-pass depth when present; otherwise clear it here as before.
         vk::AttachmentLoadOp depthLoad = vk::AttachmentLoadOp::eClear;
         if (doDepthPrepass)
@@ -2366,7 +2455,7 @@ namespace se
         raster.lineWidth = 1.0f;
 
         vk::PipelineMultisampleStateCreateInfo multisample{};
-        multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
+        multisample.rasterizationSamples = renderer.sampleCount;  // match the MSAA target
 
         vk::PipelineDepthStencilStateCreateInfo depthStencil{};
         depthStencil.depthTestEnable = VK_TRUE;
@@ -2912,6 +3001,50 @@ namespace se
     bool depthPrepassEnabled(const Renderer& renderer)
     {
         return renderer.useDepthPrepass;
+    }
+
+    void setAa(Renderer& renderer, u32 msaaSamples, bool fxaa)
+    {
+        vk::SampleCountFlagBits count = vk::SampleCountFlagBits::e1;
+        if (msaaSamples >= 8) { count = vk::SampleCountFlagBits::e8; }
+        else if (msaaSamples >= 4) { count = vk::SampleCountFlagBits::e4; }
+        else if (msaaSamples >= 2) { count = vk::SampleCountFlagBits::e2; }
+        if (static_cast<u32>(count) > static_cast<u32>(renderer.maxSampleCount))
+        {
+            count = renderer.maxSampleCount;
+        }
+
+        waitGpuIdle(renderer);
+        renderer.sampleCount = count;
+        renderer.fxaaEnabled = fxaa;
+        recreateMsaaTargets(renderer);
+
+        // The mesh + depth-prepass PSOs bake the sample count — rebuild them.
+        renderer.pipelineCache.clear();
+        std::expected<Ref<Pipeline>, std::string> depthPrepass =
+            makeDepthPrepassPipeline(renderer, "shaders/mesh.spv");
+        if (depthPrepass)
+        {
+            renderer.depthPrepassPipeline = *depthPrepass;
+        }
+        else
+        {
+            logError(depthPrepass.error());
+        }
+    }
+
+    std::string aaMode(const Renderer& renderer)
+    {
+        if (renderer.fxaaEnabled)
+        {
+            return "fxaa";
+        }
+        const u32 n = static_cast<u32>(renderer.sampleCount);
+        if (n <= 1)
+        {
+            return "off";
+        }
+        return std::format("msaa{}", n);
     }
 
     std::expected<Ref<GpuTexture>, std::string> uploadSvgIcon(Renderer& renderer, const std::string& svgPath,
