@@ -18,6 +18,7 @@ export namespace se
         std::function<void(TimeSpan)> onUpdate;
         std::function<void()> onRender;  // submit GPU work; runs inside the frame
         std::function<void()> onUi;
+        std::function<void(RenderGraph&)> onRenderGraph;  // add passes to the frame graph
         std::function<void()> onDetach;
     };
 
@@ -155,6 +156,17 @@ export namespace se
                 }
                 uiEndFrame(app.ui);
                 uiRecordDrawData(app.renderer);
+
+                // Build the frame graph (cull + scene), let layers add passes against
+                // it (e.g. post-process), then finish + execute it.
+                beginFrameGraph(app.renderer);
+                for (Layer& layer : app.layers)
+                {
+                    if (layer.onRenderGraph)
+                    {
+                        layer.onRenderGraph(frameGraph(app.renderer));
+                    }
+                }
                 endFrame(app.renderer);
             }
 

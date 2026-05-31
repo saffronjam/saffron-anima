@@ -498,6 +498,12 @@ export namespace se
         u32 viewportDesiredHeight = 0;
         u32 viewportGeneration = 0;    // bumped whenever the offscreen image is recreated
 
+        // The frame as a render graph: built in beginFrameGraph (cull + scene), extended
+        // by layers via the onRenderGraph hook, finished + executed in endFrame.
+        RenderGraph renderGraph;
+        RgResource frameSceneColor;  // the offscreen color handle, for app-authored passes
+        RgResource frameSwapImage;
+
         // Pending window screenshot, consumed in endFrame: the swapchain image is
         // only safely owned in-frame, so the copy is deferred there.
         std::optional<std::string> captureNextSwapchainPath;
@@ -511,6 +517,13 @@ export namespace se
     bool beginFrame(Renderer& renderer);
     void submit(Renderer& renderer, RenderFn fn);    // scene pass (offscreen target)
     void submitUi(Renderer& renderer, RenderFn fn);  // ui pass (swapchain)
+    // Build the frame's graph (cull + scene). The run loop then lets layers add passes
+    // (onRenderGraph) before endFrame finishes it with the ui pass + executes it.
+    void beginFrameGraph(Renderer& renderer);
+    RenderGraph& frameGraph(Renderer& renderer);
+    // The offscreen color resource in the current frame graph — an app-authored pass
+    // (e.g. post-process) declares its reads/writes against this handle.
+    RgResource viewportColorResource(const Renderer& renderer);
     void endFrame(Renderer& renderer);
 
     // The offscreen Viewport target the editor samples + displays in a panel.
@@ -1709,9 +1722,8 @@ namespace se
         return renderer.offscreenViewport.extent.height;
     }
 
-    void endFrame(Renderer& renderer)
+    void beginFrameGraph(Renderer& renderer)
     {
-        FrameData& frame = renderer.frames[renderer.frameIndex];
         Image& offscreen = renderer.offscreenViewport;
         Image& depth = renderer.offscreenDepth;
         const u32 f = renderer.frameIndex;
@@ -1721,12 +1733,13 @@ namespace se
         // The frame as a render graph: declare each pass's resource usage and let the
         // graph derive the barriers + layout transitions. The offscreen color carries
         // its layout across frames (sampled by ImGui last frame → WAR into this scene).
-        RenderGraph graph = newRenderGraph();
-        RgResource sceneColor = importImage(graph, offscreen.image, offscreen.view,
+        renderer.renderGraph = newRenderGraph();
+        RenderGraph& graph = renderer.renderGraph;
+        renderer.frameSceneColor = importImage(graph, offscreen.image, offscreen.view,
             vk::ImageAspectFlagBits::eColor, offscreen.layout, &offscreen.layout);
         RgResource sceneDepth = importImage(graph, depth.image, depth.view,
             vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
-        RgResource swapImage = importImage(graph, renderer.swapchainImages[renderer.imageIndex],
+        renderer.frameSwapImage = importImage(graph, renderer.swapchainImages[renderer.imageIndex],
             renderer.swapchainImageViews[renderer.imageIndex], vk::ImageAspectFlagBits::eColor,
             vk::ImageLayout::eUndefined, nullptr);
 
@@ -1760,8 +1773,8 @@ namespace se
         {
             scene.accesses = { RgAccess{ clusterBuffer, RgUsage::StorageReadFragment } };
         }
-        scene.color = RgAttachment{ sceneColor, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-            vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } } };
+        scene.color = RgAttachment{ renderer.frameSceneColor, vk::AttachmentLoadOp::eClear,
+            vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } } };
         scene.depth = RgAttachment{ sceneDepth, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eDontCare,
             vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
         scene.renderArea = offscreen.extent;
@@ -1773,13 +1786,31 @@ namespace se
             }
         };
         addPass(graph, std::move(scene));
+    }
 
+    RenderGraph& frameGraph(Renderer& renderer)
+    {
+        return renderer.renderGraph;
+    }
+
+    RgResource viewportColorResource(const Renderer& renderer)
+    {
+        return renderer.frameSceneColor;
+    }
+
+    void endFrame(Renderer& renderer)
+    {
+        FrameData& frame = renderer.frames[renderer.frameIndex];
+        RenderGraph& graph = renderer.renderGraph;
+
+        // The ui pass samples the (now post-processed) offscreen color and composites
+        // ImGui into the swapchain. Added last so app-authored passes land before it.
         RgPass ui;
         ui.name = "ui";
         ui.kind = RgPassKind::Graphics;
-        ui.accesses = { RgAccess{ sceneColor, RgUsage::SampledRead } };
-        ui.color = RgAttachment{ swapImage, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-            vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } } };
+        ui.accesses = { RgAccess{ renderer.frameSceneColor, RgUsage::SampledRead } };
+        ui.color = RgAttachment{ renderer.frameSwapImage, vk::AttachmentLoadOp::eClear,
+            vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } } };
         ui.renderArea = renderer.swapchainExtent;
         ui.execute = [&renderer](vk::CommandBuffer cmd)
         {
