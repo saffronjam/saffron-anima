@@ -18,6 +18,7 @@ target_sources(SaffronEngine
             source/saffron/rendering/renderer.cppm
             source/saffron/ui/ui.cppm
             source/saffron/assets/assets.cppm
+            source/saffron/editor/editor_context.cppm
             source/saffron/editor/editor.cppm
             source/saffron/control/control.cppm
             source/saffron/app/app.cppm)
@@ -31,7 +32,12 @@ target_sources(SaffronEngine PRIVATE
     source/saffron/rendering/renderer_lighting.cpp
     source/saffron/rendering/renderer_aa.cpp
     source/saffron/rendering/renderer_textures.cpp
-    source/saffron/rendering/renderer_thumbnail.cpp)
+    source/saffron/rendering/renderer_thumbnail.cpp
+    source/saffron/editor/editor_context.cpp
+    source/saffron/editor/editor_components.cpp
+    source/saffron/editor/editor_panels.cpp
+    source/saffron/editor/editor_camera.cpp
+    source/saffron/editor/editor_gizmo.cpp)
 
 target_compile_features(SaffronEngine PUBLIC cxx_std_26)
 set_target_properties(SaffronEngine PROPERTIES CXX_MODULE_STD ON)
