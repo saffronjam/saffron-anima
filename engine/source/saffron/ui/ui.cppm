@@ -5,6 +5,7 @@ module;
 #include <vulkan/vulkan.hpp>
 #include <SDL3/SDL.h>
 #include <imgui.h>
+#include <imgui_internal.h>  // DockBuilder for the default editor layout
 #include <ImGuizmo.h>
 #include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_vulkan.h>
@@ -33,6 +34,7 @@ export namespace se
         ImVec2 viewportSize{};             // captured each frame for gizmo overlay
         bool viewportHovered = false;
         ImFont* monoFont = nullptr;        // Roboto Mono for numeric/data fields
+        bool layoutBuilt = false;          // seeded the default dock layout once
     };
 
     std::expected<Ui, std::string> newUi(Renderer& renderer, Window& window);
@@ -163,7 +165,28 @@ namespace se
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
-        ImGui::DockSpaceOverViewport();
+
+        const ImGuiID dockId = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
+        if (!ui.layoutBuilt)
+        {
+            ui.layoutBuilt = true;
+            ImGuiDockNode* node = ImGui::DockBuilderGetNode(dockId);
+            if (node == nullptr || node->IsLeafNode())  // empty (no saved layout) → seed a default
+            {
+                ImGui::DockBuilderRemoveNode(dockId);
+                ImGui::DockBuilderAddNode(dockId, ImGuiDockNodeFlags_DockSpace);
+                ImGui::DockBuilderSetNodeSize(dockId, ImGui::GetMainViewport()->Size);
+                ImGuiID center = dockId;
+                const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.20f, nullptr, &center);
+                const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
+                const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.55f, nullptr, nullptr);
+                ImGui::DockBuilderDockWindow("Hierarchy", left);
+                ImGui::DockBuilderDockWindow("Inspector", leftBottom);
+                ImGui::DockBuilderDockWindow("Assets", bottom);
+                ImGui::DockBuilderDockWindow("Viewport", center);
+                ImGui::DockBuilderFinish(dockId);
+            }
+        }
     }
 
     void uiEndFrame(Ui& ui)

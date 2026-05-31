@@ -14,11 +14,15 @@ module;
 #include <imgui_stdlib.h>
 #include <ImGuizmo.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <expected>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <string>
+#include <vector>
 
 export module Saffron.Editor;
 
@@ -55,15 +59,17 @@ export namespace se
         std::string scenePath;
         EditorCamera camera;
 
-        // Set by the client to import a model path (File > Import / drag-and-drop).
-        // The editor has no renderer/assets, so importing is delegated to this hook.
+        // Set by the client to import a model/texture path (File > Import, drag-and-drop,
+        // asset browser). The editor has no renderer/assets, so importing is delegated.
         std::function<void(const std::string&)> onImportModel;
+        std::function<void(const std::string&)> onImportTexture;
         std::string importPath;  // the Import dialog's text buffer
 
         // Spawns the bundled cube mesh (Create > Cube); delegated like onImportModel
         // because the editor has no AssetServer to resolve/upload the mesh itself.
         std::function<void()> onCreateCube;
         ImGuizmo::OPERATION gizmoOp = ImGuizmo::TRANSLATE;  // W/E/R cycle translate/rotate/scale
+        std::string assetBrowserDir;  // current folder shown in the asset browser
     };
 
     void setSelection(EditorContext& ctx, Entity entity)
@@ -379,6 +385,95 @@ export namespace se
                 }
             }
             ImGui::EndPopup();
+        }
+
+        ImGui::End();
+    }
+
+    // A filesystem content browser: navigate folders under ctx.assetBrowserDir and
+    // import model (.gltf/.glb/.obj) or image (.png/.jpg) files through the editor's
+    // delegated hooks. The renderer/AssetServer work happens in those hooks.
+    void assetBrowserPanel(EditorContext& ctx)
+    {
+        ImGui::Begin("Assets");
+
+        namespace fs = std::filesystem;
+        if (ctx.assetBrowserDir.empty())
+        {
+            ImGui::TextUnformatted("No asset directory set.");
+            ImGui::End();
+            return;
+        }
+        const fs::path dir = ctx.assetBrowserDir;
+
+        if (ImGui::Button("Up") && dir.has_parent_path())
+        {
+            ctx.assetBrowserDir = dir.parent_path().string();
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted(dir.string().c_str());
+        ImGui::Separator();
+
+        std::error_code ec;
+        std::vector<fs::directory_entry> folders;
+        std::vector<fs::directory_entry> files;
+        for (const fs::directory_entry& entry : fs::directory_iterator(dir, ec))
+        {
+            if (entry.is_directory(ec))
+            {
+                folders.push_back(entry);
+            }
+            else
+            {
+                files.push_back(entry);
+            }
+        }
+        auto byName = [](const fs::directory_entry& a, const fs::directory_entry& b)
+        {
+            return a.path().filename().string() < b.path().filename().string();
+        };
+        std::sort(folders.begin(), folders.end(), byName);
+        std::sort(files.begin(), files.end(), byName);
+
+        std::string nextDir;
+        for (const fs::directory_entry& folder : folders)
+        {
+            const std::string label = "[ ] " + folder.path().filename().string();
+            if (ImGui::Selectable(label.c_str()))
+            {
+                nextDir = folder.path().string();
+            }
+        }
+        for (const fs::directory_entry& file : files)
+        {
+            std::string ext = file.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const bool isModel = ext == ".gltf" || ext == ".glb" || ext == ".obj";
+            const bool isTexture = ext == ".png" || ext == ".jpg" || ext == ".jpeg";
+
+            ImGui::TextUnformatted(file.path().filename().string().c_str());
+            if (isModel || isTexture)
+            {
+                ImGui::SameLine();
+                ImGui::PushID(file.path().string().c_str());
+                if (ImGui::SmallButton("Import"))
+                {
+                    if (isModel && ctx.onImportModel)
+                    {
+                        ctx.onImportModel(file.path().string());
+                    }
+                    if (isTexture && ctx.onImportTexture)
+                    {
+                        ctx.onImportTexture(file.path().string());
+                    }
+                }
+                ImGui::PopID();
+            }
+        }
+        if (!nextDir.empty())
+        {
+            ctx.assetBrowserDir = nextDir;  // deferred so we don't mutate mid-iteration
         }
 
         ImGui::End();

@@ -83,6 +83,27 @@ int main()
         {
             importAndSpawn(se::assetPath("models/cube.gltf"));
         };
+        // Importing a texture applies it to the selected entity's material if it has one.
+        state->editor->onImportTexture = [state, &app](const std::string& path)
+        {
+            std::expected<se::Uuid, std::string> id = se::importTexture(state->assets, app.renderer, path);
+            if (!id)
+            {
+                se::logError(id.error());
+                return;
+            }
+            se::Scene& scene = state->editor->scene;
+            se::Entity selected = state->editor->selected;
+            if (se::valid(scene, selected) && se::hasComponent<se::MaterialComponent>(scene, selected))
+            {
+                se::getComponent<se::MaterialComponent>(scene, selected).albedoTexture = *id;
+            }
+            else
+            {
+                se::logInfo("imported texture; select a mesh with a Material to apply it");
+            }
+        };
+        state->editor->assetBrowserDir = se::assetPath("");  // executable dir (models/, textures/, fonts/)
         app.window.onFileDropped.subscribe([importAndSpawn](std::string path)
         {
             importAndSpawn(path);
@@ -138,6 +159,7 @@ int main()
             }
 
             se::hierarchyPanel(*state->editor);
+            se::assetBrowserPanel(*state->editor);
 
             // Numeric/data fields read better in a monospace font.
             ImGui::PushFont(se::uiMonoFont(app.ui));
