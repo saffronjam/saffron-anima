@@ -417,7 +417,43 @@ export namespace se
         }
     };
 
-    // Per-frame scene draw counters, refreshed by drawInstanced; inspectable via the
+    /// One renderable for the scene draw list: a mesh + its albedo texture (null =>
+    /// default white) + transform + base color. submitDrawList batches these by
+    /// (mesh, texture) into instanced draws that the scene + depth passes both consume.
+    struct DrawItem
+    {
+        Ref<GpuMesh> mesh;
+        Ref<GpuTexture> texture;
+        glm::mat4 model{ 1.0f };
+        glm::mat4 normalMatrix{ 1.0f };
+        glm::vec4 baseColor{ 1.0f };
+    };
+
+    // A batch of instances sharing a mesh + albedo texture, drawn as one instanced
+    // drawIndexed. baseInstance offsets into the frame's instance buffer. The Refs keep
+    // the mesh/texture alive until the frame's command buffer executes.
+    struct DrawBatch
+    {
+        Ref<GpuMesh> mesh;
+        Ref<GpuTexture> texture;     // kept alive; may be null (default white bound)
+        vk::DescriptorSet materialSet;
+        u32 baseInstance = 0;
+        u32 instanceCount = 0;
+    };
+
+    // The scene's structured draw list for the frame: built by submitDrawList from the
+    // DrawItems, consumed by the scene pass (shaded) and the depth pre-pass (depth only).
+    struct SceneDrawList
+    {
+        Ref<Pipeline> meshPipeline;
+        glm::mat4 viewProj{ 1.0f };
+        std::vector<DrawBatch> batches;
+        vk::DescriptorSet lightSet;
+        vk::DescriptorSet instanceSet;
+        bool valid = false;
+    };
+
+    // Per-frame scene draw counters, refreshed by submitDrawList; inspectable via the
     // control plane so batching can be verified live.
     struct RenderStats
     {
@@ -454,7 +490,8 @@ export namespace se
         u32 imageIndex = 0;
 
         std::array<f32, 4> clearColor{ 0.05f, 0.06f, 0.08f, 1.0f };
-        std::vector<RenderFn> sceneSubmissions;  // replayed into the offscreen pass
+        SceneDrawList sceneDrawList;              // structured scene geometry for the frame
+        std::vector<RenderFn> sceneSubmissions;  // ad-hoc geometry replayed into the offscreen pass
         std::vector<RenderFn> uiSubmissions;     // replayed into the swapchain pass
 
         // Meshes/textures/pipelines are passed around as Ref<T> objects owned by the
@@ -558,16 +595,6 @@ export namespace se
         glm::vec4 baseColor;
     };
 
-    // A bucket of instances sharing a mesh + albedo texture, drawn as one instanced
-    // drawIndexed. baseInstance offsets into the frame's instance buffer.
-    struct InstanceBatch
-    {
-        Ref<GpuMesh> mesh;
-        Ref<GpuTexture> texture;  // null falls back to the default white texture
-        u32 baseInstance = 0;
-        u32 instanceCount = 0;
-    };
-
     // Mesh rendering: a depth-tested instanced pipeline (set 0 = material albedo,
     // set 1 = directional light, set 2 = per-instance data; push constant = viewProj),
     // device-local mesh + texture uploads, and a batched instanced draw via submit().
@@ -584,10 +611,13 @@ export namespace se
     // a fixed light) for an asset thumbnail. Synchronous one-off render; safe between frames.
     std::expected<Ref<GpuTexture>, std::string> renderMeshThumbnail(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size);
 
-    // Uploads the frame's instance data, then records ONE submit() closure that binds
-    // the light + instance sets once and issues one instanced drawIndexed per batch.
-    void drawInstanced(Renderer& renderer, const Ref<Pipeline>& pipeline, const glm::mat4& viewProj,
-                       const std::vector<InstanceData>& instances, const std::vector<InstanceBatch>& batches);
+    // Batches the DrawItems by (mesh, texture), uploads the frame's instance buffer, and
+    // stores the structured draw list on the renderer for the scene + depth passes to
+    // consume. Replaces the old single-closure drawInstanced.
+    void submitDrawList(Renderer& renderer, const Ref<Pipeline>& meshPipeline,
+                        const glm::mat4& viewProj, const std::vector<DrawItem>& items);
+    // Record the frame's scene geometry into the active pass (the scene-pass body).
+    void recordSceneDrawList(Renderer& renderer, vk::CommandBuffer cmd);
 
     // One punctual (point or spot) light in the per-frame light storage buffer
     // (set 1, binding 1). Positions/directions are world space; the fragment shader
@@ -1622,6 +1652,7 @@ namespace se
         // Drop any Refs the renderer itself still holds, plus the closure vectors
         // (which may capture Refs), before the descriptor pool / allocator / device
         // are torn down — a GpuTexture frees its material set from the pool.
+        renderer.sceneDrawList = SceneDrawList{};  // drops mesh/texture/pipeline Refs
         renderer.sceneSubmissions.clear();
         renderer.uiSubmissions.clear();
         renderer.defaultWhiteTexture.reset();
@@ -1759,6 +1790,7 @@ namespace se
 
         static_cast<void>(renderer.device.resetFences(frame.inFlight));
         static_cast<void>(frame.commandBuffer.reset());
+        renderer.sceneDrawList = SceneDrawList{};  // last frame's geometry has presented
         renderer.sceneSubmissions.clear();
         renderer.uiSubmissions.clear();
 
@@ -1865,6 +1897,7 @@ namespace se
         scene.renderArea = offscreen.extent;
         scene.execute = [&renderer](vk::CommandBuffer cmd)
         {
+            recordSceneDrawList(renderer, cmd);
             for (RenderFn& fn : renderer.sceneSubmissions)
             {
                 fn(cmd);
@@ -2331,11 +2364,72 @@ namespace se
         return {};
     }
 
-    void drawInstanced(Renderer& renderer, const Ref<Pipeline>& pipeline, const glm::mat4& viewProj,
-                       const std::vector<InstanceData>& instances, const std::vector<InstanceBatch>& batches)
+    void submitDrawList(Renderer& renderer, const Ref<Pipeline>& meshPipeline,
+                        const glm::mat4& viewProj, const std::vector<DrawItem>& items)
     {
         renderer.stats = RenderStats{};
-        if (!pipeline || instances.empty() || batches.empty())
+        renderer.sceneDrawList = SceneDrawList{};
+        if (!meshPipeline || items.empty())
+        {
+            return;
+        }
+
+        // Bucket items by (mesh, texture); each bucket becomes one instanced draw. Linear
+        // lookup — the bucket count is the number of distinct mesh/material pairs, small.
+        // First-seen order is preserved.
+        struct Bucket
+        {
+            Ref<GpuMesh> mesh;
+            Ref<GpuTexture> texture;
+            std::vector<InstanceData> instances;
+        };
+        std::vector<Bucket> buckets;
+        for (const DrawItem& item : items)
+        {
+            if (!item.mesh)
+            {
+                continue;
+            }
+            Bucket* bucket = nullptr;
+            for (Bucket& candidate : buckets)
+            {
+                if (candidate.mesh.get() == item.mesh.get() && candidate.texture.get() == item.texture.get())
+                {
+                    bucket = &candidate;
+                    break;
+                }
+            }
+            if (bucket == nullptr)
+            {
+                buckets.push_back(Bucket{ item.mesh, item.texture, {} });
+                bucket = &buckets.back();
+            }
+            bucket->instances.push_back(InstanceData{ item.model, item.normalMatrix, item.baseColor });
+        }
+
+        // Flatten buckets into one contiguous instance array + per-batch ranges, dropping
+        // any bucket whose material set is unavailable.
+        std::vector<InstanceData> instances;
+        instances.reserve(items.size());
+        std::vector<DrawBatch> batches;
+        for (Bucket& bucket : buckets)
+        {
+            const Ref<GpuTexture>& tex = bucket.texture ? bucket.texture : renderer.defaultWhiteTexture;
+            if (!tex || !tex->materialSet)
+            {
+                continue;
+            }
+            DrawBatch batch;
+            batch.mesh = bucket.mesh;
+            batch.texture = bucket.texture;
+            batch.materialSet = tex->materialSet;
+            batch.baseInstance = static_cast<u32>(instances.size());
+            batch.instanceCount = static_cast<u32>(bucket.instances.size());
+            instances.insert(instances.end(), bucket.instances.begin(), bucket.instances.end());
+            batches.push_back(std::move(batch));
+        }
+
+        if (instances.empty())
         {
             return;
         }
@@ -2349,76 +2443,47 @@ namespace se
         std::memcpy(renderer.instanceBuffers[frame]->mapped, instances.data(), bytes);
         vmaFlushAllocation(renderer.allocator, renderer.instanceBuffers[frame]->alloc, 0, bytes);
 
-        // One closure replays the whole scene: bind the light + instance sets once,
-        // then per batch bind its material set and issue one instanced drawIndexed.
-        struct BatchRecord
-        {
-            vk::DescriptorSet materialSet;
-            vk::Buffer vertexBuffer;
-            vk::Buffer indexBuffer;
-            std::vector<Submesh> submeshes;
-            u32 baseInstance;
-            u32 instanceCount;
-        };
-        std::vector<BatchRecord> records;
-        records.reserve(batches.size());
         u32 drawCalls = 0;
         u32 drawnInstances = 0;
-        for (const InstanceBatch& batch : batches)
+        for (const DrawBatch& batch : batches)
         {
-            if (!batch.mesh || batch.instanceCount == 0)
-            {
-                continue;
-            }
-            const Ref<GpuTexture>* tex = &batch.texture;
-            if (!*tex)
-            {
-                tex = &renderer.defaultWhiteTexture;
-            }
-            if (!*tex || !(*tex)->materialSet)
-            {
-                continue;
-            }
-            BatchRecord record;
-            record.materialSet = (*tex)->materialSet;
-            record.vertexBuffer = batch.mesh->vertexBuffer;
-            record.indexBuffer = batch.mesh->indexBuffer;
-            record.submeshes = batch.mesh->submeshes;
-            record.baseInstance = batch.baseInstance;
-            record.instanceCount = batch.instanceCount;
-            drawCalls = drawCalls + static_cast<u32>(record.submeshes.size());
+            drawCalls = drawCalls + static_cast<u32>(batch.mesh->submeshes.size());
             drawnInstances = drawnInstances + batch.instanceCount;
-            records.push_back(std::move(record));
         }
-
         renderer.stats.drawCalls = drawCalls;
-        renderer.stats.batches = static_cast<u32>(records.size());
+        renderer.stats.batches = static_cast<u32>(batches.size());
         renderer.stats.instances = drawnInstances;
 
-        vk::Pipeline pipelineHandle = pipeline->pipeline;
-        vk::PipelineLayout layout = pipeline->layout;
-        vk::DescriptorSet lightSet = renderer.lightSets[frame];
-        vk::DescriptorSet instanceSet = renderer.instanceSets[frame];
-        glm::mat4 camera = viewProj;
-        submit(renderer, [pipelineHandle, layout, lightSet, instanceSet, camera, records = std::move(records)](vk::CommandBuffer cmd)
+        renderer.sceneDrawList = SceneDrawList{ meshPipeline, viewProj, std::move(batches),
+            renderer.lightSets[frame], renderer.instanceSets[frame], true };
+    }
+
+    // Record the scene's shaded geometry: bind the mesh pipeline + the light/instance
+    // sets once, then per batch bind its material set and issue one instanced drawIndexed.
+    void recordSceneDrawList(Renderer& renderer, vk::CommandBuffer cmd)
+    {
+        SceneDrawList& list = renderer.sceneDrawList;
+        if (!list.valid || !list.meshPipeline)
         {
-            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipelineHandle);
-            std::array<vk::DescriptorSet, 2> frameSets{ lightSet, instanceSet };
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 1, frameSets, {});
-            cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &camera);
-            for (const BatchRecord& record : records)
+            return;
+        }
+        vk::PipelineLayout layout = list.meshPipeline->layout;
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, list.meshPipeline->pipeline);
+        std::array<vk::DescriptorSet, 2> frameSets{ list.lightSet, list.instanceSet };
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 1, frameSets, {});
+        cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &list.viewProj);
+        for (const DrawBatch& batch : list.batches)
+        {
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, batch.materialSet, {});
+            vk::DeviceSize offset = 0;
+            cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
+            cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
+            for (const Submesh& submesh : batch.mesh->submeshes)
             {
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, record.materialSet, {});
-                vk::DeviceSize offset = 0;
-                cmd.bindVertexBuffers(0, record.vertexBuffer, offset);
-                cmd.bindIndexBuffer(record.indexBuffer, 0, vk::IndexType::eUint32);
-                for (const Submesh& submesh : record.submeshes)
-                {
-                    cmd.drawIndexed(submesh.indexCount, record.instanceCount, submesh.firstIndex,
-                                    submesh.vertexOffset, record.baseInstance);
-                }
+                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex,
+                                submesh.vertexOffset, batch.baseInstance);
             }
-        });
+        }
     }
 
     const Ref<GpuTexture>& defaultTexture(const Renderer& renderer)

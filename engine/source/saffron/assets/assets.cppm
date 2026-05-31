@@ -458,16 +458,9 @@ export namespace se
         setSceneLighting(renderer, lightDir, lightColor, lightIntensity, lightAmbient, lights);
         setClusterCamera(renderer, view, proj, camera.nearPlane, camera.farPlane);  // arms the cull dispatch
 
-        // Bucket entities by (mesh, albedo texture) so each bucket draws as one
-        // instanced call. Linear lookup — bucket count is the number of distinct
-        // mesh/material pairs, which stays small.
-        struct Bucket
-        {
-            Ref<GpuMesh> mesh;
-            Ref<GpuTexture> texture;
-            std::vector<InstanceData> items;
-        };
-        std::vector<Bucket> buckets;
+        // Gather the scene's renderables as a flat draw list; the renderer batches them
+        // by (mesh, texture) and the scene + depth passes consume the result.
+        std::vector<DrawItem> items;
         forEach<TransformComponent, MeshComponent>(scene,
             [&](Entity entity, TransformComponent& transform, MeshComponent& mesh)
             {
@@ -488,43 +481,16 @@ export namespace se
                     }
                 }
                 const glm::mat4 model = transformMatrix(transform);
-                InstanceData data;
-                data.model = model;
-                data.normalMatrix = glm::mat4(glm::transpose(glm::inverse(glm::mat3(model))));
-                data.baseColor = baseColor;
-
-                Bucket* bucket = nullptr;
-                for (Bucket& candidate : buckets)
-                {
-                    if (candidate.mesh.get() == meshRef.get() && candidate.texture.get() == textureRef.get())
-                    {
-                        bucket = &candidate;
-                        break;
-                    }
-                }
-                if (bucket == nullptr)
-                {
-                    buckets.push_back(Bucket{ meshRef, textureRef, {} });
-                    bucket = &buckets.back();
-                }
-                bucket->items.push_back(data);
+                DrawItem item;
+                item.mesh = meshRef;
+                item.texture = textureRef;
+                item.model = model;
+                item.normalMatrix = glm::mat4(glm::transpose(glm::inverse(glm::mat3(model))));
+                item.baseColor = baseColor;
+                items.push_back(std::move(item));
             });
 
-        // Flatten buckets into one contiguous instance array + per-batch offsets.
-        std::vector<InstanceData> instances;
-        std::vector<InstanceBatch> batches;
-        batches.reserve(buckets.size());
-        for (Bucket& bucket : buckets)
-        {
-            InstanceBatch batch;
-            batch.mesh = bucket.mesh;
-            batch.texture = bucket.texture;
-            batch.baseInstance = static_cast<u32>(instances.size());
-            batch.instanceCount = static_cast<u32>(bucket.items.size());
-            instances.insert(instances.end(), bucket.items.begin(), bucket.items.end());
-            batches.push_back(std::move(batch));
-        }
-        drawInstanced(renderer, meshPipeline, viewProjection, instances, batches);
+        submitDrawList(renderer, meshPipeline, viewProjection, items);
     }
 
     // Picks the nearest entity whose world-space mesh AABB the camera ray hits. `ndc` is
