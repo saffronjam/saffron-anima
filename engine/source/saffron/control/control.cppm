@@ -9,6 +9,7 @@ module;
 #include <sys/un.h>
 #include <unistd.h>
 #include <cerrno>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 
@@ -479,7 +480,23 @@ export namespace se
                 }
                 json body = row->serialize(ctx.editor.scene, *entity);
                 if (params.contains("baseColor")) { body["baseColor"] = params["baseColor"]; }
-                if (params.contains("albedoTexture")) { body["albedoTexture"] = params["albedoTexture"]; }
+                if (params.contains("albedoTexture"))
+                {
+                    // The se CLI passes a bare uuid as a string; coerce it to a number so
+                    // the component's value<u64> deserialize doesn't abort (JSON_NOEXCEPTION).
+                    const json& a = params["albedoTexture"];
+                    if (a.is_string())
+                    {
+                        const std::string s = a.get<std::string>();
+                        u64 id = 0;
+                        std::from_chars(s.data(), s.data() + s.size(), id);
+                        body["albedoTexture"] = id;
+                    }
+                    else
+                    {
+                        body["albedoTexture"] = a;
+                    }
+                }
                 if (params.contains("unlit"))
                 {
                     const json& u = params["unlit"];
