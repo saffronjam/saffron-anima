@@ -21,6 +21,17 @@ export namespace se
     template <typename T>
     using Ref = std::shared_ptr<T>;
 
+    // Rust-style fallible return: every fallible function returns Result<T> and reports
+    // failure with Err("message"). Result<T> is exactly std::expected<T, std::string>;
+    // success is the value itself (or {} for Result<void>) — no Ok wrapper.
+    template <typename T>
+    using Result = std::expected<T, std::string>;
+
+    inline auto Err(std::string message) -> std::unexpected<std::string>
+    {
+        return std::unexpected<std::string>(std::move(message));
+    }
+
     inline constexpr std::string_view EngineName = "Saffron Engine";
     inline constexpr std::string_view EngineVersion = "0.1.0-vulkan";
 

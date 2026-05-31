@@ -23,14 +23,15 @@ are not our source.)
 - **Free functions — prefer these.** Pure functions wherever practical (testability).
 - **Concepts** as compile-time interfaces (the method set a type must satisfy).
 - **Closures / `std::function`** for behavior injection and *runtime* interfaces.
-- `std::variant` for sum types; `std::expected<T, Error>` for fallible returns.
+- `std::variant` for sum types; `Result<T>` (= `std::expected<T, std::string>`) for fallible
+  returns, with `Err("message")` for failure (see *Return types*).
 - Generics via templates/concepts (Go has generics) — keep them simple and flat.
 - **RAII wrapper types for GPU / data-plane resources** (the rendering "meta-layer"):
   a `struct` that owns a Vulkan handle and frees it in its destructor. These are
   move-only (deleted copy, defaulted/explicit move) — the destructor + move
   assignment are *resource management*, NOT the prohibited operator overloading.
   Vulkan is used via **Vulkan-Hpp `vk::`** with `VULKAN_HPP_NO_EXCEPTIONS` (calls
-  return results, converted to `std::expected`); never `vk::raii` (it throws).
+  return results, converted to `Result`); never `vk::raii` (it throws).
 
 ## Prohibited — Go does not have these
 - **Inheritance.** No `: public Base`, no class hierarchies.
@@ -38,10 +39,10 @@ are not our source.)
   function values (an explicit itable — which is exactly what a Go interface is),
   or as a `concept` for compile-time dispatch.
 - **Exceptions — entirely.** Never `throw`, `try`, or `catch` in our code. Every
-  fallible operation returns `std::expected<T, std::string>` (or `std::expected<void, …>`),
-  and the result MUST be checked at the call site **immediately** — never propagate an
-  unchecked expected. Third-party libraries that can throw are driven through their
-  no-throw APIs/configs and converted to `std::expected` at the boundary.
+  fallible operation returns `Result<T>` (or `Result<void>`) and reports failure with
+  `Err("message")`; the result MUST be checked at the call site **immediately** — never
+  propagate an unchecked `Result`. Third-party libraries that can throw are driven
+  through their no-throw APIs/configs and converted to `Result` at the boundary.
 - **The ternary operator `?:`.** Use `if`/`else`.
 - **Operator overloading on our own types.** Use named free functions (`add(a, b)`).
   Third-party libs (e.g. GLM) may use operators internally; that's fine.
@@ -50,9 +51,21 @@ are not our source.)
 ## Shape of things
 - Data and behavior are separated where it aids testing: plain data `struct`s +
   free functions that transform them.
-- A "constructor" is a free function `newThing(...) -> Thing` (or `-> expected`).
+- A "constructor" is a free function `newThing(...) -> Thing` (or `-> Result<Thing>`).
 - Prefer composition over any form of subtyping.
 - One namespace, `se`. Modules provide the real boundaries.
+
+## Return types
+- **Trailing return type, always:** `auto functionName(ParamType param) -> ReturnType`.
+  The name lands right after `auto`, so names align in a column and signatures read
+  left-to-right. Applies to every function (declaration + definition); `main`, lambdas
+  (already `-> T`/deduced), and constructors/destructors are the only exceptions.
+- **Fallible returns are `Result<T>`**, never the spelled-out `std::expected<T, std::string>`;
+  return failure with `Err("message")`, success as the value itself (`return x;`) or `{}`
+  for `Result<void>`. (`Result`/`Err` live in `Saffron.Core`.)
+- **Prefer `auto` for locals bound to a call result** — `auto x = makeThing();` — especially
+  `Result`/`Ref`/iterator types. Keep an explicit type only when it documents intent or the
+  initializer's type isn't obvious at the call site.
 
 ## Comments
 - **No inline comments unless the logic is genuinely non-obvious.** Prefer a clear
