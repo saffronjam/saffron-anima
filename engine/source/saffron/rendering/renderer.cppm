@@ -534,6 +534,12 @@ export namespace se
         // pass (which then loads it + tests eLessOrEqual). Reduces shaded overdraw.
         Ref<Pipeline> depthPrepassPipeline;
         bool useDepthPrepass = false;
+        // FXAA: when on, the scene renders to offscreenScratch (1x sampled), and a compute
+        // pass edge-blurs it into the offscreen. set 0: 0 = source sampler, 1 = target storage.
+        Image offscreenScratch;
+        Ref<Pipeline> fxaaPipeline;
+        vk::DescriptorSetLayout fxaaSetLayout;
+        vk::DescriptorSet fxaaSet;
         // Clustered forward (Forward+): a compute pass culls the punctual lights into a
         // froxel grid each frame; the fragment loops only its cluster's lights.
         Ref<Pipeline> cullPipeline;                   // compute light-cull pipeline
@@ -1065,6 +1071,35 @@ namespace se
             }
         }
 
+        void updateFxaaSet(Renderer& renderer);  // defined alongside updateTonemapSet below
+
+        // (Re)create the 1x scratch target FXAA reads from (the scene renders here when
+        // FXAA is on); drop it when off. Sized to the offscreen; the GPU is already idle.
+        void recreateFxaaTarget(Renderer& renderer)
+        {
+            renderer.offscreenScratch.reset();
+            if (!renderer.fxaaEnabled)
+            {
+                return;
+            }
+            const u32 w = renderer.offscreenViewport.extent.width;
+            const u32 h = renderer.offscreenViewport.extent.height;
+            if (w == 0 || h == 0)
+            {
+                return;
+            }
+            std::expected<Image, std::string> scratch = newColorImage(renderer, w, h, OffscreenColorFormat, false);
+            if (scratch)
+            {
+                renderer.offscreenScratch = std::move(*scratch);
+                updateFxaaSet(renderer);
+            }
+            else
+            {
+                logError(scratch.error());
+            }
+        }
+
         // Host-visible, mapped buffer the caller owns (vmaDestroyBuffer when done).
         std::expected<void, std::string> newHostCaptureBuffer(
             Renderer& renderer, vk::DeviceSize bytes,
@@ -1390,6 +1425,31 @@ namespace se
             renderer.device.updateDescriptorSets(write, {});
         }
 
+        // Point the FXAA set at the current scratch (sampled source) + offscreen (storage
+        // target) views. Called after either is (re)created.
+        void updateFxaaSet(Renderer& renderer)
+        {
+            if (!renderer.fxaaSet || !renderer.offscreenScratch.view)
+            {
+                return;
+            }
+            vk::DescriptorImageInfo sourceInfo{ renderer.linearSampler, renderer.offscreenScratch.view,
+                                                vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo targetInfo{};
+            targetInfo.imageView = renderer.offscreenViewport.view;
+            targetInfo.imageLayout = vk::ImageLayout::eGeneral;
+            std::array<vk::WriteDescriptorSet, 2> writes{};
+            writes[0].dstSet = renderer.fxaaSet;
+            writes[0].dstBinding = 0;
+            writes[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            writes[0].setImageInfo(sourceInfo);
+            writes[1].dstSet = renderer.fxaaSet;
+            writes[1].dstBinding = 1;
+            writes[1].descriptorType = vk::DescriptorType::eStorageImage;
+            writes[1].setImageInfo(targetInfo);
+            renderer.device.updateDescriptorSets(writes, {});
+        }
+
         // The shared sampler, material/light set layouts, descriptor pool, and the
         // per-frame light UBO + its set. Called once in newRenderer.
         std::expected<void, std::string> initDescriptorResources(Renderer& renderer)
@@ -1507,6 +1567,24 @@ namespace se
                 return std::unexpected(tonemapLayout.error());
             }
             renderer.tonemapSetLayout = *tonemapLayout;
+
+            std::array<vk::DescriptorSetLayoutBinding, 2> fxaaBindings{};
+            fxaaBindings[0].binding = 0;  // source (scene scratch) sampler
+            fxaaBindings[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            fxaaBindings[0].descriptorCount = 1;
+            fxaaBindings[0].stageFlags = vk::ShaderStageFlagBits::eCompute;
+            fxaaBindings[1].binding = 1;  // target (offscreen) storage image
+            fxaaBindings[1].descriptorType = vk::DescriptorType::eStorageImage;
+            fxaaBindings[1].descriptorCount = 1;
+            fxaaBindings[1].stageFlags = vk::ShaderStageFlagBits::eCompute;
+            vk::DescriptorSetLayoutCreateInfo fxaaLayoutInfo{};
+            fxaaLayoutInfo.setBindings(fxaaBindings);
+            auto fxaaLayout = checked(renderer.device.createDescriptorSetLayout(fxaaLayoutInfo), "fxaaSetLayout");
+            if (!fxaaLayout)
+            {
+                return std::unexpected(fxaaLayout.error());
+            }
+            renderer.fxaaSetLayout = *fxaaLayout;
 
             std::array<vk::DescriptorPoolSize, 4> poolSizes{
                 vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 1024 },
@@ -1703,6 +1781,25 @@ namespace se
             }
             renderer.tonemapSet = (*tonemapAllocated)[0];
             updateTonemapSet(renderer);
+
+            // FXAA: a compute pipeline + a set (source sampler + offscreen storage). The
+            // scratch source is created on demand when FXAA is enabled (recreateFxaaTarget).
+            std::expected<Ref<Pipeline>, std::string> fxaa =
+                newComputePipeline(renderer, "shaders/fxaa.spv", renderer.fxaaSetLayout);
+            if (!fxaa)
+            {
+                return std::unexpected(fxaa.error());
+            }
+            renderer.fxaaPipeline = *fxaa;
+            vk::DescriptorSetAllocateInfo fxaaAlloc{};
+            fxaaAlloc.descriptorPool = renderer.descriptorPool;
+            fxaaAlloc.setSetLayouts(renderer.fxaaSetLayout);
+            auto fxaaAllocated = checked(renderer.device.allocateDescriptorSets(fxaaAlloc), "allocate fxaaSet");
+            if (!fxaaAllocated)
+            {
+                return std::unexpected(fxaaAllocated.error());
+            }
+            renderer.fxaaSet = (*fxaaAllocated)[0];
 
             // Depth pre-pass: a vertex-only pipeline that reuses the mesh vertex shader.
             std::expected<Ref<Pipeline>, std::string> depthPrepass =
@@ -1932,12 +2029,14 @@ namespace se
         renderer.cullPipeline.reset();        // RAII frees the compute pipeline + layout
         renderer.thumbnailPipeline.reset();
         renderer.tonemapPipeline.reset();
+        renderer.fxaaPipeline.reset();
         renderer.depthPrepassPipeline.reset();
 
         renderer.offscreenViewport.reset();  // free before the allocator/device
         renderer.offscreenDepth.reset();
         renderer.msaaColor.reset();
         renderer.msaaDepth.reset();
+        renderer.offscreenScratch.reset();
 
         for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
         {
@@ -1982,6 +2081,10 @@ namespace se
         if (renderer.tonemapSetLayout)
         {
             renderer.device.destroyDescriptorSetLayout(renderer.tonemapSetLayout);
+        }
+        if (renderer.fxaaSetLayout)
+        {
+            renderer.device.destroyDescriptorSetLayout(renderer.fxaaSetLayout);
         }
         if (renderer.linearSampler)
         {
@@ -2062,6 +2165,7 @@ namespace se
                     logError(resizedDepth.error());
                 }
                 recreateMsaaTargets(renderer);  // MSAA targets follow the offscreen extent
+                recreateFxaaTarget(renderer);   // and the FXAA scratch target
             }
             else
             {
@@ -2133,13 +2237,21 @@ namespace se
         // its layout across frames (sampled by ImGui last frame → WAR into this scene).
         renderer.renderGraph = newRenderGraph();
         RenderGraph& graph = renderer.renderGraph;
-        // frameSceneColor is always the offscreen (what ImGui samples + tonemap reads). With
-        // MSAA the scene renders to msaaColor and resolves into it; otherwise it is the direct
-        // scene target. Likewise the scene depth is the multisampled buffer when MSAA is on.
+        // frameSceneColor is always the offscreen (what ImGui samples + tonemap reads). The
+        // scene's 1x result lands in `sceneOutput`: the offscreen normally, or the FXAA
+        // scratch when FXAA is on (FXAA then edge-blurs scratch → offscreen). With MSAA the
+        // scene renders to msaaColor and resolves into sceneOutput. mutually exclusive via set-aa.
         const bool msaa = renderer.sampleCount != vk::SampleCountFlagBits::e1 && renderer.msaaColor.image;
+        const bool fxaa = renderer.fxaaEnabled && renderer.offscreenScratch.image && renderer.fxaaPipeline;
         renderer.frameSceneColor = importImage(graph, offscreen.image, offscreen.view,
             vk::ImageAspectFlagBits::eColor, offscreen.layout, &offscreen.layout);
-        RgResource sceneColorAttachment = renderer.frameSceneColor;
+        RgResource sceneOutput = renderer.frameSceneColor;
+        if (fxaa)
+        {
+            sceneOutput = importImage(graph, renderer.offscreenScratch.image, renderer.offscreenScratch.view,
+                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+        }
+        RgResource sceneColorAttachment = sceneOutput;
         if (msaa)
         {
             sceneColorAttachment = importImage(graph, renderer.msaaColor.image, renderer.msaaColor.view,
@@ -2212,7 +2324,7 @@ namespace se
         if (msaa)
         {
             scene.color->storeOp = vk::AttachmentStoreOp::eDontCare;
-            scene.color->resolve = renderer.frameSceneColor;
+            scene.color->resolve = sceneOutput;
         }
         // Load the pre-pass depth when present; otherwise clear it here as before.
         vk::AttachmentLoadOp depthLoad = vk::AttachmentLoadOp::eClear;
@@ -2232,6 +2344,26 @@ namespace se
             }
         };
         addPass(graph, std::move(scene));
+
+        // FXAA: edge-blur the scene scratch into the offscreen (a compute pass). Added here
+        // so it runs before any app-authored post-process (e.g. tonemap) + the ui pass.
+        if (fxaa)
+        {
+            RgPass fxaaPass;
+            fxaaPass.name = "fxaa";
+            fxaaPass.kind = RgPassKind::Compute;
+            fxaaPass.accesses = { RgAccess{ sceneOutput, RgUsage::SampledReadCompute },
+                                  RgAccess{ renderer.frameSceneColor, RgUsage::StorageImageRWCompute } };
+            const vk::Extent2D extent = offscreen.extent;
+            fxaaPass.execute = [&renderer, extent](vk::CommandBuffer cmd)
+            {
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.fxaaPipeline->pipeline);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                    renderer.fxaaPipeline->layout, 0, renderer.fxaaSet, {});
+                cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+            };
+            addPass(graph, std::move(fxaaPass));
+        }
     }
 
     RenderGraph& frameGraph(Renderer& renderer)
@@ -3018,6 +3150,7 @@ namespace se
         renderer.sampleCount = count;
         renderer.fxaaEnabled = fxaa;
         recreateMsaaTargets(renderer);
+        recreateFxaaTarget(renderer);
 
         // The mesh + depth-prepass PSOs bake the sample count — rebuild them.
         renderer.pipelineCache.clear();

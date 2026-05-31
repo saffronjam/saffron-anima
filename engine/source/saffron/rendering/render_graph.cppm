@@ -29,6 +29,7 @@ export namespace se
         StorageReadCompute,   ///< storage buffer read by a compute shader
         StorageReadFragment,  ///< storage buffer read by a fragment shader
         StorageImageRWCompute,  ///< image read+written in place by a compute shader (GENERAL)
+        SampledReadCompute,     ///< image sampled in a compute shader (SHADER_READ_ONLY)
     };
 
     enum class RgPassKind
@@ -162,6 +163,10 @@ namespace se
             return { vk::PipelineStageFlagBits2::eComputeShader,
                      vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
                      vk::ImageLayout::eGeneral, true };
+        case RgUsage::SampledReadCompute:
+            return { vk::PipelineStageFlagBits2::eComputeShader,
+                     vk::AccessFlagBits2::eShaderSampledRead,
+                     vk::ImageLayout::eShaderReadOnlyOptimal, false };
         }
         return { vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
                  vk::ImageLayout::eUndefined, false };

@@ -204,7 +204,7 @@ export namespace se
                              { "aa", aaMode(ctx.renderer) } };
             });
 
-        registerCommand(reg, "set-aa", "set-aa {off|msaa2|msaa4|msaa8} — anti-aliasing mode",
+        registerCommand(reg, "set-aa", "set-aa {off|fxaa|msaa2|msaa4|msaa8} — anti-aliasing mode",
             [](EngineContext& ctx, const json& params) -> std::expected<json, std::string>
             {
                 const json value = positionalOr(params, "mode", 0);
@@ -214,14 +214,16 @@ export namespace se
                     mode = value.get<std::string>();
                 }
                 u32 samples = 1;
-                if (mode == "msaa2") { samples = 2; }
+                bool fxaa = false;
+                if (mode == "fxaa") { fxaa = true; }
+                else if (mode == "msaa2") { samples = 2; }
                 else if (mode == "msaa4") { samples = 4; }
                 else if (mode == "msaa8") { samples = 8; }
                 else if (mode != "off")
                 {
-                    return std::unexpected(std::string{ "expected off|msaa2|msaa4|msaa8" });
+                    return std::unexpected(std::string{ "expected off|fxaa|msaa2|msaa4|msaa8" });
                 }
-                setAa(ctx.renderer, samples, false);
+                setAa(ctx.renderer, samples, fxaa);
                 return json{ { "aa", aaMode(ctx.renderer) } };
             });
 
