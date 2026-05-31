@@ -31,6 +31,8 @@ module;
 
 export module Saffron.Rendering;
 
+export import :RenderGraph;
+
 import Saffron.Core;
 import Saffron.Window;
 import Saffron.Geometry;
@@ -1711,132 +1713,84 @@ namespace se
     {
         FrameData& frame = renderer.frames[renderer.frameIndex];
         Image& offscreen = renderer.offscreenViewport;
-
-        // Clustered forward: cull the punctual lights into the froxel grid before the
-        // scene pass. Must run outside any rendering scope, with a compute→fragment
-        // barrier so the fragment shader sees the written cluster light lists.
-        if (renderer.clusterDispatchPending && renderer.cullPipeline)
-        {
-            const u32 f = renderer.frameIndex;
-            frame.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.cullPipeline->pipeline);
-            frame.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                renderer.cullPipeline->layout, 0, renderer.clusterSets[f], {});
-            const u32 groups = (ClusterCount + 63) / 64;
-            frame.commandBuffer.dispatch(groups, 1, 1);
-
-            vk::MemoryBarrier2 barrier{};
-            barrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-            barrier.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite;
-            barrier.dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader;
-            barrier.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead;
-            vk::DependencyInfo dependency{};
-            dependency.setMemoryBarriers(barrier);
-            frame.commandBuffer.pipelineBarrier2(dependency);
-        }
+        Image& depth = renderer.offscreenDepth;
+        const u32 f = renderer.frameIndex;
+        const bool doCull = renderer.clusterDispatchPending && renderer.cullPipeline;
         renderer.clusterDispatchPending = false;
 
-        // Render the scene into the offscreen image. Enter from the image's tracked
-        // layout (Undefined on frame 1 / after a recreate; ShaderReadOnly thereafter,
-        // the WAR barrier vs last frame's read).
-        vk::PipelineStageFlags2 srcStage = vk::PipelineStageFlagBits2::eTopOfPipe;
-        vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eNone;
-        if (offscreen.layout == vk::ImageLayout::eShaderReadOnlyOptimal)
+        // The frame as a render graph: declare each pass's resource usage and let the
+        // graph derive the barriers + layout transitions. The offscreen color carries
+        // its layout across frames (sampled by ImGui last frame → WAR into this scene).
+        RenderGraph graph = newRenderGraph();
+        RgResource sceneColor = importImage(graph, offscreen.image, offscreen.view,
+            vk::ImageAspectFlagBits::eColor, offscreen.layout, &offscreen.layout);
+        RgResource sceneDepth = importImage(graph, depth.image, depth.view,
+            vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
+        RgResource swapImage = importImage(graph, renderer.swapchainImages[renderer.imageIndex],
+            renderer.swapchainImageViews[renderer.imageIndex], vk::ImageAspectFlagBits::eColor,
+            vk::ImageLayout::eUndefined, nullptr);
+
+        // Clustered forward: a compute pass culls the punctual lights into the froxel
+        // grid; the scene fragment reads the result (the graph emits the compute→
+        // fragment barrier from these declared usages).
+        RgResource clusterBuffer{};
+        if (doCull)
         {
-            srcStage = vk::PipelineStageFlagBits2::eFragmentShader;
-            srcAccess = vk::AccessFlagBits2::eShaderSampledRead;
+            clusterBuffer = importBuffer(graph, renderer.clusterBuffers[f]->buffer);
+
+            RgPass cull;
+            cull.name = "light-cull";
+            cull.kind = RgPassKind::Compute;
+            cull.accesses = { RgAccess{ clusterBuffer, RgUsage::StorageWriteCompute } };
+            cull.execute = [&renderer, f](vk::CommandBuffer cmd)
+            {
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.cullPipeline->pipeline);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                    renderer.cullPipeline->layout, 0, renderer.clusterSets[f], {});
+                const u32 groups = (ClusterCount + 63) / 64;
+                cmd.dispatch(groups, 1, 1);
+            };
+            addPass(graph, std::move(cull));
         }
-        transitionImage(
-            frame.commandBuffer, offscreen.image,
-            offscreen.layout, vk::ImageLayout::eColorAttachmentOptimal,
-            srcStage, srcAccess,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite);
-        offscreen.layout = vk::ImageLayout::eColorAttachmentOptimal;
 
-        // Depth is cleared every frame (loadOp clear), so enter from Undefined.
-        Image& depth = renderer.offscreenDepth;
-        transitionImage(
-            frame.commandBuffer, depth.image,
-            vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
-            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-            vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-            vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-            vk::ImageAspectFlagBits::eDepth);
-
-        vk::RenderingAttachmentInfo sceneColor{};
-        sceneColor.imageView = offscreen.view;
-        sceneColor.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
-        sceneColor.loadOp = vk::AttachmentLoadOp::eClear;
-        sceneColor.storeOp = vk::AttachmentStoreOp::eStore;
-        sceneColor.clearValue = vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } };
-
-        vk::RenderingAttachmentInfo sceneDepth{};
-        sceneDepth.imageView = depth.view;
-        sceneDepth.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
-        sceneDepth.loadOp = vk::AttachmentLoadOp::eClear;
-        sceneDepth.storeOp = vk::AttachmentStoreOp::eDontCare;
-        sceneDepth.clearValue = vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } };
-
-        vk::RenderingInfo sceneRendering{};
-        sceneRendering.renderArea = vk::Rect2D{ vk::Offset2D{ 0, 0 }, offscreen.extent };
-        sceneRendering.layerCount = 1;
-        sceneRendering.setColorAttachments(sceneColor);
-        sceneRendering.setPDepthAttachment(&sceneDepth);
-        frame.commandBuffer.beginRendering(sceneRendering);
-
-        vk::Viewport sceneViewport{ 0.0f, 0.0f,
-                                    static_cast<f32>(offscreen.extent.width),
-                                    static_cast<f32>(offscreen.extent.height), 0.0f, 1.0f };
-        vk::Rect2D sceneScissor{ vk::Offset2D{ 0, 0 }, offscreen.extent };
-        frame.commandBuffer.setViewport(0, sceneViewport);
-        frame.commandBuffer.setScissor(0, sceneScissor);
-
-        for (RenderFn& fn : renderer.sceneSubmissions)
+        RgPass scene;
+        scene.name = "scene";
+        scene.kind = RgPassKind::Graphics;
+        if (doCull)
         {
-            fn(frame.commandBuffer);
+            scene.accesses = { RgAccess{ clusterBuffer, RgUsage::StorageReadFragment } };
         }
-        frame.commandBuffer.endRendering();
-
-        // Producer → consumer: the offscreen image becomes a sampled texture for ImGui.
-        // Must be OUTSIDE any rendering scope.
-        transitionImage(
-            frame.commandBuffer, offscreen.image,
-            vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
-            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
-        offscreen.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
-
-        // Render ImGui into the swapchain image.
-        transitionImage(
-            frame.commandBuffer, renderer.swapchainImages[renderer.imageIndex],
-            vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
-            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite);
-
-        vk::RenderingAttachmentInfo swapColor{};
-        swapColor.imageView = renderer.swapchainImageViews[renderer.imageIndex];
-        swapColor.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
-        swapColor.loadOp = vk::AttachmentLoadOp::eClear;
-        swapColor.storeOp = vk::AttachmentStoreOp::eStore;
-        swapColor.clearValue = vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } };
-
-        vk::RenderingInfo swapRendering{};
-        swapRendering.renderArea = vk::Rect2D{ vk::Offset2D{ 0, 0 }, renderer.swapchainExtent };
-        swapRendering.layerCount = 1;
-        swapRendering.setColorAttachments(swapColor);
-        frame.commandBuffer.beginRendering(swapRendering);
-
-        vk::Viewport swapViewport{ 0.0f, 0.0f,
-                                   static_cast<f32>(renderer.swapchainExtent.width),
-                                   static_cast<f32>(renderer.swapchainExtent.height), 0.0f, 1.0f };
-        vk::Rect2D swapScissor{ vk::Offset2D{ 0, 0 }, renderer.swapchainExtent };
-        frame.commandBuffer.setViewport(0, swapViewport);
-        frame.commandBuffer.setScissor(0, swapScissor);
-
-        for (RenderFn& fn : renderer.uiSubmissions)
+        scene.color = RgAttachment{ sceneColor, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+            vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } } };
+        scene.depth = RgAttachment{ sceneDepth, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eDontCare,
+            vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+        scene.renderArea = offscreen.extent;
+        scene.execute = [&renderer](vk::CommandBuffer cmd)
         {
-            fn(frame.commandBuffer);
-        }
-        frame.commandBuffer.endRendering();
+            for (RenderFn& fn : renderer.sceneSubmissions)
+            {
+                fn(cmd);
+            }
+        };
+        addPass(graph, std::move(scene));
+
+        RgPass ui;
+        ui.name = "ui";
+        ui.kind = RgPassKind::Graphics;
+        ui.accesses = { RgAccess{ sceneColor, RgUsage::SampledRead } };
+        ui.color = RgAttachment{ swapImage, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+            vk::ClearValue{ vk::ClearColorValue{ renderer.clearColor } } };
+        ui.renderArea = renderer.swapchainExtent;
+        ui.execute = [&renderer](vk::CommandBuffer cmd)
+        {
+            for (RenderFn& fn : renderer.uiSubmissions)
+            {
+                fn(cmd);
+            }
+        };
+        addPass(graph, std::move(ui));
+
+        executeRenderGraph(graph, frame.commandBuffer);
 
         // The swapchain image is only safely owned in-frame, so a pending capture
         // is copied here, between the ImGui pass and present; its COLOR->PRESENT
