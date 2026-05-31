@@ -26,6 +26,7 @@ import Saffron.Core;
 import Saffron.Signal;
 import Saffron.Scene;
 import Saffron.Json;
+import Saffron.Ui;
 
 export namespace se
 {
@@ -171,13 +172,13 @@ export namespace se
             [](Scene& s, Entity e)
         {
                 TransformComponent& t = getComponent<TransformComponent>(s, e);
-                ImGui::DragFloat3("Translation", &t.translation.x, 0.1f);
+                vec3Control("Translation", &t.translation.x);
                 glm::vec3 degrees = glm::degrees(t.rotation);
-                if (ImGui::DragFloat3("Rotation", &degrees.x, 0.5f))
+                if (vec3Control("Rotation", &degrees.x))
                 {
                     t.rotation = glm::radians(degrees);
                 }
-                ImGui::DragFloat3("Scale", &t.scale.x, 0.1f);
+                vec3Control("Scale", &t.scale.x, 1.0f);
             },
             [](const TransformComponent& t)
             -> nlohmann::json {
@@ -426,7 +427,7 @@ export namespace se
                 continue;
             }
             ImGui::PushID(static_cast<int>(traits.id));
-            const bool open = ImGui::CollapsingHeader(traits.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+            const bool open = propertyGridHeader(traits.name);
             if (traits.removable && ImGui::BeginPopupContextItem())
             {
                 if (ImGui::MenuItem("Remove component"))
@@ -438,6 +439,7 @@ export namespace se
             if (open)
             {
                 traits.drawInspector(ctx.scene, selected);
+                ImGui::TreePop();
             }
             ImGui::PopID();
         }
