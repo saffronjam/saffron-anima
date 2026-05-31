@@ -1,0 +1,136 @@
+{
+  "assets": [
+    {
+      "id": 3862017159553017004,
+      "name": "cube",
+      "path": "meshes/3862017159553017004.smesh",
+      "type": "mesh"
+    },
+    {
+      "id": 3489623957534207920,
+      "name": "UE4",
+      "path": "meshes/3489623957534207920.smesh",
+      "type": "mesh"
+    },
+    {
+      "id": 5228066645973735959,
+      "name": "UE4-albedo",
+      "path": "textures/5228066645973735959.jpeg",
+      "type": "texture"
+    }
+  ],
+  "scene": {
+    "entities": [
+      {
+        "components": {
+          "Material": {
+            "albedoTexture": 5228066645973735959,
+            "baseColor": {
+              "w": 1.0,
+              "x": 1.0,
+              "y": 1.0,
+              "z": 1.0
+            },
+            "unlit": false
+          },
+          "Mesh": {
+            "mesh": 3489623957534207920
+          },
+          "Name": {
+            "name": "Cube"
+          },
+          "Transform": {
+            "rotation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "scale": {
+              "x": 1.0,
+              "y": 1.0,
+              "z": 1.0
+            },
+            "translation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            }
+          }
+        },
+        "id": 11844202439015522807
+      },
+      {
+        "components": {
+          "DirectionalLight": {
+            "ambient": 0.15000000596046448,
+            "color": {
+              "x": 1.0,
+              "y": 1.0,
+              "z": 1.0
+            },
+            "direction": {
+              "x": -0.5,
+              "y": -1.0,
+              "z": -0.30000001192092896
+            },
+            "intensity": 8.0
+          },
+          "Name": {
+            "name": "Sun"
+          },
+          "Transform": {
+            "rotation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "scale": {
+              "x": 1.0,
+              "y": 1.0,
+              "z": 1.0
+            },
+            "translation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            }
+          }
+        },
+        "id": 11732588220512257043
+      },
+      {
+        "components": {
+          "Camera": {
+            "far": 100.0,
+            "fov": 45.0,
+            "near": 0.10000000149011612,
+            "primary": true
+          },
+          "Name": {
+            "name": "Camera"
+          },
+          "Transform": {
+            "rotation": {
+              "x": -0.4636475741863251,
+              "y": 0.6435010433197021,
+              "z": 1.862645326866641e-08
+            },
+            "scale": {
+              "x": 1.0,
+              "y": 1.0,
+              "z": 1.0
+            },
+            "translation": {
+              "x": 3.0,
+              "y": 2.5,
+              "z": 4.0
+            }
+          }
+        },
+        "id": 18296423349489302882
+      }
+    ],
+    "version": 1
+  },
+  "version": 1
+}

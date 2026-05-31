@@ -124,19 +124,6 @@ int main()
         };
         se::registerBuiltinComponents(state->editor->registry, thumbnailFor);
 
-        // Mesh pipelines are owned by the renderer's PSO cache (resolved per material in
-        // renderScene), so the client no longer creates one. Just seed the scene.
-        auto cube =
-            se::importModel(state->assets, app.renderer, se::assetPath("models/cube.gltf"));
-        if (cube)
-        {
-            se::spawnModel(state->editor->scene, "Cube", *cube);
-        }
-        else
-        {
-            se::logError(cube.error());
-        }
-
         // Import a file into the asset catalog (no spawn), routed by extension. Used by
         // File > Import, the asset panel, and drag-and-drop.
         auto importToCatalog = [state, &app](const std::string& path)
@@ -198,6 +185,28 @@ int main()
             importToCatalog(path);
             return false;
         });
+
+        // Auto-load project.json from the working directory if it exists; otherwise seed
+        // a default scene with a cube so a fresh checkout starts with something visible.
+        constexpr const char* defaultProject = "project.json";
+        if (std::filesystem::exists(defaultProject))
+        {
+            if (auto result = se::loadProject(state->assets, app.renderer,
+                    state->editor->registry, state->editor->scene, defaultProject))
+            {
+                state->editor->scenePath = defaultProject;
+            }
+            else
+            {
+                se::logError(result.error());
+            }
+        }
+        else
+        {
+            auto cube = se::importModel(state->assets, app.renderer, se::assetPath("models/cube.gltf"));
+            if (cube) { se::spawnModel(state->editor->scene, "Cube", *cube); }
+            else      { se::logError(cube.error()); }
+        }
 
         se::Layer layer;
         layer.name = "EditorLayer";
