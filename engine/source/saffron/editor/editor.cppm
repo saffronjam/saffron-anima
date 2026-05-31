@@ -58,6 +58,9 @@ export namespace se
         // Imports a file into the asset catalog (File > Import, drag-and-drop, the asset
         // panel). The editor has no renderer/assets, so the client routes by extension.
         std::function<void(const std::string&)> onImport;
+        // Save/load the whole project (asset catalog + scene); delegated for the same reason.
+        std::function<void(const std::string&)> onSaveProject;
+        std::function<void(const std::string&)> onLoadProject;
         std::string importPath;  // the Import dialog's text buffer
 
         // Spawns the bundled cube mesh (Create > Cube); delegated because the editor has
@@ -572,35 +575,21 @@ export namespace se
                 std::string path = ctx.scenePath;
                 if (path.empty())
                 {
-                    path = "scene.json";
+                    path = "project.json";
                 }
 
-                if (ImGui::MenuItem("Save Scene"))
+                // Project save/load is delegated (the editor has no AssetServer/Renderer
+                // to write the asset catalog); the client wires saveProject/loadProject.
+                if (ImGui::MenuItem("Save Project") && ctx.onSaveProject)
                 {
-                    std::expected<void, std::string> result = writeScene(ctx.registry, ctx.scene, path);
-                    if (!result)
-                    {
-                        logError(result.error());
-                    }
-                    else
-                    {
-                        ctx.scenePath = path;
-                        logInfo(std::format("saved scene to {}", path));
-                    }
+                    ctx.onSaveProject(path);
+                    ctx.scenePath = path;
                 }
-                if (ImGui::MenuItem("Load Scene"))
+                if (ImGui::MenuItem("Load Project") && ctx.onLoadProject)
                 {
-                    std::expected<void, std::string> result = readScene(ctx.registry, ctx.scene, path);
-                    if (!result)
-                    {
-                        logError(result.error());
-                    }
-                    else
-                    {
-                        ctx.scenePath = path;
-                        setSelection(ctx, Entity{ entt::null });
-                        logInfo(std::format("loaded scene from {}", path));
-                    }
+                    ctx.onLoadProject(path);
+                    ctx.scenePath = path;
+                    setSelection(ctx, Entity{ entt::null });
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Import..."))

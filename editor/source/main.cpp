@@ -178,6 +178,29 @@ int main()
             }
             se::setSelection(*state->editor, se::spawnModel(state->editor->scene, "Cube", *cube));
         };
+        state->editor->onSaveProject = [state](const std::string& path)
+        {
+            if (std::expected<void, std::string> result =
+                    se::saveProject(state->assets, state->editor->registry, state->editor->scene, path); !result)
+            {
+                se::logError(result.error());
+            }
+        };
+        state->editor->onLoadProject = [state, &app](const std::string& path)
+        {
+            if (std::expected<void, std::string> result = se::loadProject(state->assets, app.renderer,
+                    state->editor->registry, state->editor->scene, path); !result)
+            {
+                se::logError(result.error());
+                return;
+            }
+            // The catalog changed; drop stale thumbnails so they re-generate.
+            for (auto& [id, thumb] : state->thumbnails)
+            {
+                se::uiUnregisterTexture(thumb.id);
+            }
+            state->thumbnails.clear();
+        };
         app.window.onFileDropped.subscribe([importToCatalog](std::string path)
         {
             importToCatalog(path);

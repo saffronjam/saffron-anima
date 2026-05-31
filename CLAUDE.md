@@ -194,9 +194,9 @@ Working and verified (validation-clean) in the toolbox:
   via `SubscriberList<Entity>`.
 - ✅ **Control plane** (`Saffron.Control`) + the `se` CLI: a non-blocking unix socket, drained per
   frame on the main thread, drives the running editor (list/create/destroy/select entities,
-  add/remove/set component, set-transform, set-material, save/load scene, import-model/texture,
-  render-stats, set-clustered, pick, inspect, list-assets, focus, screenshot viewport|window to PNG,
-  quit). See `control-plane` memory.
+  add/remove/set component, set-transform, set-material, save/load scene + save/load project,
+  import-model/texture, render-stats, set-clustered, pick, inspect, list-assets, rename-asset,
+  assign-asset, focus, screenshot viewport|window to PNG, quit). See `control-plane` memory.
 
 > **Keep `se` current.** When a feature adds engine state worth driving or inspecting, add a matching
 > control command (one `registerCommand` in `control.cppm`) so the running editor stays scriptable and
@@ -204,9 +204,9 @@ Working and verified (validation-clean) in the toolbox:
 
 - ✅ **Model import + mesh rendering**: `Saffron.Geometry` imports glTF (cgltf) + OBJ (tinyobjloader) into a
   common `Mesh`, baked to a versioned `.smesh`; `GpuMesh` (VMA vertex/index buffers) + a depth-tested mesh
-  pipeline; `Saffron.Assets` (an `AssetServer` Uuid→mesh registry, persisted to `asset_registry.json`) +
-  `renderScene` draw the ECS scene (`MeshComponent` + `CameraComponent`) through the primary camera. Import via
-  `se import-model`, File ▸ Import, or drag-and-drop. See `mesh-asset-pipeline` memory.
+  pipeline; `Saffron.Assets` (an `AssetServer` that owns the asset catalog + Uuid→GPU caches) + `renderScene`
+  draw the ECS scene (`MeshComponent` + `CameraComponent`). Import via `se import-model`, File ▸ Import, or
+  drag-and-drop. See `mesh-asset-pipeline` + `asset-catalog` memories.
 - ✅ **Materials + textures**: descriptor sets (set 0 = albedo combined image sampler) + a shared sampler +
   `GpuTexture`/`uploadTexture`; a per-entity `MaterialComponent` (base color + albedo `Uuid`); albedo textures
   imported from glTF/OBJ (or `se import-texture`), copied into `assets/textures/`, sRGB, persisted + reloaded
@@ -229,8 +229,16 @@ Working and verified (validation-clean) in the toolbox:
   cameras) — hold RMB to look + WASD move, Shift up / Ctrl down; `renderScene`/gizmo draw through it. Left-click
   ray-picks the nearest entity by world-space mesh AABB (`pickEntity`; empty space deselects). `se pick`/`focus`.
 - ✅ **Editor shell**: Roboto + Roboto Mono fonts (data fields monospace); a default DockBuilder layout
-  (Hierarchy/Inspector left, Assets bottom, Viewport center); a filesystem **asset browser** that imports
-  models/textures from disk via delegated hooks.
+  (Hierarchy/Inspector left, Assets bottom, Viewport center).
+- ✅ **Project asset catalog**: imported models/textures become **named, renameable (UTF-8) catalog entries**
+  (`AssetCatalog` in `Saffron.Scene`, owned by `AssetServer`; `Scene` borrows a `const AssetCatalog*` so the
+  registry-driven inspector pickers can read it). The **Assets** panel shows a tile grid with **best-effort
+  thumbnails** — textures as their image, meshes as a `renderMeshThumbnail` 3D preview, else a vendored Lucide
+  **SVG** icon (nanosvg via `uploadSvgIcon`). Mesh/Material fields are **picker combos** (also ImGui drag-drop
+  targets for asset tiles). Import via the modal/drag-drop (catalog-only, no auto-spawn). The whole project
+  (catalog + scene) saves to one **`project.json`** (`saveProject`/`loadProject`; legacy `asset_registry.json`
+  migrated on first load). `se list-assets`/`rename-asset`/`assign-asset`/`save-project`/`load-project`.
+  See `asset-catalog` memory. (Non-latin names round-trip; rendering them needs a broader font — follow-up.)
 
 Not done yet (planned):
 - **PBR** (metallic/roughness/normal maps — tangents + `materialSlot` per-submesh multi-material are reserved),
