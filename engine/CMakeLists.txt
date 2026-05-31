@@ -22,7 +22,8 @@ target_sources(SaffronEngine
             source/saffron/editor/editor.cppm
             source/saffron/control/command.cppm
             source/saffron/control/control.cppm
-            source/saffron/app/app.cppm)
+            source/saffron/app/app.cppm
+            source/saffron/editorapp/editor_app.cppm)
 
 # Implementation units (module Saffron.Rendering;) are regular sources, not module
 # interface units, so they live outside the CXX_MODULES file set.
