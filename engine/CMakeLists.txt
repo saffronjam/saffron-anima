@@ -25,7 +25,13 @@ target_sources(SaffronEngine
 # Implementation units (module Saffron.Rendering;) are regular sources, not module
 # interface units, so they live outside the CXX_MODULES file set.
 target_sources(SaffronEngine PRIVATE
-    source/saffron/rendering/renderer_capture.cpp)
+    source/saffron/rendering/renderer_capture.cpp
+    source/saffron/rendering/renderer_pipelines.cpp
+    source/saffron/rendering/renderer_drawlist.cpp
+    source/saffron/rendering/renderer_lighting.cpp
+    source/saffron/rendering/renderer_aa.cpp
+    source/saffron/rendering/renderer_textures.cpp
+    source/saffron/rendering/renderer_thumbnail.cpp)
 
 target_compile_features(SaffronEngine PUBLIC cxx_std_26)
 set_target_properties(SaffronEngine PROPERTIES CXX_MODULE_STD ON)
