@@ -1,3 +1,4 @@
+#include "../args.hxx"
 #include <nlohmann/json.hpp>
 
 #include <sys/socket.h>
@@ -8,10 +9,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace
 {
     using json = nlohmann::json;
+
+    enum class OutputMode { Text, Json };
 
     std::string socketPath()
     {
@@ -41,7 +45,6 @@ namespace
             }
         }
         char* end = nullptr;
-        // Try unsigned first so 64-bit ids (uuids) above LLONG_MAX survive.
         if (!token.empty() && token.front() != '-')
         {
             const unsigned long long asUnsigned = std::strtoull(token.c_str(), &end, 10);
@@ -66,13 +69,13 @@ namespace
 
     // Positionals go to params["args"]; --flag value / --flag=value / bare --flag map
     // to params[flag]. Commands read positionals or flags via the same key.
-    json buildParams(int argc, char** argv, int start)
+    json buildParams(const std::vector<std::string>& args)
     {
         json params = json::object();
         json positional = json::array();
-        for (int i = start; i < argc; i = i + 1)
+        for (std::size_t i = 0; i < args.size(); )
         {
-            std::string arg = argv[i];
+            const std::string& arg = args[i];
             if (arg.rfind("--", 0) == 0)
             {
                 std::string key = arg.substr(2);
@@ -80,20 +83,23 @@ namespace
                 if (eq != std::string::npos)
                 {
                     params[key.substr(0, eq)] = coerce(key.substr(eq + 1));
+                    i += 1;
                 }
-                else if (i + 1 < argc && std::string(argv[i + 1]).rfind("--", 0) != 0)
+                else if (i + 1 < args.size() && args[i + 1].rfind("--", 0) != 0)
                 {
-                    i = i + 1;
-                    params[key] = coerce(argv[i]);
+                    params[key] = coerce(args[i + 1]);
+                    i += 2;
                 }
                 else
                 {
                     params[key] = true;
+                    i += 1;
                 }
             }
             else
             {
                 positional.push_back(coerce(arg));
+                i += 1;
             }
         }
         if (!positional.empty())
@@ -102,20 +108,164 @@ namespace
         }
         return params;
     }
+
+    void printResult(const std::string& cmd, const json& result, OutputMode mode)
+    {
+        if (mode == OutputMode::Json)
+        {
+            std::printf("%s\n", result.dump(2).c_str());
+            return;
+        }
+        if (cmd == "help" && result.contains("commands"))
+        {
+            for (const auto& entry : result["commands"])
+            {
+                std::printf("  %-22s  %s\n",
+                    entry.value("name", "").c_str(),
+                    entry.value("help", "").c_str());
+            }
+            return;
+        }
+        if (cmd == "ping")
+        {
+            std::printf("pong  engine=%s  version=%s  pid=%d\n",
+                result.value("engine", "").c_str(),
+                result.value("version", "").c_str(),
+                result.value("pid", 0));
+            return;
+        }
+        if (cmd == "list-entities" && result.contains("entities"))
+        {
+            for (const auto& e : result["entities"])
+            {
+                std::printf("  %-24s  %s\n",
+                    std::to_string(e.value("id", std::uint64_t{ 0 })).c_str(),
+                    e.value("name", "").c_str());
+            }
+            return;
+        }
+        if (cmd == "list-components" && result.contains("components"))
+        {
+            for (const auto& c : result["components"])
+            {
+                std::printf("  %s\n", c.get<std::string>().c_str());
+            }
+            return;
+        }
+        if (cmd == "list-assets" && result.contains("assets"))
+        {
+            for (const auto& a : result["assets"])
+            {
+                std::printf("  %-8s  %-32s  %s\n",
+                    a.value("type", "").c_str(),
+                    a.value("name", "").c_str(),
+                    std::to_string(a.value("id", std::uint64_t{ 0 })).c_str());
+            }
+            return;
+        }
+        if (cmd == "render-stats")
+        {
+            std::printf("draws=%-4d  batches=%-4d  instances=%-4d  clustered=%s\n",
+                result.value("drawCalls", 0),
+                result.value("batches", 0),
+                result.value("instances", 0),
+                result.value("clustered", false) ? "on" : "off");
+            return;
+        }
+        // Fallback: pretty JSON with UTF-8 unescaped (so — renders as — rather than —).
+        std::printf("%s\n", result.dump(2, ' ', false).c_str());
+    }
+
+    // Split argv into se-level flags, the command, and engine args.
+    // Se-level flags are known at compile time and stripped before forwarding to the engine.
+    // Adding a new se flag: add extraction here + a matching declaration in the args parser below.
+    struct SplitArgs
+    {
+        std::vector<std::string> seFlags;  // tokens for the args parser
+        std::string cmd;
+        std::vector<std::string> engArgs;
+    };
+
+    SplitArgs splitArgs(int argc, char** argv)
+    {
+        SplitArgs r;
+        for (int i = 1; i < argc; )
+        {
+            std::string arg = argv[i];
+            if ((arg == "-o" || arg == "--output") && i + 1 < argc)
+            {
+                r.seFlags.push_back(arg);
+                r.seFlags.push_back(argv[++i]);
+                i++;
+            }
+            else if (arg.rfind("--output=", 0) == 0 || arg == "-h" || arg == "--help")
+            {
+                r.seFlags.push_back(arg);
+                i++;
+            }
+            else if (r.cmd.empty() && (arg.empty() || arg[0] != '-'))
+            {
+                r.cmd = arg;
+                i++;
+            }
+            else
+            {
+                r.engArgs.push_back(arg);
+                i++;
+            }
+        }
+        return r;
+    }
 }
 
 int main(int argc, char** argv)
 {
-    if (argc < 2)
+    args::ArgumentParser parser("se — SaffronEditor control CLI");
+    parser.Prog("se");
+    args::HelpFlag help(parser, "help", "show this help", {'h', "help"});
+    args::MapFlag<std::string, OutputMode> output(parser, "output",
+        "output format",
+        {'o', "output"},
+        { { "text", OutputMode::Text }, { "json", OutputMode::Json } },
+        OutputMode::Text);
+
+    const auto split = splitArgs(argc, argv);
+
+    try
     {
-        std::fprintf(stderr, "usage: se <command> [positional...] [--flag value]\n");
+        parser.ParseArgs(split.seFlags);
+    }
+    catch (const args::Help&)
+    {
+        std::cout << parser;
+        return 0;
+    }
+    catch (const args::ParseError& e)
+    {
+        std::fprintf(stderr, "se: %s\n", e.what());
+        std::fprintf(stderr, "%s", parser.Help().c_str());
+        return 1;
+    }
+
+    if (args::get(help))
+    {
+        std::cout << parser;
+        return 0;
+    }
+
+    if (split.cmd.empty())
+    {
+        std::fprintf(stderr, "se: missing command\n%s", parser.Help().c_str());
         return 2;
     }
 
+    const std::string& cmd  = split.cmd;
+    const OutputMode   mode = args::get(output);
+
     json request;
-    request["cmd"] = argv[1];
-    request["params"] = buildParams(argc, argv, 2);
-    request["id"] = 1;
+    request["cmd"]    = cmd;
+    request["params"] = buildParams(split.engArgs);
+    request["id"]     = 1;
 
     const std::string path = socketPath();
     const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -160,7 +310,7 @@ int main(int argc, char** argv)
     }
     if (response.value("ok", false))
     {
-        std::printf("%s\n", response.value("result", json::object()).dump(2).c_str());
+        printResult(cmd, response.value("result", json::object()), mode);
         return 0;
     }
     std::fprintf(stderr, "se: %s\n", response.value("error", std::string{ "error" }).c_str());
