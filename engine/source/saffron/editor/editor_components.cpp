@@ -220,7 +220,8 @@ namespace se
                 ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 100.0f);
                 ImGui::DragFloat("Range", &light.range, 0.05f, 0.0f, 200.0f);
             },
-            [](const PointLightComponent& c) -> nlohmann::json {
+            [](const PointLightComponent& c)
+            -> nlohmann::json {
                 return nlohmann::json{ { "color", vec3ToJson(c.color) },
                                        { "intensity", c.intensity }, { "range", c.range } };
             },
