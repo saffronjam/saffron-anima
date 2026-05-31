@@ -25,6 +25,7 @@ export module Saffron.Editor;
 import Saffron.Core;
 import Saffron.Signal;
 import Saffron.Scene;
+import Saffron.Json;
 
 export namespace se
 {
@@ -161,7 +162,7 @@ export namespace se
             [](const NameComponent& c) { return nlohmann::json{ { "name", c.name } }; },
             [](NameComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
             {
-                c.name = j.value("name", std::string{});
+                c.name = jsonStringOr(j, "name", std::string{});
                 return {};
             },
             false);
@@ -202,7 +203,7 @@ export namespace se
             [](const MeshComponent& c) { return nlohmann::json{ { "mesh", c.mesh.value } }; },
             [](MeshComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
             {
-                c.mesh = Uuid{ j.value("mesh", u64{ 0 }) };
+                c.mesh = Uuid{ jsonU64Or(j, "mesh", 0) };
                 return {};
             },
             true);
@@ -223,10 +224,10 @@ export namespace se
             },
             [](CameraComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
             {
-                c.fov = j.value("fov", 45.0f);
-                c.nearPlane = j.value("near", 0.1f);
-                c.farPlane = j.value("far", 100.0f);
-                c.primary = j.value("primary", true);
+                c.fov = jsonF32Or(j, "fov", 45.0f);
+                c.nearPlane = jsonF32Or(j, "near", 0.1f);
+                c.farPlane = jsonF32Or(j, "far", 100.0f);
+                c.primary = jsonBoolOr(j, "primary", true);
                 return {};
             },
             true);
@@ -248,8 +249,8 @@ export namespace se
             [](MaterialComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
             {
                 c.baseColor = vec4FromJson(j.value("baseColor", nlohmann::json::object()));
-                c.albedoTexture = Uuid{ j.value("albedoTexture", u64{ 0 }) };
-                c.unlit = j.value("unlit", false);
+                c.albedoTexture = Uuid{ jsonU64Or(j, "albedoTexture", 0) };
+                c.unlit = jsonBoolOr(j, "unlit", false);
                 return {};
             },
             true);
@@ -273,8 +274,8 @@ export namespace se
             {
                 c.direction = vec3FromJson(j.value("direction", nlohmann::json::object()));
                 c.color = vec3FromJson(j.value("color", nlohmann::json::object()));
-                c.intensity = j.value("intensity", 1.0f);
-                c.ambient = j.value("ambient", 0.15f);
+                c.intensity = jsonF32Or(j, "intensity", 1.0f);
+                c.ambient = jsonF32Or(j, "ambient", 0.15f);
                 return {};
             },
             true);
@@ -295,8 +296,8 @@ export namespace se
             [](PointLightComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
             {
                 c.color = vec3FromJson(j.value("color", nlohmann::json::object()));
-                c.intensity = j.value("intensity", 5.0f);
-                c.range = j.value("range", 10.0f);
+                c.intensity = jsonF32Or(j, "intensity", 5.0f);
+                c.range = jsonF32Or(j, "range", 10.0f);
                 return {};
             },
             true);
@@ -323,10 +324,10 @@ export namespace se
             {
                 c.direction = vec3FromJson(j.value("direction", nlohmann::json::object()));
                 c.color = vec3FromJson(j.value("color", nlohmann::json::object()));
-                c.intensity = j.value("intensity", 5.0f);
-                c.range = j.value("range", 10.0f);
-                c.innerAngle = j.value("innerAngle", 20.0f);
-                c.outerAngle = j.value("outerAngle", 30.0f);
+                c.intensity = jsonF32Or(j, "intensity", 5.0f);
+                c.range = jsonF32Or(j, "range", 10.0f);
+                c.innerAngle = jsonF32Or(j, "innerAngle", 20.0f);
+                c.outerAngle = jsonF32Or(j, "outerAngle", 30.0f);
                 return {};
             },
             true);

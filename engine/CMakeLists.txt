@@ -7,6 +7,7 @@ target_sources(SaffronEngine
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/source
         FILES
             source/saffron/core/core.cppm
+            source/saffron/json/json.cppm
             source/saffron/signal/signal.cppm
             source/saffron/window/window.cppm
             source/saffron/geometry/geometry.cppm

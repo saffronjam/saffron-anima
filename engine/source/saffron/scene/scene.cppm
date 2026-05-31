@@ -21,6 +21,7 @@ module;
 export module Saffron.Scene;
 
 import Saffron.Core;
+import Saffron.Json;
 
 export namespace se
 {
@@ -309,11 +310,7 @@ export namespace se
 
     glm::vec3 vec3FromJson(const nlohmann::json& j)
     {
-        if (!j.is_object())
-        {
-            return glm::vec3{ 0.0f };
-        }
-        return glm::vec3{ j.value("x", 0.0f), j.value("y", 0.0f), j.value("z", 0.0f) };
+        return glm::vec3{ jsonF32Or(j, "x", 0.0f), jsonF32Or(j, "y", 0.0f), jsonF32Or(j, "z", 0.0f) };
     }
 
 
@@ -324,11 +321,8 @@ export namespace se
 
     glm::vec4 vec4FromJson(const nlohmann::json& j)
     {
-        if (!j.is_object())
-        {
-            return glm::vec4{ 1.0f };
-        }
-        return glm::vec4{ j.value("x", 1.0f), j.value("y", 1.0f), j.value("z", 1.0f), j.value("w", 1.0f) };
+        return glm::vec4{ jsonF32Or(j, "x", 1.0f), jsonF32Or(j, "y", 1.0f),
+                          jsonF32Or(j, "z", 1.0f), jsonF32Or(j, "w", 1.0f) };
     }
 
     // ComponentTraits is a struct of std::function fields (a Go-interface itable);
@@ -485,7 +479,7 @@ export namespace se
         {
             return std::unexpected(std::string{ "scene root is not an object" });
         }
-        const int version = doc.value("version", 0);
+        const int version = static_cast<int>(jsonU64Or(doc, "version", 0));
         if (version != SceneVersion)
         {
             return std::unexpected(std::format("unsupported scene version {}", version));
@@ -506,7 +500,7 @@ export namespace se
             {
                 return std::unexpected(std::string{ "entity entry is not an object" });
             }
-            const u64 uuid = entry.value("id", u64{ 0 });
+            const u64 uuid = jsonU64Or(entry, "id", 0);
             if (uuid == 0)
             {
                 return std::unexpected(std::string{ "entity missing 'id'" });
@@ -539,7 +533,7 @@ export namespace se
         {
             return std::unexpected(std::format("cannot open '{}' for writing", path));
         }
-        out << sceneToJson(reg, scene).dump(2);
+        out << dumpJson(sceneToJson(reg, scene), 2);
         out.flush();
         if (!out)
         {
@@ -557,12 +551,12 @@ export namespace se
         }
         std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
-        nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
-        if (doc.is_discarded())
+        std::expected<nlohmann::json, std::string> doc = parseJson(text);
+        if (!doc)
         {
-            return std::unexpected(std::format("'{}': JSON parse error", path));
+            return std::unexpected(std::format("'{}': {}", path, doc.error()));
         }
-        return sceneFromJson(reg, scene, doc);
+        return sceneFromJson(reg, scene, *doc);
     }
 
     // Headless round-trip check: build a registry, populate a scene, write + read
@@ -575,7 +569,7 @@ export namespace se
             [](const NameComponent& c) { return nlohmann::json{ { "name", c.name } }; },
             [](NameComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
             {
-                c.name = j.value("name", std::string{});
+                c.name = jsonStringOr(j, "name", std::string{});
                 return {};
             },
             false);

@@ -20,6 +20,7 @@ module;
 export module Saffron.Assets;
 
 import Saffron.Core;
+import Saffron.Json;
 import Saffron.Geometry;
 import Saffron.Rendering;
 import Saffron.Scene;
@@ -85,10 +86,10 @@ export namespace se
                 continue;
             }
             AssetEntry parsed;
-            parsed.id = Uuid{ entry.value("id", u64{ 0 }) };
-            parsed.name = entry.value("name", std::string{});
-            parsed.type = assetTypeFromName(entry.value("type", std::string{ "mesh" }));
-            parsed.path = entry.value("path", std::string{});
+            parsed.id = Uuid{ jsonU64Or(entry, "id", 0) };
+            parsed.name = jsonStringOr(entry, "name", std::string{});
+            parsed.type = assetTypeFromName(jsonStringOr(entry, "type", std::string{ "mesh" }));
+            parsed.path = jsonStringOr(entry, "path", std::string{});
             if (parsed.id.value != 0)
             {
                 putAsset(catalog, std::move(parsed));
@@ -111,9 +112,10 @@ export namespace se
         if (in)
         {
             std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
-            if (!doc.is_discarded())
+            std::expected<nlohmann::json, std::string> parsedDoc = parseJson(text);
+            if (parsedDoc)
             {
+                const nlohmann::json& doc = *parsedDoc;
                 auto migrate = [&](const char* key, AssetType type)
                 {
                     if (!doc.contains(key) || !doc[key].is_object())
@@ -159,7 +161,7 @@ export namespace se
         {
             return std::unexpected(std::format("cannot open '{}' for writing", path));
         }
-        out << doc.dump(2);
+        out << dumpJson(doc, 2);
         out.flush();
         if (!out)
         {
@@ -179,12 +181,13 @@ export namespace se
             return std::unexpected(std::format("cannot open '{}'", path));
         }
         std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
-        if (doc.is_discarded() || !doc.is_object())
+        std::expected<nlohmann::json, std::string> parsedDoc = parseJson(text);
+        if (!parsedDoc || !parsedDoc->is_object())
         {
             return std::unexpected(std::format("'{}': JSON parse error", path));
         }
-        const int version = doc.value("version", 0);
+        const nlohmann::json& doc = *parsedDoc;
+        const int version = static_cast<int>(jsonU64Or(doc, "version", 0));
         if (version != ProjectVersion)
         {
             return std::unexpected(std::format("unsupported project version {}", version));

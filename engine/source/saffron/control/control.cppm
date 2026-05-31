@@ -23,6 +23,7 @@ module;
 export module Saffron.Control;
 
 import Saffron.Core;
+import Saffron.Json;
 import Saffron.Window;
 import Saffron.Rendering;
 import Saffron.Scene;
@@ -157,7 +158,7 @@ export namespace se
         }
         if (found.handle == entt::null)
         {
-            return std::unexpected(std::format("entity not found: {}", selector.dump()));
+            return std::unexpected(std::format("entity not found: {}", dumpJson(selector)));
         }
         return found;
     }
@@ -932,7 +933,7 @@ export namespace se
     {
         json reply;
         reply["id"] = request.value("id", json{});
-        const std::string command = request.value("cmd", std::string{});
+        const std::string command = jsonStringOr(request, "cmd", std::string{});
         const CommandTraits* row = findCommand(reg, command);
         if (row == nullptr)
         {
@@ -993,18 +994,18 @@ export namespace se
                 const std::string line = client.inbuf.substr(0, newline);
                 client.inbuf.erase(0, newline + 1);
 
-                json request = json::parse(line, nullptr, false);
+                std::expected<json, std::string> request = parseJson(line);
                 json reply;
-                if (request.is_discarded())
+                if (!request)
                 {
                     reply = json{ { "ok", false }, { "error", "invalid JSON request" } };
                 }
                 else
                 {
-                    reply = dispatch(reg, ctx, request);
+                    reply = dispatch(reg, ctx, *request);
                 }
 
-                std::string out = reply.dump();
+                std::string out = dumpJson(reply);
                 out.push_back('\n');
                 static_cast<void>(::send(client.fd, out.data(), out.size(), MSG_NOSIGNAL));
             }
