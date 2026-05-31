@@ -544,7 +544,9 @@ export namespace se
                 }
                 ImGui::Button(glyph, ImVec2{ tileSize, tileSize });  // placeholder until thumbnails land
             }
-            if (ImGui::BeginDragDropSource())
+            // The tile's last item is an Image (no ImGui ID) when it has a thumbnail;
+            // SourceAllowNullID lets such an item be a drag source (id from its position).
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
             {
                 AssetDragPayload payload{ entry.id.value, entry.type };
                 ImGui::SetDragDropPayload("SE_ASSET", &payload, sizeof(payload));
