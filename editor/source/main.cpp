@@ -42,7 +42,6 @@ namespace
         se::EditorContext* editor = nullptr;
         se::ControlContext* control = nullptr;
         se::AssetServer assets;
-        se::Ref<se::Pipeline> meshPipeline;
 
         // Fallback SVG type icons + the per-asset thumbnail cache (textures show their
         // image, meshes their rendered preview). All freed in onExit before the renderer.
@@ -125,24 +124,17 @@ int main()
         };
         se::registerBuiltinComponents(state->editor->registry, thumbnailFor);
 
-        std::expected<se::Ref<se::Pipeline>, std::string> pipeline = se::newMeshPipeline(app.renderer, "shaders/mesh.spv");
-        if (!pipeline)
+        // Mesh pipelines are owned by the renderer's PSO cache (resolved per material in
+        // renderScene), so the client no longer creates one. Just seed the scene.
+        std::expected<se::ImportResult, std::string> cube =
+            se::importModel(state->assets, app.renderer, se::assetPath("models/cube.gltf"));
+        if (cube)
         {
-            se::logError(pipeline.error());
+            se::spawnModel(state->editor->scene, "Cube", *cube);
         }
         else
         {
-            state->meshPipeline = *pipeline;
-            std::expected<se::ImportResult, std::string> cube =
-                se::importModel(state->assets, app.renderer, se::assetPath("models/cube.gltf"));
-            if (cube)
-            {
-                se::spawnModel(state->editor->scene, "Cube", *cube);
-            }
-            else
-            {
-                se::logError(cube.error());
-            }
+            se::logError(cube.error());
         }
 
         // Import a file into the asset catalog (no spawn), routed by extension. Used by
@@ -233,9 +225,9 @@ int main()
             se::CameraView cam = se::editorCameraView(state->editor->camera);
             const se::u32 vw = se::viewportWidth(app.renderer);
             const se::u32 vh = se::viewportHeight(app.renderer);
-            if (state->meshPipeline && vw > 0 && vh > 0)
+            if (vw > 0 && vh > 0)
             {
-                se::renderScene(app.renderer, state->editor->scene, state->assets, state->meshPipeline, cam);
+                se::renderScene(app.renderer, state->editor->scene, state->assets, cam);
 
                 // Gizmo: same camera, but the UN-flipped projection (the renderer keeps
                 // the Vulkan Y-flip local) so it is not mirrored.
@@ -320,7 +312,6 @@ int main()
 
         state->assets.meshRefByUuid.clear();
         state->assets.textureRefByUuid.clear();
-        state->meshPipeline.reset();
     };
 
     return se::run(std::move(config));

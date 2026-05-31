@@ -393,8 +393,7 @@ export namespace se
 
     // Draws every entity with a Transform + Mesh through the given camera (the editor
     // viewport camera), resolving each mesh on demand. A no-op without a viewport.
-    void renderScene(Renderer& renderer, Scene& scene, AssetServer& assets,
-                     const Ref<Pipeline>& meshPipeline, const CameraView& camera)
+    void renderScene(Renderer& renderer, Scene& scene, AssetServer& assets, const CameraView& camera)
     {
         if (!camera.valid)
         {
@@ -490,7 +489,7 @@ export namespace se
                 items.push_back(std::move(item));
             });
 
-        submitDrawList(renderer, meshPipeline, viewProjection, items);
+        submitDrawList(renderer, viewProjection, items);
     }
 
     // Picks the nearest entity whose world-space mesh AABB the camera ray hits. `ndc` is

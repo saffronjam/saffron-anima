@@ -26,6 +26,7 @@ module;
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -417,9 +418,18 @@ export namespace se
         }
     };
 
+    /// A material: which shader/PSO variant to draw a renderable with. The per-instance
+    /// albedo texture + base color live on the DrawItem; this selects the pipeline. For
+    /// v1 there is one übershader; a variant flag selects a different cached PSO.
+    struct Material
+    {
+        std::string shader = "shaders/mesh.spv";
+    };
+
     /// One renderable for the scene draw list: a mesh + its albedo texture (null =>
-    /// default white) + transform + base color. submitDrawList batches these by
-    /// (mesh, texture) into instanced draws that the scene + depth passes both consume.
+    /// default white) + transform + base color + material. submitDrawList resolves each
+    /// material to a cached PSO and batches by (pipeline, mesh, texture) into instanced
+    /// draws that the scene + depth passes both consume.
     struct DrawItem
     {
         Ref<GpuMesh> mesh;
@@ -427,13 +437,15 @@ export namespace se
         glm::mat4 model{ 1.0f };
         glm::mat4 normalMatrix{ 1.0f };
         glm::vec4 baseColor{ 1.0f };
+        Material material;
     };
 
-    // A batch of instances sharing a mesh + albedo texture, drawn as one instanced
-    // drawIndexed. baseInstance offsets into the frame's instance buffer. The Refs keep
-    // the mesh/texture alive until the frame's command buffer executes.
+    // A batch of instances sharing a pipeline + mesh + albedo texture, drawn as one
+    // instanced drawIndexed. baseInstance offsets into the frame's instance buffer. The
+    // Refs keep the pipeline/mesh/texture alive until the frame's command buffer executes.
     struct DrawBatch
     {
+        Ref<Pipeline> pipeline;      // resolved from the material via the PSO cache
         Ref<GpuMesh> mesh;
         Ref<GpuTexture> texture;     // kept alive; may be null (default white bound)
         vk::DescriptorSet materialSet;
@@ -445,7 +457,6 @@ export namespace se
     // DrawItems, consumed by the scene pass (shaded) and the depth pre-pass (depth only).
     struct SceneDrawList
     {
-        Ref<Pipeline> meshPipeline;
         glm::mat4 viewProj{ 1.0f };
         std::vector<DrawBatch> batches;
         vk::DescriptorSet lightSet;
@@ -541,7 +552,12 @@ export namespace se
         std::array<u32, MaxFramesInFlight> instanceCapacity{};
         Ref<GpuTexture> defaultWhiteTexture;         // 1x1 white; bound when a material has no albedo
 
-        RenderStats stats;  // populated each frame by drawInstanced
+        // PSO cache: mesh pipelines built on demand and keyed by their variant (shader +
+        // render-state permutation). The übershader maps many materials to one PSO; a
+        // permutation (e.g. unlit) adds an entry. The renderer owns these (not the client).
+        std::unordered_map<std::string, Ref<Pipeline>> pipelineCache;
+
+        RenderStats stats;  // populated each frame by submitDrawList
 
         Image offscreenViewport;       // scene render target shown in the Viewport panel
         Image offscreenDepth;          // depth buffer for the scene pass, sized to the viewport
@@ -603,6 +619,11 @@ export namespace se
     // set 1 = directional light, set 2 = per-instance data; push constant = viewProj),
     // device-local mesh + texture uploads, and a batched instanced draw via submit().
     std::expected<Ref<Pipeline>, std::string> newMeshPipeline(Renderer& renderer, std::string_view shaderName);
+    // The PSO cache front door: returns the mesh pipeline for a material variant, building
+    // + caching it on first request. The renderer owns it; the client never creates PSOs.
+    Ref<Pipeline> requestMeshPipeline(Renderer& renderer, const Material& material);
+    // Number of distinct mesh PSOs the cache holds (inspectable to verify übershader reuse).
+    u32 pipelineCount(const Renderer& renderer);
     std::expected<Ref<GpuMesh>, std::string> uploadMesh(Renderer& renderer, const Mesh& mesh);
     std::expected<Ref<GpuTexture>, std::string> uploadTexture(Renderer& renderer, const u8* rgba, u32 width, u32 height, bool srgb);
 
@@ -615,11 +636,10 @@ export namespace se
     // a fixed light) for an asset thumbnail. Synchronous one-off render; safe between frames.
     std::expected<Ref<GpuTexture>, std::string> renderMeshThumbnail(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size);
 
-    // Batches the DrawItems by (mesh, texture), uploads the frame's instance buffer, and
-    // stores the structured draw list on the renderer for the scene + depth passes to
-    // consume. Replaces the old single-closure drawInstanced.
-    void submitDrawList(Renderer& renderer, const Ref<Pipeline>& meshPipeline,
-                        const glm::mat4& viewProj, const std::vector<DrawItem>& items);
+    // Resolves each item's material to a cached PSO, batches by (pipeline, mesh, texture),
+    // uploads the frame's instance buffer, and stores the structured draw list on the
+    // renderer for the scene + depth passes to consume.
+    void submitDrawList(Renderer& renderer, const glm::mat4& viewProj, const std::vector<DrawItem>& items);
     // Record the frame's scene geometry into the active pass (the scene-pass body).
     void recordSceneDrawList(Renderer& renderer, vk::CommandBuffer cmd);
     // Record depth-only draws of the frame's geometry (the depth-pre-pass body).
@@ -1768,6 +1788,7 @@ namespace se
         // (which may capture Refs), before the descriptor pool / allocator / device
         // are torn down — a GpuTexture frees its material set from the pool.
         renderer.sceneDrawList = SceneDrawList{};  // drops mesh/texture/pipeline Refs
+        renderer.pipelineCache.clear();            // drops the cached mesh PSOs
         renderer.sceneSubmissions.clear();
         renderer.uiSubmissions.clear();
         renderer.defaultWhiteTexture.reset();
@@ -2319,6 +2340,29 @@ namespace se
         return std::make_shared<Pipeline>(std::move(pipeline));
     }
 
+    Ref<Pipeline> requestMeshPipeline(Renderer& renderer, const Material& material)
+    {
+        const std::string& key = material.shader;
+        auto found = renderer.pipelineCache.find(key);
+        if (found != renderer.pipelineCache.end())
+        {
+            return found->second;
+        }
+        std::expected<Ref<Pipeline>, std::string> built = newMeshPipeline(renderer, material.shader);
+        if (!built)
+        {
+            logError(built.error());
+            return nullptr;
+        }
+        renderer.pipelineCache.emplace(key, *built);
+        return *built;
+    }
+
+    u32 pipelineCount(const Renderer& renderer)
+    {
+        return static_cast<u32>(renderer.pipelineCache.size());
+    }
+
     std::expected<Ref<GpuMesh>, std::string> uploadMesh(Renderer& renderer, const Mesh& mesh)
     {
         if (mesh.vertices.empty() || mesh.indices.empty())
@@ -2502,21 +2546,21 @@ namespace se
         return {};
     }
 
-    void submitDrawList(Renderer& renderer, const Ref<Pipeline>& meshPipeline,
-                        const glm::mat4& viewProj, const std::vector<DrawItem>& items)
+    void submitDrawList(Renderer& renderer, const glm::mat4& viewProj, const std::vector<DrawItem>& items)
     {
         renderer.stats = RenderStats{};
         renderer.sceneDrawList = SceneDrawList{};
-        if (!meshPipeline || items.empty())
+        if (items.empty())
         {
             return;
         }
 
-        // Bucket items by (mesh, texture); each bucket becomes one instanced draw. Linear
-        // lookup — the bucket count is the number of distinct mesh/material pairs, small.
-        // First-seen order is preserved.
+        // Bucket items by (pipeline, mesh, texture); each bucket becomes one instanced
+        // draw. The pipeline is resolved from the item's material via the PSO cache, so
+        // same-material items share a PSO and batch together. First-seen order preserved.
         struct Bucket
         {
+            Ref<Pipeline> pipeline;
             Ref<GpuMesh> mesh;
             Ref<GpuTexture> texture;
             std::vector<InstanceData> instances;
@@ -2528,10 +2572,16 @@ namespace se
             {
                 continue;
             }
+            Ref<Pipeline> pipeline = requestMeshPipeline(renderer, item.material);
+            if (!pipeline)
+            {
+                continue;
+            }
             Bucket* bucket = nullptr;
             for (Bucket& candidate : buckets)
             {
-                if (candidate.mesh.get() == item.mesh.get() && candidate.texture.get() == item.texture.get())
+                if (candidate.pipeline.get() == pipeline.get() &&
+                    candidate.mesh.get() == item.mesh.get() && candidate.texture.get() == item.texture.get())
                 {
                     bucket = &candidate;
                     break;
@@ -2539,7 +2589,7 @@ namespace se
             }
             if (bucket == nullptr)
             {
-                buckets.push_back(Bucket{ item.mesh, item.texture, {} });
+                buckets.push_back(Bucket{ pipeline, item.mesh, item.texture, {} });
                 bucket = &buckets.back();
             }
             bucket->instances.push_back(InstanceData{ item.model, item.normalMatrix, item.baseColor });
@@ -2558,6 +2608,7 @@ namespace se
                 continue;
             }
             DrawBatch batch;
+            batch.pipeline = bucket.pipeline;
             batch.mesh = bucket.mesh;
             batch.texture = bucket.texture;
             batch.materialSet = tex->materialSet;
@@ -2592,27 +2643,28 @@ namespace se
         renderer.stats.batches = static_cast<u32>(batches.size());
         renderer.stats.instances = drawnInstances;
 
-        renderer.sceneDrawList = SceneDrawList{ meshPipeline, viewProj, std::move(batches),
+        renderer.sceneDrawList = SceneDrawList{ viewProj, std::move(batches),
             renderer.lightSets[frame], renderer.instanceSets[frame], true };
     }
 
-    // Record the scene's shaded geometry: bind the mesh pipeline + the light/instance
-    // sets once, then per batch bind its material set and issue one instanced drawIndexed.
+    // Record the scene's shaded geometry. All mesh PSOs share the layout, so the light +
+    // instance sets and the viewProj push bind once; per batch then binds its pipeline +
+    // material set and issues one instanced drawIndexed.
     void recordSceneDrawList(Renderer& renderer, vk::CommandBuffer cmd)
     {
         SceneDrawList& list = renderer.sceneDrawList;
-        if (!list.valid || !list.meshPipeline)
+        if (!list.valid || list.batches.empty())
         {
             return;
         }
-        vk::PipelineLayout layout = list.meshPipeline->layout;
-        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, list.meshPipeline->pipeline);
+        vk::PipelineLayout layout = list.batches[0].pipeline->layout;
         std::array<vk::DescriptorSet, 2> frameSets{ list.lightSet, list.instanceSet };
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 1, frameSets, {});
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &list.viewProj);
         for (const DrawBatch& batch : list.batches)
         {
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, batch.materialSet, {});
+            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, batch.pipeline->pipeline);
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, batch.pipeline->layout, 0, batch.materialSet, {});
             vk::DeviceSize offset = 0;
             cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);

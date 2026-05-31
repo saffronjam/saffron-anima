@@ -198,7 +198,8 @@ export namespace se
                              { "instances", stats.instances },
                              { "clustered", clusteredEnabled(ctx.renderer) },
                              { "postProcess", postProcessEnabled(ctx.renderer) },
-                             { "depthPrepass", depthPrepassEnabled(ctx.renderer) } };
+                             { "depthPrepass", depthPrepassEnabled(ctx.renderer) },
+                             { "pipelines", pipelineCount(ctx.renderer) } };
             });
 
         registerCommand(reg, "set-clustered", "set-clustered {0|1} — toggle clustered light culling",
