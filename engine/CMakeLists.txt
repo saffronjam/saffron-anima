@@ -13,12 +13,19 @@ target_sources(SaffronEngine
             source/saffron/geometry/geometry.cppm
             source/saffron/scene/scene.cppm
             source/saffron/rendering/render_graph.cppm
+            source/saffron/rendering/renderer_types.cppm
+            source/saffron/rendering/renderer_detail.cppm
             source/saffron/rendering/renderer.cppm
             source/saffron/ui/ui.cppm
             source/saffron/assets/assets.cppm
             source/saffron/editor/editor.cppm
             source/saffron/control/control.cppm
             source/saffron/app/app.cppm)
+
+# Implementation units (module Saffron.Rendering;) are regular sources, not module
+# interface units, so they live outside the CXX_MODULES file set.
+target_sources(SaffronEngine PRIVATE
+    source/saffron/rendering/renderer_capture.cpp)
 
 target_compile_features(SaffronEngine PUBLIC cxx_std_26)
 set_target_properties(SaffronEngine PROPERTIES CXX_MODULE_STD ON)
