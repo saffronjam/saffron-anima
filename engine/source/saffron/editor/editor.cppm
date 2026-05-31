@@ -78,10 +78,63 @@ export namespace se
         ctx.onSelectionChanged.publish(entity);
     }
 
-    // Concrete built-in component registration — the imgui draw lambdas + json
-    // serde live here (the one place with both imgui and json). A future physics
-    // or render module registers ITS components the same way; nothing else changes.
-    void registerBuiltinComponents(ComponentRegistry& reg)
+    // A combo that picks a catalog asset of `type` into `target` (the component's Uuid),
+    // showing each asset's thumbnail + name. Reads the catalog through scene.catalog
+    // (borrowed; tolerates null). `thumbnailFor` maps an asset to an ImGui texture (0 = none).
+    void drawAssetPicker(Scene& scene, AssetType type, const char* label, Uuid& target,
+                         const std::function<ImTextureID(const AssetEntry&)>& thumbnailFor)
+    {
+        const AssetCatalog* catalog = scene.catalog;
+        std::string current = "(none)";
+        if (catalog != nullptr)
+        {
+            const AssetEntry* entry = findAsset(*catalog, target);
+            if (entry != nullptr)
+            {
+                current = entry->name;
+            }
+        }
+        if (ImGui::BeginCombo(label, current.c_str()))
+        {
+            if (ImGui::Selectable("(none)", target.value == 0))
+            {
+                target = Uuid{ 0 };
+            }
+            if (catalog != nullptr)
+            {
+                for (const AssetEntry& entry : catalog->entries)
+                {
+                    if (entry.type != type)
+                    {
+                        continue;
+                    }
+                    ImGui::PushID(static_cast<int>(entry.id.value));
+                    ImTextureID thumb = 0;
+                    if (thumbnailFor)
+                    {
+                        thumb = thumbnailFor(entry);
+                    }
+                    if (thumb != 0)
+                    {
+                        ImGui::Image(thumb, ImVec2{ 16.0f, 16.0f });
+                        ImGui::SameLine();
+                    }
+                    if (ImGui::Selectable(entry.name.c_str(), entry.id.value == target.value))
+                    {
+                        target = entry.id;
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    // Concrete built-in component registration — the imgui draw lambdas + json serde
+    // live here (the one place with both imgui and json). `thumbnailFor` is captured by
+    // the Mesh/Material draws so their pickers can show asset thumbnails.
+    void registerBuiltinComponents(ComponentRegistry& reg,
+                                   std::function<ImTextureID(const AssetEntry&)> thumbnailFor)
     {
         registerComponent<NameComponent>(reg, "Name",
             [](Scene& s, Entity e)
@@ -124,10 +177,10 @@ export namespace se
             false);
 
         registerComponent<MeshComponent>(reg, "Mesh",
-            [](Scene& s, Entity e)
+            [thumbnailFor](Scene& s, Entity e)
             {
                 MeshComponent& mesh = getComponent<MeshComponent>(s, e);
-                ImGui::Text("Asset: %llu", static_cast<unsigned long long>(mesh.mesh.value));
+                drawAssetPicker(s, AssetType::Mesh, "Mesh", mesh.mesh, thumbnailFor);
             },
             [](const MeshComponent& c) { return nlohmann::json{ { "mesh", c.mesh.value } }; },
             [](MeshComponent& c, const nlohmann::json& j) -> std::expected<void, std::string>
@@ -162,11 +215,11 @@ export namespace se
             true);
 
         registerComponent<MaterialComponent>(reg, "Material",
-            [](Scene& s, Entity e)
+            [thumbnailFor](Scene& s, Entity e)
             {
                 MaterialComponent& material = getComponent<MaterialComponent>(s, e);
                 ImGui::ColorEdit4("Base Color", &material.baseColor.x);
-                ImGui::Text("Albedo: %llu", static_cast<unsigned long long>(material.albedoTexture.value));
+                drawAssetPicker(s, AssetType::Texture, "Albedo", material.albedoTexture, thumbnailFor);
             },
             [](const MaterialComponent& c)
             {
@@ -264,7 +317,9 @@ export namespace se
     EditorContext* newEditorContext()
     {
         EditorContext* ctx = new EditorContext();
-        registerBuiltinComponents(ctx->registry);
+        // Components are registered by the client via registerBuiltinComponents(reg,
+        // thumbnailFor) once the thumbnail provider exists. Seeding entities below uses
+        // entt directly, so it does not need the ComponentRegistry populated yet.
 
         // Seed a camera looking at the origin so a freshly spawned mesh is visible.
         Entity camera = createEntity(ctx->scene, "Camera");

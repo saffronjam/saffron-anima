@@ -47,6 +47,10 @@ int main()
         state->control = se::newControlContext();
         state->assets = se::newAssetServer(se::assetPath("assets"));
 
+        // Asset thumbnails are added in a later phase; for now the pickers show names only.
+        auto thumbnailFor = [](const se::AssetEntry&) -> ImTextureID { return 0; };
+        se::registerBuiltinComponents(state->editor->registry, thumbnailFor);
+
         std::expected<se::Ref<se::Pipeline>, std::string> pipeline = se::newMeshPipeline(app.renderer, "shaders/mesh.spv");
         if (!pipeline)
         {
