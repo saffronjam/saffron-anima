@@ -107,11 +107,13 @@ SaffronEngine/
 │   ├── CMakeLists.txt      # SaffronEngine static lib (FILE_SET CXX_MODULES)
 │   └── source/saffron/
 │       ├── core/core.cppm        # module Saffron.Core  — aliases, TimeSpan, logging
+│       ├── json/json.cppm        # module Saffron.Json  — error-as-value gateway over nlohmann (no abort)
 │       ├── signal/signal.cppm    # module Saffron.Signal — SubscriberList<...> signal/slot
 │       ├── window/window.cppm    # module Saffron.Window — SDL3 window + typed event signals
 │       ├── geometry/geometry.cppm  # module Saffron.Geometry — Vertex/Mesh/Submesh, glTF+OBJ import, .smesh
 │       ├── scene/scene.cppm      # module Saffron.Scene — entt ECS + ComponentRegistry + JSON serialization
-│       ├── rendering/renderer.cppm  # module Saffron.Rendering — Vulkan device/swapchain/frame loop + submit() seam
+│       ├── rendering/render_graph.cppm  # partition Saffron.Rendering:RenderGraph — declared-usage → auto barriers
+│       ├── rendering/renderer.cppm  # module Saffron.Rendering — Vulkan device/swapchain + render-graph frame + submit() seam
 │       ├── ui/ui.cppm            # module Saffron.Ui — ImGui docking (SDL3 + Vulkan backends) + Viewport
 │       ├── assets/assets.cppm    # module Saffron.Assets — AssetServer (Uuid→mesh registry) + importModel + renderScene
 │       ├── editor/editor.cppm    # module Saffron.Editor — hierarchy + generic inspector + component registration
@@ -124,10 +126,10 @@ SaffronEngine/
 └── tools/se/               # the `se` control CLI (json over the unix socket; no engine dep)
 ```
 
-Modules form a DAG (real imports, not a single chain): `Signal→Core`,
-`Window→{Core,Signal}`, `Geometry→{Core}`, `Scene→Core`, `Rendering→{Core,Window,Geometry}`,
-`Ui→{Core,Window,Rendering}`, `Assets→{Core,Geometry,Rendering,Scene}`, `Editor→{Core,Signal,Scene}`,
-`Control→{Core,Window,Rendering,Scene,Editor,Assets}`, `App→{Core,Window,Rendering,Ui}`.
+Modules form a DAG (real imports, not a single chain): `Signal→Core`, `Json→Core`,
+`Window→{Core,Signal}`, `Geometry→{Core}`, `Scene→{Core,Json}`, `Rendering→{Core,Window,Geometry}`
+(with a `:RenderGraph` partition), `Ui→{Core,Window,Rendering}`, `Assets→{Core,Json,Geometry,Rendering,Scene}`,
+`Editor→{Core,Signal,Scene,Json}`, `Control→{Core,Json,Window,Rendering,Scene,Editor,Assets}`, `App→{Core,Window,Rendering,Ui}`.
 The editor exe links `Saffron::Engine` and imports the modules it needs (Core/App/Window/Rendering/Ui/Editor/Control/Scene/Assets).
 
 ### Module conventions
@@ -137,8 +139,8 @@ The editor exe links `Saffron::Engine` and imports the modules it needs (Core/Ap
 - `rendering`, `ui`, and `scene` wrap heavy **C++** third-party headers (Vulkan +
   vk-bootstrap + VMA, ImGui, entt + glm), so they use **classic `#include` in the
   global module fragment and do NOT `import std`** — mixing `import std` with a heavy
-  C++ header in one TU breaks. `geometry` (cgltf + tinyobjloader + glm), `assets`,
-  `editor`, and `control` follow the same rule, and the editor TU (`main.cpp`)
+  C++ header in one TU breaks. `geometry` (cgltf + tinyobjloader + glm), `json` (nlohmann),
+  `assets`, `editor`, and `control` follow the same rule, and the editor TU (`main.cpp`)
   includes `<imgui.h>` the same way. These modules are still consumed normally by the `import std` modules —
   the BMI carries the std types.
 
