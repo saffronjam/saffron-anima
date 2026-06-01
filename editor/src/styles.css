@@ -1,0 +1,138 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Bundle the engine's editor fonts into the webview (Tauri runs offline/CSP-
+   restricted, so no Google-Fonts CDN). These are the same TTFs the C++ editor
+   loads (Roboto-Regular UI + RobotoMono-Regular data fields, ui.cppm:478-489).
+   The --font-sans/--font-mono theme vars below name these families, so declaring
+   @font-face here makes them resolve. url() is resolved by Vite relative to this
+   file, so the .ttf is fingerprinted into the build. */
+@font-face {
+  font-family: "Roboto";
+  src: url("./assets/fonts/Roboto-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Roboto Mono";
+  src: url("./assets/fonts/RobotoMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* The editor is ALWAYS dark: the engine `theme::` palette drives both `:root`
+   and `.dark`, and index.html pins `class="dark"` on <html> so component
+   dark: variants resolve. Hexes mirror the C++ editor theme exactly. */
+:root {
+  --background: #242424;
+  --foreground: #c0c0c0;
+  --card: #1a1a1a;
+  --card-foreground: #c0c0c0;
+  --popover: #3f464d;
+  --popover-foreground: #d2d2d2;
+  --primary: #ec9e24;
+  --primary-foreground: #151515;
+  --secondary: #2f2f2f;
+  --secondary-foreground: #d2d2d2;
+  --muted: #2f2f2f;
+  --muted-foreground: #808080;
+  --accent: #2f2f2f;
+  --accent-foreground: #d2d2d2;
+  --destructive: #b91c1c;
+  --destructive-foreground: #f5f5f5;
+  --border: #4d4d4d;
+  --input: #0f0f0f;
+  --ring: #ec9e24;
+  --radius: 0.15rem;
+}
+
+.dark {
+  --background: #242424;
+  --foreground: #c0c0c0;
+  --card: #1a1a1a;
+  --card-foreground: #c0c0c0;
+  --popover: #3f464d;
+  --popover-foreground: #d2d2d2;
+  --primary: #ec9e24;
+  --primary-foreground: #151515;
+  --secondary: #2f2f2f;
+  --secondary-foreground: #d2d2d2;
+  --muted: #2f2f2f;
+  --muted-foreground: #808080;
+  --accent: #2f2f2f;
+  --accent-foreground: #d2d2d2;
+  --destructive: #b91c1c;
+  --destructive-foreground: #f5f5f5;
+  --border: #4d4d4d;
+  --input: #0f0f0f;
+  --ring: #ec9e24;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* The families are bundled via the @font-face rules above. UI chrome (labels,
+     buttons, menus, hierarchy names) uses --font-sans (Roboto); data/number fields
+     (NumberDrag/VectorEditor/ColorField inputs, RenderStats counters, entity/asset
+     ids) use --font-mono (Roboto Mono) via Tailwind `font-mono`, mirroring the C++
+     uiMonoFont rule (editor_app.cppm:373). */
+  --font-sans: "Roboto", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* The viewport host is the native X11 reparent target: a plain positioned
+   layer the engine paints over. It must stay transparent and is not a
+   shadcn/Tailwind concern, so it keeps explicit positioning here. */
+.viewport-host {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+}
