@@ -172,6 +172,88 @@ namespace
                 result.value("clustered", false) ? "on" : "off");
             return;
         }
+        if (cmd == "viewport-native-info")
+        {
+            std::printf("%s  %s  %ux%u  sock=%s\n",
+                result.value("status", "").c_str(), result.value("transport", "").c_str(),
+                result.value("width", 0u), result.value("height", 0u),
+                result.value("controlSocket", "").c_str());
+            return;
+        }
+        if (cmd == "attach-native-viewport" || cmd == "resize-native-viewport")
+        {
+            std::printf("%s  %dx%d @ (%d,%d)\n",
+                (result.value("attached", false) || result.value("resized", false)) ? "ok" : "fail",
+                result.value("width", 0), result.value("height", 0),
+                result.value("x", 0), result.value("y", 0));
+            return;
+        }
+        if (cmd == "get-selection")
+        {
+            if (result.contains("entity") && result["entity"].is_object())
+            {
+                std::printf("selected: %s  (sel v%llu, scene v%llu)\n",
+                    result["entity"].value("name", "").c_str(),
+                    result.value("selectionVersion", 0ULL), result.value("sceneVersion", 0ULL));
+            }
+            else
+            {
+                std::printf("no selection  (sel v%llu, scene v%llu)\n",
+                    result.value("selectionVersion", 0ULL), result.value("sceneVersion", 0ULL));
+            }
+            return;
+        }
+        if (cmd == "add-entity" || cmd == "copy-entity")
+        {
+            std::printf("%s  id=%s\n", result.value("name", "").c_str(),
+                std::to_string(result.value("id", std::uint64_t{ 0 })).c_str());
+            return;
+        }
+        if (cmd == "get-gizmo" || cmd == "set-gizmo")
+        {
+            std::printf("op=%s  space=%s\n",
+                result.value("op", "").c_str(), result.value("space", "").c_str());
+            return;
+        }
+        if (cmd == "gizmo-pointer")
+        {
+            std::printf("hovered=%s  dragging=%s\n",
+                result.value("hovered", "none").c_str(),
+                result.value("dragging", false) ? "yes" : "no");
+            return;
+        }
+        if (cmd == "pick")
+        {
+            if (result.value("hit", false))
+            {
+                std::printf("%s  %s  id=%s\n",
+                    result.value("kind", "").c_str(),
+                    result.value("name", "").c_str(),
+                    std::to_string(result.value("id", std::uint64_t{ 0 })).c_str());
+            }
+            else
+            {
+                std::printf("no hit\n");
+            }
+            return;
+        }
+        if (cmd == "get-camera" || cmd == "set-camera")
+        {
+            const json p = result.value("position", json::object());
+            std::printf("pos=(%.2f, %.2f, %.2f)  yaw=%.1f  pitch=%.1f  fov=%.1f\n",
+                p.value("x", 0.0), p.value("y", 0.0), p.value("z", 0.0),
+                result.value("yaw", 0.0), result.value("pitch", 0.0), result.value("fov", 0.0));
+            return;
+        }
+        if (cmd == "get-thumbnail" || cmd == "view-asset")
+        {
+            const std::string b64 = result.value("base64", std::string{});
+            std::printf("%s %ux%u  ~%zu bytes (base64 %zu chars)\n",
+                result.value("format", "").c_str(),
+                result.value("width", 0u), result.value("height", 0u),
+                (b64.size() / 4) * 3, b64.size());
+            return;
+        }
         // Fallback: pretty JSON with UTF-8 unescaped (so — renders as — rather than —).
         std::printf("%s\n", result.dump(2, ' ', false).c_str());
     }
