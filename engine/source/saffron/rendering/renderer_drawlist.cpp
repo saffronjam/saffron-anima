@@ -314,6 +314,8 @@ namespace se
         // Set 4 = screen-space maps (AO + contact + SSGI); each gated by its flag in the
         // shader, so the bind is always valid even when an effect is off.
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 4, renderer.ssao.meshSet, {});
+        // Set 5 = DDGI probe atlases (irradiance + distance); gated by screenFlags.z.
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 5, renderer.ddgi.meshSet, {});
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &list.viewProj);
         for (const DrawBatch& batch : list.batches)
         {

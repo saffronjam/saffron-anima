@@ -123,9 +123,10 @@ namespace se
         pushConstant.offset = 0;
         pushConstant.size = sizeof(glm::mat4);  // viewProj
 
-        std::array<vk::DescriptorSetLayout, 5> setLayouts{
+        std::array<vk::DescriptorSetLayout, 6> setLayouts{
             renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout,
-            renderer.descriptors.instanceSetLayout, renderer.ibl.setLayout, renderer.ssao.meshSetLayout };
+            renderer.descriptors.instanceSetLayout, renderer.ibl.setLayout,
+            renderer.ssao.meshSetLayout, renderer.ddgi.meshLayout };
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);

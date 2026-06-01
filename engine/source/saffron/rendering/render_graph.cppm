@@ -111,6 +111,11 @@ export namespace se
                            vk::ImageAspectFlags aspect, vk::ImageLayout initialLayout,
                            vk::ImageLayout* externalLayout) -> RgResource;
 
+    /// Import an external 3D image (e.g. the DDGI voxel proxy). Only used for compute
+    /// storage barriers — the graph tracks its layout exactly like a 2D image.
+    auto importImage3D(RenderGraph& graph, vk::Image image, vk::ImageView view,
+                             vk::ImageLayout initialLayout, vk::ImageLayout* externalLayout) -> RgResource;
+
     /// Import an external buffer produced and/or consumed within the frame.
     auto importBuffer(RenderGraph& graph, vk::Buffer buffer) -> RgResource;
 
@@ -262,6 +267,14 @@ namespace se
         seedImageState(r);
         graph.resources.push_back(r);
         return RgResource{ static_cast<u32>(graph.resources.size() - 1) };
+    }
+
+    auto importImage3D(RenderGraph& graph, vk::Image image, vk::ImageView view,
+                             vk::ImageLayout initialLayout, vk::ImageLayout* externalLayout) -> RgResource
+    {
+        // A 3D image is tracked identically to a 2D one for barrier purposes (the barrier
+        // transitions the whole image; dimensionality is irrelevant here).
+        return importImage(graph, image, view, vk::ImageAspectFlagBits::eColor, initialLayout, externalLayout);
     }
 
     auto importBuffer(RenderGraph& graph, vk::Buffer buffer) -> RgResource

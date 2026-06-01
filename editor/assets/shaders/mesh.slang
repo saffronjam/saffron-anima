@@ -51,7 +51,10 @@ struct LightGlobals
     uint4 spotShadow;            // x = shadowed spot's light index, y = enabled (0/1)
     float4 pointShadow;          // xyz = shadowed point light world pos, w = far plane
     uint4 pointShadowMeta;       // x = shadowed point's light index, y = enabled (0/1)
-    uint4 screenFlags;           // x = contact shadows on, y = SSGI on (AO is counts.w)
+    uint4 screenFlags;           // x = contact shadows, y = SSGI, z = DDGI (AO is counts.w)
+    float4 ddgiVolumeMin;        // xyz = DDGI probe volume world min
+    float4 ddgiVolumeExtent;     // xyz = DDGI probe volume world size
+    uint4 ddgiProbeCount;        // xyz = probes per axis, w = irradiance tile interior
 };
 [[vk::binding(0, 1)]] ConstantBuffer<LightGlobals> globals;
 
@@ -146,6 +149,83 @@ static const float IblPrefilterMaxMip = 4.0;  // == IblPrefilterMips - 1 (render
 [[vk::binding(0, 4)]] Sampler2D aoMap;
 [[vk::binding(1, 4)]] Sampler2D contactMap;
 [[vk::binding(2, 4)]] Sampler2D ssgiMap;
+
+// Set 5: DDGI probe atlases (octahedral irradiance + distance moments), sampled for
+// multi-bounce indirect when screenFlags.z != 0.
+[[vk::binding(0, 5)]] Sampler2D ddgiIrradiance;
+[[vk::binding(1, 5)]] Sampler2D ddgiDistance;
+
+float2 ddgiOctEncode(float3 d)
+{
+    d /= (abs(d.x) + abs(d.y) + abs(d.z));
+    float2 o = d.z >= 0.0 ? d.xy : (1.0 - abs(d.yx)) * float2(d.x >= 0.0 ? 1.0 : -1.0, d.y >= 0.0 ? 1.0 : -1.0);
+    return o * 0.5 + 0.5;
+}
+
+// Atlas UV for probe `p` sampling direction `dir`, given the tile interior + gutter.
+float2 ddgiAtlasUv(uint3 p, float3 dir, uint interior, uint2 atlasSize)
+{
+    uint tile = interior + 2;
+    uint tileX = p.x + p.y * globals.ddgiProbeCount.x;
+    uint tileY = p.z;
+    float2 oct = ddgiOctEncode(normalize(dir));
+    float2 interiorPx = oct * float(interior) + 1.0;
+    float2 atlasPx = float2(tileX, tileY) * float(tile) + interiorPx;
+    return (atlasPx + 0.5) / float2(atlasSize);
+}
+
+// Sample the 8-probe cage around worldPos: trilinear weight * soft backface * Chebyshev
+// visibility (kills light leaking). Returns irradiance to add to the indirect term.
+float3 ddgiSampleIrradiance(float3 worldPos, float3 n)
+{
+    uint3 pc = globals.ddgiProbeCount.xyz;
+    uint interior = globals.ddgiProbeCount.w;
+    uint2 irrAtlas = uint2(pc.x * pc.y * (interior + 2), pc.z * (interior + 2));
+    uint2 distAtlas = uint2(pc.x * pc.y * (16u + 2u), pc.z * (16u + 2u));
+
+    float3 t = (worldPos - globals.ddgiVolumeMin.xyz) / globals.ddgiVolumeExtent.xyz;  // [0,1] in volume
+    float3 grid = t * float3(pc - 1u);                 // probe-space coordinate
+    int3 base = int3(floor(grid));
+    float3 frac = grid - float3(base);
+
+    float3 sum = float3(0.0);
+    float wsum = 0.0;
+    for (uint c = 0; c < 8; c = c + 1)
+    {
+        int3 off = int3(c & 1u, (c >> 1) & 1u, (c >> 2) & 1u);
+        int3 pi = clamp(base + off, int3(0), int3(pc) - 1);
+        float3 probePos = globals.ddgiVolumeMin.xyz + (float3(pi) + 0.5) / float3(pc) * globals.ddgiVolumeExtent.xyz;
+
+        // Trilinear weight.
+        float3 tw = lerp(1.0 - frac, frac, float3(off));
+        float weight = tw.x * tw.y * tw.z;
+
+        // Soft backface: prefer probes the surface normal faces.
+        float3 dirToProbe = probePos - worldPos;
+        float distToProbe = length(dirToProbe);
+        dirToProbe = distToProbe > 1e-4 ? dirToProbe / distToProbe : n;
+        weight *= max(0.05, (dot(dirToProbe, n) * 0.5 + 0.5));
+
+        // Chebyshev visibility: compare distToProbe against the probe's stored moments in
+        // the surface->probe direction (kills leaking through occluders).
+        float2 distUv = ddgiAtlasUv(uint3(pi), -dirToProbe, 16u, distAtlas);
+        float2 moments = ddgiDistance.SampleLevel(distUv, 0.0).rg;
+        float meanDist = moments.x;
+        if (distToProbe > meanDist)
+        {
+            float variance = abs(moments.x * moments.x - moments.y);
+            float d = distToProbe - meanDist;
+            float cheb = variance / (variance + d * d);
+            cheb = max(cheb * cheb * cheb, 0.0);  // sharpen
+            weight *= cheb;
+        }
+
+        float2 irrUv = ddgiAtlasUv(uint3(pi), n, interior, irrAtlas);
+        sum += ddgiIrradiance.SampleLevel(irrUv, 0.0).rgb * weight;
+        wsum += weight;
+    }
+    return wsum > 1e-4 ? sum / wsum : float3(0.0);
+}
 
 float3 fresnelSchlickRoughness(float cosT, float3 F0, float roughness)
 {
@@ -359,6 +439,12 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         float ao = globals.counts.w != 0 ? aoMap.SampleLevel(screenUv, 0.0).r : 1.0;
         float3 gi = ssgiMap.SampleLevel(screenUv, 0.0).rgb;
         ambient += gi * albedo * (1.0 - metallic) * ao;
+    }
+    // DDGI adds world-space multi-bounce indirect from the probe cage (diffuse only).
+    if (globals.screenFlags.z != 0)
+    {
+        float3 probeIrradiance = ddgiSampleIrradiance(input.worldPos, n);
+        ambient += probeIrradiance * albedo * (1.0 - metallic);
     }
     float3 color = lo + ambient + input.emissive;
     return float4(color, tex.a * input.baseColor.a);

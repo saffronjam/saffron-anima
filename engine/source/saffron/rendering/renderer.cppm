@@ -278,6 +278,16 @@ namespace se
         renderer.pipelines.copyColor.reset();
         renderer.pipelines.motion.reset();
         renderer.pipelines.taa.reset();
+        renderer.pipelines.ddgiVoxelize.reset();
+        renderer.pipelines.ddgiTrace.reset();
+        renderer.pipelines.ddgiBlendIrr.reset();
+        renderer.pipelines.ddgiBlendDist.reset();
+        renderer.pipelines.ddgiBorder.reset();
+        renderer.ddgi.boxBuffer.reset();
+        renderer.ddgi.voxels.reset();
+        renderer.ddgi.irradiance.reset();
+        renderer.ddgi.distance.reset();
+        renderer.ddgi.rays.reset();
         for (vk::ImageView& face : renderer.targets.pointShadowFaces)
         {
             if (face)
@@ -395,6 +405,16 @@ namespace se
         if (renderer.descriptors.taaSetLayout)
         {
             renderer.context.device.destroyDescriptorSetLayout(renderer.descriptors.taaSetLayout);
+        }
+        for (vk::DescriptorSetLayout l : { renderer.ddgi.voxelLayout, renderer.ddgi.traceLayout,
+                                           renderer.ddgi.blendIrrLayout, renderer.ddgi.blendDistLayout,
+                                           renderer.ddgi.borderLayout, renderer.ddgi.meshLayout })
+        {
+            if (l) { renderer.context.device.destroyDescriptorSetLayout(l); }
+        }
+        if (renderer.ddgi.sampler)
+        {
+            renderer.context.device.destroySampler(renderer.ddgi.sampler);
         }
 
         for (FrameData& frame : renderer.frame.frames)
@@ -862,6 +882,146 @@ namespace se
             addPass(graph, std::move(motionPass));
         }
 
+        // DDGI: voxelize the scene proxy -> trace probe rays (software) -> blend irradiance +
+        // distance atlases -> octahedral border copy. All compute, before the scene pass that
+        // samples the atlases. The voxel image lives in GENERAL (storage read+write); the
+        // atlases ping General (blend/border write) <-> ShaderReadOnly (trace prev-read + mesh).
+        const bool doDdgi = renderer.ddgi.useDdgi && renderer.ddgi.ready &&
+                            renderer.pipelines.ddgiVoxelize && renderer.pipelines.ddgiTrace &&
+                            renderer.pipelines.ddgiBlendIrr && renderer.pipelines.ddgiBlendDist &&
+                            renderer.pipelines.ddgiBorder;
+        if (doDdgi)
+        {
+            Ddgi& d = renderer.ddgi;
+            const glm::uvec4 probeCount{ DdgiProbesX, DdgiProbesY, DdgiProbesZ, DdgiRaysPerProbe };
+            const u32 probeTotal = DdgiProbesX * DdgiProbesY * DdgiProbesZ;
+            RgResource voxelRes = importImage3D(graph, d.voxels.image, d.voxels.view, d.voxels.layout, &d.voxels.layout);
+            RgResource rayRes = importImage(graph, d.rays.image, d.rays.view,
+                vk::ImageAspectFlagBits::eColor, d.rays.layout, &d.rays.layout);
+            RgResource irrRes = importImage(graph, d.irradiance.image, d.irradiance.view,
+                vk::ImageAspectFlagBits::eColor, d.irradiance.layout, &d.irradiance.layout);
+            RgResource distRes = importImage(graph, d.distance.image, d.distance.view,
+                vk::ImageAspectFlagBits::eColor, d.distance.layout, &d.distance.layout);
+            renderer.graph.ddgiIrradiance = irrRes;
+            renderer.graph.ddgiDistance = distRes;
+            renderer.graph.hasDdgi = true;
+
+            const u32 g3 = (DdgiVoxelRes + 3) / 4;
+            const glm::vec3 volMin = d.volumeMin;
+            const glm::vec3 volExt = d.volumeExtent;
+            const glm::vec3 sunDir = d.sunDir;
+            const glm::vec3 sunColor = d.sunColor;
+            const f32 sunI = d.sunIntensity;
+            const glm::vec3 sky = d.skyColor;
+            const u32 boxCount = d.frameBoxCount;
+            const f32 frameIdx = static_cast<f32>(d.frameIndex);
+            const u32 firstFrame = d.historyReset ? 1u : 0u;
+            const f32 maxDist = glm::length(volExt);
+
+            // 1. Voxelize.
+            RgPass vox;
+            vox.name = "ddgi-voxelize";
+            vox.kind = RgPassKind::Compute;
+            vox.accesses = { RgAccess{ voxelRes, RgUsage::StorageImageRWCompute } };
+            vox.execute = [&renderer, g3, probeCount, volMin, volExt, boxCount](vk::CommandBuffer cmd)
+        {
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiVoxelize->pipeline);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiVoxelize->layout, 0, renderer.ddgi.voxelSet, {});
+                struct { glm::uvec4 gridCount; glm::vec4 volumeMin; glm::vec4 volumeExtent; }
+                    push{ glm::uvec4(DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelRes, boxCount),
+                          glm::vec4(volMin, 0.0f), glm::vec4(volExt, 0.0f) };
+                cmd.pushConstants(renderer.pipelines.ddgiVoxelize->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.dispatch(g3, g3, g3);
+            };
+            addPass(graph, std::move(vox));
+
+            // 2. Trace (reads voxel storage + prev irradiance sampler -> ray storage).
+            RgPass trace;
+            trace.name = "ddgi-trace";
+            trace.kind = RgPassKind::Compute;
+            // Voxel read uses the image RW-storage usage (GENERAL) — StorageReadCompute is
+            // modeled for buffers (layout Undefined) and would mis-transition a 3D image.
+            trace.accesses = { RgAccess{ voxelRes, RgUsage::StorageImageRWCompute },
+                               RgAccess{ irrRes, RgUsage::SampledReadCompute },
+                               RgAccess{ rayRes, RgUsage::StorageImageRWCompute } };
+            trace.execute = [&renderer, probeCount, probeTotal, volMin, volExt, sunDir, sunColor, sunI, sky, frameIdx](vk::CommandBuffer cmd)
+        {
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiTrace->pipeline);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiTrace->layout, 0, renderer.ddgi.traceSet, {});
+                struct {
+                    glm::uvec4 probeCount; glm::uvec4 gridCount; glm::vec4 volumeMin; glm::vec4 volumeExtent;
+                    glm::vec4 sunDir; glm::vec4 sunColor; glm::vec4 skyColor;
+                } push{ probeCount, glm::uvec4(DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelRes, DdgiIrrInterior),
+                        glm::vec4(volMin, 0.0f), glm::vec4(volExt, 0.0f),
+                        glm::vec4(sunDir, sunI), glm::vec4(sunColor, frameIdx), glm::vec4(sky, 0.0f) };
+                cmd.pushConstants(renderer.pipelines.ddgiTrace->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.dispatch((DdgiRaysPerProbe + 63) / 64, probeTotal, 1);
+            };
+            addPass(graph, std::move(trace));
+
+            // 3. Blend irradiance (ray sampler -> irradiance storage).
+            RgPass bi;
+            bi.name = "ddgi-blend-irr";
+            bi.kind = RgPassKind::Compute;
+            bi.accesses = { RgAccess{ rayRes, RgUsage::SampledReadCompute },
+                            RgAccess{ irrRes, RgUsage::StorageImageRWCompute } };
+            const u32 irrAtlasW = DdgiProbesX * DdgiProbesY * (DdgiIrrInterior + 2);
+            const u32 irrAtlasH = DdgiProbesZ * (DdgiIrrInterior + 2);
+            bi.execute = [&renderer, probeCount, firstFrame, irrAtlasW, irrAtlasH](vk::CommandBuffer cmd)
+        {
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendIrr->pipeline);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendIrr->layout, 0, renderer.ddgi.blendIrrSet, {});
+                struct { glm::uvec4 probeCount; glm::uvec4 tile; glm::vec4 params; }
+                    push{ probeCount, glm::uvec4(DdgiIrrInterior, firstFrame, 0, 0), glm::vec4(DdgiHysteresis, 0, 0, 0) };
+                cmd.pushConstants(renderer.pipelines.ddgiBlendIrr->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.dispatch((irrAtlasW + 7) / 8, (irrAtlasH + 7) / 8, 1);
+            };
+            addPass(graph, std::move(bi));
+
+            // 4. Blend distance (ray sampler -> moment storage).
+            RgPass bd;
+            bd.name = "ddgi-blend-dist";
+            bd.kind = RgPassKind::Compute;
+            bd.accesses = { RgAccess{ rayRes, RgUsage::SampledReadCompute },
+                            RgAccess{ distRes, RgUsage::StorageImageRWCompute } };
+            const u32 distAtlasW = DdgiProbesX * DdgiProbesY * (DdgiDistInterior + 2);
+            const u32 distAtlasH = DdgiProbesZ * (DdgiDistInterior + 2);
+            bd.execute = [&renderer, probeCount, firstFrame, maxDist, distAtlasW, distAtlasH](vk::CommandBuffer cmd)
+        {
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendDist->pipeline);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendDist->layout, 0, renderer.ddgi.blendDistSet, {});
+                struct { glm::uvec4 probeCount; glm::uvec4 tile; glm::vec4 params; }
+                    push{ probeCount, glm::uvec4(DdgiDistInterior, firstFrame, 0, 0), glm::vec4(DdgiHysteresis, maxDist, 0, 0) };
+                cmd.pushConstants(renderer.pipelines.ddgiBlendDist->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.dispatch((distAtlasW + 7) / 8, (distAtlasH + 7) / 8, 1);
+            };
+            addPass(graph, std::move(bd));
+
+            // 5. Border copy (fix irradiance octahedral gutters) -> leaves irradiance in
+            // ShaderReadOnly for the scene pass via the scene's SampledRead declaration.
+            RgPass bo;
+            bo.name = "ddgi-border";
+            bo.kind = RgPassKind::Compute;
+            bo.accesses = { RgAccess{ irrRes, RgUsage::StorageImageRWCompute } };
+            bo.execute = [&renderer, probeCount, irrAtlasW, irrAtlasH](vk::CommandBuffer cmd)
+        {
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBorder->pipeline);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBorder->layout, 0, renderer.ddgi.borderSet, {});
+                struct { glm::uvec4 probeCount; glm::uvec4 tile; }
+                    push{ probeCount, glm::uvec4(DdgiIrrInterior, 0, 0, 0) };
+                cmd.pushConstants(renderer.pipelines.ddgiBorder->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.dispatch((irrAtlasW + 7) / 8, (irrAtlasH + 7) / 8, 1);
+            };
+            addPass(graph, std::move(bo));
+
+            renderer.ddgi.frameIndex = renderer.ddgi.frameIndex + 1;
+            renderer.ddgi.historyReset = false;
+        }
+        else
+        {
+            renderer.graph.hasDdgi = false;
+        }
+
         RgPass scene;
         scene.name = "scene";
         scene.kind = RgPassKind::Graphics;
@@ -880,6 +1040,11 @@ namespace se
         if (renderer.graph.hasSsgi)
         {
             scene.accesses.push_back(RgAccess{ renderer.graph.ssgiResource, RgUsage::SampledRead });
+        }
+        if (renderer.graph.hasDdgi)
+        {
+            scene.accesses.push_back(RgAccess{ renderer.graph.ddgiIrradiance, RgUsage::SampledRead });
+            scene.accesses.push_back(RgAccess{ renderer.graph.ddgiDistance, RgUsage::SampledRead });
         }
         if (doShadow)
         {
@@ -1256,6 +1421,56 @@ namespace se
     {
         return renderer.ssao.ready &&
                (renderer.ssao.useSsao || renderer.ssao.useContact || renderer.ssao.useSsgi);
+    }
+
+    void setDdgi(Renderer& renderer, bool enabled)
+    {
+        if (enabled && !renderer.ddgi.useDdgi)
+        {
+            renderer.ddgi.historyReset = true;  // re-converge probes from scratch on enable
+        }
+        renderer.ddgi.useDdgi = enabled;
+    }
+
+    auto ddgiEnabled(const Renderer& renderer) -> bool
+    {
+        return renderer.ddgi.useDdgi && renderer.ddgi.ready;
+    }
+
+    void setDdgiScene(Renderer& renderer, const std::vector<glm::vec4>& boxMins,
+                      const std::vector<glm::vec4>& boxMaxs, const std::vector<glm::vec4>& boxAlbedos,
+                      glm::vec3 volumeMin, glm::vec3 volumeExtent,
+                      glm::vec3 sunDir, glm::vec3 sunColor, f32 sunIntensity)
+    {
+        Ddgi& d = renderer.ddgi;
+        if (!d.ready || d.boxBuffer == nullptr)
+        {
+            return;
+        }
+        u32 count = static_cast<u32>(boxMins.size());
+        if (count > d.boxCapacity)
+        {
+            count = d.boxCapacity;
+        }
+        // Interleave [min, max, albedo] per box into the mapped SSBO (matches the Box struct).
+        auto* dst = static_cast<glm::vec4*>(d.boxBuffer->mapped);
+        for (u32 i = 0; i < count; i = i + 1)
+        {
+            dst[i * 3 + 0] = boxMins[i];
+            dst[i * 3 + 1] = boxMaxs[i];
+            dst[i * 3 + 2] = boxAlbedos[i];
+        }
+        if (count > 0)
+        {
+            vmaFlushAllocation(renderer.context.allocator, d.boxBuffer->alloc, 0,
+                               static_cast<vk::DeviceSize>(count) * 3 * sizeof(glm::vec4));
+        }
+        d.frameBoxCount = count;
+        d.volumeMin = volumeMin;
+        d.volumeExtent = volumeExtent;
+        d.sunDir = sunDir;
+        d.sunColor = sunColor;
+        d.sunIntensity = sunIntensity;
     }
 
     void setSsaoCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj,

@@ -49,6 +49,7 @@ namespace se
                              { "ssao", ssaoEnabled(ctx.renderer) },
                              { "contactShadows", contactShadowsEnabled(ctx.renderer) },
                              { "ssgi", ssgiEnabled(ctx.renderer) },
+                             { "ddgi", ddgiEnabled(ctx.renderer) },
                              { "pipelines", pipelineCount(ctx.renderer) },
                              { "hdr", true },
                              { "exposureEv", exposureEv(ctx.renderer) },
@@ -176,6 +177,21 @@ namespace se
                 }
                 setSsgi(ctx.renderer, enabled);
                 return json{ { "ssgi", ssgiEnabled(ctx.renderer) } };
+            });
+
+        registerCommand(reg, "set-gi", "set-gi {off|ddgi} — DDGI probe global illumination (multi-bounce)",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                const json value = positionalOr(params, "mode", 0);
+                std::string mode = "off";
+                if (value.is_string()) { mode = value.get<std::string>(); }
+                else if (value.is_number()) { mode = value.get<double>() != 0.0 ? "ddgi" : "off"; }
+                if (mode != "off" && mode != "ddgi")
+                {
+                    return Err(std::string{ "expected off|ddgi" });
+                }
+                setDdgi(ctx.renderer, mode == "ddgi");
+                return json{ { "ddgi", ddgiEnabled(ctx.renderer) } };
             });
 
         registerCommand(reg, "set-shadows", "set-shadows {0|1} — toggle the directional shadow map",

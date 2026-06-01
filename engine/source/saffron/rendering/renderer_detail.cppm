@@ -350,6 +350,52 @@ export namespace se
         return result;
     }
 
+    // A 3D storage+sampled image (the DDGI voxel scene proxy). The one genuinely new
+    // resource type beyond 2D/cube; an e3D view, storage + sampled usage.
+    auto newImage3D(Renderer& renderer, u32 w, u32 h, u32 d, vk::Format format) -> Result<Image3D>
+    {
+        VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        imageInfo.imageType = VK_IMAGE_TYPE_3D;
+        imageInfo.format = static_cast<VkFormat>(format);
+        imageInfo.extent = VkExtent3D{ w, h, d };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        VkImage raw = VK_NULL_HANDLE;
+        VmaAllocation allocation = nullptr;
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &raw, &allocation, nullptr) != VK_SUCCESS)
+        {
+            return Err(std::string{ "vmaCreateImage failed for 3D image" });
+        }
+        vk::ImageViewCreateInfo viewInfo{};
+        viewInfo.image = vk::Image{ raw };
+        viewInfo.viewType = vk::ImageViewType::e3D;
+        viewInfo.format = format;
+        viewInfo.subresourceRange = vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+        vk::ResultValue<vk::ImageView> view = renderer.context.device.createImageView(viewInfo);
+        if (view.result != vk::Result::eSuccess)
+        {
+            vmaDestroyImage(renderer.context.allocator, raw, allocation);
+            return Err(std::format("createImageView (3D): {}", vk::to_string(view.result)));
+        }
+        Image3D result;
+        result.device = renderer.context.device;
+        result.allocator = renderer.context.allocator;
+        result.image = vk::Image{ raw };
+        result.view = view.value;
+        result.alloc = allocation;
+        result.extent = vk::Extent3D{ w, h, d };
+        result.format = format;
+        result.layout = vk::ImageLayout::eUndefined;
+        return result;
+    }
+
     // A cube-compatible image (6 array layers, N mips) usable both as a sampled cubemap
     // (the default eCube view) and as a 2D-array storage image (compute fills it via
     // per-mip transient views). Used for the IBL environment/irradiance/prefiltered cubes.
@@ -683,7 +729,10 @@ export namespace se
         glm::uvec4 spotShadow;          // x = shadowed spot's light index, y = enabled (0/1)
         glm::vec4 pointShadow;          // xyz = shadowed point light world pos, w = far plane
         glm::uvec4 pointShadowMeta;     // x = shadowed point's light index, y = enabled (0/1)
-        glm::uvec4 screenFlags;         // x = contact-shadows on, y = SSGI on (AO is counts.w)
+        glm::uvec4 screenFlags;         // x = contact-shadows, y = SSGI, z = DDGI (AO is counts.w)
+        glm::vec4 ddgiVolumeMin;        // xyz = DDGI volume world min corner
+        glm::vec4 ddgiVolumeExtent;     // xyz = DDGI volume world size
+        glm::uvec4 ddgiProbeCount;      // xyz = probes per axis
     };
 
     // Shadow-map resolution + slope/constant depth bias (units of D32 depth). Tuned on
@@ -706,6 +755,21 @@ export namespace se
     // TAA: per-pixel screen-space motion (rg16f); history is the offscreen HDR format.
     inline constexpr vk::Format MotionFormat = vk::Format::eR16G16Sfloat;
     inline constexpr f32 TaaHistoryWeight = 0.9f;
+
+    // DDGI: one coarse probe volume + a voxel scene proxy. Probe counts per axis, rays per
+    // probe per frame, octahedral tile interiors (irradiance 8, distance 16), atlas formats.
+    inline constexpr u32 DdgiProbesX = 8;
+    inline constexpr u32 DdgiProbesY = 4;
+    inline constexpr u32 DdgiProbesZ = 8;
+    inline constexpr u32 DdgiRaysPerProbe = 64;
+    inline constexpr u32 DdgiIrrInterior = 8;
+    inline constexpr u32 DdgiDistInterior = 16;
+    inline constexpr u32 DdgiVoxelRes = 32;  // voxel proxy is DdgiVoxelRes^3
+    inline constexpr vk::Format DdgiVoxelFormat = vk::Format::eR16G16B16A16Sfloat;
+    inline constexpr vk::Format DdgiIrrFormat = vk::Format::eR16G16B16A16Sfloat;
+    inline constexpr vk::Format DdgiDistFormat = vk::Format::eR16G16Sfloat;
+    inline constexpr u32 DdgiMaxBoxes = 256;
+    inline constexpr f32 DdgiHysteresis = 0.95f;
 
     // IBL bake sizes. The environment is a procedural HDR sky; it is convolved into a
     // small diffuse-irradiance cube + a roughness-mipped prefiltered specular cube, plus
@@ -1883,13 +1947,14 @@ export namespace se
         std::array<vk::DescriptorPoolSize, 4> poolSizes{
             vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 1024 },
             vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, 4 * MaxFramesInFlight + 8 },
-            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageBuffer, 8 * MaxFramesInFlight + 8 },
-            // tonemap/fxaa/TAA(4) + the screen-space chain (gtao/blur/contact/ssgi/copy storage)
-            // ~= a dozen; plus generous headroom.
-            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 32 } };
+            // + the DDGI box SSBO; bumped for it.
+            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageBuffer, 8 * MaxFramesInFlight + 16 },
+            // tonemap/fxaa/TAA(4) + screen-space chain + DDGI (voxel/ray/atlas storages)
+            // ~= two dozen; plus generous headroom.
+            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 48 } };
         vk::DescriptorPoolCreateInfo poolInfo{};
         poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;  // texture sets freed on Ref drop
-        poolInfo.maxSets = 1024 + 8 * MaxFramesInFlight + 48;
+        poolInfo.maxSets = 1024 + 8 * MaxFramesInFlight + 64;
         poolInfo.setPoolSizes(poolSizes);
         auto pool = checked(renderer.context.device.createDescriptorPool(poolInfo), "descriptorPool");
         if (!pool)
@@ -2368,6 +2433,175 @@ export namespace se
         renderer.pipelines.taa = *taaPipe;
 
         recreateTaaTargets(renderer);
+
+        // ---- DDGI: probe atlases + voxel proxy + ray image + box SSBO + 6 sets + 5 PSOs ----
+        const u32 probeTotal = DdgiProbesX * DdgiProbesY * DdgiProbesZ;
+        const u32 irrTile = DdgiIrrInterior + 2;
+        const u32 distTile = DdgiDistInterior + 2;
+        const u32 irrW = DdgiProbesX * DdgiProbesY * irrTile;
+        const u32 irrH = DdgiProbesZ * irrTile;
+        const u32 distW = DdgiProbesX * DdgiProbesY * distTile;
+        const u32 distH = DdgiProbesZ * distTile;
+
+        auto voxels = newImage3D(renderer, DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelFormat);
+        if (!voxels) { return Err(voxels.error()); }
+        renderer.ddgi.voxels = std::move(*voxels);
+        auto irr = newColorImage(renderer, irrW, irrH, DdgiIrrFormat, true);
+        if (!irr) { return Err(irr.error()); }
+        renderer.ddgi.irradiance = std::move(*irr);
+        auto dist = newColorImage(renderer, distW, distH, DdgiDistFormat, true);
+        if (!dist) { return Err(dist.error()); }
+        renderer.ddgi.distance = std::move(*dist);
+        auto rays = newColorImage(renderer, DdgiRaysPerProbe, probeTotal, DdgiVoxelFormat, true);
+        if (!rays) { return Err(rays.error()); }
+        renderer.ddgi.rays = std::move(*rays);
+        auto boxBuf = makeMappedStorageBuffer(renderer, static_cast<vk::DeviceSize>(DdgiMaxBoxes) * 3 * sizeof(glm::vec4));
+        if (!boxBuf) { return Err(boxBuf.error()); }
+        renderer.ddgi.boxBuffer = *boxBuf;
+        renderer.ddgi.boxCapacity = DdgiMaxBoxes;
+
+        vk::SamplerCreateInfo ddgiSamplerInfo{};
+        ddgiSamplerInfo.magFilter = vk::Filter::eLinear;
+        ddgiSamplerInfo.minFilter = vk::Filter::eLinear;
+        ddgiSamplerInfo.mipmapMode = vk::SamplerMipmapMode::eNearest;
+        ddgiSamplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+        ddgiSamplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+        ddgiSamplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+        auto ddgiSampler = checked(renderer.context.device.createSampler(ddgiSamplerInfo), "createSampler (ddgi)");
+        if (!ddgiSampler) { return Err(ddgiSampler.error()); }
+        renderer.ddgi.sampler = *ddgiSampler;
+
+        // Layout builder: ordered (type) list of compute (or fragment) bindings.
+        auto makeLayout = [&](std::vector<vk::DescriptorType> types, vk::ShaderStageFlags stage, const char* name)
+            -> Result<vk::DescriptorSetLayout>
+        {
+            std::vector<vk::DescriptorSetLayoutBinding> b;
+            for (u32 i = 0; i < types.size(); i = i + 1)
+            {
+                vk::DescriptorSetLayoutBinding bd{};
+                bd.binding = i;
+                bd.descriptorType = types[i];
+                bd.descriptorCount = 1;
+                bd.stageFlags = stage;
+                b.push_back(bd);
+            }
+            vk::DescriptorSetLayoutCreateInfo info{};
+            info.setBindings(b);
+            return checked(renderer.context.device.createDescriptorSetLayout(info), name);
+        };
+        const auto SI = vk::DescriptorType::eStorageImage;
+        const auto CS = vk::DescriptorType::eCombinedImageSampler;
+        const auto SB = vk::DescriptorType::eStorageBuffer;
+        const auto comp = vk::ShaderStageFlagBits::eCompute;
+        auto voxL = makeLayout({ SI, SB }, comp, "ddgiVoxelLayout");           if (!voxL) { return Err(voxL.error()); }
+        renderer.ddgi.voxelLayout = *voxL;
+        auto trL = makeLayout({ SI, CS, SI }, comp, "ddgiTraceLayout");        if (!trL) { return Err(trL.error()); }
+        renderer.ddgi.traceLayout = *trL;
+        auto biL = makeLayout({ CS, SI }, comp, "ddgiBlendIrrLayout");         if (!biL) { return Err(biL.error()); }
+        renderer.ddgi.blendIrrLayout = *biL;
+        auto bdL = makeLayout({ CS, SI }, comp, "ddgiBlendDistLayout");        if (!bdL) { return Err(bdL.error()); }
+        renderer.ddgi.blendDistLayout = *bdL;
+        auto boL = makeLayout({ SI }, comp, "ddgiBorderLayout");               if (!boL) { return Err(boL.error()); }
+        renderer.ddgi.borderLayout = *boL;
+        auto meL = makeLayout({ CS, CS }, vk::ShaderStageFlagBits::eFragment, "ddgiMeshLayout"); if (!meL) { return Err(meL.error()); }
+        renderer.ddgi.meshLayout = *meL;
+
+        auto allocOne = [&](vk::DescriptorSetLayout layout, const char* name) -> Result<vk::DescriptorSet>
+        {
+            vk::DescriptorSetAllocateInfo ai{};
+            ai.descriptorPool = renderer.descriptors.descriptorPool;
+            ai.setSetLayouts(layout);
+            auto s = checked(renderer.context.device.allocateDescriptorSets(ai), name);
+            if (!s) { return Err(s.error()); }
+            return (*s)[0];
+        };
+        auto vs = allocOne(renderer.ddgi.voxelLayout, "ddgiVoxelSet");      if (!vs) { return Err(vs.error()); } renderer.ddgi.voxelSet = *vs;
+        auto ts = allocOne(renderer.ddgi.traceLayout, "ddgiTraceSet");     if (!ts) { return Err(ts.error()); } renderer.ddgi.traceSet = *ts;
+        auto bis = allocOne(renderer.ddgi.blendIrrLayout, "ddgiBlendIrr"); if (!bis) { return Err(bis.error()); } renderer.ddgi.blendIrrSet = *bis;
+        auto bds = allocOne(renderer.ddgi.blendDistLayout, "ddgiBlendDist"); if (!bds) { return Err(bds.error()); } renderer.ddgi.blendDistSet = *bds;
+        auto bos = allocOne(renderer.ddgi.borderLayout, "ddgiBorder");     if (!bos) { return Err(bos.error()); } renderer.ddgi.borderSet = *bos;
+        auto mes = allocOne(renderer.ddgi.meshLayout, "ddgiMeshSet");      if (!mes) { return Err(mes.error()); } renderer.ddgi.meshSet = *mes;
+
+        // Static descriptor writes (the images/buffer never reallocate after init).
+        auto wImg = [&](vk::DescriptorSet set, u32 binding, vk::DescriptorType type, vk::ImageView v, vk::ImageLayout l, vk::Sampler s)
+        {
+            vk::DescriptorImageInfo ii{ s, v, l };
+            vk::WriteDescriptorSet w{};
+            w.dstSet = set; w.dstBinding = binding; w.descriptorType = type; w.setImageInfo(ii);
+            renderer.context.device.updateDescriptorSets(w, {});
+        };
+        const vk::ImageLayout GEN = vk::ImageLayout::eGeneral;
+        const vk::ImageLayout RO = vk::ImageLayout::eShaderReadOnlyOptimal;
+        // voxelize: voxel storage + box SSBO
+        wImg(renderer.ddgi.voxelSet, 0, SI, renderer.ddgi.voxels.view, GEN, nullptr);
+        {
+            vk::DescriptorBufferInfo bi{ renderer.ddgi.boxBuffer->buffer, 0, renderer.ddgi.boxBuffer->size };
+            vk::WriteDescriptorSet w{}; w.dstSet = renderer.ddgi.voxelSet; w.dstBinding = 1;
+            w.descriptorType = SB; w.setBufferInfo(bi);
+            renderer.context.device.updateDescriptorSets(w, {});
+        }
+        // trace: voxel storage (read) + irradiance sampler (prev) + ray storage
+        wImg(renderer.ddgi.traceSet, 0, SI, renderer.ddgi.voxels.view, GEN, nullptr);
+        wImg(renderer.ddgi.traceSet, 1, CS, renderer.ddgi.irradiance.view, RO, renderer.ddgi.sampler);
+        wImg(renderer.ddgi.traceSet, 2, SI, renderer.ddgi.rays.view, GEN, nullptr);
+        // blend irradiance: ray sampler + irradiance storage
+        wImg(renderer.ddgi.blendIrrSet, 0, CS, renderer.ddgi.rays.view, RO, renderer.ddgi.sampler);
+        wImg(renderer.ddgi.blendIrrSet, 1, SI, renderer.ddgi.irradiance.view, GEN, nullptr);
+        // blend distance: ray sampler + distance storage
+        wImg(renderer.ddgi.blendDistSet, 0, CS, renderer.ddgi.rays.view, RO, renderer.ddgi.sampler);
+        wImg(renderer.ddgi.blendDistSet, 1, SI, renderer.ddgi.distance.view, GEN, nullptr);
+        // border: irradiance storage
+        wImg(renderer.ddgi.borderSet, 0, SI, renderer.ddgi.irradiance.view, GEN, nullptr);
+        // mesh set 5: irradiance + distance samplers
+        wImg(renderer.ddgi.meshSet, 0, CS, renderer.ddgi.irradiance.view, RO, renderer.ddgi.sampler);
+        wImg(renderer.ddgi.meshSet, 1, CS, renderer.ddgi.distance.view, RO, renderer.ddgi.sampler);
+
+        // Pipelines.
+        const u32 voxPush = static_cast<u32>(sizeof(glm::uvec4) + 2 * sizeof(glm::vec4));
+        const u32 tracePush = static_cast<u32>(2 * sizeof(glm::uvec4) + 5 * sizeof(glm::vec4));
+        const u32 blendPush = static_cast<u32>(2 * sizeof(glm::uvec4) + sizeof(glm::vec4));
+        const u32 borderPush = static_cast<u32>(2 * sizeof(glm::uvec4));
+        auto p1 = newComputePipeline(renderer, "shaders/ddgi_voxelize.spv", renderer.ddgi.voxelLayout, voxPush);
+        if (!p1) { return Err(p1.error()); } renderer.pipelines.ddgiVoxelize = *p1;
+        auto p2 = newComputePipeline(renderer, "shaders/ddgi_trace.spv", renderer.ddgi.traceLayout, tracePush);
+        if (!p2) { return Err(p2.error()); } renderer.pipelines.ddgiTrace = *p2;
+        auto p3 = newComputePipeline(renderer, "shaders/ddgi_blend_irradiance.spv", renderer.ddgi.blendIrrLayout, blendPush);
+        if (!p3) { return Err(p3.error()); } renderer.pipelines.ddgiBlendIrr = *p3;
+        auto p4 = newComputePipeline(renderer, "shaders/ddgi_blend_distance.spv", renderer.ddgi.blendDistLayout, blendPush);
+        if (!p4) { return Err(p4.error()); } renderer.pipelines.ddgiBlendDist = *p4;
+        auto p5 = newComputePipeline(renderer, "shaders/ddgi_border.spv", renderer.ddgi.borderLayout, borderPush);
+        if (!p5) { return Err(p5.error()); } renderer.pipelines.ddgiBorder = *p5;
+
+        // Initial layouts: atlases + voxel begin in their resting state. Irradiance/distance
+        // are sampler-read by the mesh (RO); voxel is storage (GENERAL). One-shot barrier.
+        {
+            vk::CommandBufferAllocateInfo allocInfo{};
+            allocInfo.commandPool = renderer.frame.frames[0].commandPool;
+            allocInfo.level = vk::CommandBufferLevel::ePrimary;
+            allocInfo.commandBufferCount = 1;
+            auto cmds = checked(renderer.context.device.allocateCommandBuffers(allocInfo), "ddgi init cmd");
+            if (!cmds) { return Err(cmds.error()); }
+            vk::CommandBuffer cmd = (*cmds)[0];
+            vk::CommandBufferBeginInfo begin{};
+            begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+            static_cast<void>(cmd.begin(begin));
+            transitionImage(cmd, renderer.ddgi.irradiance.image, vk::ImageLayout::eUndefined, RO,
+                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+            transitionImage(cmd, renderer.ddgi.distance.image, vk::ImageLayout::eUndefined, RO,
+                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+            renderer.ddgi.irradiance.layout = RO;
+            renderer.ddgi.distance.layout = RO;
+            static_cast<void>(cmd.end());
+            vk::CommandBufferSubmitInfo cmdInfo{}; cmdInfo.commandBuffer = cmd;
+            vk::SubmitInfo2 submitInfo{}; submitInfo.setCommandBufferInfos(cmdInfo);
+            static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
+            static_cast<void>(renderer.context.device.waitIdle());
+            renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        }
+        renderer.ddgi.ready = true;
+
         return {};
     }
 

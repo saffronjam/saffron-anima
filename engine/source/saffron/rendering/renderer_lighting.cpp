@@ -118,8 +118,12 @@ namespace se
         const u32 ssaoFlag = (renderer.ssao.useSsao && renderer.ssao.ready) ? 1u : 0u;
         const u32 contactFlag = (renderer.ssao.useContact && renderer.ssao.ready) ? 1u : 0u;
         const u32 ssgiFlag = (renderer.ssao.useSsgi && renderer.ssao.ready) ? 1u : 0u;
+        const u32 ddgiFlag = (renderer.ddgi.useDdgi && renderer.ddgi.ready) ? 1u : 0u;
         ubo.counts = glm::uvec4(count, renderer.lighting.shadowPending ? 1u : 0u, iblFlag, ssaoFlag);
-        ubo.screenFlags = glm::uvec4(contactFlag, ssgiFlag, 0, 0);
+        ubo.screenFlags = glm::uvec4(contactFlag, ssgiFlag, ddgiFlag, 0);
+        ubo.ddgiVolumeMin = glm::vec4(renderer.ddgi.volumeMin, 0.0f);
+        ubo.ddgiVolumeExtent = glm::vec4(renderer.ddgi.volumeExtent, 0.0f);
+        ubo.ddgiProbeCount = glm::uvec4(DdgiProbesX, DdgiProbesY, DdgiProbesZ, DdgiIrrInterior);
         ubo.eyePosition = glm::vec4(eyePosition, 0.0f);
         ubo.shadowViewProj = renderer.lighting.shadowViewProj;
         ubo.spotShadowViewProj = renderer.lighting.spotShadowViewProj;

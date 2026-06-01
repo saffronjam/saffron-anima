@@ -499,6 +499,10 @@ export namespace se
         std::vector<DrawItem> items;
         glm::vec3 sceneMin{ std::numeric_limits<f32>::max() };
         glm::vec3 sceneMax{ std::numeric_limits<f32>::lowest() };
+        // Per-draw world AABBs + albedo for the DDGI voxel proxy.
+        std::vector<glm::vec4> boxMins;
+        std::vector<glm::vec4> boxMaxs;
+        std::vector<glm::vec4> boxAlbedos;
         forEach<TransformComponent, MeshComponent>(scene,
             [&](Entity entity, TransformComponent& transform, MeshComponent& mesh)
         {
@@ -529,7 +533,9 @@ export namespace se
                     }
                 }
                 const glm::mat4 model = transformMatrix(transform);
-                // Accumulate the world AABB from the 8 transformed local-AABB corners.
+                // Accumulate the scene + this draw's world AABB from the 8 transformed corners.
+                glm::vec3 boxMin{ std::numeric_limits<f32>::max() };
+                glm::vec3 boxMax{ std::numeric_limits<f32>::lowest() };
                 for (u32 corner = 0; corner < 8; corner = corner + 1)
                 {
                     glm::vec3 p = meshRef->boundsMin;
@@ -539,7 +545,12 @@ export namespace se
                     const glm::vec3 world = glm::vec3(model * glm::vec4(p, 1.0f));
                     sceneMin = glm::min(sceneMin, world);
                     sceneMax = glm::max(sceneMax, world);
+                    boxMin = glm::min(boxMin, world);
+                    boxMax = glm::max(boxMax, world);
                 }
+                boxMins.push_back(glm::vec4(boxMin, 0.0f));
+                boxMaxs.push_back(glm::vec4(boxMax, 0.0f));
+                boxAlbedos.push_back(glm::vec4(glm::vec3(baseColor), 0.0f));
                 DrawItem item;
                 item.mesh = meshRef;
                 item.texture = textureRef;
@@ -571,6 +582,17 @@ export namespace se
             shadowViewProj = lightProj * lightView;
         }
         setDirectionalShadow(renderer, shadowViewProj, castShadow);
+        // DDGI: fit the probe volume to the scene AABB (padded a little so probes sit just
+        // outside the geometry), upload the box proxy, and pass the sun for the trace.
+        // Done before setSceneLighting, which reads the volume placement into the light UBO.
+        if (!items.empty() && sceneMax.x >= sceneMin.x)
+        {
+            const glm::vec3 pad{ 1.0f };
+            const glm::vec3 volMin = sceneMin - pad;
+            const glm::vec3 volExt = (sceneMax + pad) - volMin;
+            setDdgiScene(renderer, boxMins, boxMaxs, boxAlbedos, volMin, volExt,
+                         lightDir, lightColor, lightIntensity);
+        }
         setSceneLighting(renderer, lightDir, lightColor, lightIntensity, lightAmbient, eyePosition, lights);
         setClusterCamera(renderer, view, proj, camera.nearPlane, camera.farPlane);  // arms the cull dispatch
         // Screen-space passes (G-buffer/GTAO/contact/SSGI) use the scene's view/proj + the

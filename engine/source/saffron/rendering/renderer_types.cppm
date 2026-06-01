@@ -588,6 +588,11 @@ export namespace se
         Ref<Pipeline> copyColor;     // capture linear-HDR scene color into prevColor
         Ref<Pipeline> motion;        // motion-vector prepass (camera reprojection)
         Ref<Pipeline> taa;           // compute TAA resolve
+        Ref<Pipeline> ddgiVoxelize;  // build the voxel scene proxy
+        Ref<Pipeline> ddgiTrace;     // software probe ray trace
+        Ref<Pipeline> ddgiBlendIrr;  // blend rays -> irradiance atlas
+        Ref<Pipeline> ddgiBlendDist; // blend rays -> moment atlas
+        Ref<Pipeline> ddgiBorder;    // octahedral gutter copy
         Ref<Pipeline> fxaa;          // compute FXAA post-process
         Ref<Pipeline> cull;          // compute light-cull (clustered forward)
         std::unordered_map<std::string, Ref<Pipeline>> cache;
@@ -691,6 +696,86 @@ export namespace se
         u32 generation = 0;                          // bumped when targets recreate (sets refreshed)
     };
 
+    // A VMA-allocated 3D image (the DDGI voxel scene proxy). Move-only like Image; a 3D
+    // view + storage usage. Kept separate from Image (which is 2D-only) per the roadmap.
+    struct Image3D
+    {
+        vk::Device device;
+        VmaAllocator allocator = nullptr;
+        vk::Image image;
+        vk::ImageView view;
+        VmaAllocation alloc = nullptr;
+        vk::Extent3D extent;
+        vk::Format format = vk::Format::eUndefined;
+        vk::ImageLayout layout = vk::ImageLayout::eUndefined;
+
+        Image3D() = default;
+        Image3D(const Image3D&) = delete;
+        auto operator=(const Image3D&) -> Image3D& = delete;
+        Image3D(Image3D&& o) noexcept
+            : device(o.device), allocator(o.allocator), image(o.image), view(o.view),
+              alloc(o.alloc), extent(o.extent), format(o.format), layout(o.layout)
+        {
+            o.device = nullptr; o.allocator = nullptr; o.image = nullptr; o.view = nullptr; o.alloc = nullptr;
+        }
+        auto operator=(Image3D&& o) noexcept -> Image3D&
+        {
+            if (this != &o)
+            {
+                reset();
+                device = o.device; allocator = o.allocator; image = o.image; view = o.view;
+                alloc = o.alloc; extent = o.extent; format = o.format; layout = o.layout;
+                o.device = nullptr; o.allocator = nullptr; o.image = nullptr; o.view = nullptr; o.alloc = nullptr;
+            }
+            return *this;
+        }
+        ~Image3D() { reset(); }
+        void reset()
+        {
+            if (device && view) { device.destroyImageView(view); }
+            if (allocator != nullptr && image) { vmaDestroyImage(allocator, static_cast<VkImage>(image), alloc); }
+            view = nullptr; image = nullptr; alloc = nullptr;
+        }
+    };
+
+    // Dynamic Diffuse Global Illumination: one irradiance probe volume updated by a
+    // software voxel-ray trace, sampled in the mesh fragment for multi-bounce indirect.
+    // Octahedral atlases with 1-texel gutters; a 3D voxel proxy rebuilt each frame.
+    struct Ddgi
+    {
+        bool useDdgi = false;  // off by default (it adds several compute passes / frame)
+        bool ready = false;
+        bool historyReset = true;  // first frame after enable/resize → no temporal history
+        Image3D voxels;            // scene proxy (rgba16f: albedo + occupancy)
+        Image irradiance;          // octahedral irradiance atlas (rgba16f)
+        Image distance;            // octahedral moment atlas (rg16f: r, r^2)
+        Image rays;                // per-frame ray radiance+distance (rays x probeCount)
+        Ref<Buffer> boxBuffer;     // per-frame scene box SSBO (world AABB + albedo)
+        u32 boxCapacity = 0;
+        u32 frameBoxCount = 0;
+        u32 frameIndex = 0;        // rotates the trace ray set
+        // Volume placement (world space) — fit to the scene AABB each frame.
+        glm::vec3 volumeMin{ -8.0f };
+        glm::vec3 volumeExtent{ 16.0f };
+        glm::vec3 sunDir{ -0.5f, -1.0f, -0.3f };
+        glm::vec3 sunColor{ 1.0f };
+        f32 sunIntensity = 1.0f;
+        glm::vec3 skyColor{ 0.1f, 0.13f, 0.2f };
+        vk::Sampler sampler;       // linear clamp — atlases sampled in mesh + trace
+        vk::DescriptorSetLayout voxelLayout;     // voxelize: 3D storage + box SSBO
+        vk::DescriptorSetLayout traceLayout;     // trace: voxel storage + irr sampler + ray storage
+        vk::DescriptorSetLayout blendIrrLayout;  // ray sampler + irr storage
+        vk::DescriptorSetLayout blendDistLayout; // ray sampler + dist storage
+        vk::DescriptorSetLayout borderLayout;    // irr storage
+        vk::DescriptorSetLayout meshLayout;      // set 5: irr sampler + dist sampler
+        vk::DescriptorSet voxelSet;
+        vk::DescriptorSet traceSet;
+        vk::DescriptorSet blendIrrSet;
+        vk::DescriptorSet blendDistSet;
+        vk::DescriptorSet borderSet;
+        vk::DescriptorSet meshSet;
+    };
+
     // The frame as a render graph + the resource handles app-authored passes reference.
     struct FrameGraphState
     {
@@ -701,9 +786,12 @@ export namespace se
         RgResource contactResource;   // contact-shadow map handle when contact ran
         RgResource ssgiResource;      // SSGI radiance handle when SSGI ran
         RgResource prevColorResource; // prevColor handle (imported once; read by SSGI, written by copy)
+        RgResource ddgiIrradiance;    // DDGI irradiance atlas handle when DDGI ran
+        RgResource ddgiDistance;      // DDGI moment atlas handle when DDGI ran
         bool hasAo = false;
         bool hasContact = false;
         bool hasSsgi = false;
+        bool hasDdgi = false;
     };
 
     struct Renderer
@@ -718,6 +806,7 @@ export namespace se
         Targets targets;
         Ibl ibl;
         Ssao ssao;
+        Ddgi ddgi;
         FrameGraphState graph;
 
         bool useDepthPrepass = false;
@@ -849,6 +938,15 @@ export namespace se
     auto ssgiEnabled(const Renderer& renderer) -> bool;
     // True if any screen-space effect is on (so the G-buffer prepass is worth running).
     auto screenEffectsEnabled(const Renderer& renderer) -> bool;
+    // DDGI probe global illumination: toggle multi-bounce indirect (software voxel trace).
+    void setDdgi(Renderer& renderer, bool enabled);
+    auto ddgiEnabled(const Renderer& renderer) -> bool;
+    // Uploads the scene's per-draw world AABBs + albedo into the DDGI box SSBO and fits the
+    // probe volume to them; arms the per-frame DDGI update. Called from renderScene.
+    void setDdgiScene(Renderer& renderer, const std::vector<glm::vec4>& boxMins,
+                      const std::vector<glm::vec4>& boxMaxs, const std::vector<glm::vec4>& boxAlbedos,
+                      glm::vec3 volumeMin, glm::vec3 volumeExtent,
+                      glm::vec3 sunDir, glm::vec3 sunColor, f32 sunIntensity);
     // Records the G-buffer prepass (view normal + view-Z) for the screen-space pass bodies.
     void recordGbuffer(Renderer& renderer, vk::CommandBuffer cmd);
     // Feeds the camera the screen-space passes need: view, proj (SAME Y-flipped projection
