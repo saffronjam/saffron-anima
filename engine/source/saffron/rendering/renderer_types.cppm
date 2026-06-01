@@ -715,6 +715,13 @@ export namespace se
         u32 generation = 0;        // bumped whenever the offscreen image is recreated
     };
 
+    // Which shader fills the IBL environment cube before the convolution chain.
+    enum class EnvSource
+    {
+        Procedural,  // ibl_skygen.slang from SkygenParams (default)
+        Equirect,    // ibl_equirect.slang projecting a user panorama
+    };
+
     // Inputs that drive the procedural-sky bake (ibl_skygen). The sun follows the scene's
     // directional light, so a re-bake re-tints the visible sky AND the IBL together. (Overall
     // sky intensity is applied by the visible-sky pass, not baked, to avoid double-counting.)
@@ -744,6 +751,9 @@ export namespace se
         SkygenParams bakedParams;    // the params the current envCube was baked with
         SkygenParams pendingParams;  // requested params (applied at the next beginFrameGraph)
         bool rebakePending = false;  // pendingParams differ from bakedParams -> re-bake
+        EnvSource source = EnvSource::Procedural;       // which shader fills envCube
+        EnvSource bakedSource = EnvSource::Procedural;  // source the current envCube was baked with
+        Ref<GpuTexture> envPanorama;                    // Equirect source (held alive across the bake)
     };
 
     // Visible sky background, drawn by a fullscreen graphics pass before the scene pass.
@@ -1073,9 +1083,14 @@ export namespace se
     // Record the fullscreen sky into the active pass (the sky-pass body).
     void recordSky(Renderer& renderer, vk::CommandBuffer cmd);
 
-    // Requests an IBL re-bake if `params` (the sun, from the scene's directional light) differ
-    // from what the environment was last baked with. The re-bake is deferred to the next
-    // beginFrameGraph (a GPU-idle point), so this is cheap to call every frame.
+    // Selects the IBL environment source and requests a re-bake when it changed. Procedural
+    // fills envCube from `params` (ibl_skygen); Equirect projects `panorama` into envCube
+    // (ibl_equirect), holding the Ref alive across the bake. Arms a re-bake (consumed in
+    // beginFrameGraph) when the source, the panorama identity, or — for Procedural — `params`
+    // change. No-op if nothing changed, so it is cheap to call every frame.
+    void requestEnvBake(Renderer& renderer, EnvSource source, Ref<GpuTexture> panorama,
+                        const SkygenParams& params);
+    // Procedural-source convenience wrapper over requestEnvBake.
     void requestSkyBake(Renderer& renderer, const SkygenParams& params);
 
     // One punctual (point or spot) light in the per-frame light storage buffer
@@ -1134,7 +1149,7 @@ export namespace se
     void setDdgiScene(Renderer& renderer, const std::vector<glm::vec4>& boxMins,
                       const std::vector<glm::vec4>& boxMaxs, const std::vector<glm::vec4>& boxAlbedos,
                       glm::vec3 volumeMin, glm::vec3 volumeExtent,
-                      glm::vec3 sunDir, glm::vec3 sunColor, f32 sunIntensity);
+                      glm::vec3 sunDir, glm::vec3 sunColor, f32 sunIntensity, glm::vec3 skyColor);
     // Hardware ray tracing (feature-gated). rtSupported reports device capability; the
     // toggle is a no-op when unsupported. RT shadows trace one ray-query per light.
     auto rtSupported(const Renderer& renderer) -> bool;

@@ -672,8 +672,14 @@ export namespace se
             const glm::vec3 pad{ 1.0f };
             const glm::vec3 volMin = sceneMin - pad;
             const glm::vec3 volExt = (sceneMax + pad) - volMin;
+            // The DDGI indirect bounce reads the scene's sky/ambient instead of a hardcoded blue.
+            glm::vec3 ddgiSky{ 0.1f, 0.13f, 0.2f };
+            if (scene.environment.useSkyForAmbient)
+            {
+                ddgiSky = scene.environment.ambientColor * scene.environment.ambientIntensity;
+            }
             setDdgiScene(renderer, boxMins, boxMaxs, boxAlbedos, volMin, volExt,
-                         lightDir, lightColor, lightIntensity);
+                         lightDir, lightColor, lightIntensity, ddgiSky);
         }
         // Fallback ambient (used when IBL is off): the scene environment's ambient color when
         // useSkyForAmbient, else the directional light's legacy scalar ambient (grayscale).
@@ -683,15 +689,33 @@ export namespace se
             ambient = scene.environment.ambientColor * scene.environment.ambientIntensity;
         }
         setSceneLighting(renderer, lightDir, lightColor, lightIntensity, ambient, eyePosition, lights);
-        // Drive the procedural sky bake from the directional light: the sun sits opposite the
-        // light's travel direction, so the visible sky's sun + the IBL relight to follow it.
-        // requestSkyBake no-ops unless the inputs actually changed (re-bake happens in beginFrameGraph).
+        // Drive the environment bake. Procedural derives the sky from the directional light (the
+        // sun sits opposite the light's travel direction); Texture mode routes the same panorama
+        // that drives the visible sky into the IBL too (loaded once, shared below). requestEnvBake
+        // no-ops unless the source/panorama/sun changed (re-bake happens in beginFrameGraph).
+        Ref<GpuTexture> skyPanorama;
         {
+            const SceneEnvironment& env = scene.environment;
             SkygenParams skyBake;
             skyBake.sunDir = -lightDir;
             skyBake.sunColor = lightColor;
             skyBake.sunIntensity = lightIntensity;
-            requestSkyBake(renderer, skyBake);
+            if (env.skyMode == SkyMode::Texture && env.skyTexture.value != 0)
+            {
+                skyPanorama = loadTextureAsset(assets, renderer, env.skyTexture);
+                if (skyPanorama)
+                {
+                    requestEnvBake(renderer, EnvSource::Equirect, skyPanorama, skyBake);
+                }
+                else
+                {
+                    requestEnvBake(renderer, EnvSource::Procedural, nullptr, skyBake);
+                }
+            }
+            else
+            {
+                requestEnvBake(renderer, EnvSource::Procedural, nullptr, skyBake);
+            }
         }
         setClusterCamera(renderer, view, proj, camera.nearPlane, camera.farPlane);  // arms the cull dispatch
         // Screen-space passes (G-buffer/GTAO/contact/SSGI) use the scene's view/proj + the
@@ -713,10 +737,9 @@ export namespace se
             sky.visible = env.visible;
             if (env.skyMode == SkyMode::Texture && env.skyTexture.value != 0)
             {
-                Ref<GpuTexture> panorama = loadTextureAsset(assets, renderer, env.skyTexture);
-                if (panorama)
+                if (skyPanorama)
                 {
-                    sky.textureIndex = panorama->bindlessIndex;
+                    sky.textureIndex = skyPanorama->bindlessIndex;
                 }
                 else
                 {

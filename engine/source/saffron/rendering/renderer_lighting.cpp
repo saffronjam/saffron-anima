@@ -186,16 +186,31 @@ namespace se
         renderer.sky.textureIndex = settings.textureIndex;
     }
 
-    void requestSkyBake(Renderer& renderer, const SkygenParams& params)
+    void requestEnvBake(Renderer& renderer, EnvSource source, Ref<GpuTexture> panorama,
+                        const SkygenParams& params)
     {
         // Values are copied verbatim from stable component/environment data each frame, so an
         // exact compare flags only real user changes (no per-frame float drift -> no churn).
-        const SkygenParams& baked = renderer.ibl.bakedParams;
-        if (params.sunDir != baked.sunDir || params.sunColor != baked.sunColor ||
-            params.sunIntensity != baked.sunIntensity)
+        Ibl& ibl = renderer.ibl;
+        const bool panoChanged =
+            source == EnvSource::Equirect &&
+            (ibl.envPanorama == nullptr || panorama == nullptr ||
+             ibl.envPanorama->bindlessIndex != panorama->bindlessIndex);
+        const bool sourceChanged = source != ibl.bakedSource;
+        const SkygenParams& baked = ibl.bakedParams;
+        const bool skyChanged = params.sunDir != baked.sunDir || params.sunColor != baked.sunColor ||
+                                params.sunIntensity != baked.sunIntensity;
+        if (sourceChanged || panoChanged || (source == EnvSource::Procedural && skyChanged))
         {
-            renderer.ibl.rebakePending = true;
+            ibl.rebakePending = true;
         }
-        renderer.ibl.pendingParams = params;
+        ibl.source = source;
+        ibl.envPanorama = std::move(panorama);  // keep the Ref alive across the bake
+        ibl.pendingParams = params;
+    }
+
+    void requestSkyBake(Renderer& renderer, const SkygenParams& params)
+    {
+        requestEnvBake(renderer, EnvSource::Procedural, nullptr, params);
     }
 }

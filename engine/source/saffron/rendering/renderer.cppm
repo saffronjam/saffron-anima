@@ -397,6 +397,7 @@ namespace se
         renderer.ibl.irradianceCube.reset();
         renderer.ibl.prefilteredCube.reset();
         renderer.ibl.brdfLut.reset();
+        renderer.ibl.envPanorama.reset();
         renderer.targets.msaaColor.reset();
         renderer.targets.msaaDepth.reset();
         renderer.targets.scratch.reset();
@@ -669,6 +670,7 @@ namespace se
             if (Result<void> r = bakeEnvironment(renderer, renderer.ibl.pendingParams, false); r)
             {
                 renderer.ibl.bakedParams = renderer.ibl.pendingParams;
+                renderer.ibl.bakedSource = renderer.ibl.source;
             }
             else
             {
@@ -1777,7 +1779,7 @@ namespace se
     void setDdgiScene(Renderer& renderer, const std::vector<glm::vec4>& boxMins,
                       const std::vector<glm::vec4>& boxMaxs, const std::vector<glm::vec4>& boxAlbedos,
                       glm::vec3 volumeMin, glm::vec3 volumeExtent,
-                      glm::vec3 sunDir, glm::vec3 sunColor, f32 sunIntensity)
+                      glm::vec3 sunDir, glm::vec3 sunColor, f32 sunIntensity, glm::vec3 skyColor)
     {
         Ddgi& d = renderer.ddgi;
         if (!d.ready || d.boxBuffer == nullptr)
@@ -1808,6 +1810,7 @@ namespace se
         d.sunDir = sunDir;
         d.sunColor = sunColor;
         d.sunIntensity = sunIntensity;
+        d.skyColor = skyColor;
     }
 
     void setSsaoCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj,

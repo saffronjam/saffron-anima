@@ -3374,6 +3374,9 @@ export namespace se
         auto skygenP = newComputePipeline(renderer, "shaders/ibl_skygen.spv", layoutA,
                                           static_cast<u32>(2 * sizeof(glm::vec4)));
         if (!skygenP) { cleanupLayouts(); return Err(skygenP.error()); }
+        auto equirectP = newComputePipeline(renderer, "shaders/ibl_equirect.spv", layoutB,
+                                            static_cast<u32>(sizeof(glm::vec4)));
+        if (!equirectP) { cleanupLayouts(); return Err(equirectP.error()); }
         auto irrP = newComputePipeline(renderer, "shaders/ibl_irradiance.spv", layoutB);
         if (!irrP) { cleanupLayouts(); return Err(irrP.error()); }
         auto preP = newComputePipeline(renderer, "shaders/ibl_prefilter.spv", layoutB, static_cast<u32>(sizeof(f32)));
@@ -3410,6 +3413,7 @@ export namespace se
             return device.allocateDescriptorSets(ai).value[0];
         };
         vk::DescriptorSet skygenSet = allocSet(layoutA);
+        vk::DescriptorSet equirectSet = allocSet(layoutB);
         vk::DescriptorSet brdfSet = allocSet(layoutA);
         vk::DescriptorSet irrSet = allocSet(layoutB);
         std::vector<vk::DescriptorSet> preSets;
@@ -3486,16 +3490,48 @@ export namespace se
         };
         const auto group = [](u32 n) -> u32 { return (n + 7) / 8; };
 
-        // Environment sky -> general, dispatch skygen, -> shader-read for the convolutions.
+        // Environment cube -> general, fill it (procedural skygen or an equirect panorama),
+        // -> shader-read for the convolutions. A missing panorama degrades to Procedural.
+        const bool useEquirect = renderer.ibl.source == EnvSource::Equirect &&
+                                 renderer.ibl.envPanorama != nullptr;
+        if (renderer.ibl.source == EnvSource::Equirect && renderer.ibl.envPanorama == nullptr)
+        {
+            logWarn("ibl bake: Equirect source has no panorama; falling back to procedural sky");
+        }
         barrier(renderer.ibl.envCube.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
                 vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
                 vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite, 0, 1, 6);
-        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, skygenP.value()->pipeline);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, skygenP.value()->layout, 0, skygenSet, {});
-        struct SkyPush { glm::vec4 sunDir; glm::vec4 sunColor; } skyPush{
-            glm::vec4(sky.sunDir, sky.sunIntensity), glm::vec4(sky.sunColor, 1.0f) };
-        cmd.pushConstants(skygenP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(skyPush), &skyPush);
-        cmd.dispatch(group(IblEnvSize), group(IblEnvSize), 6);
+        if (useEquirect)
+        {
+            // The panorama wraps in longitude, so it reads through the eRepeat linearSampler
+            // (ibl.sampler is eClampToEdge and would seam the meridian).
+            vk::DescriptorImageInfo panoInfo{ renderer.descriptors.linearSampler,
+                                              renderer.ibl.envPanorama->view,
+                                              vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::WriteDescriptorSet panoWrite{};
+            panoWrite.dstSet = equirectSet;
+            panoWrite.dstBinding = 0;
+            panoWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            panoWrite.setImageInfo(panoInfo);
+            device.updateDescriptorSets(panoWrite, {});
+            writeStorage(equirectSet, 1, envStore);
+            cmd.bindPipeline(vk::PipelineBindPoint::eCompute, equirectP.value()->pipeline);
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, equirectP.value()->layout, 0, equirectSet, {});
+            // x = rotation, y = intensity. The IBL bakes the raw panorama (no rotation, unit
+            // intensity); the visible-sky pass applies the scene's rotation/intensity itself.
+            const glm::vec4 equirectPush{ 0.0f, 1.0f, 0.0f, 0.0f };
+            cmd.pushConstants(equirectP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(equirectPush), &equirectPush);
+            cmd.dispatch(group(IblEnvSize), group(IblEnvSize), 6);
+        }
+        else
+        {
+            cmd.bindPipeline(vk::PipelineBindPoint::eCompute, skygenP.value()->pipeline);
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, skygenP.value()->layout, 0, skygenSet, {});
+            struct SkyPush { glm::vec4 sunDir; glm::vec4 sunColor; } skyPush{
+                glm::vec4(sky.sunDir, sky.sunIntensity), glm::vec4(sky.sunColor, 1.0f) };
+            cmd.pushConstants(skygenP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(skyPush), &skyPush);
+            cmd.dispatch(group(IblEnvSize), group(IblEnvSize), 6);
+        }
         barrier(renderer.ibl.envCube.image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
                 vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
                 vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead, 0, 1, 6);
