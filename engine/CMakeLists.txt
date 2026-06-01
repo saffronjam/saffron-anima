@@ -37,7 +37,6 @@ target_sources(SaffronEngine PRIVATE
     source/saffron/rendering/renderer_thumbnail.cpp
     source/saffron/editor/editor_context.cpp
     source/saffron/editor/editor_components.cpp
-    source/saffron/editor/editor_panels.cpp
     source/saffron/editor/editor_camera.cpp
     source/saffron/editor/editor_gizmo.cpp
     source/saffron/control/control_commands_render.cpp

@@ -3,10 +3,7 @@ module;
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
-#include <imgui.h>
-#include <imgui_stdlib.h>
 
-#include <functional>
 #include <string>
 
 module Saffron.Editor;
@@ -14,83 +11,13 @@ module Saffron.Editor;
 import Saffron.Core;
 import Saffron.Scene;
 import Saffron.Json;
-import Saffron.Ui;
 
 namespace se
 {
-    void drawAssetPicker(Scene& scene, AssetType type, const char* label, Uuid& target,
-                         const std::function<ImTextureID(const AssetEntry&)>& thumbnailFor)
-    {
-        const AssetCatalog* catalog = scene.catalog;
-        std::string current = "(none)";
-        if (catalog != nullptr)
-        {
-            const AssetEntry* entry = findAsset(*catalog, target);
-            if (entry != nullptr)
-            {
-                current = entry->name;
-            }
-        }
-        ImGui::TextUnformatted(label);
-        const std::string comboId = std::string("##") + label;
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::BeginCombo(comboId.c_str(), current.c_str()))
-        {
-            if (ImGui::Selectable("(none)", target.value == 0))
-            {
-                target = Uuid{ 0 };
-            }
-            if (catalog != nullptr)
-            {
-                for (const AssetEntry& entry : catalog->entries)
-                {
-                    if (entry.type != type)
-                    {
-                        continue;
-                    }
-                    ImGui::PushID(static_cast<int>(entry.id.value));
-                    ImTextureID thumb = 0;
-                    if (thumbnailFor)
-                    {
-                        thumb = thumbnailFor(entry);
-                    }
-                    if (thumb != 0)
-                    {
-                        ImGui::Image(thumb, ImVec2{ 16.0f, 16.0f });
-                        ImGui::SameLine();
-                    }
-                    if (ImGui::Selectable(entry.name.c_str(), entry.id.value == target.value))
-                    {
-                        target = entry.id;
-                    }
-                    ImGui::PopID();
-                }
-            }
-            ImGui::EndCombo();
-        }
-        // Accept an asset tile dragged from the catalog panel (matching type only).
-        if (ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SE_ASSET"))
-            {
-                const AssetDragPayload* drag = static_cast<const AssetDragPayload*>(payload->Data);
-                if (drag != nullptr && drag->type == type)
-                {
-                    target = Uuid{ drag->id };
-                }
-            }
-            ImGui::EndDragDropTarget();
-        }
-    }
-
-    void registerBuiltinComponents(ComponentRegistry& reg,
-                                   std::function<ImTextureID(const AssetEntry&)> thumbnailFor)
+    void registerBuiltinComponents(ComponentRegistry& reg)
     {
         registerComponent<NameComponent>(reg, "Name",
-            [](Scene& s, Entity e)
-        {
-                ImGui::InputText("##name", &getComponent<NameComponent>(s, e).name);
-            },
+            [](Scene&, Entity) {},
             [](const NameComponent& c) -> nlohmann::json { return nlohmann::json{ { "name", c.name } }; },
             [](NameComponent& c, const nlohmann::json& j) -> Result<void>
             {
@@ -100,17 +27,7 @@ namespace se
             false);
 
         registerComponent<TransformComponent>(reg, "Transform",
-            [](Scene& s, Entity e)
-        {
-                TransformComponent& t = getComponent<TransformComponent>(s, e);
-                vec3Control("Translation", &t.translation.x);
-                glm::vec3 degrees = glm::degrees(t.rotation);
-                if (vec3Control("Rotation", &degrees.x))
-                {
-                    t.rotation = glm::radians(degrees);
-                }
-                vec3Control("Scale", &t.scale.x, 1.0f);
-            },
+            [](Scene&, Entity) {},
             [](const TransformComponent& t)
             -> nlohmann::json {
                 return nlohmann::json{ { "translation", vec3ToJson(t.translation) },
@@ -127,11 +44,7 @@ namespace se
             false);
 
         registerComponent<MeshComponent>(reg, "Mesh",
-            [thumbnailFor](Scene& s, Entity e)
-        {
-                MeshComponent& mesh = getComponent<MeshComponent>(s, e);
-                drawAssetPicker(s, AssetType::Mesh, "Mesh", mesh.mesh, thumbnailFor);
-            },
+            [](Scene&, Entity) {},
             [](const MeshComponent& c) -> nlohmann::json { return nlohmann::json{ { "mesh", c.mesh.value } }; },
             [](MeshComponent& c, const nlohmann::json& j) -> Result<void>
             {
@@ -141,14 +54,7 @@ namespace se
             true);
 
         registerComponent<CameraComponent>(reg, "Camera",
-            [](Scene& s, Entity e)
-        {
-                CameraComponent& camera = getComponent<CameraComponent>(s, e);
-                ImGui::DragFloat("FOV", &camera.fov, 0.5f, 1.0f, 179.0f);
-                ImGui::DragFloat("Near", &camera.nearPlane, 0.01f, 0.001f, camera.farPlane);
-                ImGui::DragFloat("Far", &camera.farPlane, 1.0f, camera.nearPlane, 10000.0f);
-                ImGui::Checkbox("Primary", &camera.primary);
-            },
+            [](Scene&, Entity) {},
             [](const CameraComponent& c)
             -> nlohmann::json {
                 return nlohmann::json{ { "fov", c.fov }, { "near", c.nearPlane },
@@ -165,17 +71,7 @@ namespace se
             true);
 
         registerComponent<MaterialComponent>(reg, "Material",
-            [thumbnailFor](Scene& s, Entity e)
-        {
-                MaterialComponent& material = getComponent<MaterialComponent>(s, e);
-                ImGui::ColorEdit4("Base Color", &material.baseColor.x);
-                drawAssetPicker(s, AssetType::Texture, "Albedo", material.albedoTexture, thumbnailFor);
-                ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
-                ImGui::SliderFloat("Roughness", &material.roughness, 0.0f, 1.0f);
-                ImGui::ColorEdit3("Emissive", &material.emissive.x);
-                ImGui::DragFloat("Emissive Strength", &material.emissiveStrength, 0.05f, 0.0f, 100.0f);
-                ImGui::Checkbox("Unlit", &material.unlit);
-            },
+            [](Scene&, Entity) {},
             [](const MaterialComponent& c)
             -> nlohmann::json {
                 return nlohmann::json{ { "baseColor", vec4ToJson(c.baseColor) },
@@ -200,14 +96,7 @@ namespace se
             true);
 
         registerComponent<DirectionalLightComponent>(reg, "DirectionalLight",
-            [](Scene& s, Entity e)
-        {
-                DirectionalLightComponent& light = getComponent<DirectionalLightComponent>(s, e);
-                ImGui::DragFloat3("Direction", &light.direction.x, 0.01f);
-                ImGui::ColorEdit3("Color", &light.color.x);
-                ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 50.0f);
-                ImGui::DragFloat("Ambient", &light.ambient, 0.01f, 0.0f, 1.0f);
-            },
+            [](Scene&, Entity) {},
             [](const DirectionalLightComponent& c)
             -> nlohmann::json {
                 return nlohmann::json{ { "direction", vec3ToJson(c.direction) },
@@ -225,13 +114,7 @@ namespace se
             true);
 
         registerComponent<PointLightComponent>(reg, "PointLight",
-            [](Scene& s, Entity e)
-        {
-                PointLightComponent& light = getComponent<PointLightComponent>(s, e);
-                ImGui::ColorEdit3("Color", &light.color.x);
-                ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 100.0f);
-                ImGui::DragFloat("Range", &light.range, 0.05f, 0.0f, 200.0f);
-            },
+            [](Scene&, Entity) {},
             [](const PointLightComponent& c)
             -> nlohmann::json {
                 return nlohmann::json{ { "color", vec3ToJson(c.color) },
@@ -247,16 +130,7 @@ namespace se
             true);
 
         registerComponent<SpotLightComponent>(reg, "SpotLight",
-            [](Scene& s, Entity e)
-        {
-                SpotLightComponent& light = getComponent<SpotLightComponent>(s, e);
-                ImGui::DragFloat3("Direction", &light.direction.x, 0.01f);
-                ImGui::ColorEdit3("Color", &light.color.x);
-                ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 100.0f);
-                ImGui::DragFloat("Range", &light.range, 0.05f, 0.0f, 200.0f);
-                ImGui::DragFloat("Inner Angle", &light.innerAngle, 0.1f, 0.0f, 89.0f);
-                ImGui::DragFloat("Outer Angle", &light.outerAngle, 0.1f, 0.0f, 89.0f);
-            },
+            [](Scene&, Entity) {},
             [](const SpotLightComponent& c)
             -> nlohmann::json {
                 return nlohmann::json{ { "direction", vec3ToJson(c.direction) },

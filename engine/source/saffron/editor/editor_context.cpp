@@ -5,6 +5,8 @@ module;
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
 
+#include <string>
+
 module Saffron.Editor;
 
 import Saffron.Core;
@@ -16,7 +18,36 @@ namespace se
     void setSelection(EditorContext& ctx, Entity entity)
     {
         ctx.selected = entity;
+        ctx.selectionVersion += 1;
         ctx.onSelectionChanged.publish(entity);
+    }
+
+    auto gizmoOpName(GizmoOp op) -> const char*
+    {
+        switch (op)
+        {
+            case GizmoOp::Rotate: return "rotate";
+            case GizmoOp::Scale: return "scale";
+            case GizmoOp::Translate: break;
+        }
+        return "translate";
+    }
+
+    auto gizmoOpFromName(const std::string& name) -> GizmoOp
+    {
+        if (name == "rotate") { return GizmoOp::Rotate; }
+        if (name == "scale") { return GizmoOp::Scale; }
+        return GizmoOp::Translate;
+    }
+
+    auto gizmoSpaceName(GizmoSpace space) -> const char*
+    {
+        return space == GizmoSpace::Local ? "local" : "world";
+    }
+
+    auto gizmoSpaceFromName(const std::string& name) -> GizmoSpace
+    {
+        return name == "local" ? GizmoSpace::Local : GizmoSpace::World;
     }
 
     auto newEditorContext() -> EditorContext*

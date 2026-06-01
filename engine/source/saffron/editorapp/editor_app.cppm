@@ -1,21 +1,24 @@
 module;
 
-// imgui.h is a heavy C++ header, so this TU uses classic includes (no `import
-// std`) — consistent with the engine's rendering/ui/scene modules.
+// SDL3 + glm are header-heavy C++ headers, so this TU uses classic includes (no
+// `import std`) — consistent with the engine's rendering/scene modules.
 #include <entt/entt.hpp>
-#include <imgui.h>
-#include <ImGuizmo.h>
+#include <SDL3/SDL.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
-#include <cctype>
+#include <array>
+#include <cmath>
 #include <expected>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <utility>
+#include <vector>
 
 export module Saffron.EditorApp;
 
@@ -23,7 +26,6 @@ import Saffron.Core;
 import Saffron.App;
 import Saffron.Window;
 import Saffron.Rendering;
-import Saffron.Ui;
 import Saffron.Editor;
 import Saffron.Control;
 import Saffron.Scene;
@@ -33,13 +35,6 @@ namespace se
 {
     constexpr se::i32 KeyEscape = 27;  // SDLK_ESCAPE
 
-    // A cached asset thumbnail: the GPU texture + its ImGui handle.
-    struct Thumbnail
-    {
-        se::Ref<se::GpuTexture> texture;
-        ImTextureID id = 0;
-    };
-
     // State shared across the app lifecycle closures. The EditorContext is owned
     // by the engine (heap) so its heavy entt/json destructor stays out of this TU.
     struct EditorState
@@ -47,25 +42,262 @@ namespace se
         se::EditorContext* editor = nullptr;
         se::ControlContext* control = nullptr;
         se::AssetServer assets;
-
-        // Fallback SVG type icons + the per-asset thumbnail cache (textures show their
-        // image, meshes their rendered preview). All freed in onExit before the renderer.
-        Thumbnail meshIcon;
-        Thumbnail textureIcon;
-        Thumbnail fileIcon;
-        // Editor-only billboard icons for lights + cameras (drawn in the viewport).
-        Thumbnail pointLightIcon;
-        Thumbnail spotLightIcon;
-        Thumbnail cameraIcon;
-        std::unordered_map<se::u64, Thumbnail> thumbnails;
-        Thumbnail eyeIcon;
-        struct {
-            bool open = false;
-            std::string title;
-            ImTextureID previewId = 0;
-            se::Ref<se::GpuTexture> previewTexture;
-        } viewer;
     };
+
+    // The overlay-gizmo + billboard geometry builders + the SDL pointer handler. These
+    // touch Rendering (OverlayVertex / submitOverlay / Renderer) + Assets (pickEntity) +
+    // SDL, so they stay in this TU; the pure-math hit-test/drag live in Saffron.Editor.
+
+    void addTriangle(std::vector<se::OverlayVertex>& vertices, glm::vec2 a, glm::vec2 b, glm::vec2 c, glm::vec4 color)
+    {
+        vertices.push_back(se::OverlayVertex{ a, color });
+        vertices.push_back(se::OverlayVertex{ b, color });
+        vertices.push_back(se::OverlayVertex{ c, color });
+    }
+
+    void addLine(std::vector<se::OverlayVertex>& vertices, glm::vec2 aPx, glm::vec2 bPx, se::f32 thickness,
+                 glm::vec4 color, se::u32 width, se::u32 height)
+    {
+        const glm::vec2 delta = bPx - aPx;
+        const se::f32 len = glm::length(delta);
+        if (len < 0.001f)
+        {
+            return;
+        }
+        const glm::vec2 n = glm::vec2{ -delta.y, delta.x } / len * (thickness * 0.5f);
+        const glm::vec2 a0 = se::pixelToNdc(aPx + n, width, height);
+        const glm::vec2 a1 = se::pixelToNdc(aPx - n, width, height);
+        const glm::vec2 b0 = se::pixelToNdc(bPx + n, width, height);
+        const glm::vec2 b1 = se::pixelToNdc(bPx - n, width, height);
+        addTriangle(vertices, a0, b0, b1, color);
+        addTriangle(vertices, a0, b1, a1, color);
+    }
+
+    void addBox(std::vector<se::OverlayVertex>& vertices, glm::vec2 centerPx, se::f32 size, glm::vec4 color,
+                se::u32 width, se::u32 height)
+    {
+        const se::f32 h = size * 0.5f;
+        const glm::vec2 a = se::pixelToNdc(centerPx + glm::vec2{ -h, -h }, width, height);
+        const glm::vec2 b = se::pixelToNdc(centerPx + glm::vec2{ h, -h }, width, height);
+        const glm::vec2 c = se::pixelToNdc(centerPx + glm::vec2{ h, h }, width, height);
+        const glm::vec2 d = se::pixelToNdc(centerPx + glm::vec2{ -h, h }, width, height);
+        addTriangle(vertices, a, b, c, color);
+        addTriangle(vertices, a, c, d, color);
+    }
+
+    // Outline box (four edges) for camera/empty glyphs.
+    void addBoxOutline(std::vector<se::OverlayVertex>& vertices, glm::vec2 centerPx, se::f32 size, glm::vec4 color,
+                       se::u32 width, se::u32 height)
+    {
+        const se::f32 h = size * 0.5f;
+        const glm::vec2 tl = centerPx + glm::vec2{ -h, -h };
+        const glm::vec2 tr = centerPx + glm::vec2{ h, -h };
+        const glm::vec2 br = centerPx + glm::vec2{ h, h };
+        const glm::vec2 bl = centerPx + glm::vec2{ -h, h };
+        addLine(vertices, tl, tr, 2.0f, color, width, height);
+        addLine(vertices, tr, br, 2.0f, color, width, height);
+        addLine(vertices, br, bl, 2.0f, color, width, height);
+        addLine(vertices, bl, tl, 2.0f, color, width, height);
+    }
+
+    // Builds the active-mode gizmo geometry for the selected entity into `vertices`.
+    void buildNativeGizmo(se::EditorContext& editor, const se::CameraView& cam, se::u32 width, se::u32 height,
+                          std::vector<se::OverlayVertex>& vertices)
+    {
+        if (editor.selected.handle == entt::null ||
+            !se::hasComponent<se::TransformComponent>(editor.scene, editor.selected))
+        {
+            return;
+        }
+        se::TransformComponent& transform = se::getComponent<se::TransformComponent>(editor.scene, editor.selected);
+        const auto axes = se::gizmoAxes(transform, editor.nativeGizmo.space);
+        const se::GizmoProjection origin = se::viewportProject(cam, width, height, transform.translation);
+        if (!origin.visible)
+        {
+            return;
+        }
+        const se::f32 distance = glm::length(se::cameraPosition(cam) - transform.translation);
+        const se::f32 axisLen = std::max(0.75f, distance * 0.22f);
+        const std::array<se::NativeGizmoHandle, 3> handles{
+            se::NativeGizmoHandle::X, se::NativeGizmoHandle::Y, se::NativeGizmoHandle::Z };
+        for (se::u32 i = 0; i < 3; i = i + 1)
+        {
+            const se::GizmoProjection end =
+                se::viewportProject(cam, width, height, transform.translation + axes[i] * axisLen);
+            if (!end.visible)
+            {
+                continue;
+            }
+            addLine(vertices, origin.pixel, end.pixel, 5.0f, se::axisColor(handles[i], editor.nativeGizmo), width, height);
+            addBox(vertices, end.pixel, editor.nativeGizmo.mode == se::NativeGizmoMode::Scale ? 12.0f : 8.0f,
+                   se::axisColor(handles[i], editor.nativeGizmo), width, height);
+        }
+        if (editor.nativeGizmo.mode == se::NativeGizmoMode::Translate)
+        {
+            const std::array<std::pair<se::NativeGizmoHandle, glm::vec3>, 3> planes{
+                std::pair{ se::NativeGizmoHandle::XY, axes[0] * axisLen * 0.26f + axes[1] * axisLen * 0.26f },
+                std::pair{ se::NativeGizmoHandle::YZ, axes[1] * axisLen * 0.26f + axes[2] * axisLen * 0.26f },
+                std::pair{ se::NativeGizmoHandle::XZ, axes[0] * axisLen * 0.26f + axes[2] * axisLen * 0.26f }
+            };
+            for (const auto& [handle, offset] : planes)
+            {
+                const se::GizmoProjection center = se::viewportProject(cam, width, height, transform.translation + offset);
+                if (center.visible)
+                {
+                    addBox(vertices, center.pixel, 18.0f, se::axisColor(handle, editor.nativeGizmo), width, height);
+                }
+            }
+        }
+        else if (editor.nativeGizmo.mode == se::NativeGizmoMode::Rotate)
+        {
+            constexpr se::u32 segments = 96;
+            const se::f32 radius = axisLen * 0.72f;
+            for (se::u32 axis = 0; axis < 3; axis = axis + 1)
+            {
+                const glm::vec3 n = axes[axis];
+                glm::vec3 a = glm::normalize(glm::cross(n, glm::vec3{ 0.0f, 1.0f, 0.0f }));
+                if (glm::length(a) < 0.001f)
+                {
+                    a = glm::normalize(glm::cross(n, glm::vec3{ 1.0f, 0.0f, 0.0f }));
+                }
+                const glm::vec3 b = glm::normalize(glm::cross(n, a));
+                se::GizmoProjection prev{};
+                for (se::u32 i = 0; i <= segments; i = i + 1)
+                {
+                    const se::f32 t = static_cast<se::f32>(i) / static_cast<se::f32>(segments) * glm::two_pi<se::f32>();
+                    const se::GizmoProjection cur = se::viewportProject(
+                        cam, width, height, transform.translation + (a * std::cos(t) + b * std::sin(t)) * radius);
+                    if (i > 0 && prev.visible && cur.visible)
+                    {
+                        addLine(vertices, prev.pixel, cur.pixel, 3.0f,
+                                se::axisColor(handles[axis], editor.nativeGizmo), width, height);
+                    }
+                    prev = cur;
+                }
+            }
+        }
+        else
+        {
+            addBox(vertices, origin.pixel, 13.0f, se::axisColor(se::NativeGizmoHandle::Uniform, editor.nativeGizmo),
+                   width, height);
+        }
+    }
+
+    // Colored screen-space glyphs for light/camera/empty entities (the overlay vertex
+    // format has no UV/sampler, so the SVG billboards become solid glyphs): point = filled
+    // warm box, spot = box + a short cone line along its direction, camera = box outline.
+    void buildEditorBillboards(se::EditorContext& editor, const se::CameraView& cam, se::u32 width, se::u32 height,
+                               std::vector<se::OverlayVertex>& vertices)
+    {
+        if (width == 0 || height == 0)
+        {
+            return;
+        }
+        const glm::vec4 selectedColor{ 1.0f, 0.78f, 0.18f, 1.0f };
+        const se::f32 half = 12.0f;
+
+        se::forEach<se::PointLightComponent>(editor.scene, [&](se::Entity e, se::PointLightComponent&)
+        {
+            if (!se::hasComponent<se::TransformComponent>(editor.scene, e)) { return; }
+            const glm::vec3 pos = se::getComponent<se::TransformComponent>(editor.scene, e).translation;
+            const se::GizmoProjection p = se::viewportProject(cam, width, height, pos);
+            if (!p.visible) { return; }
+            const bool sel = editor.selected.handle == e.handle;
+            addBox(vertices, p.pixel, half * 2.0f, sel ? selectedColor : glm::vec4{ 1.0f, 0.85f, 0.35f, 0.9f },
+                   width, height);
+        });
+        se::forEach<se::SpotLightComponent>(editor.scene, [&](se::Entity e, se::SpotLightComponent&)
+        {
+            if (!se::hasComponent<se::TransformComponent>(editor.scene, e)) { return; }
+            const se::TransformComponent& t = se::getComponent<se::TransformComponent>(editor.scene, e);
+            const se::GizmoProjection p = se::viewportProject(cam, width, height, t.translation);
+            if (!p.visible) { return; }
+            const bool sel = editor.selected.handle == e.handle;
+            const glm::vec4 color = sel ? selectedColor : glm::vec4{ 0.45f, 0.85f, 1.0f, 0.9f };
+            addBox(vertices, p.pixel, half * 2.0f, color, width, height);
+            // A short cone line along the spot's forward (-Z rotated by the transform).
+            const glm::vec3 forward = glm::quat(t.rotation) * glm::vec3{ 0.0f, 0.0f, -1.0f };
+            const se::GizmoProjection tip = se::viewportProject(cam, width, height, t.translation + forward * 0.6f);
+            if (tip.visible)
+            {
+                addLine(vertices, p.pixel, tip.pixel, 3.0f, color, width, height);
+            }
+        });
+        se::forEach<se::CameraComponent>(editor.scene, [&](se::Entity e, se::CameraComponent&)
+        {
+            if (!se::hasComponent<se::TransformComponent>(editor.scene, e)) { return; }
+            const glm::vec3 pos = se::getComponent<se::TransformComponent>(editor.scene, e).translation;
+            const se::GizmoProjection p = se::viewportProject(cam, width, height, pos);
+            if (!p.visible) { return; }
+            const bool sel = editor.selected.handle == e.handle;
+            addBoxOutline(vertices, p.pixel, half * 2.2f, sel ? selectedColor : glm::vec4{ 0.85f, 0.85f, 0.9f, 0.9f },
+                          width, height);
+        });
+    }
+
+    // Builds the combined overlay (billboards first, gizmo on top) + submits it to the renderer.
+    void submitNativeGizmo(se::EditorContext& editor, se::Renderer& renderer, const se::CameraView& cam,
+                           se::u32 width, se::u32 height)
+    {
+        std::vector<se::OverlayVertex> vertices;
+        buildEditorBillboards(editor, cam, width, height, vertices);
+        buildNativeGizmo(editor, cam, width, height, vertices);
+        se::submitOverlay(renderer, std::move(vertices));
+    }
+
+    // SDL pointer → overlay-gizmo hover/drag, or (on a miss) a mesh ray-pick that updates
+    // the selection. Wired to the window event sinks under the native viewport host.
+    auto handleNativeGizmoPointer(se::EditorContext& editor, se::AssetServer& assets, se::Renderer& renderer,
+                                  const se::CameraView& cam, const SDL_Event& event) -> bool
+    {
+        if (renderer.window == nullptr || renderer.window->width == 0 || renderer.window->height == 0)
+        {
+            return false;
+        }
+        se::NativeGizmoState& gizmo = editor.nativeGizmo;
+        const se::u32 width = renderer.window->width;
+        const se::u32 height = renderer.window->height;
+        if (event.type == SDL_EVENT_MOUSE_MOTION)
+        {
+            const glm::vec2 mouse{ event.motion.x, event.motion.y };
+            if (gizmo.dragging)
+            {
+                se::applyNativeGizmoDrag(editor, cam, width, height, mouse);
+                return true;
+            }
+            gizmo.hovered = se::hitNativeGizmo(editor, cam, width, height, mouse);
+            return gizmo.hovered != se::NativeGizmoHandle::None;
+        }
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT)
+        {
+            const glm::vec2 mouse{ event.button.x, event.button.y };
+            gizmo.hovered = se::hitNativeGizmo(editor, cam, width, height, mouse);
+            if (gizmo.hovered != se::NativeGizmoHandle::None)
+            {
+                gizmo.active = gizmo.hovered;
+                gizmo.dragging = true;
+                gizmo.startMouse = mouse;
+                gizmo.target = editor.selected;
+                se::TransformComponent& transform = se::getComponent<se::TransformComponent>(editor.scene, editor.selected);
+                gizmo.startTranslation = transform.translation;
+                gizmo.startRotation = transform.rotation;
+                gizmo.startScale = transform.scale;
+                return true;
+            }
+            const glm::vec2 ndc{ mouse.x / static_cast<se::f32>(width) * 2.0f - 1.0f,
+                                 mouse.y / static_cast<se::f32>(height) * 2.0f - 1.0f };
+            se::setSelection(editor, se::pickEntity(editor.scene, assets, renderer, cam, ndc));
+            return true;
+        }
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT)
+        {
+            gizmo.dragging = false;
+            gizmo.active = se::NativeGizmoHandle::None;
+            gizmo.target = se::Entity{ entt::null };
+            return true;
+        }
+        return false;
+    }
 }
 
 export namespace se
@@ -79,178 +311,22 @@ export namespace se
 
         se::AppConfig config;
         config.window = se::WindowConfig{ .title = std::move(title), .width = width, .height = height };
+        // The editor is the headless native-viewport host: it never runs ImGui — the full
+        // editor UI is the React/Tauri frontend driving this host over the control plane.
+        config.useImGui = false;
 
         config.onCreate = [state](se::App& app)
         {
             state->editor = se::newEditorContext();
             state->control = se::newControlContext();
             state->assets = se::newAssetServer(se::assetPath("assets"));
+            // The editor is the headless native-viewport host: always present-only (no ImGui
+            // panels), reparented under the Tauri window and driven over the control plane.
+            se::setPresentViewportOnly(app.renderer, true);
 
-            // Vendored Lucide type icons (the fallback when a real thumbnail isn't available).
-            auto loadIcon = [&app](const char* file) -> Thumbnail
-            {
-                auto tex =
-                    se::uploadSvgIcon(app.renderer, se::assetPath(file), 64, glm::vec4(0.85f));
-                if (!tex)
-                {
-                    se::logError(tex.error());
-                    return Thumbnail{};
-                }
-                return Thumbnail{ *tex, se::uiRegisterTexture(*tex) };
-            };
-            state->meshIcon = loadIcon("icons/box.svg");
-            state->textureIcon = loadIcon("icons/image.svg");
-            state->fileIcon = loadIcon("icons/file.svg");
-            state->eyeIcon = loadIcon("icons/eye.svg");
-            state->pointLightIcon = loadIcon("icons/lightbulb.svg");
-            state->spotLightIcon  = loadIcon("icons/flashlight.svg");
-            state->cameraIcon     = loadIcon("icons/camera.svg");
-
-            // Best-effort thumbnail per asset: textures show their image, anything else the
-            // type icon (mesh render lands in a later step). Cached so AddTexture runs once.
-            std::function<ImTextureID(const se::AssetEntry&)> thumbnailFor =
-                [state, &app](const se::AssetEntry& entry) -> ImTextureID
-            {
-                auto cached = state->thumbnails.find(entry.id.value);
-                if (cached != state->thumbnails.end())
-                {
-                    return cached->second.id;
-                }
-                if (entry.type == se::AssetType::Texture)
-                {
-                    se::Ref<se::GpuTexture> tex = se::loadTextureAsset(state->assets, app.renderer, entry.id);
-                    if (!tex)
-                    {
-                        return state->textureIcon.id;
-                    }
-                    Thumbnail thumb{ tex, se::uiRegisterTexture(tex) };
-                    state->thumbnails.emplace(entry.id.value, thumb);
-                    return thumb.id;
-                }
-                if (entry.type == se::AssetType::Mesh)
-                {
-                    se::Ref<se::GpuMesh> mesh = se::loadMeshAsset(state->assets, app.renderer, entry.id);
-                    if (!mesh)
-                    {
-                        return state->meshIcon.id;
-                    }
-                    auto rendered =
-                        se::renderMeshThumbnail(app.renderer, mesh, 128);
-                    if (!rendered)
-                    {
-                        se::logError(rendered.error());
-                        return state->meshIcon.id;
-                    }
-                    Thumbnail thumb{ *rendered, se::uiRegisterTexture(*rendered) };
-                    state->thumbnails.emplace(entry.id.value, thumb);
-                    return thumb.id;
-                }
-                return state->fileIcon.id;
-            };
-            se::registerBuiltinComponents(state->editor->registry, thumbnailFor);
-
-            std::function<void(const se::AssetEntry&)> onView =
-                [state, &app](const se::AssetEntry& entry)
-            {
-                if (state->viewer.previewId != 0)
-                {
-                    se::uiUnregisterTexture(state->viewer.previewId);
-                    state->viewer.previewId = 0;
-                    state->viewer.previewTexture = nullptr;
-                }
-                if (entry.type == se::AssetType::Mesh)
-                {
-                    se::Ref<se::GpuMesh> mesh = se::loadMeshAsset(state->assets, app.renderer, entry.id);
-                    if (!mesh) { return; }
-                    auto rendered = se::renderMeshThumbnail(app.renderer, mesh, 512);
-                    if (!rendered) { se::logError(rendered.error()); return; }
-                    state->viewer.previewTexture = *rendered;
-                    state->viewer.previewId      = se::uiRegisterTexture(*rendered);
-                }
-                else if (entry.type == se::AssetType::Texture)
-                {
-                    auto it = state->thumbnails.find(entry.id.value);
-                    se::Ref<se::GpuTexture> tex =
-                        (it != state->thumbnails.end() && it->second.texture)
-                            ? it->second.texture
-                            : se::loadTextureAsset(state->assets, app.renderer, entry.id);
-                    if (!tex) { return; }
-                    state->viewer.previewTexture = tex;
-                    state->viewer.previewId      = se::uiRegisterTexture(tex);
-                }
-                else { return; }
-                state->viewer.title = entry.name;
-                state->viewer.open  = true;
-            };
-
-            // Import a file into the asset catalog (no spawn), routed by extension. Used by
-            // File > Import, the asset panel, and drag-and-drop.
-            auto importToCatalog = [state, &app](const std::string& path)
-            {
-                std::string ext = std::filesystem::path(path).extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(),
-                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")
-                {
-                    if (auto id = se::importTexture(state->assets, app.renderer, path); !id)
-                    {
-                        se::logError(id.error());
-                    }
-                    return;
-                }
-                if (auto model = se::importModel(state->assets, app.renderer, path); !model)
-                {
-                    se::logError(model.error());
-                }
-            };
-            state->editor->onImport = importToCatalog;
-            // Create > Cube imports the bundled cube into the catalog and spawns an entity.
-            state->editor->onCreateCube = [state, &app]()
-            {
-                auto cube =
-                    se::importModel(state->assets, app.renderer, se::assetPath("models/cube.gltf"));
-                if (!cube)
-                {
-                    se::logError(cube.error());
-                    return;
-                }
-                se::setSelection(*state->editor, se::spawnModel(state->editor->scene, "Cube", *cube));
-            };
-            state->editor->onSaveProject = [state](const std::string& path)
-            {
-                if (auto result =
-                        se::saveProject(state->assets, state->editor->registry, state->editor->scene, path); !result)
-                {
-                    se::logError(result.error());
-                }
-            };
-            state->editor->onLoadProject = [state, &app](const std::string& path)
-            {
-                if (auto result = se::loadProject(state->assets, app.renderer,
-                        state->editor->registry, state->editor->scene, path); !result)
-                {
-                    se::logError(result.error());
-                    return;
-                }
-                // The catalog changed; drop stale thumbnails so they re-generate.
-                for (auto& [id, thumb] : state->thumbnails)
-                {
-                    se::uiUnregisterTexture(thumb.id);
-                }
-                state->thumbnails.clear();
-                if (state->viewer.previewId != 0)
-                {
-                    se::uiUnregisterTexture(state->viewer.previewId);
-                    state->viewer.previewId      = 0;
-                    state->viewer.previewTexture = nullptr;
-                    state->viewer.open           = false;
-                }
-            };
-            app.window.onFileDropped.subscribe([importToCatalog](std::string path)
-            {
-                importToCatalog(path);
-                return false;
-            });
+            // The registry exists for its JSON serde (scene save/load + control plane); the
+            // present-only host renders no inspector, so no draw lambdas / thumbnails.
+            se::registerBuiltinComponents(state->editor->registry);
 
             // Auto-load project.json from the working directory if it exists; otherwise seed
             // a default scene with a cube so a fresh checkout starts with something visible.
@@ -274,6 +350,26 @@ export namespace se
                 else      { se::logError(cube.error()); }
             }
 
+            // The native-viewport host has no hierarchy panel to select from; auto-select
+            // the first mesh entity so the embedded viewport starts with something selected.
+            se::Entity renderable{ entt::null };
+            se::forEach<se::MeshComponent>(state->editor->scene,
+                [&renderable](se::Entity entity, se::MeshComponent&)
+                {
+                    if (renderable.handle == entt::null) { renderable = entity; }
+                });
+            if (renderable.handle != entt::null) { se::setSelection(*state->editor, renderable); }
+
+            // Raw SDL pointer → overlay-gizmo hover/drag + mesh ray-pick. This works
+            // only when the reparented child window actually receives mouse events; the
+            // command-driven gizmo-pointer path is the robust fallback (control plane).
+            app.window.eventSinks.push_back([state, &app](const SDL_Event& event)
+            {
+                se::syncNativeGizmo(*state->editor);
+                const se::CameraView cam = se::editorCameraView(state->editor->camera);
+                static_cast<void>(handleNativeGizmoPointer(*state->editor, state->assets, app.renderer, cam, event));
+            });
+
             se::Layer layer;
             layer.name = "EditorLayer";
             layer.onUpdate = [state, &app](se::TimeSpan)
@@ -283,96 +379,26 @@ export namespace se
                     se::pollControl(*state->control, app.window, app.renderer, *state->editor, state->assets);
                 }
             };
-            // The scene renders through the editor (viewport) camera, which is driven by
-            // ImGui input — valid only during onUi — so the scene draw + gizmo live here.
-            // renderScene records closures the renderer replays in endFrame.
-            layer.onUi = [state, &app, thumbnailFor, onView]()
+            // Present-only host: the editor is the headless native-viewport host the Tauri
+            // app spawns + reparents. There are no ImGui panels — the scene renders through
+            // the editor (fly-cam) camera into the swapchain, with the gizmo handles + entity
+            // billboards drawn by the engine overlay pass. The full editor UI is the React/
+            // Tauri frontend, which drives this host over the control plane.
+            layer.onUi = [state, &app]()
             {
-                // The inspector pickers + asset panel read the catalog through the scene
-                // (a borrowed pointer, valid only for this frame).
+                // The pickers + serde read the catalog through the scene (a borrowed
+                // pointer, valid only for this frame); also set on the control side.
                 state->editor->scene.catalog = &state->assets.catalog;
-
-                se::drawEditorMenuBar(*state->editor);
-                se::viewportPanel(app.ui, app.renderer);
-
-                se::updateEditorCamera(state->editor->camera, se::viewportHovered(app.ui),
-                                       ImGui::GetIO().DeltaTime);
+                se::setViewportDesiredSize(app.renderer, app.window.width, app.window.height);
+                // Command-driven camera (controlling is false), so the frame dt is unused.
+                se::updateEditorCamera(state->editor->camera, false, 0.0f);
+                se::syncNativeGizmo(*state->editor);
                 se::CameraView cam = se::editorCameraView(state->editor->camera);
-                const se::u32 vw = se::viewportWidth(app.renderer);
-                const se::u32 vh = se::viewportHeight(app.renderer);
-                if (vw > 0 && vh > 0)
+                if (app.window.width > 0 && app.window.height > 0)
                 {
                     se::renderScene(app.renderer, state->editor->scene, state->assets, cam);
-
-                    // Gizmo: same camera, but the UN-flipped projection (the renderer keeps
-                    // the Vulkan Y-flip local) so it is not mirrored.
-                    glm::mat4 proj = se::cameraProjection(cam, static_cast<float>(vw) / static_cast<float>(vh));
-                    se::drawGizmo(*state->editor, cam.view, proj,
-                                  se::viewportContentPos(app.ui), se::viewportContentSize(app.ui),
-                                  se::viewportHovered(app.ui));
-
-                    // Billboard icons for lights + cameras (drawn in the Viewport window).
-                    const float aspect = static_cast<float>(vw) / static_cast<float>(vh);
-                    ImGui::Begin("Viewport");
-                    const se::Entity billboardHit = se::drawEditorBillboards(
-                        *state->editor, cam, aspect,
-                        se::viewportContentPos(app.ui), se::viewportContentSize(app.ui),
-                        state->pointLightIcon.id, state->spotLightIcon.id, state->cameraIcon.id);
-                    ImGui::End();
-                    if (billboardHit.handle != entt::null)
-                    {
-                        se::setSelection(*state->editor, billboardHit);
-                    }
-
-                    // Left-click in empty viewport space ray-picks an entity (or clears the
-                    // selection). Skipped when gizmo is active or a billboard was clicked.
-                    if (billboardHit.handle == entt::null &&
-                        se::viewportHovered(app.ui) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-                        !ImGuizmo::IsOver() && !ImGuizmo::IsUsing())
-                    {
-                        const ImVec2 origin = se::viewportContentPos(app.ui);
-                        const ImVec2 size = se::viewportContentSize(app.ui);
-                        const ImVec2 mouse = ImGui::GetIO().MousePos;
-                        const glm::vec2 ndc{ (mouse.x - origin.x) / size.x * 2.0f - 1.0f,
-                                             (mouse.y - origin.y) / size.y * 2.0f - 1.0f };
-                        se::setSelection(*state->editor,
-                                         se::pickEntity(state->editor->scene, state->assets, app.renderer, cam, ndc));
-                    }
+                    se::submitNativeGizmo(*state->editor, app.renderer, cam, app.window.width, app.window.height);
                 }
-
-                se::hierarchyPanel(*state->editor);
-                se::environmentPanel(*state->editor, thumbnailFor);
-                se::assetCatalogPanel(*state->editor, &state->assets.catalog, thumbnailFor,
-                                      onView, state->eyeIcon.id);
-                {
-                    const bool wasOpen = state->viewer.open;
-                    se::viewerPanel(state->viewer.open, state->viewer.title.c_str(),
-                                    state->viewer.previewId);
-                    if (wasOpen && !state->viewer.open)
-                    {
-                        se::uiUnregisterTexture(state->viewer.previewId);
-                        state->viewer.previewId      = 0;
-                        state->viewer.previewTexture = nullptr;
-                    }
-                }
-
-                // Render stats overlay — dockable panel.
-                if (ImGui::Begin("Render Stats"))
-                {
-                    const se::RenderStats stats = se::renderStats(app.renderer);
-                    const ImGuiIO& io = ImGui::GetIO();
-                    ImGui::Text("%.1f fps   %.2f ms", io.Framerate, 1000.0f / io.Framerate);
-                    ImGui::Separator();
-                    ImGui::Text("Draw calls  %u", stats.drawCalls);
-                    ImGui::Text("Batches     %u", stats.batches);
-                    ImGui::Text("Instances   %u", stats.instances);
-                }
-                ImGui::End();
-
-                // Numeric/data fields read better in a monospace font.
-                ImGui::PushFont(se::uiMonoFont(app.ui));
-                se::inspectorPanel(*state->editor);
-                ImGui::PopFont();
             };
             se::attachLayer(app, std::move(layer));
 
@@ -401,32 +427,7 @@ export namespace se
             }
             // Drop every GPU Ref this client holds before destroyRenderer frees the
             // device/allocator — otherwise the cached meshes/textures and the pipeline
-            // would be freed too late (use-after-free). Unregister ImGui textures first
-            // (RemoveTexture needs the ImGui Vulkan backend, torn down after onExit).
-            auto freeThumbnail = [](Thumbnail& thumb)
-            {
-                se::uiUnregisterTexture(thumb.id);
-                thumb = Thumbnail{};
-            };
-            for (auto& [id, thumb] : state->thumbnails)
-            {
-                se::uiUnregisterTexture(thumb.id);
-            }
-            state->thumbnails.clear();
-            freeThumbnail(state->meshIcon);
-            freeThumbnail(state->textureIcon);
-            freeThumbnail(state->fileIcon);
-            freeThumbnail(state->eyeIcon);
-            freeThumbnail(state->pointLightIcon);
-            freeThumbnail(state->spotLightIcon);
-            freeThumbnail(state->cameraIcon);
-            if (state->viewer.previewId != 0)
-            {
-                se::uiUnregisterTexture(state->viewer.previewId);
-                state->viewer.previewId      = 0;
-                state->viewer.previewTexture = nullptr;
-            }
-
+            // would be freed too late (use-after-free).
             state->assets.meshRefByUuid.clear();
             state->assets.textureRefByUuid.clear();
         };
