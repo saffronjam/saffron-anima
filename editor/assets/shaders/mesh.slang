@@ -55,6 +55,7 @@ struct LightGlobals
     float4 ddgiVolumeMin;        // xyz = DDGI probe volume world min
     float4 ddgiVolumeExtent;     // xyz = DDGI probe volume world size
     uint4 ddgiProbeCount;        // xyz = probes per axis, w = irradiance tile interior
+    float4 ambientColor;         // rgb = scene-environment ambient (non-IBL fallback)
 };
 [[vk::binding(0, 1)]] ConstantBuffer<LightGlobals> globals;
 
@@ -467,7 +468,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     }
     else
     {
-        ambient = albedo * (1.0 - metallic) * globals.directionAmbient.w;
+        ambient = albedo * (1.0 - metallic) * globals.ambientColor.rgb;
     }
     // Screen-space AO darkens only the indirect (ambient) term, sampled at this pixel.
     if (globals.counts.w != 0)

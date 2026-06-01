@@ -1072,9 +1072,10 @@ export namespace se
 
     // Writes the whole per-frame lighting state: the directional light + ambient + the
     // camera eye position into the UBO and the punctual lights into the storage buffer
-    // (grown on demand). The eye position feeds the BRDF view vector.
+    // (grown on demand). The eye position feeds the BRDF view vector. `ambient` is the
+    // premultiplied RGB fallback ambient (color * intensity), used when IBL is off.
     void setSceneLighting(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity,
-                          f32 ambient, glm::vec3 eyePosition, const std::vector<GpuLight>& lights);
+                          glm::vec3 ambient, glm::vec3 eyePosition, const std::vector<GpuLight>& lights);
 
     // Uploads the camera into the cluster-params UBO and arms the per-frame light-cull
     // compute dispatch (clustered forward). `proj` is the Y-flipped projection used for

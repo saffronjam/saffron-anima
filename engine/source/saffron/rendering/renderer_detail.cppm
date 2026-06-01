@@ -1038,6 +1038,7 @@ export namespace se
         glm::vec4 ddgiVolumeMin;        // xyz = DDGI volume world min corner
         glm::vec4 ddgiVolumeExtent;     // xyz = DDGI volume world size
         glm::uvec4 ddgiProbeCount;      // xyz = probes per axis
+        glm::vec4 ambientColor;         // rgb = scene-environment ambient (non-IBL fallback), a unused
     };
 
     // Shadow-map resolution + slope/constant depth bias (units of D32 depth). Tuned on

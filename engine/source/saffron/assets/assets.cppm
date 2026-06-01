@@ -607,7 +607,14 @@ export namespace se
             setDdgiScene(renderer, boxMins, boxMaxs, boxAlbedos, volMin, volExt,
                          lightDir, lightColor, lightIntensity);
         }
-        setSceneLighting(renderer, lightDir, lightColor, lightIntensity, lightAmbient, eyePosition, lights);
+        // Fallback ambient (used when IBL is off): the scene environment's ambient color when
+        // useSkyForAmbient, else the directional light's legacy scalar ambient (grayscale).
+        glm::vec3 ambient{ lightAmbient };
+        if (scene.environment.useSkyForAmbient)
+        {
+            ambient = scene.environment.ambientColor * scene.environment.ambientIntensity;
+        }
+        setSceneLighting(renderer, lightDir, lightColor, lightIntensity, ambient, eyePosition, lights);
         setClusterCamera(renderer, view, proj, camera.nearPlane, camera.farPlane);  // arms the cull dispatch
         // Screen-space passes (G-buffer/GTAO/contact/SSGI) use the scene's view/proj + the
         // directional light direction (for contact shadows).

@@ -80,11 +80,11 @@ namespace se
     }
     void setDirectionalLight(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity, f32 ambient)
     {
-        setSceneLighting(renderer, direction, color, intensity, ambient, glm::vec3(0.0f), {});
+        setSceneLighting(renderer, direction, color, intensity, glm::vec3(ambient), glm::vec3(0.0f), {});
     }
 
     void setSceneLighting(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity,
-                          f32 ambient, glm::vec3 eyePosition, const std::vector<GpuLight>& lights)
+                          glm::vec3 ambient, glm::vec3 eyePosition, const std::vector<GpuLight>& lights)
     {
         // Write the current frame's copies; beginFrame already waited on its fence, so
         // no in-flight frame is reading them.
@@ -107,8 +107,11 @@ namespace se
         }
 
         LightUbo ubo;
-        ubo.directionAmbient = glm::vec4(glm::normalize(direction), ambient);
+        // directionAmbient.w keeps a scalar ambient luminance for legacy reads; the shader's
+        // non-IBL fallback uses the RGB ambientColor below.
+        ubo.directionAmbient = glm::vec4(glm::normalize(direction), (ambient.r + ambient.g + ambient.b) / 3.0f);
         ubo.colorIntensity = glm::vec4(color, intensity);
+        ubo.ambientColor = glm::vec4(ambient, 1.0f);
         // counts: x = punctual count, y = directional-shadow flag, z = IBL-ambient flag,
         // w = SSAO flag (the mesh multiplies the AO map into the ambient term). screenFlags
         // x = contact-shadow flag, y = SSGI flag. Driven off the same enable state
