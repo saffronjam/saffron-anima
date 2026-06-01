@@ -362,6 +362,11 @@ namespace se
             renderer.rt.instanceBuffers[i].reset();
             renderer.rt.scratchBuffers[i].reset();
         }
+        // The last frame's RT scene holds Ref<GpuMesh> captured by setRtScene; beginFrame
+        // would clear it next frame, but there is no next frame at teardown. Drop them so the
+        // meshes (vertex + index + BLAS buffers) free before the allocator, not after.
+        renderer.rt.frameMeshes.clear();
+        renderer.rt.frameModels.clear();
         for (vk::ImageView& face : renderer.targets.pointShadowFaces)
         {
             if (face)
