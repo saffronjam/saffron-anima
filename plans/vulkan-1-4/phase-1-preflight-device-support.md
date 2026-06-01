@@ -1,6 +1,10 @@
 # Phase 1 — Pre-flight: confirm 1.4 device support
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
+
+**Result (2026-06-01):** dev device llvmpipe (Mesa, LLVM 21.1.8) reports `apiVersion = 1.4.328`
+(≥ 1.4) in the `saffron-build` toolbox — confirmed via `vulkaninfo`. No other GPU is available
+in this environment (llvmpipe is the engine's current target per `AGENTS.md`). **Go.**
 
 Decide whether requiring Vulkan 1.4 is safe on the hardware the engine actually runs on. This
 is a gate, not a code change. Requiring 1.4 makes `vkb::InstanceBuilder` /

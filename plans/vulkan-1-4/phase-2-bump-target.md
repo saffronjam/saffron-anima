@@ -1,7 +1,15 @@
 # Phase 2 — Bump the target + sync docs
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** phase 1 (go decision)
+
+**Result (2026-06-01):** four edits in `renderer.cppm` applied (`require_api_version(1,4,0)`,
+`set_minimum_version(1,4)`, VMA `VK_API_VERSION_1_4`, empty `features14` wired via
+`.set_required_features_14`). Incremental `-j1` rebuild clean. llvmpipe selects under the raised
+1.4 floor (no "no suitable GPU"); zero validation **errors** (the 5 perf-hint warnings about
+unconsumed vertex attributes are pre-existing and present in the pre-bump baseline too). Capture
+byte-identical to the 1.3 baseline (`cmp -s`, both 22722 bytes). Docs/`AGENTS.md` target-claims
+synced to 1.4 with 1.3 provenance kept; `hugo --gc` exit 0.
 
 The load-bearing change. Four edits in `renderer.cppm`, a rebuild, a validation + pixel-identity
 check, and the doc/metadata sync in the same change (per AGENTS.md "Keep `docs/` current").
