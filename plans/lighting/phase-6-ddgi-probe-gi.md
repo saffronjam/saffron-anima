@@ -1,7 +1,38 @@
 # Phase 6: DDGI Probe GI (Software SDF/Voxel Trace)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+<!--
+COMPLETED 2026-06-01 (commit 1b5091a), validation-clean under headless weston across the
+full 3D-image pass chain — the no-bake "Lumen-without-RT" multi-bounce GI demonstrator.
+- NEW Image3D resource type (renderer_types.cppm) + newImage3D (e3D view, storage+sampled);
+  importImage3D threads it through the render graph for compute storage barriers (the graph
+  tracks its layout exactly like a 2D image — barriers are dimension-agnostic).
+- One probe volume (8x4x8 probes, 64 rays/probe), fit to the scene AABB each frame.
+  Storage: octahedral irradiance atlas (8x8 interior + gutter, rgba16f) + distance/moment
+  atlas (16x16, rg16f for Chebyshev), a 32^3 voxel proxy (rgba16f albedo+occupancy), a ray
+  image (rays x probes), and a per-frame box SSBO.
+- 5 graph compute passes before the scene (shape of light-cull -> scene):
+  ddgi_voxelize (rasterize per-draw world AABBs + albedo into the 3D proxy),
+  ddgi_trace (SOFTWARE Fibonacci-sphere ray-march vs the proxy; hit = albedo*(sun+sky) +
+  last-frame probe irradiance => free multi-bounce; miss = sky), ddgi_blend_irradiance +
+  ddgi_blend_distance (cosine-weighted accumulate into the atlases, hysteresis 0.95, first
+  frame no-history), ddgi_border (octahedral gutter copy).
+- Mesh set 5: 8-probe cage sample, trilinear * soft-backface * Chebyshev^3 visibility (leak
+  kill); added to the indirect term, gated by screenFlags.z. se set-gi {off|ddgi}.
+- Per-draw AABBs/albedo gathered in renderScene; setDdgiScene uploads the box proxy + fits
+  the volume. The HW ray_query trace variant is the documented phase-7 seam (the proxy +
+  sampling are reused there).
+- Verified: red wall bleeds onto a white floor (floor R-G 0.0 -> 4.4, 54% px changed),
+  temporally stable (frame delta 0.09), VAL=0.
+
+NOT done (noted, non-blocking): HW ray_query trace (phase 7 seam); probe relocation/
+classification + a `visualize-probes` debug view; cascaded volumes for large scenes;
+glossy/specular GI (diffuse-only v1 per the plan). The software trace is correct but slow
+on llvmpipe (the sampling side is interactive — visual result verified via captures).
+-->
+
 
 ## Goal
 
