@@ -346,6 +346,7 @@ namespace se
         renderer.pipelines.restirInitial.reset();
         renderer.pipelines.restirReuse.reset();
         renderer.pipelines.restirResolve.reset();
+        renderer.sky.pipeline.reset();          // fullscreen sky PSO
         renderer.restir.radiance.reset();
         renderer.restir.initial.reset();
         renderer.restir.combined.reset();
@@ -458,6 +459,10 @@ namespace se
         if (renderer.ibl.sampler)
         {
             renderer.context.device.destroySampler(renderer.ibl.sampler);
+        }
+        if (renderer.sky.setLayout)
+        {
+            renderer.context.device.destroyDescriptorSetLayout(renderer.sky.setLayout);
         }
         if (renderer.ssao.compute2Layout)
         {
@@ -1213,6 +1218,23 @@ namespace se
             renderer.restir.historyReset = false;
         }
 
+        // Visible sky: a fullscreen pass that fills the scene color target before the geometry.
+        // It writes the SAME target the scene pass uses (offscreen / msaaColor / scratch), so
+        // the MSAA resolve + FXAA/TAA filtering treat sky and geometry alike. When present it
+        // owns the color clear, and the scene pass loads instead of clearing.
+        const bool doSky = renderer.sky.visible && renderer.sky.ready && renderer.sky.pipeline;
+        if (doSky)
+        {
+            RgPass skyPass;
+            skyPass.name = "sky";
+            skyPass.kind = RgPassKind::Graphics;
+            skyPass.colors.push_back(RgAttachment{ sceneColorAttachment, vk::AttachmentLoadOp::eClear,
+                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } });
+            skyPass.renderArea = offscreen.extent;
+            skyPass.execute = [&renderer](vk::CommandBuffer cmd) { recordSky(renderer, cmd); };
+            addPass(graph, std::move(skyPass));
+        }
+
         RgPass scene;
         scene.name = "scene";
         scene.kind = RgPassKind::Graphics;
@@ -1251,7 +1273,8 @@ namespace se
         }
         // MSAA: render to the multisampled color, resolve into the offscreen (don't store
         // the multisampled samples). Otherwise render straight into the offscreen.
-        RgAttachment sceneColorAtt{ sceneColorAttachment, vk::AttachmentLoadOp::eClear,
+        RgAttachment sceneColorAtt{ sceneColorAttachment,
+            doSky ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eClear,
             vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } };
         if (msaa)
         {

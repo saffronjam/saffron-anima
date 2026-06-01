@@ -79,6 +79,17 @@ namespace se
         {
             logError(depthPrepass.error());
         }
+
+        // The sky PSO bakes the sample count too — rebuild it for the new scene color target.
+        Result<Ref<Pipeline>> skyPipe = makeSkyPipeline(renderer);
+        if (skyPipe)
+        {
+            renderer.sky.pipeline = *skyPipe;
+        }
+        else
+        {
+            logError(skyPipe.error());
+        }
     }
 
     auto aaMode(const Renderer& renderer) -> std::string

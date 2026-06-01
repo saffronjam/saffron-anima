@@ -1620,6 +1620,97 @@ export namespace se
         return std::make_shared<Pipeline>(std::move(pipeline));
     }
 
+    // Fullscreen sky PSO: no vertex input, depth test+write off, cull none. Bakes the sample
+    // count so it can render into the (possibly multisampled) scene color target; rebuilt on
+    // AA change. Sets: 0 = bindless (panorama), 1 = sky (envCube). Push constant: fragment.
+    auto makeSkyPipeline(Renderer& renderer) -> Result<Ref<Pipeline>>
+    {
+        auto moduleResult = loadShaderModule(renderer.context.device, assetPath("shaders/sky.spv"));
+        if (!moduleResult)
+        {
+            return Err(moduleResult.error());
+        }
+        vk::ShaderModule shaderModule = *moduleResult;
+
+        std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
+        stages[0].stage = vk::ShaderStageFlagBits::eVertex;
+        stages[0].module = shaderModule;
+        stages[0].pName = "vertexMain";
+        stages[1].stage = vk::ShaderStageFlagBits::eFragment;
+        stages[1].module = shaderModule;
+        stages[1].pName = "fragmentMain";
+
+        vk::PipelineVertexInputStateCreateInfo vertexInput{};  // fullscreen triangle: no inputs
+        vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+        vk::PipelineViewportStateCreateInfo viewportState{};
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+        vk::PipelineRasterizationStateCreateInfo raster{};
+        raster.polygonMode = vk::PolygonMode::eFill;
+        raster.cullMode = vk::CullModeFlagBits::eNone;
+        raster.frontFace = vk::FrontFace::eCounterClockwise;
+        raster.lineWidth = 1.0f;
+        vk::PipelineMultisampleStateCreateInfo multisample{};
+        multisample.rasterizationSamples = renderer.targets.sampleCount;  // match the scene color target
+        vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.depthTestEnable = VK_FALSE;
+        depthStencil.depthWriteEnable = VK_FALSE;
+        vk::PipelineColorBlendAttachmentState blendAttachment{};
+        blendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+        vk::PipelineColorBlendStateCreateInfo colorBlend{};
+        colorBlend.setAttachments(blendAttachment);
+        std::array<vk::DynamicState, 2> dynamicStates{ vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+        vk::PipelineDynamicStateCreateInfo dynamic{};
+        dynamic.setDynamicStates(dynamicStates);
+
+        vk::PipelineRenderingCreateInfo renderingInfo{};
+        renderingInfo.setColorAttachmentFormats(OffscreenColorFormat);  // no depth attachment
+
+        vk::PushConstantRange pushConstant{};
+        pushConstant.stageFlags = vk::ShaderStageFlagBits::eFragment;
+        pushConstant.offset = 0;
+        pushConstant.size = sizeof(glm::mat4) + 2 * sizeof(glm::vec4);  // invViewProj + params + clearColor
+        std::array<vk::DescriptorSetLayout, 2> setLayouts{
+            renderer.descriptors.bindlessSetLayout, renderer.sky.setLayout };
+        vk::PipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.setSetLayouts(setLayouts);
+        layoutInfo.setPushConstantRanges(pushConstant);
+        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (sky)");
+        if (!layoutResult)
+        {
+            renderer.context.device.destroyShaderModule(shaderModule);
+            return Err(layoutResult.error());
+        }
+
+        vk::GraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.pNext = &renderingInfo;
+        pipelineInfo.setStages(stages);
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &raster;
+        pipelineInfo.pMultisampleState = &multisample;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamic;
+        pipelineInfo.layout = *layoutResult;
+
+        vk::ResultValue<vk::Pipeline> created = renderer.context.device.createGraphicsPipeline(nullptr, pipelineInfo);
+        renderer.context.device.destroyShaderModule(shaderModule);
+        if (created.result != vk::Result::eSuccess)
+        {
+            renderer.context.device.destroyPipelineLayout(*layoutResult);
+            return Err(std::format("createGraphicsPipeline (sky): {}", vk::to_string(created.result)));
+        }
+        Pipeline pipeline;
+        pipeline.device = renderer.context.device;
+        pipeline.pipeline = created.value;
+        pipeline.layout = *layoutResult;
+        return std::make_shared<Pipeline>(std::move(pipeline));
+    }
+
     // (Re)creates the SSAO targets (G-buffer normal+viewZ, its depth, AO map) at the
     // viewport extent and rewrites the GTAO + mesh-AO descriptor sets. Called at init and
     // after the offscreen resizes (the caller has idled the GPU). The AO map is cleared to
@@ -2703,6 +2794,39 @@ export namespace se
         }
         renderer.ibl.set = (*iblSet)[0];
 
+        // Sky set (set 1 in the sky pipeline): the procedural environment cube the visible-sky
+        // pass samples. Layout + set created here so makeSkyPipeline can reference the layout;
+        // bakeEnvironment writes the descriptor once the envCube is filled. The sky reuses the
+        // IBL sampler (linear/clamp/mipped) for the cube.
+        vk::DescriptorSetLayoutBinding skyBinding{};
+        skyBinding.binding = 0;
+        skyBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        skyBinding.descriptorCount = 1;
+        skyBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+        vk::DescriptorSetLayoutCreateInfo skyLayoutInfo{};
+        skyLayoutInfo.setBindings(skyBinding);
+        auto skyLayout = checked(renderer.context.device.createDescriptorSetLayout(skyLayoutInfo), "skySetLayout");
+        if (!skyLayout)
+        {
+            return Err(skyLayout.error());
+        }
+        renderer.sky.setLayout = *skyLayout;
+        vk::DescriptorSetAllocateInfo skyAlloc{};
+        skyAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+        skyAlloc.setSetLayouts(renderer.sky.setLayout);
+        auto skySet = checked(renderer.context.device.allocateDescriptorSets(skyAlloc), "allocate skySet");
+        if (!skySet)
+        {
+            return Err(skySet.error());
+        }
+        renderer.sky.set = (*skySet)[0];
+        auto skyPipe = makeSkyPipeline(renderer);
+        if (!skyPipe)
+        {
+            return Err(skyPipe.error());
+        }
+        renderer.sky.pipeline = *skyPipe;
+
         // Screen-space effects (GTAO + denoise, contact shadows, SSGI). A nearest sampler
         // for the G-buffer; two shared compute set layouts (2-binding sampler+storage,
         // 3-binding sampler+sampler+storage); a 3-binding mesh set (set 4: AO/contact/SSGI);
@@ -3431,6 +3555,18 @@ export namespace se
         }
         device.updateDescriptorSets(setWrites, {});
         renderer.ibl.ready = true;
+
+        // The visible-sky pass samples the same procedural environment cube (set 1, binding 0)
+        // so the background matches the IBL lighting.
+        vk::DescriptorImageInfo skyImage{ renderer.ibl.sampler, renderer.ibl.envCube.view,
+            vk::ImageLayout::eShaderReadOnlyOptimal };
+        vk::WriteDescriptorSet skyWrite{};
+        skyWrite.dstSet = renderer.sky.set;
+        skyWrite.dstBinding = 0;
+        skyWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        skyWrite.setImageInfo(skyImage);
+        device.updateDescriptorSets(skyWrite, {});
+        renderer.sky.ready = true;
 
         for (vk::ImageView v : transientViews) { device.destroyImageView(v); }
         cleanupLayouts();

@@ -1,0 +1,76 @@
+// Visible sky background. A fullscreen triangle (no vertex buffer); the fragment
+// reconstructs the world-space view ray from the inverse view-projection and shades it by
+// mode. Output is linear HDR into the scene color target — the tonemap pass handles display.
+// Camera translation cancels in (far - near), so the sky is naturally camera-locked.
+//
+// Modes (push.params.z): 0 = flat clear color, 1 = equirectangular panorama (a bindless 2D
+// texture, set 0, indexed by push.params.w), 2 = the procedural IBL environment cube (set 1).
+
+static const float PI = 3.14159265;
+
+// Set 0: the same bindless albedo array the mesh samples (any uploaded texture, incl. a
+// loaded sky panorama). Size matches MaxBindlessTextures in renderer.cppm.
+[[vk::binding(0, 0)]] Sampler2D albedoTextures[1024];
+// Set 1: the procedural environment cube the IBL bake produced (shared with the lighting).
+[[vk::binding(0, 1)]] SamplerCube envCube;
+
+struct SkyPush
+{
+    float4x4 invViewProj;  // clip -> world (this frame's camera, inverted)
+    float4 params;         // x = intensity, y = rotation (yaw radians), z = mode, w = texture index
+    float4 clearColor;     // rgb = Color-mode fill
+};
+[[vk::push_constant]] SkyPush push;
+
+struct VertexOutput
+{
+    float4 position : SV_Position;
+    float2 ndc : TEXCOORD0;
+};
+
+[shader("vertex")]
+VertexOutput vertexMain(uint vertexId : SV_VertexID)
+{
+    // Fullscreen triangle: (0,0) (2,0) (0,2) in UV -> (-1,-1) (3,-1) (-1,3) in clip.
+    float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
+    VertexOutput output;
+    output.ndc = uv * 2.0 - 1.0;
+    output.position = float4(output.ndc, 0.0, 1.0);
+    return output;
+}
+
+[shader("fragment")]
+float4 fragmentMain(VertexOutput input) : SV_Target
+{
+    // World ray direction: unproject the near + far points; their difference is translation-
+    // independent, so the sky stays fixed as the camera moves.
+    float4 nearW = mul(push.invViewProj, float4(input.ndc, 0.0, 1.0));
+    float4 farW = mul(push.invViewProj, float4(input.ndc, 1.0, 1.0));
+    float3 dir = normalize(farW.xyz / farW.w - nearW.xyz / nearW.w);
+
+    // Yaw the lookup around the world up axis.
+    float a = push.params.y;
+    float s = sin(a);
+    float c = cos(a);
+    dir = float3(c * dir.x + s * dir.z, dir.y, -s * dir.x + c * dir.z);
+
+    float intensity = push.params.x;
+    uint mode = (uint)push.params.z;
+    float3 color;
+    if (mode == 0u)
+    {
+        color = push.clearColor.rgb;
+    }
+    else if (mode == 1u)
+    {
+        float2 uv = float2(atan2(dir.z, dir.x) * (0.5 / PI) + 0.5,
+                           acos(clamp(dir.y, -1.0, 1.0)) / PI);
+        uint index = (uint)push.params.w;
+        color = albedoTextures[NonUniformResourceIndex(index)].SampleLevel(uv, 0.0).rgb;
+    }
+    else
+    {
+        color = envCube.SampleLevel(dir, 0.0).rgb;
+    }
+    return float4(color * intensity, 1.0);
+}

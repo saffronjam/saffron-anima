@@ -172,4 +172,14 @@ namespace se
     {
         return renderer.lighting.useClustered;
     }
+
+    void submitSky(Renderer& renderer, const SkyRenderSettings& settings)
+    {
+        renderer.sky.mode = settings.mode;
+        renderer.sky.clearColor = settings.clearColor;
+        renderer.sky.intensity = settings.intensity;
+        renderer.sky.rotation = settings.rotation;
+        renderer.sky.visible = settings.visible;
+        renderer.sky.textureIndex = settings.textureIndex;
+    }
 }

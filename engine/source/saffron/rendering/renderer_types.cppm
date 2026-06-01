@@ -732,6 +732,25 @@ export namespace se
         bool useIbl = true;     // false = flat scalar ambient fallback
     };
 
+    // Visible sky background, drawn by a fullscreen graphics pass before the scene pass.
+    // Procedural mode samples the IBL envCube (so the background matches the lighting),
+    // Texture mode samples a bindless equirectangular panorama, Color mode is a flat fill.
+    // mode: 0 = Color, 1 = Texture, 2 = Procedural — matches Saffron.Scene SkyMode's values
+    // (the renderer does not import Scene, so it carries the mode as a plain int).
+    struct Sky
+    {
+        u32 mode = 2;
+        glm::vec3 clearColor{ 0.05f, 0.06f, 0.08f };
+        f32 intensity = 1.0f;
+        f32 rotation = 0.0f;
+        bool visible = true;
+        u32 textureIndex = 0;               // bindless panorama slot (Texture mode)
+        Ref<Pipeline> pipeline;             // fullscreen PSO; bakes the sample count, rebuilt on AA change
+        vk::DescriptorSetLayout setLayout;  // set 1: envCube (combined image sampler)
+        vk::DescriptorSet set;
+        bool ready = false;                 // set written + envCube baked
+    };
+
     // Screen-space ambient occlusion (GTAO-lite). When on, a G-buffer prepass + a compute
     // pass produce an AO factor the mesh multiplies into the IBL/flat ambient term. The
     // descriptor sets/layouts are built once; the camera transforms are written per frame.
@@ -931,6 +950,7 @@ export namespace se
         Pipelines pipelines;
         Targets targets;
         Ibl ibl;
+        Sky sky;
         Ssao ssao;
         Ddgi ddgi;
         Rt rt;
@@ -1018,6 +1038,22 @@ export namespace se
     void recordSceneDrawList(Renderer& renderer, vk::CommandBuffer cmd);
     // Record depth-only draws of the frame's geometry (the depth-pre-pass body).
     void recordDepthPrepass(Renderer& renderer, vk::CommandBuffer cmd);
+
+    // Per-frame visible-sky settings, resolved by renderScene from Scene.environment.
+    struct SkyRenderSettings
+    {
+        u32 mode = 2;            // 0 = Color, 1 = Texture, 2 = Procedural
+        glm::vec3 clearColor{ 0.05f, 0.06f, 0.08f };
+        f32 intensity = 1.0f;
+        f32 rotation = 0.0f;     // yaw radians
+        bool visible = true;
+        u32 textureIndex = 0;    // bindless slot of the panorama (Texture mode)
+    };
+    // Stores the sky settings for this frame; the sky pass (added in beginFrameGraph when
+    // visible) draws from them. Leaves the pipeline/set/ready state intact.
+    void submitSky(Renderer& renderer, const SkyRenderSettings& settings);
+    // Record the fullscreen sky into the active pass (the sky-pass body).
+    void recordSky(Renderer& renderer, vk::CommandBuffer cmd);
 
     // One punctual (point or spot) light in the per-frame light storage buffer
     // (set 1, binding 1). Positions/directions are world space; the fragment shader

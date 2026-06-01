@@ -614,6 +614,32 @@ export namespace se
         setSsaoCamera(renderer, view, proj, lightDir);
 
         submitDrawList(renderer, viewProjection, items);
+
+        // Resolve the scene environment into the visible-sky settings. Procedural samples the
+        // baked envCube (so the background matches the IBL lighting); Texture loads the
+        // panorama into the bindless array and passes its slot; Color is a flat fill.
+        {
+            const SceneEnvironment& env = scene.environment;
+            SkyRenderSettings sky;
+            sky.mode = static_cast<u32>(env.skyMode);
+            sky.clearColor = env.clearColor;
+            sky.intensity = env.skyIntensity;
+            sky.rotation = env.skyRotation;
+            sky.visible = env.visible;
+            if (env.skyMode == SkyMode::Texture && env.skyTexture.value != 0)
+            {
+                Ref<GpuTexture> panorama = loadTextureAsset(assets, renderer, env.skyTexture);
+                if (panorama)
+                {
+                    sky.textureIndex = panorama->bindlessIndex;
+                }
+                else
+                {
+                    sky.mode = static_cast<u32>(SkyMode::Color);  // missing panorama -> clear color
+                }
+            }
+            submitSky(renderer, sky);
+        }
     }
 
     // Picks the nearest entity whose world-space mesh AABB the camera ray hits. `ndc` is

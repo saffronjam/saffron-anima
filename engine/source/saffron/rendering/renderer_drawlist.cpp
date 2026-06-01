@@ -365,6 +365,33 @@ namespace se
         }
     }
 
+    // Record the fullscreen sky: bind the bindless array (set 0, for a Texture-mode panorama)
+    // + the envCube set (set 1), push this frame's inverse view-projection + sky params, and
+    // draw a single fullscreen triangle. The graph sets the dynamic viewport/scissor.
+    void recordSky(Renderer& renderer, vk::CommandBuffer cmd)
+    {
+        if (!renderer.sky.pipeline)
+        {
+            return;
+        }
+        vk::PipelineLayout layout = renderer.sky.pipeline->layout;
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, renderer.sky.pipeline->pipeline);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, renderer.descriptors.bindlessSet, {});
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 1, renderer.sky.set, {});
+        struct SkyPush
+        {
+            glm::mat4 invViewProj;
+            glm::vec4 params;      // intensity, rotation, mode, textureIndex
+            glm::vec4 clearColor;
+        } push;
+        push.invViewProj = glm::inverse(renderer.frame.sceneDrawList.viewProj);
+        push.params = glm::vec4(renderer.sky.intensity, renderer.sky.rotation,
+                                static_cast<f32>(renderer.sky.mode), static_cast<f32>(renderer.sky.textureIndex));
+        push.clearColor = glm::vec4(renderer.sky.clearColor, 1.0f);
+        cmd.pushConstants(layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(push), &push);
+        cmd.draw(3, 1, 0, 0);
+    }
+
     void recordDepthPrepass(Renderer& renderer, vk::CommandBuffer cmd)
     {
         SceneDrawList& list = renderer.frame.sceneDrawList;
