@@ -1,9 +1,15 @@
 module;
 
 #include <nlohmann/json.hpp>
+#include <SDL3/SDL.h>
+#include <X11/Xlib.h>
 
 #include <unistd.h>
 
+#include <algorithm>
+#include <charconv>
+#include <cstdlib>
+#include <format>
 #include <string>
 
 module Saffron.Control;
@@ -13,6 +19,30 @@ import Saffron.Rendering;
 
 namespace se
 {
+    auto renderStatsJson(Renderer& renderer) -> json
+    {
+        const RenderStats stats = renderStats(renderer);
+        return json{ { "drawCalls", stats.drawCalls },
+                     { "batches", stats.batches },
+                     { "instances", stats.instances },
+                     { "clustered", clusteredEnabled(renderer) },
+                     { "depthPrepass", depthPrepassEnabled(renderer) },
+                     { "shadows", shadowsEnabled(renderer) },
+                     { "ibl", iblEnabled(renderer) },
+                     { "ssao", ssaoEnabled(renderer) },
+                     { "contactShadows", contactShadowsEnabled(renderer) },
+                     { "ssgi", ssgiEnabled(renderer) },
+                     { "ddgi", ddgiEnabled(renderer) },
+                     { "rtSupported", rtSupported(renderer) },
+                     { "rtShadows", rtShadowsEnabled(renderer) },
+                     { "restir", restirEnabled(renderer) },
+                     { "blasCount", rtBlasCount(renderer) },
+                     { "pipelines", pipelineCount(renderer) },
+                     { "hdr", true },
+                     { "exposureEv", exposureEv(renderer) },
+                     { "aa", aaMode(renderer) } };
+    }
+
     void registerRenderCommands(CommandRegistry& reg)
     {
         registerCommand(reg, "ping", "liveness + engine info",
@@ -38,26 +68,7 @@ namespace se
         registerCommand(reg, "render-stats", "last frame's scene draw counters",
             [](EngineContext& ctx, const json&) -> Result<json>
             {
-                const RenderStats stats = renderStats(ctx.renderer);
-                return json{ { "drawCalls", stats.drawCalls },
-                             { "batches", stats.batches },
-                             { "instances", stats.instances },
-                             { "clustered", clusteredEnabled(ctx.renderer) },
-                             { "depthPrepass", depthPrepassEnabled(ctx.renderer) },
-                             { "shadows", shadowsEnabled(ctx.renderer) },
-                             { "ibl", iblEnabled(ctx.renderer) },
-                             { "ssao", ssaoEnabled(ctx.renderer) },
-                             { "contactShadows", contactShadowsEnabled(ctx.renderer) },
-                             { "ssgi", ssgiEnabled(ctx.renderer) },
-                             { "ddgi", ddgiEnabled(ctx.renderer) },
-                             { "rtSupported", rtSupported(ctx.renderer) },
-                             { "rtShadows", rtShadowsEnabled(ctx.renderer) },
-                             { "restir", restirEnabled(ctx.renderer) },
-                             { "blasCount", rtBlasCount(ctx.renderer) },
-                             { "pipelines", pipelineCount(ctx.renderer) },
-                             { "hdr", true },
-                             { "exposureEv", exposureEv(ctx.renderer) },
-                             { "aa", aaMode(ctx.renderer) } };
+                return renderStatsJson(ctx.renderer);
             });
 
         registerCommand(reg, "set-aa", "set-aa {off|fxaa|taa|msaa2|msaa4|msaa8} — anti-aliasing mode",
@@ -292,6 +303,143 @@ namespace se
                 }
                 setDepthPrepass(ctx.renderer, enabled);
                 return json{ { "depthPrepass", enabled } };
+            });
+
+        registerCommand(reg, "viewport-native-info", "native viewport bridge status",
+            [](EngineContext& ctx, const json&) -> Result<json>
+            {
+                std::string controlPath = controlSocketPath();
+                return json{
+                    { "platform", "linux" },
+                    { "transport", "x11-child-window" },
+                    { "status", "engine-window-ready" },
+                    { "controlSocket", controlPath },
+                    { "width", viewportWidth(ctx.renderer) },
+                    { "height", viewportHeight(ctx.renderer) },
+                    { "message", "engine SDL/Vulkan window can be reparented into an X11 host" }
+                };
+            });
+
+        registerCommand(reg, "attach-native-viewport",
+            "attach-native-viewport {parentXid,x?,y?,width?,height?} — reparent the engine window into an X11 host",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                auto readU64 = [&params](const char* name) -> Result<u64>
+                {
+                    const json value = positionalOr(params, name, 0);
+                    if (value.is_number_unsigned())
+                    {
+                        return value.get<u64>();
+                    }
+                    if (value.is_number_integer())
+                    {
+                        const i64 parsed = value.get<i64>();
+                        if (parsed >= 0) { return static_cast<u64>(parsed); }
+                    }
+                    if (value.is_string())
+                    {
+                        const std::string text = value.get<std::string>();
+                        u64 parsed = 0;
+                        std::from_chars_result result =
+                            std::from_chars(text.data(), text.data() + text.size(), parsed);
+                        if (result.ec == std::errc{} && result.ptr == text.data() + text.size())
+                        {
+                            return parsed;
+                        }
+                    }
+                    return Err(std::format("expected numeric {}", name));
+                };
+                auto readI32 = [&params](const char* name, i32 fallback) -> i32
+                {
+                    const json value = params.contains(name) ? params[name] : json{ fallback };
+                    if (value.is_number_integer()) { return value.get<i32>(); }
+                    if (value.is_number()) { return static_cast<i32>(value.get<double>()); }
+                    return fallback;
+                };
+
+                auto parent = readU64("parentXid");
+                if (!parent)
+                {
+                    return Err(parent.error());
+                }
+                const i32 x = readI32("x", 0);
+                const i32 y = readI32("y", 0);
+                const i32 width = std::max(1, readI32("width", static_cast<i32>(ctx.window.width)));
+                const i32 height = std::max(1, readI32("height", static_cast<i32>(ctx.window.height)));
+
+                SDL_SetWindowBordered(ctx.window.handle, false);
+                SDL_SetWindowSize(ctx.window.handle, width, height);
+                SDL_SetWindowPosition(ctx.window.handle, x, y);
+                SDL_SyncWindow(ctx.window.handle);
+
+                SDL_PropertiesID props = SDL_GetWindowProperties(ctx.window.handle);
+                Display* display = static_cast<Display*>(
+                    SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr));
+                const ::Window child = static_cast<::Window>(
+                    SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
+                if (display == nullptr || child == 0)
+                {
+                    return Err(std::string{ "engine window is not using SDL's X11 backend; run with SDL_VIDEODRIVER=x11" });
+                }
+
+                XReparentWindow(display, child, static_cast<::Window>(*parent), x, y);
+                XMoveResizeWindow(display, child, x, y,
+                    static_cast<unsigned int>(width), static_cast<unsigned int>(height));
+                XMapRaised(display, child);
+                XFlush(display);
+
+                ctx.window.width = static_cast<u32>(width);
+                ctx.window.height = static_cast<u32>(height);
+                setViewportDesiredSize(ctx.renderer, static_cast<u32>(width), static_cast<u32>(height));
+                setPresentViewportOnly(ctx.renderer, true);
+
+                return json{
+                    { "attached", true },
+                    { "transport", "x11-child-window" },
+                    { "x", x },
+                    { "y", y },
+                    { "width", width },
+                    { "height", height }
+                };
+            });
+
+        registerCommand(reg, "resize-native-viewport",
+            "resize-native-viewport {x,y,width,height} — move/resize the reparented child (no reparent)",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                auto readI32 = [&params](const char* name, i32 fallback) -> i32
+                {
+                    const json value = params.contains(name) ? params[name] : json{ fallback };
+                    if (value.is_number_integer()) { return value.get<i32>(); }
+                    if (value.is_number()) { return static_cast<i32>(value.get<double>()); }
+                    return fallback;
+                };
+
+                const i32 x = readI32("x", 0);
+                const i32 y = readI32("y", 0);
+                const i32 width = std::max(1, readI32("width", static_cast<i32>(ctx.window.width)));
+                const i32 height = std::max(1, readI32("height", static_cast<i32>(ctx.window.height)));
+
+                SDL_SetWindowSize(ctx.window.handle, width, height);
+                SDL_SetWindowPosition(ctx.window.handle, x, y);
+
+                SDL_PropertiesID props = SDL_GetWindowProperties(ctx.window.handle);
+                Display* display = static_cast<Display*>(
+                    SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr));
+                const ::Window child = static_cast<::Window>(
+                    SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
+                if (display == nullptr || child == 0)
+                {
+                    return Err(std::string{ "engine window is not using SDL's X11 backend; run with SDL_VIDEODRIVER=x11" });
+                }
+                XMoveResizeWindow(display, child, x, y,
+                    static_cast<unsigned int>(width), static_cast<unsigned int>(height));
+                XFlush(display);
+
+                ctx.window.width = static_cast<u32>(width);
+                ctx.window.height = static_cast<u32>(height);
+                setViewportDesiredSize(ctx.renderer, static_cast<u32>(width), static_cast<u32>(height));
+                return json{ { "resized", true }, { "x", x }, { "y", y }, { "width", width }, { "height", height } };
             });
     }
 }

@@ -58,6 +58,9 @@ export namespace se
     auto resolveEntity(EngineContext& ctx, const json& params) -> Result<Entity>;
     auto entityRef(Scene& scene, Entity entity) -> json;
 
+    // Builds the render-stats DTO (shared by the render-stats command + dump-schema).
+    auto renderStatsJson(Renderer& renderer) -> json;
+
     // The built-in commands, grouped by concern. Registered in render → scene → asset
     // order (help/list iterate the registry in insertion order).
     void registerRenderCommands(CommandRegistry& reg);
