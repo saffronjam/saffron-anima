@@ -1,8 +1,10 @@
 # Phase 2: Control surface hardening — new editor commands + thumbnail PNG readback + schema-first DTO catalog
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+**Verified (2026-06-01):** Engine build validation-clean. All 12 new commands smoke-tested via `se` under weston/llvmpipe — `add-entity` (every preset), `copy-entity` (keeps the "(copy)" suffix + bumps `sceneVersion`), `get-selection`/`deselect`, `set-gizmo`/`get-gizmo` (local space round-trips), `get-camera`/`set-camera`, `set-component-field`, `dump-schema` (8 components + environment + renderStats), `get-thumbnail`/`view-asset` (valid base64 PNG, 128 + 512). `schemas/control/` (24 draft-2020-12 schemas) + `tools/check-control-schema/check.ts` (zero-dependency validator, runs in the toolbox without `bun install`) pass **14/14** against live `se` output, including the bad-command `ok:false` envelope and the **u64 lossless-id raw-bytes assertion**. Docs: reference rows for all 12 + scene/asset explanation pages extended + new `shared-types.md` + hub row. **Two deliberate improvements over the plan sketch:** `copy-entity`/`dump-schema` use `deserialize` (add-defaults-if-missing) / guarded `addDefault` instead of unconditional `addDefault` to avoid an entt double-`emplace` abort on Name/Transform; `get-thumbnail` accepts a numeric *or* string asset selector (the CLI coerces bare ids to numbers). **u64 note:** ids are emitted as raw JSON integers; the `uuid` schema validates that but carries `tsType:string` so the phase-3 TS protocol types them as strings (the contract test caught its own `JSON.parse` truncation — ids must be string-preserve-parsed).
 
 ## Goal
 

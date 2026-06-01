@@ -1,8 +1,10 @@
 # Phase 7: Asset browser (thumbnails over the wire) + pickers + drag-drop + import
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — implemented & `bun run check`/`build` + cargo (dialog plugin) green; thumbnails-over-socket / drag-drop / import / View-modal pending interactive (display) verification
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+**Done so far (2026-06-01):** shadcn-based asset browser. Rust: `tauri-plugin-dialog` 2.7.1 added (`.plugin(tauri_plugin_dialog::init())` + `dialog:default` capability), cargo build green. React: `AssetTile` (lazy 128px socket thumbnail with a module-level blob-URL cache + in-flight dedupe + invalidate-on-load; inline rename; HTML5 drag source `application/x-se-asset`), `AssetsPanel` (tile grid + Import via `@tauri-apps/plugin-dialog` `open()` + OS file-drop via `onDragDropEvent`), `AssetPicker` (Popover thumbnail combo wired into the inspector's uuid fields — Mesh.mesh/Material.albedoTexture→`assign-asset`, others→`set-component-field`), `AssetViewer` (shadcn Dialog 512 preview). **Occlusion:** the View modal sets a `viewportHidden` flag → `ViewportPanel` parks the native window off-screen (`-10000,-10000,1×1`) while open and restores on close. `bun run check` + `bun run build` green. (Divergence: `import-model` spawns+selects an entity, matching `se import-model`.)
 
 ## Goal
 

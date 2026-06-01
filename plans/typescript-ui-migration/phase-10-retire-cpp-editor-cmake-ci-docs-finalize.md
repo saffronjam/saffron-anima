@@ -1,6 +1,6 @@
 # Phase 10: Retire the C++ ImGui editor + CMake/CI/docs finalize
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — C++ ImGui editor retired + engine build validation-clean + headless host smoke EXIT=0. `editor_panels.cpp` deleted (the only caller was `editor_app` onUi, now slimmed to the present-only host path), its CMake source line + the panel decls/ImGui closures (`editor_context.cppm`) + `drawGizmo`/`drawEditorBillboards` (`editor_gizmo.cpp`) removed; `editor_components.cpp` kept (registry serde backs the control path + copy-entity); the native-gizmo math + overlay + control surface untouched. `SaffronEditor` (`editor-old/`) is now the always-present-only headless host the Tauri app spawns (`editor/`). **Finalize DONE:** `AGENTS.md` editor/layout updated; `tools/ci/check.sh` gate + root `Makefile` (`check`/`engine`/`editor`/`schema`) + an honest self-hosted `.github/workflows/ci.yml` (documents that a hosted runner can't build the toolbox stack) + `tools/ci/README.md`; the **docs retarget is complete** — the 11 `ui-and-editor` pages were rewritten for the Tauri/React editor (`imgui-integration.md` → new `tauri-editor-and-x11-bridge.md`), the hub + `build-and-run` how-to updated, `hugo --gc` builds clean (181 pages, 0 errors). **Only remaining:** the live end-to-end Tauri-editor parity walkthrough (`bun run tauri dev` on an X11/XWayland desktop) — needs a display.
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
 

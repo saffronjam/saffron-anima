@@ -1,8 +1,10 @@
 # Phase 1: Engine viewport bridge forward-port + C++ editor relocation to editor-old/
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+**Verified (2026-06-01):** Build validation-clean in the toolbox (`cmake --preset debug && cmake --build build/debug -j1` — all 73 steps, no errors). `editor-old/` builds `SaffronEditor`; `bin/shaders/*.spv` (29) + `models`/`fonts`/`icons` emitted. Headless (weston / Wayland / llvmpipe): the default ImGui editor boots + renders + exits clean (no regression); native present-only mode (`SAFFRON_EDITOR_NATIVE_VIEWPORT=1`) exercises `presentViewportToSwapchain` and exits clean via graceful `quit`; `se viewport-native-info` → `engine-window-ready`, `se help` lists all three viewport commands, `attach-native-viewport` without X11 returns the typed backend error. **Deferred:** the live `XReparentWindow` reparent + `resize-native-viewport` visual check needs an X11 server with a parent window (no Xvfb/Xwayland in the toolbox) — it is the integration test the phase-3 Tauri host performs, or run it on an X11 desktop.
 
 ## Goal
 

@@ -1,8 +1,20 @@
 # Phase 9: Theme, fonts, and dock-like layout parity
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+> **UI toolkit (cross-cutting decision — see the migration README):** the editor uses
+> **shadcn/ui + Tailwind v4**, so this phase is expressed in shadcn terms. The design tokens below
+> become the **shadcn CSS-variable theme** (the `theme::` palette mapped 1:1 onto
+> `--background`/`--primary`/`--input`/`--border`/… with the app forced dark); the hand-rolled
+> buttons/tabs/menus/inputs become shadcn primitives (Button, Tabs, DropdownMenu, ContextMenu,
+> Select, Slider, Input, ScrollArea, Separator, Dialog, Tooltip); and the resizable dock layout
+> uses shadcn's `resizable` (which wraps `react-resizable-panels`, named below). Fonts (Roboto +
+> Roboto Mono) layer on via the Tailwind theme + `@font-face`. The shadcn foundation (Tailwind +
+> `components.json` + base components + the token theme) is set up early and the phases 3–8 panels
+> are built/retrofitted on it; phase 9 finalizes the exact token values, font bundling, and the
+> dock layout/bounds-sync.
 
 ## Goal
 

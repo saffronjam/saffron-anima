@@ -1,8 +1,10 @@
 # Phase 5: Hierarchy panel + Create menu
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — React implemented & `bun run check` green; click→select / create / copy / delete round-trips pending interactive (display) verification with the rest of the embedded-editor runtime
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+**Done so far (2026-06-01):** React-only (every engine command already existed). `HierarchyPanel` (flat `store.entities` list keyed by string id; left-click → optimistic `selectEntity` + `client.selectEntity`; selected row highlighted; right-click context menu Copy/Delete); `CreateMenu` (single `CREATE_PRESETS` source → `client.addEntity`, auto-selected); `client.selectEntity`/`destroyEntity` added (`{entity:id}`); mounted in a left sidebar. The list re-fetches only on a `sceneVersion` change (no per-tick churn). `bun run check` exit 0.
 
 ## Goal
 

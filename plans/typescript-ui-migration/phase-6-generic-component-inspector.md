@@ -1,8 +1,10 @@
 # Phase 6: Generic component inspector (schema-driven, all component types)
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — implemented & `bun run check` green (then reskinned to shadcn); inspector edit round-trips pending interactive (display) verification
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+**Done so far (2026-06-01):** Data-driven inspector with NO per-component switch — a `fieldRenderer` dispatches by value shape ({x,y,z}→VectorEditor, {x,y,z,w}→ColorField, number→NumberDrag, bool→Switch, uuid→AssetPicker [phase 7], string→Input) with a `FIELD_HINTS` override table. Widget primitives `NumberDrag`/`VectorEditor` (ported drag-scrub) / `ColorField` / `ComboField`. Write routing: Transform→`set-transform`, Material→`set-material`, uuid→`assign-asset`/`set-component-field`, others→`set-component` read-modify-write (full body). **Transform.rotation radians↔degrees** + SpotLight angles degrees-only handled at the widget boundary. Coalesced writes + `dragActive` poll-gating. Add/Remove component guarded to removable (Name/Transform locked). Later reskinned to shadcn (Card/Label/Separator/Input/Switch) during the shadcn adoption. `bun run check` green.
 
 ## Goal
 

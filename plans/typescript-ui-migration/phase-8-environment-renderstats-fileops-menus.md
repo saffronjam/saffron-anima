@@ -1,6 +1,6 @@
 # Phase 8: Environment panel + Render Stats + save/load project/scene + menus
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — implementation complete & `bun run check`/`build` green (shadcn Environment panel + Render Stats + AA/feature toggles with RT-gating + File/Create menu bar + full store-reset-on-load); live env/stats/menu round-trips pending interactive (display) verification. (Verified: the boolean toggles send `{enabled:0|1}`, `set-aa`/`set-gi` `{mode}`, `set-exposure` `{ev}` — matching the engine `positionalOr` keys; `skyRotation` deg↔rad only at the widget boundary; exposure routed to `set-exposure` not `setEnvironment`.)
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
 

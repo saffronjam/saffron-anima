@@ -1,8 +1,10 @@
 # Phase 4: Viewport interaction unit — native gizmo overlay + billboards + input forwarding + ray-pick selection round-trip
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — engine + React implemented & build-verified; visible gizmo/billboards/drag pending interactive (display) verification
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+**Done so far (2026-06-01):** Engine builds validation-clean (`-j1`, all steps); `bin/shaders/gizmo_overlay.spv` emitted. Forward-ported the overlay graphics pipeline (`newOverlayPipeline`, 1× samples, alpha blend, no depth, empty layout, `OffscreenColorFormat`), `OverlayVertex`/`OverlayState`, `makeMappedVertexBuffer`/`submitOverlay`, and the `editor-overlay` RgPass appended after `addTonemapPass` (`colors.push_back`, loadOp Load into the 1× resolved `sceneColor`). Refactored the pure-math gizmo (`viewportProject`/`gizmoAxes`/`handleAxis`/`hitNativeGizmo`/`applyNativeGizmoDrag`/`pointSegmentDistance` + `syncNativeGizmo`) into `Saffron.Editor` so the new `gizmo-pointer` command shares it; the OverlayVertex builders (`buildNativeGizmo`/`buildEditorBillboards`/`submitNativeGizmo`/`handleNativeGizmoPointer`) stay in `Saffron.EditorApp`. `NativeGizmoState` + enums on `EditorContext`, mode/space synced from the phase-2 `GizmoOp`/`GizmoSpace`. Billboards are colored overlay glyphs (point=filled box, spot=box+cone line, camera=box outline). `pick` extended to test billboards first (`kind:"billboard"|"mesh"`); `gizmo-pointer {phase,x,y NDC}` command. React: `Topbar` (T/R/S + world/local → `set-gizmo`), `ViewportPanel` pointer handlers (left-click → `pick`; drag → coalesced `gizmo-pointer`), `gizmo` store slice; `bun run check` green. **Headless-verified:** the overlay RgPass executes every frame in present-only mode with **no validation errors across off/msaa4/taa/fxaa** (the mandatory MSAA-ordering test); `gizmo-pointer` hover/begin/drag/end + the extended `pick` (`kind=mesh`) respond + exit clean. **Pending (needs a display):** the visible gizmo handles + billboard glyphs + an actual handle-drag manipulating the transform in the attached webview viewport, and the Topbar/ViewportPanel interaction round-trip.
 
 ## Goal
 

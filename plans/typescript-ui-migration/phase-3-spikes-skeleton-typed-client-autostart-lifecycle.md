@@ -1,8 +1,12 @@
 # Phase 3: Build/input spikes + Tauri/React skeleton + generic passthrough + typed client + auto-start/attach + crash recovery
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — build-verified; runtime (auto-attach) pending interactive verification
 
 <!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
+
+**Done so far (2026-06-01):** Scaffolded the Tauri app under `editor/` (the C++ host lives at `editor-old/` from phase 1). **Spike-0a confirmed empirically:** the whole stack builds in the `saffron-build` toolbox with host bun on PATH — `cargo build` of the Rust bridge is green (tauri 2.11, edition 2024, webkit2gtk-4.1) and `bun install` + `bun run check` are green. `lib.rs` rewritten to ONE generic `control(cmd, params)` passthrough (the 8 MVP shims deleted) + dedicated window-handle commands (`start_engine`, `attach_native_viewport`, `resize_native_viewport`→the phase-1 engine command (no reparent flicker), `quit_engine`, `engine_alive` via `child.try_wait()` not `Option::is_some`), per-PID `XDG_RUNTIME_DIR` socket, `.setup()` auto-start with a liveness-aware readiness thread emitting `engine-phase`/`viewport-error`, and `RunEvent::ExitRequested` teardown. `@saffron/protocol` generated from the phase-2 `schemas/control/` via `json-schema-to-typescript` (24 types, `Uuid=string` through `tsType`, byte-deterministic). Typed `client.ts` (named params, ids as strings; entity selector key is `entity`, thumbnail key is `asset`), `coalesce.ts`, a Zustand `store.ts` + focus-gated reconcile poll + crash watchdog, `ViewportPanel` bounds-sync (ResizeObserver + resize-end debounce + HiDPI scaleFactor) + auto-attach on non-zero rect, `LoadingOverlay` (Retry/Restart), `App` event wiring. The dead fd-export/GTK bridge + gtk/gdk/glib/base64/thiserror/libc deps were NOT brought over. **Modernized vs the MVP:** Rust edition 2021→**2024**, TS/Vite ES2022→**ESNext**, tauri 2.8→**2.11**.
+
+**Remaining (runtime, needs a display I can't drive headless):** `bun run tauri dev` actually launching → auto-spawn → X11 reparent into the webview window → loading overlay → live embedded scene with no clicks; crash-recovery Restart; HiDPI cover; two-instance socket isolation. The toolbox has no XWayland (weston-headless is Wayland-only), so the X11 child-window reparent can only be verified on a real X11/XWayland desktop. **Spike-0b (keyboard into the reparented child) not yet run** — phase 4 defaults to the control-command-driven camera/gizmo regardless, so it is not blocking.
 
 ## Goal
 
