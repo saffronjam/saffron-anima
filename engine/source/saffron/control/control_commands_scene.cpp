@@ -18,6 +18,36 @@ import Saffron.Assets;
 
 namespace se
 {
+    // Server-side billboard hit-test: the nearest light/camera entity whose screen-space
+    // glyph contains `mouse` (viewport pixels). Mirrors the overlay's ~12px glyph half-size.
+    auto pickBillboard(EditorContext& editor, const CameraView& cam, u32 width, u32 height, glm::vec2 mouse) -> Entity
+    {
+        if (width == 0 || height == 0)
+        {
+            return Entity{ entt::null };
+        }
+        constexpr f32 half = 13.0f;  // a touch larger than the drawn glyph for easier clicking
+        Entity hit{ entt::null };
+        f32 best = half;
+        auto test = [&](Entity e)
+        {
+            if (!hasComponent<TransformComponent>(editor.scene, e)) { return; }
+            const glm::vec3 pos = getComponent<TransformComponent>(editor.scene, e).translation;
+            const GizmoProjection p = viewportProject(cam, width, height, pos);
+            if (!p.visible) { return; }
+            const glm::vec2 d = glm::abs(mouse - p.pixel);
+            if (d.x <= half && d.y <= half)
+            {
+                const f32 dist = glm::length(mouse - p.pixel);
+                if (dist <= best) { best = dist; hit = e; }
+            }
+        };
+        forEach<PointLightComponent>(editor.scene, [&](Entity e, PointLightComponent&) { test(e); });
+        forEach<SpotLightComponent>(editor.scene, [&](Entity e, SpotLightComponent&) { test(e); });
+        forEach<CameraComponent>(editor.scene, [&](Entity e, CameraComponent&) { test(e); });
+        return hit;
+    }
+
     void registerSceneCommands(CommandRegistry& reg)
     {
         registerCommand(reg, "list-entities", "list all entities",
@@ -65,6 +95,7 @@ namespace se
                     setSelection(ctx.editor, Entity{ entt::null });
                 }
                 destroyEntity(ctx.editor.scene, *entity);
+                ctx.editor.sceneVersion += 1;
                 return json{ { "destroyed", id } };
             });
 
@@ -301,7 +332,8 @@ namespace se
                 return entityRef(ctx.editor.scene, *entity);
             });
 
-        registerCommand(reg, "pick", "pick {u=0.5, v=0.5} — ray-pick at viewport UV (0,0 = top-left)",
+        registerCommand(reg, "pick",
+            "pick {u=0.5, v=0.5} — pick at viewport UV (0,0 = top-left); tests billboards then mesh AABBs",
             [](EngineContext& ctx, const json& params) -> Result<json>
             {
                 const json uParam = positionalOr(params, "u", 0);
@@ -311,6 +343,22 @@ namespace se
                 if (uParam.is_number()) { u = static_cast<f32>(uParam.get<double>()); }
                 if (vParam.is_number()) { v = static_cast<f32>(vParam.get<double>()); }
                 const CameraView cam = editorCameraView(ctx.editor.camera);
+                const u32 width = viewportWidth(ctx.renderer);
+                const u32 height = viewportHeight(ctx.renderer);
+                const glm::vec2 mouse{ u * static_cast<f32>(width), v * static_cast<f32>(height) };
+
+                // Billboards first (light/camera glyphs aren't in the mesh AABB set), then the
+                // mesh ray-pick. The glyph hit rect mirrors the overlay's ~12px half-size.
+                const Entity billboard = pickBillboard(ctx.editor, cam, width, height, mouse);
+                if (billboard.handle != entt::null)
+                {
+                    setSelection(ctx.editor, billboard);
+                    json result = entityRef(ctx.editor.scene, billboard);
+                    result["hit"] = true;
+                    result["kind"] = "billboard";
+                    return result;
+                }
+
                 const Entity hit = pickEntity(ctx.editor.scene, ctx.assets, ctx.renderer, cam,
                                               glm::vec2{ u * 2.0f - 1.0f, v * 2.0f - 1.0f });
                 setSelection(ctx.editor, hit);
@@ -320,6 +368,7 @@ namespace se
                 }
                 json result = entityRef(ctx.editor.scene, hit);
                 result["hit"] = true;
+                result["kind"] = "mesh";
                 return result;
             });
 
@@ -394,6 +443,291 @@ namespace se
                 if (params.contains("ambientIntensity")) { body["ambientIntensity"] = params["ambientIntensity"]; }
                 ctx.editor.scene.environment = environmentFromJson(body);
                 return environmentToJson(ctx.editor.scene.environment);
+            });
+
+        registerCommand(reg, "get-selection",
+            "get-selection — the current editor selection + scene/selection version stamps",
+            [](EngineContext& ctx, const json&) -> Result<json>
+            {
+                json out;
+                out["selectionVersion"] = ctx.editor.selectionVersion;
+                out["sceneVersion"] = ctx.editor.sceneVersion;
+                const Entity sel = ctx.editor.selected;
+                if (sel.handle != entt::null && valid(ctx.editor.scene, sel))
+                {
+                    out["entity"] = entityRef(ctx.editor.scene, sel);
+                }
+                else
+                {
+                    out["entity"] = nullptr;
+                }
+                return out;
+            });
+
+        registerCommand(reg, "deselect", "deselect — clear the editor selection",
+            [](EngineContext& ctx, const json&) -> Result<json>
+            {
+                setSelection(ctx.editor, Entity{ entt::null });
+                return json{ { "selectionVersion", ctx.editor.selectionVersion } };
+            });
+
+        registerCommand(reg, "add-entity",
+            "add-entity {preset=empty|cube|model|point-light|spot-light|directional-light|camera}",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                const std::string preset = asString(positionalOr(params, "preset", 0), "empty");
+                Scene& scene = ctx.editor.scene;
+                Entity e{ entt::null };
+                if (preset == "empty")
+                {
+                    e = createEntity(scene, "Entity");
+                }
+                else if (preset == "cube" || preset == "model")
+                {
+                    auto cube = importModel(ctx.assets, ctx.renderer, assetPath("models/cube.gltf"));
+                    if (!cube) { return Err(cube.error()); }
+                    e = spawnModel(scene, "Cube", *cube);
+                }
+                else if (preset == "point-light")
+                {
+                    e = createEntity(scene, "Point Light");
+                    addComponent<PointLightComponent>(scene, e);
+                    getComponent<TransformComponent>(scene, e).translation = glm::vec3(0.0f, 2.0f, 0.0f);
+                }
+                else if (preset == "spot-light")
+                {
+                    e = createEntity(scene, "Spot Light");
+                    addComponent<SpotLightComponent>(scene, e);
+                    getComponent<TransformComponent>(scene, e).translation = glm::vec3(0.0f, 4.0f, 0.0f);
+                }
+                else if (preset == "directional-light")
+                {
+                    e = createEntity(scene, "Directional Light");
+                    addComponent<DirectionalLightComponent>(scene, e);
+                }
+                else if (preset == "camera")
+                {
+                    e = createEntity(scene, "Camera");
+                    addComponent<CameraComponent>(scene, e);
+                }
+                else
+                {
+                    return Err(std::format("unknown preset '{}'", preset));
+                }
+                ctx.editor.sceneVersion += 1;
+                setSelection(ctx.editor, e);
+                return entityRef(scene, e);
+            });
+
+        registerCommand(reg, "copy-entity", "copy-entity {entity} — deep-duplicate it (selects the copy)",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                auto src = resolveEntity(ctx, params);
+                if (!src) { return Err(src.error()); }
+                Scene& scene = ctx.editor.scene;
+                const std::string copyName = getComponent<NameComponent>(scene, *src).name + " (copy)";
+                Entity fresh = createEntity(scene, copyName);
+                // deserialize add-defaults each missing component and applies fromJson, so we
+                // do not call addDefault (which would double-emplace Name/Transform that
+                // createEntity already added). Copying the Name component overwrites the
+                // "(copy)" suffix, so restore it afterwards.
+                for (const ComponentTraits& t : ctx.editor.registry.rows)
+                {
+                    if (t.has(scene, *src))
+                    {
+                        static_cast<void>(t.deserialize(scene, fresh, t.serialize(scene, *src)));
+                    }
+                }
+                getComponent<NameComponent>(scene, fresh).name = copyName;
+                ctx.editor.sceneVersion += 1;
+                setSelection(ctx.editor, fresh);
+                return entityRef(scene, fresh);
+            });
+
+        registerCommand(reg, "set-component-field",
+            "set-component-field {entity, component, field, value} — merge one field "
+            "(value may be a uuid string, number, bool, or json object)",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                auto entity = resolveEntity(ctx, params);
+                if (!entity) { return Err(entity.error()); }
+                const std::string comp = asString(positionalOr(params, "component", 1), "");
+                const std::string field = asString(positionalOr(params, "field", 2), "");
+                if (comp.empty() || field.empty())
+                {
+                    return Err(std::string{ "usage: set-component-field {entity, component, field, value}" });
+                }
+                const ComponentTraits* row = findByName(ctx.editor.registry, comp);
+                if (row == nullptr) { return Err(std::format("unknown component '{}'", comp)); }
+                if (!row->has(ctx.editor.scene, *entity))
+                {
+                    row->addDefault(ctx.editor.scene, *entity);
+                }
+                json body = row->serialize(ctx.editor.scene, *entity);
+                json value = positionalOr(params, "value", 3);
+                // The CLI passes a bare uuid as a string; coerce a fully-numeric string to u64
+                // so a value<u64> deserialize does not abort under JSON_NOEXCEPTION.
+                if (value.is_string())
+                {
+                    const std::string s = value.get<std::string>();
+                    u64 n = 0;
+                    const std::from_chars_result fc = std::from_chars(s.data(), s.data() + s.size(), n);
+                    if (fc.ec == std::errc{} && fc.ptr == s.data() + s.size()) { value = n; }
+                }
+                body[field] = value;
+                auto result = row->deserialize(ctx.editor.scene, *entity, body);
+                if (!result) { return Err(result.error()); }
+                return json{ { "set", row->name }, { "field", field } };
+            });
+
+        registerCommand(reg, "get-camera", "get-camera — the editor fly-camera state",
+            [](EngineContext& ctx, const json&) -> Result<json>
+            {
+                const EditorCamera& c = ctx.editor.camera;
+                return json{ { "position", vec3ToJson(c.position) },
+                             { "yaw", c.yaw }, { "pitch", c.pitch }, { "fov", c.fov },
+                             { "near", c.nearPlane }, { "far", c.farPlane },
+                             { "moveSpeed", c.moveSpeed }, { "lookSpeed", c.lookSpeed } };
+            });
+
+        registerCommand(reg, "set-camera",
+            "set-camera {position?, yaw?, pitch?, fov?, near?, far?, moveSpeed?, lookSpeed?}",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                auto readF32 = [&params](const char* key, f32 fallback) -> f32
+                {
+                    return params.contains(key) && params[key].is_number()
+                        ? static_cast<f32>(params[key].get<double>()) : fallback;
+                };
+                EditorCamera& c = ctx.editor.camera;
+                if (params.contains("position")) { c.position = vec3FromJson(params["position"]); }
+                c.yaw = readF32("yaw", c.yaw);
+                c.pitch = readF32("pitch", c.pitch);
+                c.fov = readF32("fov", c.fov);
+                c.nearPlane = readF32("near", c.nearPlane);
+                c.farPlane = readF32("far", c.farPlane);
+                c.moveSpeed = readF32("moveSpeed", c.moveSpeed);
+                c.lookSpeed = readF32("lookSpeed", c.lookSpeed);
+                return json{ { "position", vec3ToJson(c.position) }, { "yaw", c.yaw }, { "pitch", c.pitch },
+                             { "fov", c.fov }, { "near", c.nearPlane }, { "far", c.farPlane },
+                             { "moveSpeed", c.moveSpeed }, { "lookSpeed", c.lookSpeed } };
+            });
+
+        registerCommand(reg, "get-gizmo", "get-gizmo — the gizmo op + space",
+            [](EngineContext& ctx, const json&) -> Result<json>
+            {
+                return json{ { "op", gizmoOpName(ctx.editor.gizmoOp) },
+                             { "space", gizmoSpaceName(ctx.editor.gizmoSpace) } };
+            });
+
+        registerCommand(reg, "set-gizmo", "set-gizmo {op?:translate|rotate|scale, space?:world|local}",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                if (params.contains("op"))
+                {
+                    ctx.editor.gizmoOp = gizmoOpFromName(asString(params["op"], "translate"));
+                }
+                if (params.contains("space"))
+                {
+                    ctx.editor.gizmoSpace = gizmoSpaceFromName(asString(params["space"], "world"));
+                }
+                return json{ { "op", gizmoOpName(ctx.editor.gizmoOp) },
+                             { "space", gizmoSpaceName(ctx.editor.gizmoSpace) } };
+            });
+
+        registerCommand(reg, "gizmo-pointer",
+            "gizmo-pointer {phase:hover|begin|drag|end, x, y} — drive the overlay gizmo (x,y are NDC [-1,1])",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                const std::string phase = asString(positionalOr(params, "phase", 0), "hover");
+                const json xParam = positionalOr(params, "x", 1);
+                const json yParam = positionalOr(params, "y", 2);
+                f32 x = 0.0f;
+                f32 y = 0.0f;
+                if (xParam.is_number()) { x = static_cast<f32>(xParam.get<double>()); }
+                if (yParam.is_number()) { y = static_cast<f32>(yParam.get<double>()); }
+
+                // Keep mode/space in sync with the backend-neutral gizmo state (the single source).
+                syncNativeGizmo(ctx.editor);
+                const CameraView cam = editorCameraView(ctx.editor.camera);
+                const u32 width = viewportWidth(ctx.renderer);
+                const u32 height = viewportHeight(ctx.renderer);
+                // NDC [-1,1] (top-left = -1,-1) → viewport pixels, matching the SDL pointer path.
+                const glm::vec2 mouse{ (x * 0.5f + 0.5f) * static_cast<f32>(width),
+                                       (y * 0.5f + 0.5f) * static_cast<f32>(height) };
+
+                NativeGizmoState& gizmo = ctx.editor.nativeGizmo;
+                if (phase == "hover")
+                {
+                    gizmo.hovered = hitNativeGizmo(ctx.editor, cam, width, height, mouse);
+                }
+                else if (phase == "begin")
+                {
+                    gizmo.hovered = hitNativeGizmo(ctx.editor, cam, width, height, mouse);
+                    if (gizmo.hovered != NativeGizmoHandle::None &&
+                        ctx.editor.selected.handle != entt::null &&
+                        hasComponent<TransformComponent>(ctx.editor.scene, ctx.editor.selected))
+                    {
+                        gizmo.active = gizmo.hovered;
+                        gizmo.dragging = true;
+                        gizmo.startMouse = mouse;
+                        gizmo.target = ctx.editor.selected;
+                        TransformComponent& transform =
+                            getComponent<TransformComponent>(ctx.editor.scene, ctx.editor.selected);
+                        gizmo.startTranslation = transform.translation;
+                        gizmo.startRotation = transform.rotation;
+                        gizmo.startScale = transform.scale;
+                    }
+                }
+                else if (phase == "drag")
+                {
+                    applyNativeGizmoDrag(ctx.editor, cam, width, height, mouse);
+                }
+                else if (phase == "end")
+                {
+                    gizmo.dragging = false;
+                    gizmo.active = NativeGizmoHandle::None;
+                    gizmo.target = Entity{ entt::null };
+                }
+                else
+                {
+                    return Err(std::format("gizmo-pointer: unknown phase '{}'", phase));
+                }
+
+                const NativeGizmoHandle h = gizmo.dragging ? gizmo.active : gizmo.hovered;
+                const char* handleName =
+                    h == NativeGizmoHandle::X       ? "x"
+                    : h == NativeGizmoHandle::Y     ? "y"
+                    : h == NativeGizmoHandle::Z     ? "z"
+                    : h == NativeGizmoHandle::XY    ? "xy"
+                    : h == NativeGizmoHandle::YZ    ? "yz"
+                    : h == NativeGizmoHandle::XZ    ? "xz"
+                    : h == NativeGizmoHandle::Screen  ? "screen"
+                    : h == NativeGizmoHandle::Uniform ? "uniform"
+                                                      : "none";
+                return json{ { "hovered", handleName }, { "dragging", gizmo.dragging } };
+            });
+
+        registerCommand(reg, "dump-schema",
+            "dump-schema — live component / environment / render-stats shapes for codegen",
+            [](EngineContext& ctx, const json&) -> Result<json>
+            {
+                json components = json::object();
+                for (const ComponentTraits& row : ctx.editor.registry.rows)
+                {
+                    // A fresh scratch entity per component; createEntity already gives it
+                    // Name/Transform, so only add the others (addDefault double-emplaces).
+                    Entity scratch = createEntity(ctx.editor.scene, "__schema__");
+                    if (!row.has(ctx.editor.scene, scratch)) { row.addDefault(ctx.editor.scene, scratch); }
+                    components[row.name] = json{ { "removable", row.removable },
+                                                 { "fields", row.serialize(ctx.editor.scene, scratch) } };
+                    destroyEntity(ctx.editor.scene, scratch);
+                }
+                json out;
+                out["components"] = std::move(components);
+                out["environment"] = environmentToJson(ctx.editor.scene.environment);
+                out["renderStats"] = renderStatsJson(ctx.renderer);
+                return out;
             });
     }
 }
