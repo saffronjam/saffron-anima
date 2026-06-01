@@ -1,10 +1,54 @@
 # Phase 3: Lighting Integration
 
+**Status:** NOT STARTED (heavily revised — most of the original scope is already shipped)
+
 ## Goal
 
-Connect scene environment to mesh lighting without doing full physically based IBL yet.
+Connect `SceneEnvironment` to mesh lighting. The original phase planned to *build* IBL here;
+the lighting roadmap already built it. So this phase shrinks to **wiring**: make the
+environment authoring controls actually drive the (already-existing) IBL bake, the procedural
+sky, the DDGI sky color, and the non-IBL fallback ambient.
 
-## Current Lighting Limitation
+> ## Post-lighting reality — what is ALREADY DONE
+>
+> The 8-phase `plans/lighting/` roadmap implemented essentially all of this phase's original
+> "future" work. Do **not** rebuild any of it:
+> - **Full split-sum IBL** — `irradianceCube` + `prefilteredCube` + `brdfLut` baked from
+>   `envCube`, bound at mesh **set 3**, driving physically-based diffuse + specular ambient
+>   (`mesh.slang:454-466`). This *replaced* scalar ambient as the default; "Step 4: Diffuse
+>   IBL" and "Step 5: Specular IBL" below are **DONE**.
+> - **PBR Cook-Torrance BRDF** with metallic/roughness materials — done (lighting phase 1).
+> - **Colored ambient via the environment** already happens through IBL; the SH-projection
+>   path proposed below is unnecessary (a baked irradiance cube already does it).
+> - The scalar `directionAmbient.w` term is now only the **fallback** used when IBL is off
+>   (`counts.z == 0`), computed as `albedo * (1-metallic) * directionAmbient.w`
+>   (`mesh.slang:468-471`). The big LightUbo restructure proposed in "Step 1" is obsolete —
+>   the real `LightUbo` has ~14 fields (`renderer_detail.cppm:1026-1041`).
+>
+> ## Revised remaining work (what this phase SHOULD do now)
+>
+> 1. **Drive the procedural sky from `SceneEnvironment`.** `ibl_skygen.slang` hardcodes sun
+>    direction + zenith/horizon/ground colors (`:21-45`). Promote those to skygen push-constant
+>    / UBO params sourced from `SceneEnvironment` (sun from the scene's `DirectionalLight`;
+>    tint/intensity from environment). Because the bake runs **once at init**
+>    (`renderer.cppm:275-278`), add a **`rebakeEnvironment` on demand** when those inputs change
+>    so the visible sky (phase 2, sampling `envCube`) *and* the IBL lighting update together —
+>    one slider re-tints background + lighting coherently. Guard re-bake behind a dirty flag
+>    (it's a `waitIdle` + a handful of dispatches, fine for editor-time edits, not per-frame).
+> 2. **Feed environment sky color into DDGI.** `Ddgi.skyColor`/`sunDir`/`sunColor`/`sunIntensity`
+>    (`renderer_types.cppm:814-855`) are hardcoded today and consumed by the DDGI trace; route
+>    them through `setSceneEnvironment`/`setDdgiScene` from `SceneEnvironment`.
+> 3. **RGB fallback ambient (small, optional).** For the IBL-off path, add a `glm::vec4`
+>    ambient-color slot to `LightUbo` and change the fallback line to
+>    `albedo*(1-metallic) * ambientColor.rgb * ambientColor.a`, sourced from
+>    `environment.ambientColor * ambientIntensity`. Low priority — only matters with IBL off.
+> 4. **Wire `useSkyForAmbient`.** When false, skip environment-driven ambient and keep the
+>    legacy directional-light ambient fallback.
+>
+> The detailed steps below are the **original (pre-lighting) plan**, kept for context. Steps
+> 4–5 are DONE; steps 1–3 are superseded by "Revised remaining work" above.
+
+## Current Lighting Limitation (original — now historical)
 
 The mesh shader currently uses:
 

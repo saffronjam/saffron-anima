@@ -1,8 +1,22 @@
 # Phase 1: Scene Environment Data
 
+**Status:** NOT STARTED
+
 ## Goal
 
 Add durable scene-level environment state without changing rendering behavior yet. This phase should be mostly data model, serialization, and editor control plumbing.
+
+> **Post-lighting note.** This phase is unchanged by the lighting roadmap — `Scene`
+> (`scene.cppm`) still holds only `entt::registry registry` + `const AssetCatalog* catalog`,
+> `SceneVersion` is still `1`, and `sceneFromJson` **fails** on a version mismatch (so the
+> 1→2 bump *must* ship a migration that accepts v1 and fills defaults). `ProjectVersion`
+> stays `1` (the project wraps the scene; only the nested scene version bumps). Grounded
+> anchors: `Scene` at `scene.cppm:198-202`, `SceneVersion` at `:335`, `sceneToJson`/
+> `sceneFromJson` at `:465-532`, glm vec3/vec4 JSON helpers at `:311-331`, the
+> `assetTypeName`/`assetTypeFromName` enum-string pattern at `assets.cppm:49-61`. Default
+> `ambientColor`/`ambientIntensity` so an existing (IBL-on) project looks unchanged after
+> migration. Control commands that edit the environment must mutate `Scene.environment`
+> (the per-frame source of truth `renderScene` re-reads), **not** renderer state directly.
 
 ## Data Model
 

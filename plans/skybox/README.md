@@ -2,6 +2,45 @@
 
 This folder tracks a thorough implementation plan for skyboxes and scene environment rendering in Saffron Engine.
 
+## Status convention
+
+Each phase file carries a `**Status:**` line (`NOT STARTED` / `IN PROGRESS` / `COMPLETED`).
+Mark a phase `COMPLETED` when its work is done and validation-clean; delete a phase file
+only *after* it is `COMPLETED` and merged.
+
+## Post-lighting reality (READ FIRST — 2026-06-01)
+
+This plan was authored **before** the 8-phase `plans/lighting/` roadmap landed, and lighting
+rebuilt exactly the subsystems this plan targets. The grounded facts (from a recon over
+`renderer_detail.cppm`, `mesh.slang`, `renderer.cppm`, `scene.cppm`, `assets.cppm`):
+
+- **The engine already bakes a full IBL environment once at init from a *procedural* sky.**
+  `bakeEnvironment` (`renderer_detail.cppm`) runs `ibl_skygen.slang` (hardcoded sun + zenith/
+  horizon/ground gradient) into `envCube` (128² rgba16f), then convolves `irradianceCube`
+  (32²), `prefilteredCube` (128², 5 mips), and `brdfLut` (256²). All four are bound into the
+  mesh fragment at **set 3** and drive split-sum PBR ambient. So everything phase-3/4 calls
+  "future work" — cubemap creation, irradiance, prefiltered specular, BRDF LUT, PBR — **is
+  already shipped.**
+- **`envCube` is a sampleable cubemap in `ShaderReadOnlyOptimal` after bake.** The visible sky
+  pass (phase 2) should sample *that same cube* by view direction for its default/procedural
+  mode — the background and the lighting environment become one coherent source, no new
+  texture pipeline needed.
+- **Ambient is now scalar `directionAmbient.w`, used only as the non-IBL fallback.** When IBL
+  is on (`counts.z != 0`, the default) full split-sum replaces it. Phase-3's "add RGB ambient
+  + tiny LightUbo" proposal is largely obsolete; the real `LightUbo` has ~14 fields.
+- **HDR offscreen (`OffscreenColorFormat = eR16G16B16A16Sfloat`) + a mandatory tonemap pass
+  already exist.** A visible sky writes linear HDR into the scene color target and tonemaps
+  for free. No phase-2 blocker there.
+- **Still genuinely missing (the real work of this plan):** scene-level `SceneEnvironment`
+  state (phase 1), a *visible* sky background pass (phase 2), wiring `SceneEnvironment` to
+  drive the procedural sky / ambient / DDGI sky color (phase 3 remnant), and HDR `.hdr` import
+  + user equirect→cubemap IBL re-bake + atmosphere/clouds (phase 4 roadmap).
+- **Texture decode is sRGB RGBA8 only** (stb_image, no `.hdr`). Phase-2 texture-mode sky is
+  LDR for now (explicitly fine — see phase 2).
+
+Net effect on scope: **phases 1 + 2 + the non-done slice of phase 3 are the implementable
+work; phase 4 stays a roadmap.** Each phase file below has been updated in place to match.
+
 ## Recommendation
 
 The sky should be modeled as scene environment state, not as a normal mesh entity.

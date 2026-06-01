@@ -1,8 +1,41 @@
 # Phase 2: Visible Skybox Rendering
 
+**Status:** NOT STARTED
+
 ## Goal
 
 Render a visible sky background from `SceneEnvironment` through a dedicated renderer path. This phase should support solid color and texture sky appearance without adding full IBL or atmosphere.
+
+> **Post-lighting note — reuse the existing `envCube`.** Lighting already bakes a procedural
+> HDR sky into `envCube` (128² rgba16f, `ShaderReadOnlyOptimal`, view type `eCube`,
+> `renderer_detail.cppm` bake at `:3172-3440`). The visible sky's default/`ProceduralAtmosphere`
+> mode should **sample that same cube** by world-space view direction — the background then
+> matches the IBL lighting exactly, with no extra resource. So the three modes are:
+> - **`Color`** → output `clearColor * intensity`.
+> - **`ProceduralAtmosphere`** (recommended default) → sample `envCube` by ray direction.
+> - **`Texture`** → sample a user LDR equirectangular panorama (sRGB RGBA8 via the existing
+>   `loadTextureAsset`/bindless path; no `.hdr` yet — that's phase 4) by lat/long.
+>
+> Concrete anchors from the recon:
+> - **HDR + tonemap are already in place** — `OffscreenColorFormat` is `eR16G16B16A16Sfloat`
+>   and a mandatory tonemap compute pass runs last; the sky writes *linear HDR* into the scene
+>   color target. Do **not** add a second clear/tonemap.
+> - **Scene color target per AA mode** (`renderer.cppm:669-688`): off→`offscreen`;
+>   FXAA/TAA→`scratch` (then a compute pass resamples to `offscreen`); MSAA orthogonal→scene
+>   renders to `msaaColor` with `RgAttachment.resolve = sceneOutput`. The sky pass must write
+>   **the same target the scene pass chose** so it is resolved/filtered identically.
+> - **The clear today** is `frame.clearColor = {0.05,0.06,0.08,1}` (`renderer_types.cppm:562`),
+>   a static default with no setter. The sky pass takes over the clear: it uses `loadOp=Clear`
+>   and the **scene pass switches its color `loadOp` from `eClear` to `eLoad`** (the scene
+>   color clear is at `renderer.cppm:1254-1255`; flip it when the sky pass is present).
+> - **No fullscreen graphics pass exists yet** without vertex input, but `triangle.slang` is
+>   the `SV_VertexID` fullscreen-triangle reference and `makeShadowPipeline`
+>   (`renderer_detail.cppm:1317-1411`) / `newMeshPipeline` (`renderer_pipelines.cpp:40-174`)
+>   are the PSO templates. Sky PSO: empty vertex input, triangle-list, depth test+write OFF,
+>   cull NONE, color = `OffscreenColorFormat`, `rasterizationSamples = targets.sampleCount`
+>   (so MSAA works), one combined-image-sampler set + push constants (inverse-viewProj + sky
+>   params). Rebuild it on AA sample-count change (the `pipelines.cache.clear()` flow at
+>   `renderer.cppm:310-328`).
 
 ## Renderer Data
 

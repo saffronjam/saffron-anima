@@ -1,10 +1,29 @@
 # Phase 4: Atmosphere And IBL Roadmap
 
+**Status:** ROADMAP (genuinely future; not implemented with phases 1–3)
+
 ## Goal
 
 Document the longer-term path beyond a visible skybox: HDR support, environment maps, reflection probes, physically based atmosphere, and clouds.
 
 This phase should not block the first usable skybox.
+
+> **Post-lighting note — most IBL infrastructure already exists.** The lighting roadmap built
+> the cubemap/IBL stack this section once scoped as future work. **Already done:** `GpuCubemap`-
+> equivalent cube `Image` creation (`newCubeImage`, cube-compatible + mip + `eCube` view),
+> diffuse irradiance convolution (`ibl_irradiance.slang`), prefiltered specular mip chain
+> (`ibl_prefilter.slang`), BRDF integration LUT (`ibl_brdf.slang`), and PBR roughness/metalness
+> materials sampling them (`mesh.slang` set 3). The "Diffuse Irradiance", "Specular Reflections",
+> and most of "Cubemap Conversion" items below are therefore **DONE** — for the *procedural*
+> source. What remains genuinely future:
+> - **HDR `.hdr` import** — decode is sRGB RGBA8 only today (stb_image, `geometry.cppm:568-603`);
+>   needs `stb_image`'s `stbi_loadf` float path + `uploadTextureFloat` + a float bindless slot.
+> - **User equirect→cubemap + IBL re-bake from a user panorama** — feed a loaded HDR equirect
+>   into `bakeEnvironment` (an equirect→cube prepass) instead of the procedural skygen, then
+>   re-run the existing irradiance/prefilter/BRDF passes. (Phase 3 already adds on-demand
+>   re-bake for the procedural params; this extends the *source*.)
+> - **Reflection probes, procedural atmosphere LUTs, clouds, time-of-day** — all still future,
+>   as below.
 
 ## HDR Texture Support
 
