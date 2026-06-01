@@ -5,73 +5,49 @@ weight = 4
 
 # Transform gizmo
 
-The selected entity gets an in-viewport translate/rotate/scale gizmo, drawn with ImGuizmo; W, E, and R cycle the operation. Three things make it behave: where the gizmo draws (into the viewport window, not over the whole screen), which projection it gets (the un-flipped one), and how it writes a drag back onto a Euler-angle transform without snapping.
+The selected entity gets a translate/rotate/scale gizmo. It is rendered by the engine, not by the UI: under [present-only mode](../tauri-editor-and-x11-bridge/) ImGui is skipped, so the old ImGuizmo path is gone. The engine draws the gizmo through an overlay pipeline into the viewport at 1x after tonemap, and the webview forwards pointer intent and the chosen mode over the control socket.
 
-## Drawn into the viewport window
+## Engine-rendered overlay
 
-A screen-wide gizmo overlay would not clip to the dockable viewport, and its mouse hit-testing would fight the rest of the UI. Instead the gizmo draws into the "Viewport" window's draw list and is scoped to the image's rectangle:
+The gizmo is part of the scene the engine presents. An overlay pipeline runs at the offscreen's native (1x) resolution *after* the tonemap pass, so the handles stay crisp and unaffected by exposure, MSAA resolve, or post-process. Because it is engine-side, the gizmo lines up exactly with the meshes it manipulates — it shoots through the same [editor camera](../editor-camera/) the scene draws with, with no second projection to keep in sync.
 
-```cpp
-ImGui::Begin("Viewport");
-ImGuizmo::SetOrthographic(false);
-ImGuizmo::SetDrawlist();
-ImGuizmo::SetRect(imagePos.x, imagePos.y, imageSize.x, imageSize.y);
-```
+The light and camera billboards are drawn the same way: the engine projects each non-mesh entity to screen space and draws an icon, so a light or camera is selectable in the viewport even though it has no geometry.
 
-`imagePos` / `imageSize` are the viewport image's screen rect, captured by [the viewport panel](../viewport-panel/). Living in that window's draw list, the gizmo clips to the panel and consumes mouse input there like any other widget.
+## The gizmo-pointer command
 
-## Un-flipped projection
+The webview owns the DOM and the pointer events; the reparented native window does not receive raw mouse from it. So the [viewport panel](../viewport-panel/) translates each pointer phase into NDC and forwards it with the `gizmo-pointer` command:
 
-The renderer flips the projection's Y to match Vulkan's clip space, but that flip stays local to the renderer. The gizmo is handed the un-flipped projection — the same camera draws the scene with the flip and feeds the gizmo without it, and they still line up on screen.
-
-> [!WARNING]
-> Pass the un-flipped projection. ImGuizmo expects a standard projection, so handing it the renderer's Y-flipped matrix mirrors the gizmo vertically and inverts every drag. The caller builds `cameraProjection(cam, aspect)` without the `proj[1][1] *= -1` the renderer applies.
-
-## Cycling the operation
-
-W/E/R switch translate/rotate/scale, but only when it's safe to read those keys as shortcuts:
-
-```cpp
-if (hovered && !ImGuizmo::IsUsing() && !ImGui::IsAnyItemActive() &&
-    !ImGui::IsMouseDown(ImGuiMouseButton_Right))
-{
-    if (ImGui::IsKeyPressed(ImGuiKey_W)) { ctx.gizmoOp = ImGuizmo::TRANSLATE; }
-    if (ImGui::IsKeyPressed(ImGuiKey_E)) { ctx.gizmoOp = ImGuizmo::ROTATE; }
-    if (ImGui::IsKeyPressed(ImGuiKey_R)) { ctx.gizmoOp = ImGuizmo::SCALE; }
+```ts
+gizmoPointer(phase: GizmoPointerPhase, x: number, y: number): Promise<unknown> {
+  return callRaw("gizmo-pointer", { phase, x, y });
 }
 ```
 
-The right-mouse guard is the link to [the editor camera](../editor-camera/): while you fly with RMB+WASD, W means "move forward", not "switch to translate". The guards also skip the shortcut while a gizmo drag is in progress or another widget is being edited.
+`phase` is one of `hover | begin | drag | end`, and `x`/`y` are NDC in `[-1, 1]` (the same `u*2-1` mapping `pick` uses). A bare move streams `hover` so the engine highlights the handle under the cursor; a press sends `begin`; if the pointer then travels past a few pixels it becomes a `drag` (streamed, throttled, and it sets `store.dragActive` so the reconcile poll won't clobber the in-progress transform); the release always sends `end`, where the engine commits the authoritative transform. A press that *doesn't* move is a click — it [ray-picks](../selection/) instead of dragging.
 
-## Writing the drag back without snapping
+## Mode and space
 
-ImGuizmo manipulates a `glm::mat4` model matrix. Writing it back into the entity's `TransformComponent` means decomposing the matrix into translation, rotation, and scale. The catch: the transform stores rotation as Euler XYZ radians (so the inspector can edit past 90° without gimbal clipping), and a round-trip through a quaternion and back to Euler can pick a different but equivalent angle set, which would make a pure translate drag visibly snap the rotation.
+The operation (T/R/S) and the world/local space are **one** shared gizmo state on the engine, read and written through `get-gizmo`/`set-gizmo`. There is a single source of truth, so the Topbar buttons, the keyboard shortcuts, and an external `se set-gizmo` all agree.
 
-The fix is to apply rotation as a *delta* on the stored Euler, not to overwrite it:
-
-```cpp
-if (glm::decompose(model, scale, rotation, translation, skew, perspective))
-{
-    const glm::vec3 deltaEuler = glm::eulerAngles(rotation) - transform.rotation;
-    transform.translation = translation;
-    transform.rotation += deltaEuler;
-    transform.scale = scale;
-}
-```
-
-Translation and scale come straight off the decomposition; only the rotation *change* since the last frame is added to the stored Euler. A translate-only drag produces a near-zero delta, so the stored rotation is left untouched.
+- The **Topbar** has a T/R/S button group and a World/Local toggle. A click updates `store.gizmo` optimistically and fires `set-gizmo`.
+- **W/E/R** map to translate/rotate/scale, bound on the webview (gated off while a text field is focused so typing a value never retargets the gizmo).
+- The reconcile poll's `get-gizmo` read folds any external change back into `store.gizmo`, so the Topbar stays correct no matter who set the mode.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Gizmo draw + write-back | `editor_gizmo.cpp` | `drawGizmo`, `glm::decompose` |
-| Op state + cycle | `editor_gizmo.cpp` | `ctx.gizmoOp`, the W/E/R guards |
-| Viewport-window scoping | `editor_gizmo.cpp` | `ImGuizmo::SetDrawlist`, `SetRect` |
-| Un-flipped projection (caller) | `editor_app.cppm` | `cameraProjection(cam, aspect)` (no Y-flip) |
+| Pointer forwarding | `editor/src/panels/ViewportPanel.tsx` | `gizmoPointer`, the `begin`/`drag`/`end` gesture, `DRAG_THRESHOLD_PX` |
+| The gizmo-pointer wrapper | `editor/src/control/client.ts` | `gizmoPointer`, `GizmoPointerPhase` |
+| T/R/S + world/local | `editor/src/panels/Topbar.tsx` | `selectOp`, `selectSpace` |
+| W/E/R shortcuts | `editor/src/app/useGizmoShortcuts.ts` | `useGizmoShortcuts`, `KEY_TO_OP` |
+| Shared gizmo state | `editor/src/state/store.ts` | `gizmo`, `setGizmo` |
+| Mode commands (engine) | `control_commands_scene.cpp` | `get-gizmo`, `set-gizmo`, `gizmo-pointer` |
 
 ## Related
 
-- [Editor camera](../editor-camera/) — the RMB guard, and the shared `CameraView`
+- [Editor camera](../editor-camera/) — the eye the gizmo and scene share
+- [Selection](../selection/) — the click-vs-drag split, and ray-pick on a non-drag click
+- [Viewport panel](../viewport-panel/) — where pointer phases are captured and forwarded
+- [Scene commands](../../tooling-and-control/scene-commands/) — `get-gizmo`/`set-gizmo`/`gizmo-pointer`
 - [Transform and matrices](../../scene-and-ecs/transform-and-matrices/) — the Euler-radians transform the gizmo edits
-- [Viewport panel](../viewport-panel/) — supplies the image rect the gizmo clips to

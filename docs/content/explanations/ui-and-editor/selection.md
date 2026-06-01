@@ -5,61 +5,57 @@ weight = 9
 
 # Selection
 
-There is one selected entity at a time, broadcast as a signal so any panel can react. You select by clicking a row in the [hierarchy](../hierarchy-panel/), clicking a light or camera billboard in the viewport, or ray-picking a mesh in empty viewport space. Clicking empty space deselects.
+There is one selected entity at a time, and it lives in two places: the engine (authoritative) and the React store (a fast local mirror). You select by clicking a row in the [hierarchy](../hierarchy-panel/), clicking a light/camera billboard in the viewport, or ray-picking a mesh; clicking empty space deselects. The two stay in sync through a version-stamped poll, with optimistic local writes so the UI never feels a round-trip.
 
-## Selection is a signal, not a poll
+## Optimistic select, then reconcile
 
-The selected entity lives on the editor context, and changing it goes through one function that also publishes a signal:
+A click sets `store.selectedId` immediately, then fires the engine command:
 
-```cpp
-void setSelection(EditorContext& ctx, Entity entity)
-{
-    ctx.selected = entity;
-    ctx.onSelectionChanged.publish(entity);
-}
+```ts
+selectEntity(id);                              // local highlight, no wait
+void client.selectEntity(id).catch(() => {});  // tell the engine
 ```
 
-`onSelectionChanged` is a `SubscriberList<Entity>`, the engine's signal/slot type. Anything that cares about the selection subscribes to it instead of reading `ctx.selected` directly. Every source — hierarchy click, billboard click, ray-pick, delete-clears-selection — funnels through `setSelection`, so there is exactly one place selection changes and one place it's announced.
+The engine bumps a `selectionVersion` on every selection change (from `select`, `deselect`, `pick`, or a destroy that clears it). The reconcile poll reads `get-selection` each tick — it returns `{entity, selectionVersion, sceneVersion}` — and only re-applies the selection when the version or the selected id actually changed. So the common case (nothing changed) costs one cheap call, and an *external* change (e.g. `se select`) still propagates back into the store within a tick.
 
-## Three ways to select in the viewport
+```ts
+const nextSelectedId = selection.entity ? selection.entity.id : null;
+const selectionChanged =
+  selection.selectionVersion !== knownSelectionVersion ||
+  nextSelectedId !== knownSelectedId;
+if (selectionChanged) live.setSelectedId(nextSelectedId);
+```
 
-The viewport offers three pointer interactions, resolved in priority order each frame:
+When the selection (or `sceneVersion`) changes, the poll re-`inspect`s the new entity into `componentsBySelected`, which is what the [inspector](../inspector/) renders. Writes are gated off while `dragActive`, so a gizmo or scrub drag in progress is never clobbered by a poll.
 
-1. **Billboards.** `drawEditorBillboards` projects each light and camera entity's world position to screen space and draws an icon. A click inside an icon's box returns that entity, and the selected icon tints gold so the current selection stays visible even for entities with no mesh.
+## Picking in the viewport
 
-2. **Mesh ray-pick.** If no billboard was hit, a left-click in the hovered viewport ray-picks the nearest mesh, but only when the gizmo isn't being interacted with:
+A plain left-click in the viewport (a press that doesn't travel far enough to be a [gizmo](../gizmo/) drag) is a ray-pick. The [viewport panel](../viewport-panel/) maps the click to `{u,v}` in `[0,1]` and calls `pick`:
 
-   ```cpp
-   if (billboardHit.handle == entt::null &&
-       viewportHovered(app.ui) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-       !ImGuizmo::IsOver() && !ImGuizmo::IsUsing())
-   {
-       ... // build NDC from the click, then pickEntity
-       setSelection(*state->editor, pickEntity(scene, assets, renderer, cam, ndc));
-   }
-   ```
+```ts
+const result = await client.pick(u, v);
+if (result.hit && result.id) setSelectedId(result.id);
+else setSelectedId(null);   // empty space deselects
+```
 
-   The `ImGuizmo::IsOver()` / `IsUsing()` guards stop a click on a gizmo handle from reading as a pick-the-empty-space, which would deselect the very thing you're dragging.
+The engine builds a ray from the [editor camera](../editor-camera/) through that UV, tests billboards first then the nearest mesh AABB, selects the hit (bumping `selectionVersion`), and returns `{hit, id?, name?}`. A miss returns `{hit:false}` and deselects. The store update is optimistic; the reconcile poll confirms it via the version it just bumped.
 
-3. **Deselect.** `pickEntity` returns a null entity on a miss, and `setSelection` takes it as-is, so clicking empty space clears the selection.
-
-## Ray-pick lives in Assets
-
-`pickEntity` builds a camera ray from the click's NDC and tests it against each entity's world-space mesh AABB, keeping the nearest hit. It lives in `Saffron.Assets` because it needs the GPU mesh bounds the asset server caches, which the editor module has no access to. The ray cast, the AABB slab test, and the Vulkan-clip caveat are covered in [Picking](../../scene-and-ecs/picking/).
+The ray + AABB math and the Vulkan-clip caveat are covered in [Picking](../../scene-and-ecs/picking/). The click-vs-drag split (so a click on a gizmo handle drags rather than picks) lives in the viewport panel's pointer gesture.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The selection signal | `editor_context.cpp` | `setSelection`, `onSelectionChanged` |
-| Selection state | `editor_context.cppm` | `EditorContext::selected`, `SubscriberList<Entity>` |
-| Billboard hit-test | `editor_gizmo.cpp` | `drawEditorBillboards`, `glm::project` |
-| Click → pick wiring | `editor_app.cppm` | the `onUi` pick block + gizmo guards |
-| The ray cast | `assets.cppm` | `pickEntity` |
+| Selection slice + optimistic select | `editor/src/state/store.ts` | `selectedId`, `selectEntity`, `setSelectedId` |
+| Version-stamped reconcile | `editor/src/state/store.ts` | `startReconcile`, `selectionVersion`, `sceneVersion`, `getSelection` |
+| Hierarchy click | `editor/src/panels/HierarchyPanel.tsx` | `onSelect` |
+| Viewport pick | `editor/src/panels/ViewportPanel.tsx` | `runPick`, `client.pick` |
+| Selection + pick (engine) | `control_commands_scene.cpp` | `select`, `get-selection`, `deselect`, `pick`; `pickEntity` |
+| Poll counters (engine) | `editor.cppm` | `selectionVersion`, `sceneVersion`, `setSelection` |
 
 ## Related
 
 - [Picking](../../scene-and-ecs/picking/) — the ray + AABB math behind click-select
 - [Hierarchy panel](../hierarchy-panel/) — selection by list click
-- [Gizmo](../gizmo/) — why the pick is guarded while the gizmo is active
-- [Signals and slots](../../core-and-conventions/signals-and-slots/) — the `SubscriberList` type
+- [Gizmo](../gizmo/) — why a press is split into click (pick) vs drag (manipulate)
+- [Scene commands](../../tooling-and-control/scene-commands/) — `select`/`get-selection`/`deselect`/`pick` and the poll counters

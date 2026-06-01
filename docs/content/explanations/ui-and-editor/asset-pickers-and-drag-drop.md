@@ -5,74 +5,53 @@ weight = 7
 
 # Asset pickers
 
-A `MeshComponent` or `MaterialComponent` references an asset by Uuid, not by name. The inspector edits that Uuid with a picker combo showing each asset's thumbnail and name, and the same field doubles as a drag-drop target so you can drop a tile from the [Assets panel](../assets-panel-and-thumbnails/) onto it.
+A `MeshComponent` or `MaterialComponent` references an asset by Uuid, not by name. The [inspector](../inspector/) edits that Uuid with a picker combo showing each asset's thumbnail and name, and the same field doubles as a drop target so you can drag a tile from the [Assets panel](../assets-panel-and-thumbnails/) onto it. `AssetPicker` is one reusable React widget the inspector (and the [environment panel](../theme-and-fonts/)) mount on any uuid field.
 
 ## The picker combo
 
-`drawAssetPicker` is one reusable widget used by both the Mesh field and the Material albedo field. It reads the [asset catalog](../../scene-and-ecs/asset-catalog-in-scene/) through the scene (a borrowed pointer, tolerant of null), shows the current selection's name, and lists matching assets when opened:
+`AssetPicker` is a shadcn `Popover` listing `(none)` plus every catalog asset of the field's `assetType`. It reads `store.assets`, filters by type, shows the current selection's name and swatch, and emits `onChange(id)` when you pick — `(none)` emits `"0"`:
 
-```cpp
-void drawAssetPicker(Scene& scene, AssetType type, const char* label, Uuid& target,
-                     const std::function<ImTextureID(const AssetEntry&)>& thumbnailFor)
-{
-    const AssetCatalog* catalog = scene.catalog;
-    ...
-    if (ImGui::BeginCombo(comboId.c_str(), current.c_str()))
-    {
-        if (ImGui::Selectable("(none)", target.value == 0)) { target = Uuid{ 0 }; }
-        for (const AssetEntry& entry : catalog->entries)
-        {
-            if (entry.type != type) { continue; }   // mesh fields only list meshes
-            ...
-            if (ImGui::Selectable(entry.name.c_str(), entry.id.value == target.value))
-                target = entry.id;
-        }
-    }
-}
+```ts
+const options = assets.filter((a) => a.type === assetType);  // mesh fields list only meshes
+const isNone = value === NONE_UUID || value === "";
+const selected = isNone ? null : (options.find((a) => a.id === value) ?? null);
 ```
 
-The combo filters by `AssetType`, so a Mesh picker only offers meshes and an Albedo picker only offers textures. Selecting writes the asset's Uuid into the component field, and `(none)` clears it to `Uuid{ 0 }`. Each row draws the asset's thumbnail through the same `thumbnailFor` callback the Assets panel uses, so the picker and the tile grid show the same preview.
+A Mesh field passes `assetType: "mesh"`, an albedo or sky field `"texture"`, so a field can only ever hold the right kind of asset. Each row draws a small swatch through `getThumbnailUrl` at 64px — the same [blob-URL cache](../assets-panel-and-thumbnails/) the tiles use, so the picker and the grid never double-fetch a thumbnail.
 
-## The drag-drop payload
+The picker is **field-agnostic**: it only emits the chosen id. The inspector owns the write — `Mesh.mesh` and `Material.albedoTexture` go through the dedicated `assign-asset`, every other uuid field through `set-component-field`. The id is a **string** end-to-end (engine Uuids are u64), never `Number()`d.
 
-The picker field is also a drop target. The payload is a small POD carrying the asset id and its type, sent under a named channel:
+## Drag-drop, type-gated
 
-```cpp
-struct AssetDragPayload
-{
-    u64 id = 0;
-    AssetType type = AssetType::Mesh;
+A tile is an HTML5 drag source carrying `application/x-se-asset` — a JSON `{id, type}`, the React analog of the old `AssetDragPayload`. The picker is the matching drop target and accepts only when the dragged asset's type matches its own field type:
+
+```ts
+const onDrop = (event) => {
+  event.preventDefault();
+  const payload = readAssetPayload(event.dataTransfer);
+  if (payload && payload.type === assetType) onChange(payload.id);  // type guard
 };
 ```
 
-The Assets panel sets this payload on each tile as a drag source. The picker accepts it under the same `"SE_ASSET"` channel and rejects a type mismatch before assigning:
+Dragging a texture onto a Mesh field does nothing — the same type comparison guards both the combo filter and the drop, so a mismatched drop can't land. This is a distinct channel from the OS file drop the [Assets panel](../assets-panel-and-thumbnails/) listens for (which imports a new asset rather than assigning an existing one).
 
-```cpp
-if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SE_ASSET"))
-{
-    const AssetDragPayload* drag = static_cast<const AssetDragPayload*>(payload->Data);
-    if (drag != nullptr && drag->type == type)   // a texture won't drop onto a mesh field
-        target = Uuid{ drag->id };
-}
-```
+## Kept out of the viewport
 
-The type check makes the drop safe: dragging a texture tile onto a Mesh field does nothing, because the field declared `AssetType::Mesh`. The same comparison guards both the combo filter and the drop, so a field can't end up holding the wrong kind of asset.
-
-## Why a callback for thumbnails
-
-`drawAssetPicker` doesn't render thumbnails itself; it's handed a `thumbnailFor` closure. The editor module has no renderer or asset server — those live in the client — so turning an asset into a GPU texture is delegated. The client's closure caches the registered `ImTextureID` per asset so `AddTexture` runs once, and falls back to a type icon when a real preview isn't available. See [Assets panel & thumbnails](../assets-panel-and-thumbnails/) for that side.
+Like every Radix popover in the editor, the picker's dropdown is portalled to the document root. It must open over a non-viewport region or the reparented native window would occlude it, so the pickers live in the side docks (inspector / environment) where their popovers open over the sidebar. Same rule as the menus and the loading overlay — the [native bridge](../tauri-editor-and-x11-bridge/) page covers why.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The picker widget | `editor_components.cpp` | `drawAssetPicker` |
-| Where it's used | `editor_components.cpp` | Mesh + Material albedo draws in `registerBuiltinComponents` |
-| The payload | `editor_context.cppm` | `AssetDragPayload` |
-| Drop accept + type guard | `editor_components.cpp` | `AcceptDragDropPayload("SE_ASSET")` |
+| The picker widget | `editor/src/components/AssetPicker.tsx` | `AssetPicker`, `AssetSwatch`, `PickerRow` |
+| Drag payload + reader | `editor/src/components/AssetTile.tsx` | `ASSET_DND_MIME`, `AssetDragPayload`, `readAssetPayload` |
+| Where it's mounted | `editor/src/components/fieldRenderer.tsx` | the `uuid` case in `renderField`, `FieldHint.asset` |
+| The write (client) | `editor/src/panels/InspectorPanel.tsx` | `sendWrite` (`assignAsset` / `setComponentField`) |
+| Assign (engine) | `control_commands_asset.cpp` | `assign-asset` |
 
 ## Related
 
-- [Assets panel & thumbnails](../assets-panel-and-thumbnails/) — the drag source + thumbnail callback
-- [Inspector](../inspector/) — where the picker fields are drawn
+- [Assets panel & thumbnails](../assets-panel-and-thumbnails/) — the drag source + the shared thumbnail cache
+- [Inspector](../inspector/) — where the picker fields are mounted
 - [Asset catalog in the scene](../../scene-and-ecs/asset-catalog-in-scene/) — the Uuid → name/path mapping
+- [Asset commands](../../tooling-and-control/asset-commands/) — `assign-asset` and `list-assets`

@@ -5,72 +5,60 @@ weight = 5
 
 # Hierarchy panel
 
-The Hierarchy panel lists every entity in the scene and lets you create, copy, delete, and select them. It is a flat list today (the scene has no parenting yet), which keeps it to a single `forEach` over the entities that carry an id and a name.
+The Hierarchy panel lists every entity in the scene and lets you create, copy, delete, and select them. It is a flat list (the scene has no parenting), and a pure render of the store's `entities` slice — the panel never fetches; the [reconcile poll](../selection/) keeps the list current, and the panel re-renders when it changes.
 
-## Listing entities
+## A render of the store
 
-The panel iterates entities that have both an `IdComponent` and a `NameComponent`, drawing each as a selectable row. Clicking a row calls `setSelection`, which updates `ctx.selected` and publishes the [selection signal](../selection/) so the inspector and the viewport highlight follow along. The `PushID` keyed on the entity's stable id keeps ImGui's per-item state correct even when names collide.
+The list comes from `store.entities`, which the reconcile poll refreshes only when `sceneVersion` changes. Each entity is a row; a left-click selects it, a right-click opens a Radix context menu with Copy and Delete. The header carries a Create dropdown ([the same preset list](#creating-entities) the menu bar uses).
 
-## Adding entities
+Because the context menu and Create dropdown are Radix portals, they must render in a non-viewport region or they would be hidden behind the reparented native viewport window. The Hierarchy lives in the left dock, so its menus open over the sidebar and are never occluded.
 
-An "Add +" button opens a preset popup that mirrors the Create menu: Empty, Model, and the lights and camera. Each preset creates the entity, adds the right component, nudges its transform where useful, and selects it:
+## Selection is optimistic
 
-```cpp
-if (ImGui::MenuItem("Point Light"))
-{
-    Entity e = createEntity(ctx.scene, "Point Light");
-    addComponent<PointLightComponent>(ctx.scene, e);
-    getComponent<TransformComponent>(ctx.scene, e).translation = glm::vec3(0.0f, 2.0f, 0.0f);
-    setSelection(ctx, e);
-}
+Clicking a row sets the selection locally *and* tells the engine, so the row highlights without waiting a poll interval:
+
+```ts
+const onSelect = (entity: EntityRef): void => {
+  selectEntity(entity.id);            // optimistic local highlight
+  void client.selectEntity(entity.id).catch(() => {});
+};
 ```
 
-"Model" spawns the bundled cube through `ctx.onCreateCube`, a closure the client wires in. The editor has no `AssetServer` to resolve and upload a mesh itself, so anything that touches GPU assets is delegated to the client this way.
+The poll confirms via `selectionVersion`; the engine is authoritative if a newer version arrives. See [Selection](../selection/) for the round-trip.
 
-## Deferred structural changes
+## Creating entities
 
-Copy and delete are reached through a right-click context popup on each row. Both would be unsafe mid-iteration — destroying an entity while `forEach` walks the entt storage can invalidate the iteration — so the panel records the target and applies the change after the loop:
+The Create dropdown maps menu labels to `add-entity` presets — Empty, Cube, Point/Spot/Directional Light, Camera. The engine spawns the entity, adds the right component, and auto-selects it, so on success the panel mirrors that selection locally and the `sceneVersion` bump refreshes the list. The C++ editor's `onCreateCube` indirection is gone: the engine resolves and uploads the cube mesh itself behind `add-entity cube`, because the editor and engine are the same process now.
 
-```cpp
-Entity toDelete{ entt::null };
-Entity toCopy{ entt::null };
-forEach<IdComponent, NameComponent>(ctx.scene, [&](Entity entity, ...) { ...
-    if (ImGui::MenuItem("Copy"))   { toCopy   = entity; }
-    if (ImGui::MenuItem("Delete")) { toDelete = entity; }
-});
-// applied after the iteration
+## Copy and delete
+
+Copy and delete go through the engine, so there is no in-process deferred-mutation dance — the commands are safe to call from a menu handler:
+
+```ts
+const onCopy = (id) =>
+  void client.copyEntity(id).then((ref) => selectEntity(ref.id)).catch(() => {});
+
+const onDelete = (id) => {
+  if (store.selectedId === id) setSelectedId(null);  // clear if it was selected
+  void client.destroyEntity(id).catch(() => {});
+};
 ```
 
-This is the standard ImGui pattern: collect the intent during the draw, mutate the model once the draw is done.
+`copy-entity` is a deep duplicate engine-side (every component, a fresh UUID) and selects the copy; the panel mirrors that selection and lets the `sceneVersion` bump refresh the list. `destroy-entity` clears the selection locally first if the deleted entity was selected, matching the engine's own clear-on-destroy.
 
-## Copy is registry-driven
-
-Copying an entity doesn't enumerate component types by hand. It walks [the component registry](../../scene-and-ecs/component-registry/) and, for each component the source has, adds a default to the clone and replays the source's serialized form into it:
-
-```cpp
-for (const ComponentTraits& t : ctx.registry.rows)
-{
-    if (t.has(ctx.scene, toCopy))
-    {
-        t.addDefault(ctx.scene, fresh);
-        static_cast<void>(t.deserialize(ctx.scene, fresh, t.serialize(ctx.scene, toCopy)));
-    }
-}
-```
-
-Round-tripping through serialize/deserialize gives a deep copy without a per-component copy function — the same serialize/deserialize the scene file uses. Add a new component type with one `registerComponent` call and copy supports it for free. Delete clears the selection first if the deleted entity was selected, then calls `destroyEntity`.
+Rename is not inline here — it is the Inspector's `Name` field, the same as the old editor.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The panel | `editor_panels.cpp` | `hierarchyPanel` |
-| Selection on click | `editor_panels.cpp` | `setSelection`, `ctx.selected` |
-| Add presets | `editor_panels.cpp` | the "Add +" popup, `ctx.onCreateCube` |
-| Deferred copy/delete | `editor_panels.cpp` | `toCopy`/`toDelete`, `ctx.registry.rows` |
+| The panel | `editor/src/panels/HierarchyPanel.tsx` | `HierarchyPanel`, `onSelect`, `onCopy`, `onDelete` |
+| Create presets | `editor/src/app/CreateMenu.tsx` | `CREATE_PRESETS`, `CreateMenu` |
+| The entity list slice | `editor/src/state/store.ts` | `entities`, `sceneVersion`, `setEntities` |
+| Commands (engine) | `control_commands_scene.cpp` | `list-entities`, `add-entity`, `copy-entity`, `destroy-entity`, `select` |
 
 ## Related
 
-- [Inspector](../inspector/) — what shows for the selected entity
-- [Selection](../selection/) — the `SubscriberList<Entity>` selection signal
-- [Component registry](../../scene-and-ecs/component-registry/) — what copy iterates
+- [Inspector](../inspector/) — what shows for the selected entity (and where rename lives)
+- [Selection](../selection/) — the optimistic select + version reconcile round-trip
+- [Scene commands](../../tooling-and-control/scene-commands/) — the list/create/copy/destroy commands
