@@ -36,6 +36,6 @@ that spine.
 | [Screen-space & post](screen-space-and-post/) | G-buffer, GTAO, motion vectors, TAA, tonemap |
 | [Global illumination & ray tracing](global-illumination-and-raytracing/) | DDGI probes, voxel trace, BLAS/TLAS, ray-query shadows, ReSTIR |
 | [Anti-aliasing](anti-aliasing/) | MSAA, FXAA, mode switching |
-| [UI & editor](ui-and-editor/) | docking, viewport, gizmos, inspector, thumbnails |
+| [UI & editor](ui-and-editor/) | the Tauri/React editor, the X11 viewport bridge, gizmo, inspector, thumbnails |
 | [Tooling & control](tooling-and-control/) | control plane and the `se` CLI |
 | [Architecture & conventions](architecture-and-conventions/) | module DAG, build, coding style |

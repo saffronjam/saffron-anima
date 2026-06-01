@@ -5,7 +5,7 @@ description = 'How the SaffronEngine renderer works, concept by concept, with li
 
 # SaffronEngine
 
-A from-scratch **Vulkan** renderer and **C++26** game engine with an ImGui editor.
+A from-scratch **Vulkan** renderer and **C++26** game engine with a Tauri/React editor.
 These docs explain how this engine renders, concept by concept, and link each
 explanation to the code behind it.
 
