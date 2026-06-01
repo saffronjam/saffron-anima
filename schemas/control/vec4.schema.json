@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vec4.schema.json",
+  "title": "Vec4",
+  "description": "Four-component float vector.",
+  "type": "object",
+  "properties": {
+    "x": { "type": "number" },
+    "y": { "type": "number" },
+    "z": { "type": "number" },
+    "w": { "type": "number" }
+  },
+  "required": ["x", "y", "z", "w"],
+  "additionalProperties": false
+}

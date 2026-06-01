@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "entity-ref.schema.json",
+  "title": "EntityRef",
+  "description": "Lightweight reference to a scene entity: its stable id and display name.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "uuid.schema.json" },
+    "name": { "type": "string" }
+  },
+  "required": ["id", "name"],
+  "additionalProperties": false
+}

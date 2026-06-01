@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uuid.schema.json",
+  "title": "Uuid",
+  "description": "Stable u64 id. Emitted as a JSON number on the wire (may exceed 2^53); typed as string in TS (tsType) and string-preserve-parsed to avoid precision loss.",
+  "type": "integer",
+  "minimum": 0,
+  "tsType": "string"
+}

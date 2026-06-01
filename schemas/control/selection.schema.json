@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "selection.schema.json",
+  "title": "Selection",
+  "description": "Current editor selection: the selected entity (or null) plus the selection and scene version counters.",
+  "type": "object",
+  "properties": {
+    "entity": {
+      "oneOf": [
+        { "$ref": "entity-ref.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "selectionVersion": { "type": "integer" },
+    "sceneVersion": { "type": "integer" }
+  },
+  "required": ["entity", "selectionVersion", "sceneVersion"],
+  "additionalProperties": false
+}

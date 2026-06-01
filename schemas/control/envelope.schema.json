@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "envelope.schema.json",
+  "title": "Envelope",
+  "description": "Outer response envelope for every control-protocol reply. ok signals success; error carries a message on failure; result is the open per-command payload.",
+  "type": "object",
+  "properties": {
+    "ok": { "type": "boolean" },
+    "error": { "type": "string" },
+    "result": { "type": "object" }
+  },
+  "required": ["ok"]
+}

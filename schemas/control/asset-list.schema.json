@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asset-list.schema.json",
+  "title": "AssetList",
+  "description": "A list of catalog asset entries.",
+  "type": "object",
+  "properties": {
+    "assets": {
+      "type": "array",
+      "items": { "$ref": "asset-entry.schema.json" }
+    }
+  },
+  "required": ["assets"],
+  "additionalProperties": false
+}

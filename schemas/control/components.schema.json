@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "components.schema.json",
+  "title": "Components",
+  "description": "The component family keyed by component name. An entity carries a subset, so no key is required; each present key maps to its component DTO.",
+  "type": "object",
+  "properties": {
+    "Name": { "$ref": "name.schema.json" },
+    "Transform": { "$ref": "transform.schema.json" },
+    "Mesh": { "$ref": "mesh.schema.json" },
+    "Camera": { "$ref": "camera.schema.json" },
+    "Material": { "$ref": "material.schema.json" },
+    "DirectionalLight": { "$ref": "directional-light.schema.json" },
+    "PointLight": { "$ref": "point-light.schema.json" },
+    "SpotLight": { "$ref": "spot-light.schema.json" }
+  },
+  "additionalProperties": false
+}

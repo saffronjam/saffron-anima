@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "inspect-result.schema.json",
+  "title": "InspectResult",
+  "description": "Result of inspecting an entity: its id, name, and the set of components it carries.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "uuid.schema.json" },
+    "name": { "type": "string" },
+    "components": { "$ref": "components.schema.json" }
+  },
+  "required": ["id", "name", "components"],
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "entity-list.schema.json",
+  "title": "EntityList",
+  "description": "A list of scene entities as lightweight references.",
+  "type": "object",
+  "properties": {
+    "entities": {
+      "type": "array",
+      "items": { "$ref": "entity-ref.schema.json" }
+    }
+  },
+  "required": ["entities"],
+  "additionalProperties": false
+}

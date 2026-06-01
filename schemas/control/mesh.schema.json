@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mesh.schema.json",
+  "title": "Mesh",
+  "description": "Mesh component (references a mesh asset by id).",
+  "type": "object",
+  "properties": {
+    "mesh": { "$ref": "uuid.schema.json" }
+  },
+  "required": ["mesh"],
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "camera.schema.json",
+  "title": "Camera",
+  "description": "Camera component. fov is the vertical field of view in DEGREES; near/far are the clip planes; primary marks the active scene camera.",
+  "type": "object",
+  "properties": {
+    "fov": { "type": "number" },
+    "near": { "type": "number" },
+    "far": { "type": "number" },
+    "primary": { "type": "boolean" }
+  },
+  "required": ["fov", "near", "far", "primary"],
+  "additionalProperties": false
+}

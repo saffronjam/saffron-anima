@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spot-light.schema.json",
+  "title": "SpotLight",
+  "description": "Spot light component. innerAngle/outerAngle are the cone angles in DEGREES.",
+  "type": "object",
+  "properties": {
+    "direction": { "$ref": "vec3.schema.json" },
+    "color": { "$ref": "vec3.schema.json" },
+    "intensity": { "type": "number" },
+    "range": { "type": "number" },
+    "innerAngle": { "type": "number" },
+    "outerAngle": { "type": "number" }
+  },
+  "required": ["direction", "color", "intensity", "range", "innerAngle", "outerAngle"],
+  "additionalProperties": false
+}

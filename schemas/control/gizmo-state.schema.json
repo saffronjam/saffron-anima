@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gizmo-state.schema.json",
+  "title": "GizmoState",
+  "description": "In-viewport gizmo state: the active operation and the reference space.",
+  "type": "object",
+  "properties": {
+    "op": { "enum": ["translate", "rotate", "scale"] },
+    "space": { "enum": ["world", "local"] }
+  },
+  "required": ["op", "space"],
+  "additionalProperties": false
+}

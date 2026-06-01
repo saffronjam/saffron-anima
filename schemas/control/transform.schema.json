@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "transform.schema.json",
+  "title": "Transform",
+  "description": "Transform component. rotation is Euler XYZ in RADIANS on the wire.",
+  "type": "object",
+  "properties": {
+    "translation": { "$ref": "vec3.schema.json" },
+    "scale": { "$ref": "vec3.schema.json" },
+    "rotation": { "$ref": "vec3.schema.json" }
+  },
+  "required": ["translation", "scale", "rotation"],
+  "additionalProperties": false
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "render-stats.schema.json",
+  "title": "RenderStats",
+  "description": "Per-frame renderer statistics plus the active feature toggles.",
+  "type": "object",
+  "properties": {
+    "drawCalls": { "type": "integer" },
+    "batches": { "type": "integer" },
+    "instances": { "type": "integer" },
+    "blasCount": { "type": "integer" },
+    "pipelines": { "type": "integer" },
+    "clustered": { "type": "boolean" },
+    "depthPrepass": { "type": "boolean" },
+    "shadows": { "type": "boolean" },
+    "ibl": { "type": "boolean" },
+    "ssao": { "type": "boolean" },
+    "contactShadows": { "type": "boolean" },
+    "ssgi": { "type": "boolean" },
+    "ddgi": { "type": "boolean" },
+    "rtSupported": { "type": "boolean" },
+    "rtShadows": { "type": "boolean" },
+    "restir": { "type": "boolean" },
+    "hdr": { "type": "boolean" },
+    "exposureEv": { "type": "number" },
+    "aa": { "enum": ["off", "fxaa", "taa", "msaa2", "msaa4", "msaa8"] }
+  },
+  "required": ["drawCalls", "batches", "instances", "blasCount", "pipelines", "clustered", "depthPrepass", "shadows", "ibl", "ssao", "contactShadows", "ssgi", "ddgi", "rtSupported", "rtShadows", "restir", "hdr", "exposureEv", "aa"],
+  "additionalProperties": false
+}

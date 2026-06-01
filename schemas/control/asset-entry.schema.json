@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asset-entry.schema.json",
+  "title": "AssetEntry",
+  "description": "A catalog asset entry: id, display name, kind, and on-disk path.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "uuid.schema.json" },
+    "name": { "type": "string" },
+    "type": { "enum": ["mesh", "texture", "other"] },
+    "path": { "type": "string" }
+  },
+  "required": ["id", "name", "type", "path"],
+  "additionalProperties": false
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "material.schema.json",
+  "title": "Material",
+  "description": "Material component (PBR base parameters + albedo texture reference).",
+  "type": "object",
+  "properties": {
+    "baseColor": { "$ref": "vec4.schema.json" },
+    "albedoTexture": { "$ref": "uuid.schema.json" },
+    "metallic": { "type": "number" },
+    "roughness": { "type": "number" },
+    "emissive": { "$ref": "vec3.schema.json" },
+    "emissiveStrength": { "type": "number" },
+    "unlit": { "type": "boolean" }
+  },
+  "required": ["baseColor", "albedoTexture", "metallic", "roughness", "emissive", "emissiveStrength", "unlit"],
+  "additionalProperties": false
+}

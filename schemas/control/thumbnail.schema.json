@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "thumbnail.schema.json",
+  "title": "Thumbnail",
+  "description": "A rendered asset thumbnail: the asset id plus a base64-encoded PNG of the given pixel dimensions.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "uuid.schema.json" },
+    "format": { "const": "png" },
+    "width": { "type": "integer" },
+    "height": { "type": "integer" },
+    "base64": { "type": "string" }
+  },
+  "required": ["id", "format", "width", "height", "base64"],
+  "additionalProperties": false
+}

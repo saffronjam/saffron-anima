@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "editor-camera.schema.json",
+  "title": "EditorCamera",
+  "description": "Editor fly-camera state: world position, yaw/pitch orientation, clip planes, field of view, and movement/look speeds.",
+  "type": "object",
+  "properties": {
+    "position": { "$ref": "vec3.schema.json" },
+    "yaw": { "type": "number" },
+    "pitch": { "type": "number" },
+    "fov": { "type": "number" },
+    "near": { "type": "number" },
+    "far": { "type": "number" },
+    "moveSpeed": { "type": "number" },
+    "lookSpeed": { "type": "number" }
+  },
+  "required": ["position", "yaw", "pitch", "fov", "near", "far", "moveSpeed", "lookSpeed"],
+  "additionalProperties": false
+}

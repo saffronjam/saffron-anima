@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "environment.schema.json",
+  "title": "Environment",
+  "description": "Scene environment: sky source mode plus clear/sky/ambient parameters.",
+  "type": "object",
+  "properties": {
+    "skyMode": { "enum": ["color", "texture", "procedural"] },
+    "clearColor": { "$ref": "vec3.schema.json" },
+    "skyTexture": { "$ref": "uuid.schema.json" },
+    "skyIntensity": { "type": "number" },
+    "skyRotation": { "type": "number" },
+    "exposure": { "type": "number" },
+    "visible": { "type": "boolean" },
+    "useSkyForAmbient": { "type": "boolean" },
+    "ambientColor": { "$ref": "vec3.schema.json" },
+    "ambientIntensity": { "type": "number" }
+  },
+  "required": ["skyMode", "clearColor", "skyTexture", "skyIntensity", "skyRotation", "exposure", "visible", "useSkyForAmbient", "ambientColor", "ambientIntensity"],
+  "additionalProperties": false
+}
