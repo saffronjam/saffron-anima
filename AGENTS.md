@@ -37,6 +37,16 @@ code does now — and *why* if it's non-obvious — never by contrast with the p
   ```
 - For automated/headless verification, bound the run:
   `SAFFRON_EXIT_AFTER_FRAMES=5 ./build/debug/bin/SaffronEditor` exits after N frames.
+- **No display?** The editor needs a Wayland/X display. In the toolbox run a headless compositor —
+  `weston --backend=headless --width=1280 --height=720 --socket=wl-x --idle-time=0 &`, then
+  `export WAYLAND_DISPLAY=wl-x SDL_VIDEODRIVER=wayland` and launch under it — for a real swapchain
+  that `se screenshot` can read. Use a unique `--socket` + `SAFFRON_CONTROL_SOCK` per run, and
+  capture the editor exit code to a file *before* any `pkill` (the toolbox wrapper surfaces the
+  pkill signal, not the engine's real exit code).
+- **Do not write to Claude's `~/.claude/.../memory/` stores** (project-scoped or user-level). Keep
+  durable project knowledge in the repo instead — this `AGENTS.md`, `CONVENTIONS.md`, or a `plans/`
+  file — so it is version-controlled and shared. If a fact is worth saving, put it here; otherwise
+  don't. Nothing in this repo should reference an out-of-repo path for project knowledge.
 
 ---
 
