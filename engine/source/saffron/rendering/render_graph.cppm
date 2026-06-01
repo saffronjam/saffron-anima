@@ -72,7 +72,7 @@ export namespace se
         std::string name;
         RgPassKind kind = RgPassKind::Graphics;
         std::vector<RgAccess> accesses;
-        std::optional<RgAttachment> color;
+        std::vector<RgAttachment> colors;  // MRT: index 0 is location 0, etc.
         std::optional<RgAttachment> depth;
         vk::Extent2D renderArea{};
         std::function<void(vk::CommandBuffer)> execute;
@@ -290,14 +290,14 @@ namespace se
                 applyAccess(graph.resources[access.resource.index], usageInfo(access.usage),
                             imageBarriers, memoryBarriers);
             }
-            if (pass.color)
+            for (const RgAttachment& att : pass.colors)
             {
-                applyAccess(graph.resources[pass.color->resource.index], usageInfo(RgUsage::ColorWrite),
+                applyAccess(graph.resources[att.resource.index], usageInfo(RgUsage::ColorWrite),
                             imageBarriers, memoryBarriers);
-                if (pass.color->resolve)
+                if (att.resolve)
                 {
                     // The resolve target is written at end-of-pass — a second color write.
-                    applyAccess(graph.resources[pass.color->resolve->index], usageInfo(RgUsage::ColorWrite),
+                    applyAccess(graph.resources[att.resolve->index], usageInfo(RgUsage::ColorWrite),
                                 imageBarriers, memoryBarriers);
                 }
             }
@@ -317,26 +317,31 @@ namespace se
 
             if (pass.kind == RgPassKind::Graphics)
             {
-                vk::RenderingAttachmentInfo colorInfo{};
+                std::vector<vk::RenderingAttachmentInfo> colorInfos;
                 vk::RenderingAttachmentInfo depthInfo{};
                 vk::RenderingInfo rendering{};
                 rendering.renderArea = vk::Rect2D{ vk::Offset2D{ 0, 0 }, pass.renderArea };
                 rendering.layerCount = 1;
-                if (pass.color)
+                for (const RgAttachment& att : pass.colors)
                 {
-                    const RgResourceState& r = graph.resources[pass.color->resource.index];
+                    const RgResourceState& r = graph.resources[att.resource.index];
+                    vk::RenderingAttachmentInfo colorInfo{};
                     colorInfo.imageView = r.view;
                     colorInfo.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
-                    colorInfo.loadOp = pass.color->loadOp;
-                    colorInfo.storeOp = pass.color->storeOp;
-                    colorInfo.clearValue = pass.color->clearValue;
-                    if (pass.color->resolve)
+                    colorInfo.loadOp = att.loadOp;
+                    colorInfo.storeOp = att.storeOp;
+                    colorInfo.clearValue = att.clearValue;
+                    if (att.resolve)
                     {
                         colorInfo.resolveMode = vk::ResolveModeFlagBits::eAverage;
-                        colorInfo.resolveImageView = graph.resources[pass.color->resolve->index].view;
+                        colorInfo.resolveImageView = graph.resources[att.resolve->index].view;
                         colorInfo.resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal;
                     }
-                    rendering.setColorAttachments(colorInfo);
+                    colorInfos.push_back(colorInfo);
+                }
+                if (!colorInfos.empty())
+                {
+                    rendering.setColorAttachments(colorInfos);
                 }
                 if (pass.depth)
                 {
