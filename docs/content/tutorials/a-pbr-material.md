@@ -1,0 +1,115 @@
++++
+title = 'PBR material'
+weight = 3
+math = true
++++
+
+# PBR material
+
+Turn a plain mesh into a believable metal: set its base color, push metallic to 1 and
+roughness down, add a point light so the specular highlight has something to reflect, and
+tune the tonemap exposure so the bright result doesn't clip. Every value feeds the
+Cook-Torrance BRDF the engine shades with. Start from
+[your first scene](../your-first-scene/) or any scene with one mesh entity.
+
+## Set base color and metallic-roughness
+
+A mesh's look comes from its `MaterialComponent`: a base color, an optional albedo texture,
+and the PBR knobs `metallic` and `roughness`. `set-material` adds the component if missing
+and merges only the fields you pass:
+
+```sh
+./cmd/se set-material Mesh --baseColor '{"x":0.95,"y":0.64,"z":0.22,"w":1}' --metallic 1 --roughness 0.25
+```
+
+That makes the cube gold: warm base color, fully metallic, fairly smooth. The metallic flag
+routes the base color into the Fresnel reflectance $F_0$ instead of the diffuse albedo, so a
+metal reflects its own color and has no Lambertian term:
+
+$$
+F_0 = \operatorname{lerp}(0.04,\ \text{baseColor},\ \text{metallic})
+$$
+
+Roughness controls how tight the highlight is; lower is sharper. In the editor these are the
+**Base Color**, **Metallic**, and **Roughness** controls in the Inspector's Material section
+(Metallic and Roughness are `0..1` sliders). Read back what you set:
+
+```sh
+./cmd/se inspect Mesh        # the Material block shows baseColor, metallic, roughness
+```
+
+> [!NOTE]
+> Roughness is clamped to `[0.045, 1.0]` in the shader: a true zero collapses the GGX
+> denominator into an infinitely sharp highlight. See
+> [the Cook-Torrance BRDF](../../explanations/lighting-and-brdf/cook-torrance-brdf/).
+
+## Add a point light to reflect
+
+A metal is only as interesting as what it reflects. The directional sun gives one broad
+highlight; a nearby point light gives a tight one that moves as you orbit. Drop one above
+and to the side:
+
+```sh
+./cmd/se create-entity Key Light
+./cmd/se add-component "Key Light" PointLight
+./cmd/se set-transform "Key Light" --translation '{"x":2,"y":3,"z":2}'
+./cmd/se set-component "Key Light" PointLight --json '{"intensity":20,"range":15,"color":{"x":1,"y":1,"z":1}}'
+```
+
+`set-component` writes the exact JSON shape used in scene files, setting the whole
+`PointLightComponent` at once. In the editor: **Create ▸ Point Light**, then edit
+**Intensity**, **Range**, and **Color** in the Inspector. Point lights are culled per froxel
+by the clustered-forward path, so adding more costs almost nothing per pixel.
+
+Confirm the renderer is feeding lights:
+
+```sh
+./cmd/se render-stats        # clustered=on; the fragment loops only its cluster's lights
+```
+
+## Tune exposure so the highlight doesn't clip
+
+Lighting is computed in linear HDR and then tonemapped to the display. A bright metal under
+an intensity-20 light can blow out to white. The tonemap takes an exposure in stops (EV),
+applied as $2^{EV}$ before the curve, so negative EV darkens:
+
+```sh
+./cmd/se set-exposure -1.5      # pull the image down 1.5 stops
+./cmd/se screenshot viewport /tmp/gold.png
+```
+
+Sweep it and compare PNGs: `set-exposure 0` is neutral, `-2` is much darker, `+1` brightens.
+Pick the value where the highlight reads as a bright spot rather than a flat white patch.
+`render-stats` reports the current `exposureEv`.
+
+> [!NOTE]
+> Exposure is a global render setting, not per-material, so there's no Inspector field for
+> it — drive it from the CLI. See
+> [HDR and exposure](../../explanations/lighting-and-brdf/hdr-and-exposure/).
+
+## Make it glow (optional)
+
+`emissive` adds light the surface emits on its own, independent of any scene light. Give the
+mesh a faint emissive tint:
+
+```sh
+./cmd/se set-material Mesh --emissive '{"x":0.2,"y":0.1,"z":0}' --emissiveStrength 2
+```
+
+Emissive radiance is added after lighting, so it shows even in shadow. In the Inspector it's
+**Emissive** (a color) and **Emissive Strength** (a multiplier). Set the strength to 0 to
+turn it off.
+
+## Save and next steps
+
+Save the look into your project so it persists:
+
+```sh
+./cmd/se save-project /tmp/first-scene/project.json
+```
+
+- [Cook-Torrance BRDF](../../explanations/lighting-and-brdf/cook-torrance-brdf/) — the math your metallic/roughness drive.
+- [Punctual lights and attenuation](../../explanations/lighting-and-brdf/punctual-lights-and-attenuation/) — how a point light's intensity and range fall off.
+- [HDR and exposure](../../explanations/lighting-and-brdf/hdr-and-exposure/) — what `set-exposure` feeds.
+- [Image-based lighting](../../explanations/image-based-lighting/ibl-overview/) — turn on `set-ibl 1` for an environment ambient that metals reflect.
+- [Übershader](../../explanations/materials-and-pipelines/ubershader-and-specialization/) — how `unlit` selects a different pipeline.
