@@ -538,13 +538,14 @@ export namespace se
 
     void updateFxaaSet(Renderer& renderer);  // defined alongside updateTonemapSet below
     void recreateSsaoTargets(Renderer& renderer);  // defined after the SSAO pipeline helpers
+    void recreateTaaTargets(Renderer& renderer);   // defined after the TAA pipeline helpers
 
-    // (Re)create the 1x scratch target FXAA reads from (the scene renders here when
-    // FXAA is on); drop it when off. Sized to the offscreen; the GPU is already idle.
+    // (Re)create the 1x scratch target FXAA + TAA read from (the scene renders here when
+    // either is on); drop it when neither. Sized to the offscreen; the GPU is already idle.
     void recreateFxaaTarget(Renderer& renderer)
     {
         renderer.targets.scratch.reset();
-        if (!renderer.targets.fxaaEnabled)
+        if (!renderer.targets.fxaaEnabled && !renderer.targets.taaEnabled)
         {
             return;
         }
@@ -558,7 +559,10 @@ export namespace se
         if (scratch)
         {
             renderer.targets.scratch = std::move(*scratch);
-            updateFxaaSet(renderer);
+            if (renderer.targets.fxaaEnabled)
+            {
+                updateFxaaSet(renderer);
+            }
         }
         else
         {
@@ -697,6 +701,10 @@ export namespace se
     // a single-channel factor. Both viewport-sized.
     inline constexpr vk::Format GNormalFormat = vk::Format::eR16G16B16A16Sfloat;
     inline constexpr vk::Format AoFormat = vk::Format::eR8Unorm;
+
+    // TAA: per-pixel screen-space motion (rg16f); history is the offscreen HDR format.
+    inline constexpr vk::Format MotionFormat = vk::Format::eR16G16Sfloat;
+    inline constexpr f32 TaaHistoryWeight = 0.9f;
 
     // IBL bake sizes. The environment is a procedural HDR sky; it is convolved into a
     // small diffuse-irradiance cube + a roughness-mipped prefiltered specular cube, plus
@@ -1326,6 +1334,205 @@ export namespace se
         renderer.ssao.ready = true;
     }
 
+    // The motion-vector prepass pipeline: instanced scene, depth-tested, writing screen
+    // motion (rg16f) from cur/prev camera reprojection. Same shape as the G-buffer prepass
+    // (set 2 = instances) with a 2x mat4 vertex push constant. Reuses motion.slang.
+    auto makeMotionPipeline(Renderer& renderer, std::string_view shaderName) -> Result<Ref<Pipeline>>
+    {
+        auto moduleResult = loadShaderModule(renderer.context.device, assetPath(shaderName));
+        if (!moduleResult)
+        {
+            return Err(moduleResult.error());
+        }
+        vk::ShaderModule shaderModule = *moduleResult;
+
+        std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
+        stages[0].stage = vk::ShaderStageFlagBits::eVertex;
+        stages[0].module = shaderModule;
+        stages[0].pName = "vertexMain";
+        stages[1].stage = vk::ShaderStageFlagBits::eFragment;
+        stages[1].module = shaderModule;
+        stages[1].pName = "fragmentMain";
+
+        vk::VertexInputBindingDescription binding{};
+        binding.binding = 0;
+        binding.stride = sizeof(Vertex);
+        binding.inputRate = vk::VertexInputRate::eVertex;
+        std::array<vk::VertexInputAttributeDescription, 3> attributes{
+            vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
+            vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+        vk::PipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.setVertexBindingDescriptions(binding);
+        vertexInput.setVertexAttributeDescriptions(attributes);
+
+        vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+        vk::PipelineViewportStateCreateInfo viewportState{};
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+        vk::PipelineRasterizationStateCreateInfo raster{};
+        raster.polygonMode = vk::PolygonMode::eFill;
+        raster.cullMode = vk::CullModeFlagBits::eNone;
+        raster.frontFace = vk::FrontFace::eCounterClockwise;
+        raster.lineWidth = 1.0f;
+        vk::PipelineMultisampleStateCreateInfo multisample{};
+        multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
+        vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp = vk::CompareOp::eLess;
+        vk::PipelineColorBlendAttachmentState blendAttachment{};
+        blendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+        vk::PipelineColorBlendStateCreateInfo colorBlend{};
+        colorBlend.setAttachments(blendAttachment);
+        std::array<vk::DynamicState, 2> dynamicStates{ vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+        vk::PipelineDynamicStateCreateInfo dynamic{};
+        dynamic.setDynamicStates(dynamicStates);
+
+        vk::PipelineRenderingCreateInfo renderingInfo{};
+        renderingInfo.setColorAttachmentFormats(MotionFormat);
+        renderingInfo.depthAttachmentFormat = DepthFormat;
+
+        vk::PushConstantRange pushConstant{};
+        pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
+        pushConstant.offset = 0;
+        pushConstant.size = 2 * sizeof(glm::mat4);
+        std::array<vk::DescriptorSetLayout, 3> setLayouts{
+            renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout, renderer.descriptors.instanceSetLayout };
+        vk::PipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.setSetLayouts(setLayouts);
+        layoutInfo.setPushConstantRanges(pushConstant);
+        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (motion)");
+        if (!layoutResult)
+        {
+            renderer.context.device.destroyShaderModule(shaderModule);
+            return Err(layoutResult.error());
+        }
+
+        vk::GraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.pNext = &renderingInfo;
+        pipelineInfo.setStages(stages);
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &raster;
+        pipelineInfo.pMultisampleState = &multisample;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamic;
+        pipelineInfo.layout = *layoutResult;
+
+        vk::ResultValue<vk::Pipeline> created = renderer.context.device.createGraphicsPipeline(nullptr, pipelineInfo);
+        renderer.context.device.destroyShaderModule(shaderModule);
+        if (created.result != vk::Result::eSuccess)
+        {
+            renderer.context.device.destroyPipelineLayout(*layoutResult);
+            return Err(std::format("createGraphicsPipeline (motion): {}", vk::to_string(created.result)));
+        }
+        Pipeline pipeline;
+        pipeline.device = renderer.context.device;
+        pipeline.pipeline = created.value;
+        pipeline.layout = *layoutResult;
+        return std::make_shared<Pipeline>(std::move(pipeline));
+    }
+
+    // (Re)creates the TAA targets (motion + its depth scratch + 2 ping-pong history images)
+    // at the viewport extent and rewrites both parities of the TAA compute set. The history
+    // is marked invalid so the first post-resize frame falls back to the current frame.
+    // Called at init + after the offscreen resizes (the caller has idled the GPU).
+    void recreateTaaTargets(Renderer& renderer)
+    {
+        renderer.targets.motion.reset();
+        renderer.targets.motionDepth.reset();
+        renderer.targets.history[0].reset();
+        renderer.targets.history[1].reset();
+        renderer.targets.historyValid = false;
+        const u32 w = renderer.targets.offscreen.extent.width;
+        const u32 h = renderer.targets.offscreen.extent.height;
+        if (w == 0 || h == 0)
+        {
+            return;
+        }
+        auto motion = newColorImage(renderer, w, h, MotionFormat, false);
+        if (!motion) { logError(motion.error()); return; }
+        renderer.targets.motion = std::move(*motion);
+        auto motionDepth = newDepthImage(renderer, w, h);
+        if (!motionDepth) { logError(motionDepth.error()); return; }
+        renderer.targets.motionDepth = std::move(*motionDepth);
+        for (u32 i = 0; i < 2; i = i + 1)
+        {
+            auto hist = newColorImage(renderer, w, h, OffscreenColorFormat, true);  // storage (TAA writes it)
+            if (!hist) { logError(hist.error()); return; }
+            renderer.targets.history[i] = std::move(*hist);
+        }
+
+        // The history images start ShaderReadOnly so their sampler bindings are valid even
+        // before the first TAA write (historyValid gates the actual blend).
+        {
+            vk::CommandBufferAllocateInfo allocInfo{};
+            allocInfo.commandPool = renderer.frame.frames[0].commandPool;
+            allocInfo.level = vk::CommandBufferLevel::ePrimary;
+            allocInfo.commandBufferCount = 1;
+            auto cmds = checked(renderer.context.device.allocateCommandBuffers(allocInfo), "taa init cmd");
+            if (!cmds) { logError(cmds.error()); return; }
+            vk::CommandBuffer cmd = (*cmds)[0];
+            vk::CommandBufferBeginInfo begin{};
+            begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+            static_cast<void>(cmd.begin(begin));
+            for (u32 i = 0; i < 2; i = i + 1)
+            {
+                transitionImage(cmd, renderer.targets.history[i].image,
+                    vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
+                    vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead);
+                renderer.targets.history[i].layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+            }
+            static_cast<void>(cmd.end());
+            vk::CommandBufferSubmitInfo cmdInfo{};
+            cmdInfo.commandBuffer = cmd;
+            vk::SubmitInfo2 submitInfo{};
+            submitInfo.setCommandBufferInfos(cmdInfo);
+            static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
+            static_cast<void>(renderer.context.device.waitIdle());
+            renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        }
+
+        // Rewrite both TAA set parities. Parity p writes history[p] and reads history[1-p];
+        // current + motion + offscreen are the same in both. (offscreen view is stable.)
+        // TAA reads the scene's 1x result from the scratch image (the scene renders there
+        // when TAA is on, mirroring FXAA). When scratch isn't allocated (TAA off), bind the
+        // offscreen as a valid placeholder — the set is unused until TAA turns on + rebinds.
+        vk::ImageView sceneInput = renderer.targets.scratch.image ? renderer.targets.scratch.view
+                                                                  : renderer.targets.offscreen.view;
+        for (u32 p = 0; p < 2; p = p + 1)
+        {
+            vk::DescriptorImageInfo curInfo{ renderer.descriptors.linearSampler, sceneInput, vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo histInfo{ renderer.descriptors.linearSampler, renderer.targets.history[1 - p].view, vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo motionInfo{ renderer.descriptors.linearSampler, renderer.targets.motion.view, vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo outInfo{};
+            outInfo.imageView = renderer.targets.offscreen.view;
+            outInfo.imageLayout = vk::ImageLayout::eGeneral;
+            vk::DescriptorImageInfo histOut{};
+            histOut.imageView = renderer.targets.history[p].view;
+            histOut.imageLayout = vk::ImageLayout::eGeneral;
+            std::array<vk::WriteDescriptorSet, 5> writes{};
+            const std::array<vk::DescriptorImageInfo*, 5> infos{ &curInfo, &histInfo, &motionInfo, &outInfo, &histOut };
+            const std::array<vk::DescriptorType, 5> types{
+                vk::DescriptorType::eCombinedImageSampler, vk::DescriptorType::eCombinedImageSampler,
+                vk::DescriptorType::eCombinedImageSampler, vk::DescriptorType::eStorageImage, vk::DescriptorType::eStorageImage };
+            for (u32 b = 0; b < 5; b = b + 1)
+            {
+                writes[b].dstSet = renderer.descriptors.taaSets[p];
+                writes[b].dstBinding = b;
+                writes[b].descriptorType = types[b];
+                writes[b].setImageInfo(*infos[b]);
+            }
+            renderer.context.device.updateDescriptorSets(writes, {});
+        }
+    }
+
     // Write a texture into the bindless array at the given slot (set 0, binding 0).
     // update-after-bind: safe to write a live set between draws.
     void writeBindlessTexture(Renderer& renderer, vk::ImageView view, u32 index)
@@ -1632,10 +1839,11 @@ export namespace se
             vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 1024 },
             vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, 4 * MaxFramesInFlight + 8 },
             vk::DescriptorPoolSize{ vk::DescriptorType::eStorageBuffer, 8 * MaxFramesInFlight + 8 },
-            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 4 } };
+            // tonemap(1) + fxaa(1) + gtao(1) + TAA 2 parities x 2 storage = 7; plus headroom.
+            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 16 } };
         vk::DescriptorPoolCreateInfo poolInfo{};
         poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;  // texture sets freed on Ref drop
-        poolInfo.maxSets = 1024 + 8 * MaxFramesInFlight + 16;
+        poolInfo.maxSets = 1024 + 8 * MaxFramesInFlight + 32;
         poolInfo.setPoolSizes(poolSizes);
         auto pool = checked(renderer.context.device.createDescriptorPool(poolInfo), "descriptorPool");
         if (!pool)
@@ -2024,6 +2232,63 @@ export namespace se
         renderer.pipelines.gtao = *gtaoPipe;
 
         recreateSsaoTargets(renderer);
+
+        // TAA: the resolve compute set (3 samplers: current/history/motion + 2 storage:
+        // offscreen out + history out), two parities for ping-pong, the motion + resolve
+        // pipelines, and the targets.
+        std::array<vk::DescriptorSetLayoutBinding, 5> taaBindings{};
+        for (u32 b = 0; b < 3; b = b + 1)
+        {
+            taaBindings[b].binding = b;
+            taaBindings[b].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            taaBindings[b].descriptorCount = 1;
+            taaBindings[b].stageFlags = vk::ShaderStageFlagBits::eCompute;
+        }
+        for (u32 b = 3; b < 5; b = b + 1)
+        {
+            taaBindings[b].binding = b;
+            taaBindings[b].descriptorType = vk::DescriptorType::eStorageImage;
+            taaBindings[b].descriptorCount = 1;
+            taaBindings[b].stageFlags = vk::ShaderStageFlagBits::eCompute;
+        }
+        vk::DescriptorSetLayoutCreateInfo taaLayoutInfo{};
+        taaLayoutInfo.setBindings(taaBindings);
+        auto taaLayout = checked(renderer.context.device.createDescriptorSetLayout(taaLayoutInfo), "taaSetLayout");
+        if (!taaLayout)
+        {
+            return Err(taaLayout.error());
+        }
+        renderer.descriptors.taaSetLayout = *taaLayout;
+        for (u32 p = 0; p < 2; p = p + 1)
+        {
+            vk::DescriptorSetAllocateInfo taaAlloc{};
+            taaAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+            taaAlloc.setSetLayouts(renderer.descriptors.taaSetLayout);
+            auto taaSet = checked(renderer.context.device.allocateDescriptorSets(taaAlloc), "allocate taaSet");
+            if (!taaSet)
+            {
+                return Err(taaSet.error());
+            }
+            renderer.descriptors.taaSets[p] = (*taaSet)[0];
+        }
+
+        Result<Ref<Pipeline>> motionPipe = makeMotionPipeline(renderer, "shaders/motion.spv");
+        if (!motionPipe)
+        {
+            return Err(motionPipe.error());
+        }
+        renderer.pipelines.motion = *motionPipe;
+
+        Result<Ref<Pipeline>> taaPipe =
+            newComputePipeline(renderer, "shaders/taa.spv", renderer.descriptors.taaSetLayout,
+                               static_cast<u32>(sizeof(glm::vec4)));
+        if (!taaPipe)
+        {
+            return Err(taaPipe.error());
+        }
+        renderer.pipelines.taa = *taaPipe;
+
+        recreateTaaTargets(renderer);
         return {};
     }
 

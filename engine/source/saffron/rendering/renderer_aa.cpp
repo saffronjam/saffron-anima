@@ -47,8 +47,9 @@ namespace se
         return renderer.useDepthPrepass;
     }
 
-    void setAa(Renderer& renderer, u32 msaaSamples, bool fxaa)
+    void setAa(Renderer& renderer, u32 msaaSamples, bool fxaa, bool taa)
     {
+        // The three AA modes are mutually exclusive; MSAA wins if samples > 1 is requested.
         vk::SampleCountFlagBits count = vk::SampleCountFlagBits::e1;
         if (msaaSamples >= 8) { count = vk::SampleCountFlagBits::e8; }
         else if (msaaSamples >= 4) { count = vk::SampleCountFlagBits::e4; }
@@ -61,8 +62,10 @@ namespace se
         waitGpuIdle(renderer);
         renderer.targets.sampleCount = count;
         renderer.targets.fxaaEnabled = fxaa;
+        renderer.targets.taaEnabled = taa;
         recreateMsaaTargets(renderer);
-        recreateFxaaTarget(renderer);
+        recreateFxaaTarget(renderer);   // owns the 1x scratch FXAA + TAA both render into
+        recreateTaaTargets(renderer);   // binds scratch into the TAA set, so run it after
 
         // The mesh + depth-prepass PSOs bake the sample count — rebuild them.
         renderer.pipelines.cache.clear();
@@ -83,6 +86,10 @@ namespace se
         if (renderer.targets.fxaaEnabled)
         {
             return "fxaa";
+        }
+        if (renderer.targets.taaEnabled)
+        {
+            return "taa";
         }
         const u32 n = static_cast<u32>(renderer.targets.sampleCount);
         if (n <= 1)

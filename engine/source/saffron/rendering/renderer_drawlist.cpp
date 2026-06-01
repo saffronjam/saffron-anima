@@ -411,6 +411,38 @@ namespace se
         }
     }
 
+    // Records the motion-vector prepass: per-pixel screen motion from camera reprojection
+    // (cur vs prev viewProj). The push constant carries both, stored on the Ssao/Renderer
+    // state (viewProj this frame, prevViewProj last frame).
+    void recordMotion(Renderer& renderer, vk::CommandBuffer cmd)
+    {
+        SceneDrawList& list = renderer.frame.sceneDrawList;
+        if (!list.valid || !renderer.pipelines.motion)
+        {
+            return;
+        }
+        vk::PipelineLayout layout = renderer.pipelines.motion->layout;
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, renderer.pipelines.motion->pipeline);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 2, list.instanceSet, {});
+        struct MotionPush
+        {
+            glm::mat4 curViewProj;
+            glm::mat4 prevViewProj;
+        } push{ list.viewProj, renderer.prevViewProj };
+        cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(push), &push);
+        for (const DrawBatch& batch : list.batches)
+        {
+            vk::DeviceSize offset = 0;
+            cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
+            cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
+            for (const Submesh& submesh : batch.mesh->submeshes)
+            {
+                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex,
+                                submesh.vertexOffset, batch.baseInstance);
+            }
+        }
+    }
+
     // Renders world distance-to-light into the 6 faces of the point shadow cube. Runs as a
     // Compute-kind graph pass body (so the graph opens no rendering scope); this opens its
     // own per-face dynamic-rendering scope + transitions the cube General<->ShaderReadOnly,

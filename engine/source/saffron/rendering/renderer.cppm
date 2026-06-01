@@ -272,6 +272,8 @@ namespace se
         renderer.pipelines.pointShadow.reset();
         renderer.pipelines.gbuffer.reset();
         renderer.pipelines.gtao.reset();
+        renderer.pipelines.motion.reset();
+        renderer.pipelines.taa.reset();
         for (vk::ImageView& face : renderer.targets.pointShadowFaces)
         {
             if (face)
@@ -290,6 +292,10 @@ namespace se
         renderer.targets.gNormal.reset();
         renderer.targets.gDepth.reset();
         renderer.targets.aoMap.reset();
+        renderer.targets.motion.reset();
+        renderer.targets.motionDepth.reset();
+        renderer.targets.history[0].reset();
+        renderer.targets.history[1].reset();
         renderer.ibl.envCube.reset();
         renderer.ibl.irradianceCube.reset();
         renderer.ibl.prefilteredCube.reset();
@@ -373,6 +379,10 @@ namespace se
         if (renderer.ssao.sampler)
         {
             renderer.context.device.destroySampler(renderer.ssao.sampler);
+        }
+        if (renderer.descriptors.taaSetLayout)
+        {
+            renderer.context.device.destroyDescriptorSetLayout(renderer.descriptors.taaSetLayout);
         }
 
         for (FrameData& frame : renderer.frame.frames)
@@ -459,8 +469,9 @@ namespace se
                     logError(resizedDepth.error());
                 }
                 recreateMsaaTargets(renderer);  // MSAA targets follow the offscreen extent
-                recreateFxaaTarget(renderer);   // and the FXAA scratch target
+                recreateFxaaTarget(renderer);   // and the FXAA/TAA scratch target
                 recreateSsaoTargets(renderer);  // and the SSAO G-buffer + AO map
+                recreateTaaTargets(renderer);   // and the TAA motion + history (after scratch)
             }
             else
             {
@@ -538,10 +549,14 @@ namespace se
         // scene renders to msaaColor and resolves into sceneOutput. mutually exclusive via set-aa.
         const bool msaa = renderer.targets.sampleCount != vk::SampleCountFlagBits::e1 && renderer.targets.msaaColor.image;
         const bool fxaa = renderer.targets.fxaaEnabled && renderer.targets.scratch.image && renderer.pipelines.fxaa;
+        const bool taa = renderer.targets.taaEnabled && renderer.targets.scratch.image &&
+                         renderer.pipelines.motion && renderer.pipelines.taa;
         renderer.graph.sceneColor = importImage(graph, offscreen.image, offscreen.view,
             vk::ImageAspectFlagBits::eColor, offscreen.layout, &offscreen.layout);
         RgResource sceneOutput = renderer.graph.sceneColor;
-        if (fxaa)
+        // FXAA + TAA both render the scene's 1x result into the scratch image, then a
+        // compute pass resolves scratch -> offscreen.
+        if (fxaa || taa)
         {
             sceneOutput = importImage(graph, renderer.targets.scratch.image, renderer.targets.scratch.view,
                 vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
@@ -736,6 +751,31 @@ namespace se
             renderer.graph.hasAo = false;
         }
 
+        // TAA motion vectors: a depth-tested prepass writing per-pixel screen motion from
+        // camera reprojection. Produced before the scene so the TAA resolve (after the
+        // scene) can read it; the graph derives ColorWrite -> SampledReadCompute.
+        RgResource motionRes{};
+        if (taa)
+        {
+            motionRes = importImage(graph, renderer.targets.motion.image, renderer.targets.motion.view,
+                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+            RgResource motionDepthRes = importImage(graph, renderer.targets.motionDepth.image, renderer.targets.motionDepth.view,
+                vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
+            RgPass motionPass;
+            motionPass.name = "motion";
+            motionPass.kind = RgPassKind::Graphics;
+            motionPass.colors.push_back(RgAttachment{ motionRes, vk::AttachmentLoadOp::eClear,
+                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } } });
+            motionPass.depth = RgAttachment{ motionDepthRes, vk::AttachmentLoadOp::eClear,
+                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+            motionPass.renderArea = offscreen.extent;
+            motionPass.execute = [&renderer](vk::CommandBuffer cmd)
+        {
+                recordMotion(renderer, cmd);
+            };
+            addPass(graph, std::move(motionPass));
+        }
+
         RgPass scene;
         scene.name = "scene";
         scene.kind = RgPassKind::Graphics;
@@ -804,6 +844,47 @@ namespace se
             addPass(graph, std::move(fxaaPass));
         }
 
+        // TAA resolve: reproject history through the motion vector, neighborhood-clamp, and
+        // blend with the current scene (scratch) into the offscreen + the next-frame history.
+        // Parity p writes history[p]; the GTAO-style compute pass declares its image usages.
+        if (taa)
+        {
+            const u32 p = renderer.targets.historyIndex;
+            RgResource histReadRes = importImage(graph, renderer.targets.history[1 - p].image,
+                renderer.targets.history[1 - p].view, vk::ImageAspectFlagBits::eColor,
+                renderer.targets.history[1 - p].layout, &renderer.targets.history[1 - p].layout);
+            RgResource histWriteRes = importImage(graph, renderer.targets.history[p].image,
+                renderer.targets.history[p].view, vk::ImageAspectFlagBits::eColor,
+                renderer.targets.history[p].layout, &renderer.targets.history[p].layout);
+            RgPass taaPass;
+            taaPass.name = "taa";
+            taaPass.kind = RgPassKind::Compute;
+            taaPass.accesses = { RgAccess{ sceneOutput, RgUsage::SampledReadCompute },
+                                 RgAccess{ motionRes, RgUsage::SampledReadCompute },
+                                 RgAccess{ histReadRes, RgUsage::SampledReadCompute },
+                                 RgAccess{ renderer.graph.sceneColor, RgUsage::StorageImageRWCompute },
+                                 RgAccess{ histWriteRes, RgUsage::StorageImageRWCompute } };
+            const vk::Extent2D extent = offscreen.extent;
+            const bool historyValid = renderer.targets.historyValid;
+            taaPass.execute = [&renderer, extent, p, historyValid](vk::CommandBuffer cmd)
+        {
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.taa->pipeline);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                    renderer.pipelines.taa->layout, 0, renderer.descriptors.taaSets[p], {});
+                struct TaaPush
+                {
+                    glm::vec4 params;
+                } push{ glm::vec4(TaaHistoryWeight, historyValid ? 1.0f : 0.0f, 0.0f, 0.0f) };
+                cmd.pushConstants(renderer.pipelines.taa->layout, vk::ShaderStageFlagBits::eCompute,
+                                  0, sizeof(push), &push);
+                cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+            };
+            addPass(graph, std::move(taaPass));
+            // Next frame reads this frame's history; mark it valid + flip parity.
+            renderer.targets.historyValid = true;
+            renderer.targets.historyIndex = 1 - p;
+        }
+
         // HDR offscreen → display: the tonemap is mandatory (the scene wrote linear HDR
         // radiance). Added after the scene + AA passes, before any app-authored pass + ui.
         addTonemapPass(renderer, graph);
@@ -863,6 +944,14 @@ namespace se
         addPass(graph, std::move(ui));
 
         executeRenderGraph(graph, frame.commandBuffer);
+
+        // Store this frame's camera viewProj as next frame's "previous" for TAA motion
+        // vectors. Only valid once a scene draw list was submitted this frame.
+        if (renderer.frame.sceneDrawList.valid)
+        {
+            renderer.prevViewProj = renderer.frame.sceneDrawList.viewProj;
+            renderer.prevViewProjValid = true;
+        }
 
         // The swapchain image is only safely owned in-frame, so a pending capture
         // is copied here, between the ImGui pass and present; its COLOR->PRESENT

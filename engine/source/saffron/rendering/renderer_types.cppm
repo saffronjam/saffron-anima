@@ -517,6 +517,10 @@ export namespace se
         vk::DescriptorSet tonemapSet;                // points at the offscreen color view (GENERAL)
         vk::DescriptorSetLayout fxaaSetLayout;
         vk::DescriptorSet fxaaSet;
+        // TAA resolve set (compute): current + history + motion samplers, offscreen +
+        // history storage. Two sets (one per ping-pong parity) rewritten when targets change.
+        vk::DescriptorSetLayout taaSetLayout;
+        std::array<vk::DescriptorSet, 2> taaSets;
         vk::DescriptorSetLayout clusterSetLayout;    // compute set 0
     };
 
@@ -578,6 +582,8 @@ export namespace se
         Ref<Pipeline> pointShadow;   // color (distance) + depth pass into a point shadow cube face
         Ref<Pipeline> gbuffer;       // thin G-buffer prepass (view normal + view-Z)
         Ref<Pipeline> gtao;          // compute screen-space AO from the G-buffer
+        Ref<Pipeline> motion;        // motion-vector prepass (camera reprojection)
+        Ref<Pipeline> taa;           // compute TAA resolve
         Ref<Pipeline> fxaa;          // compute FXAA post-process
         Ref<Pipeline> cull;          // compute light-cull (clustered forward)
         std::unordered_map<std::string, Ref<Pipeline>> cache;
@@ -601,6 +607,13 @@ export namespace se
         Image gNormal;
         Image gDepth;
         Image aoMap;
+        // TAA: a screen-space motion-vector target (rg16f) + its depth scratch, and two
+        // ping-pong history color images. Sized to the viewport, recreated with it.
+        Image motion;
+        Image motionDepth;
+        std::array<Image, 2> history;
+        u32 historyIndex = 0;      // this frame writes history[historyIndex], reads the other
+        bool historyValid = false; // false on the first frame / after a resize
         // MSAA: when sampleCount > 1 the scene renders to these multisampled targets and
         // resolves color into offscreen. Sized to the viewport, recreated with it.
         Image msaaColor;
@@ -611,6 +624,7 @@ export namespace se
         vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1;     // 1 = MSAA off
         vk::SampleCountFlagBits maxSampleCount = vk::SampleCountFlagBits::e1;  // device cap
         bool fxaaEnabled = false;  // FXAA post-process (mutually exclusive with MSAA)
+        bool taaEnabled = false;   // TAA resolve (mutually exclusive with MSAA/FXAA)
         u32 desiredWidth = 0;      // requested by the UI panel (applied next frame)
         u32 desiredHeight = 0;
         u32 generation = 0;        // bumped whenever the offscreen image is recreated
@@ -679,6 +693,8 @@ export namespace se
 
         bool useDepthPrepass = false;
         f32 exposureEv = 0.0f;  // tonemap exposure in stops; the tonemap pass applies exp2(this)
+        glm::mat4 prevViewProj{ 1.0f };  // last frame's camera viewProj, for TAA motion vectors
+        bool prevViewProjValid = false;  // false until the first frame stores one
         Ref<GpuTexture> defaultWhiteTexture;  // 1x1 white; bound when a material has no albedo
         RenderStats stats;                    // populated each frame by submitDrawList
         // Pending window screenshot, consumed in endFrame: the swapchain image is
@@ -820,9 +836,12 @@ export namespace se
     void setDepthPrepass(Renderer& renderer, bool enabled);
     auto depthPrepassEnabled(const Renderer& renderer) -> bool;
     // Anti-aliasing: msaaSamples is 1 (off) / 2 / 4 / 8 (clamped to the device cap); fxaa
-    // toggles the post-process pass. Recreates the MSAA targets + rebuilds scene PSOs.
-    void setAa(Renderer& renderer, u32 msaaSamples, bool fxaa);
-    auto aaMode(const Renderer& renderer) -> std::string;  // "off" | "fxaa" | "msaa2|4|8"
+    // and taa toggle their post-process passes. The three modes are mutually exclusive.
+    // Recreates the MSAA/TAA targets + rebuilds scene PSOs.
+    void setAa(Renderer& renderer, u32 msaaSamples, bool fxaa, bool taa);
+    auto aaMode(const Renderer& renderer) -> std::string;  // "off" | "fxaa" | "taa" | "msaa2|4|8"
+    // Records the motion-vector prepass (camera reprojection) for the TAA pass body.
+    void recordMotion(Renderer& renderer, vk::CommandBuffer cmd);
 
     // A 1x1 white texture; bind it when a material has no albedo.
     auto defaultTexture(const Renderer& renderer) -> const Ref<GpuTexture>&;
