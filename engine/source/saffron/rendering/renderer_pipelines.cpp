@@ -199,4 +199,97 @@ namespace se
     {
         return static_cast<u32>(renderer.pipelines.cache.size());
     }
+
+    auto newOverlayPipeline(Renderer& renderer) -> Result<Ref<Pipeline>>
+    {
+        auto moduleResult = loadShaderModule(renderer.context.device, assetPath("shaders/gizmo_overlay.spv"));
+        if (!moduleResult)
+        {
+            return Err(moduleResult.error());
+        }
+        vk::ShaderModule shaderModule = *moduleResult;
+
+        std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
+        stages[0].stage = vk::ShaderStageFlagBits::eVertex;
+        stages[0].module = shaderModule;
+        stages[0].pName = "vertexMain";
+        stages[1].stage = vk::ShaderStageFlagBits::eFragment;
+        stages[1].module = shaderModule;
+        stages[1].pName = "fragmentMain";
+
+        vk::VertexInputBindingDescription binding{};
+        binding.binding = 0;
+        binding.stride = sizeof(OverlayVertex);
+        binding.inputRate = vk::VertexInputRate::eVertex;
+        std::array<vk::VertexInputAttributeDescription, 2> attributes{
+            vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32Sfloat, offsetof(OverlayVertex, position) },
+            vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(OverlayVertex, color) } };
+        vk::PipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.setVertexBindingDescriptions(binding);
+        vertexInput.setVertexAttributeDescriptions(attributes);
+
+        vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+        vk::PipelineViewportStateCreateInfo viewportState{};
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+        vk::PipelineRasterizationStateCreateInfo raster{};
+        raster.polygonMode = vk::PolygonMode::eFill;
+        raster.cullMode = vk::CullModeFlagBits::eNone;
+        raster.frontFace = vk::FrontFace::eCounterClockwise;
+        raster.lineWidth = 1.0f;
+        vk::PipelineMultisampleStateCreateInfo multisample{};
+        multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
+        vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.depthTestEnable = VK_FALSE;
+        depthStencil.depthWriteEnable = VK_FALSE;
+        vk::PipelineColorBlendAttachmentState blendAttachment{};
+        blendAttachment.blendEnable = VK_TRUE;
+        blendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
+        blendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        blendAttachment.colorBlendOp = vk::BlendOp::eAdd;
+        blendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
+        blendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        blendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
+        blendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+        vk::PipelineColorBlendStateCreateInfo colorBlend{};
+        colorBlend.setAttachments(blendAttachment);
+        std::array<vk::DynamicState, 2> dynamicStates{ vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+        vk::PipelineDynamicStateCreateInfo dynamic{};
+        dynamic.setDynamicStates(dynamicStates);
+        vk::PipelineRenderingCreateInfo renderingInfo{};
+        renderingInfo.setColorAttachmentFormats(OffscreenColorFormat);
+        vk::PipelineLayoutCreateInfo layoutInfo{};
+        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (overlay)");
+        if (!layoutResult)
+        {
+            renderer.context.device.destroyShaderModule(shaderModule);
+            return Err(layoutResult.error());
+        }
+        vk::GraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.pNext = &renderingInfo;
+        pipelineInfo.setStages(stages);
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &raster;
+        pipelineInfo.pMultisampleState = &multisample;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamic;
+        pipelineInfo.layout = *layoutResult;
+        vk::ResultValue<vk::Pipeline> created = renderer.context.device.createGraphicsPipeline(nullptr, pipelineInfo);
+        renderer.context.device.destroyShaderModule(shaderModule);
+        if (created.result != vk::Result::eSuccess)
+        {
+            renderer.context.device.destroyPipelineLayout(*layoutResult);
+            return Err(std::format("createGraphicsPipeline (overlay): {}", vk::to_string(created.result)));
+        }
+        Pipeline pipeline;
+        pipeline.device = renderer.context.device;
+        pipeline.pipeline = created.value;
+        pipeline.layout = *layoutResult;
+        return std::make_shared<Pipeline>(std::move(pipeline));
+    }
 }

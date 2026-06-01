@@ -7,6 +7,7 @@ include(FetchContent)
 # --- System packages ----------------------------------------------------------
 find_package(Vulkan REQUIRED)          # Vulkan headers + loader (we use the raw C API, not vulkan.hpp/raii)
 find_package(SDL3 REQUIRED CONFIG)     # SDL3 3.4.x, C ABI
+find_package(X11 REQUIRED)             # X11 child-window embedding for the native-viewport bridge
 
 # --- Header-only / source libraries (built from source, static) ---------------
 FetchContent_Declare(EnTT
@@ -100,6 +101,7 @@ target_compile_options(nanosvg PRIVATE -Wno-unused-function)
 add_library(saffron_third_party INTERFACE)
 target_link_libraries(saffron_third_party INTERFACE
     SDL3::SDL3
+    X11::X11
     Vulkan::Vulkan
     EnTT::EnTT
     glm::glm

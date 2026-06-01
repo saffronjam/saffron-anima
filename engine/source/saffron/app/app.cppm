@@ -38,6 +38,7 @@ export namespace se
         WindowConfig window;
         std::function<void(App&)> onCreate;
         std::function<void(App&)> onExit;
+        bool useImGui = true;  // present-only hosts disable ImGui entirely (no init, no per-frame work)
     };
 
     void attachLayer(App& app, Layer layer)
@@ -89,15 +90,19 @@ export namespace se
         }
         app.renderer = std::move(*rendererResult);
 
-        auto uiResult = newUi(app.renderer, app.window);
-        if (!uiResult)
+        const bool useImGui = config.useImGui;
+        if (useImGui)
         {
-            logError(std::format("failed to create ui: {}", uiResult.error()));
-            destroyRenderer(app.renderer);
-            destroyWindow(app.window);
-            return 1;
+            auto uiResult = newUi(app.renderer, app.window);
+            if (!uiResult)
+            {
+                logError(std::format("failed to create ui: {}", uiResult.error()));
+                destroyRenderer(app.renderer);
+                destroyWindow(app.window);
+                return 1;
+            }
+            app.ui = std::move(*uiResult);
         }
-        app.ui = std::move(*uiResult);
 
         if (config.onCreate)
         {
@@ -146,7 +151,10 @@ export namespace se
                         layer.onRender();
                     }
                 }
-                uiBeginFrame(app.ui);
+                if (useImGui)
+                {
+                    uiBeginFrame(app.ui);
+                }
                 for (Layer& layer : app.layers)
                 {
                     if (layer.onUi)
@@ -154,8 +162,11 @@ export namespace se
                         layer.onUi();
                     }
                 }
-                uiEndFrame(app.ui);
-                uiRecordDrawData(app.renderer);
+                if (useImGui)
+                {
+                    uiEndFrame(app.ui);
+                    uiRecordDrawData(app.renderer);
+                }
 
                 // Build the frame graph (cull + scene), let layers add passes against
                 // it (e.g. post-process), then finish + execute it.
@@ -204,7 +215,10 @@ export namespace se
             }
         }
 
-        destroyUi(app.renderer, app.ui);
+        if (useImGui)
+        {
+            destroyUi(app.renderer, app.ui);
+        }
         destroyRenderer(app.renderer);
         destroyWindow(app.window);
         return 0;

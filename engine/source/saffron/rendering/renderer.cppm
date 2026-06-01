@@ -19,6 +19,7 @@ module;
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <expected>
 #include <format>
 #include <fstream>
@@ -43,6 +44,8 @@ import :Detail;
 
 namespace se
 {
+    // Host-mapped vertex buffer for the editor overlay (grown per frame by the overlay pass).
+    auto makeMappedVertexBuffer(Renderer& renderer, vk::DeviceSize bytes) -> Result<Ref<Buffer>>;
 
     auto newRenderer(Window& window) -> Result<Renderer>
     {
@@ -56,7 +59,7 @@ namespace se
         instanceBuilder
             .set_app_name("Saffron Editor")
             .set_engine_name("Saffron Engine")
-            .require_api_version(1, 3, 0)
+            .require_api_version(1, 4, 0)
             .request_validation_layers(true)
             .use_default_debug_messenger();
         for (u32 i = 0; i < sdlExtensionCount; i = i + 1)
@@ -85,6 +88,8 @@ namespace se
         features13.dynamicRendering = VK_TRUE;
         features13.synchronization2 = VK_TRUE;
 
+        VkPhysicalDeviceVulkan14Features features14{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES };
+
         // Bindless: one global texture array indexed per-instance. Core Vulkan 1.2
         // descriptor indexing — required (selection fails with a clear error if absent).
         VkPhysicalDeviceVulkan12Features features12{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
@@ -96,10 +101,11 @@ namespace se
 
         vkb::PhysicalDeviceSelector selector{ renderer.context.vkbInstance };
         auto physicalResult = selector
-                                  .set_minimum_version(1, 3)
+                                  .set_minimum_version(1, 4)
                                   .set_required_features_11(features11)
                                   .set_required_features_12(features12)
                                   .set_required_features_13(features13)
+                                  .set_required_features_14(features14)
                                   .set_surface(rawSurface)
                                   .select();
         if (!physicalResult)
@@ -190,7 +196,7 @@ namespace se
         allocatorInfo.instance = renderer.context.vkbInstance.instance;
         allocatorInfo.physicalDevice = physicalResult.value().physical_device;
         allocatorInfo.device = renderer.context.vkbDevice.device;
-        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_4;
         if (renderer.context.rtSupported)
         {
             // BDA is needed to feed vertex/index/instance buffer addresses to AS builds.
@@ -324,6 +330,7 @@ namespace se
         renderer.frame.uiSubmissions.clear();
         renderer.defaultWhiteTexture.reset();
         renderer.pipelines.cull.reset();        // RAII frees the compute pipeline + layout
+        renderer.pipelines.overlay.reset();     // editor gizmo + billboard PSO
         renderer.pipelines.thumbnail.reset();
         renderer.pipelines.tonemap.reset();
         renderer.pipelines.fxaa.reset();
@@ -361,6 +368,7 @@ namespace se
             renderer.rt.tlas[i].reset();
             renderer.rt.instanceBuffers[i].reset();
             renderer.rt.scratchBuffers[i].reset();
+            renderer.overlay.buffers[i].reset();  // host-mapped overlay vertex buffers
         }
         // The last frame's RT scene holds Ref<GpuMesh> captured by setRtScene; beginFrame
         // would clear it next frame, but there is no next frame at teardown. Drop them so the
@@ -614,6 +622,7 @@ namespace se
         renderer.frame.sceneDrawList = SceneDrawList{};  // last frame's geometry has presented
         renderer.frame.sceneSubmissions.clear();
         renderer.frame.uiSubmissions.clear();
+        renderer.overlay.vertices.clear();  // editor overlay re-submits its geometry each frame
 
         vk::CommandBufferBeginInfo beginInfo{};
         beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
@@ -1423,6 +1432,58 @@ namespace se
         // HDR offscreen → display: the tonemap is mandatory (the scene wrote linear HDR
         // radiance). Added after the scene + AA passes, before any app-authored pass + ui.
         addTonemapPass(renderer, graph);
+
+        // Editor overlay: gizmo handles + entity billboards, composited into the 1x resolved
+        // sceneColor AFTER tonemap (the last sceneColor writer) so present-only blits it too.
+        // The overlay runs at e1: by here sceneColor is always the 1x offscreen regardless of AA.
+        if (!renderer.overlay.vertices.empty() && renderer.pipelines.overlay)
+        {
+            RgPass overlay;
+            overlay.name = "editor-overlay";
+            overlay.kind = RgPassKind::Graphics;
+            overlay.colors.push_back(RgAttachment{ renderer.graph.sceneColor, vk::AttachmentLoadOp::eLoad,
+                vk::AttachmentStoreOp::eStore, {} });
+            overlay.renderArea = offscreen.extent;
+            const u32 vertexCount = static_cast<u32>(renderer.overlay.vertices.size());
+            overlay.execute = [&renderer, vertexCount](vk::CommandBuffer cmd)
+            {
+                const u32 f = renderer.frame.index;
+                if (renderer.overlay.capacity[f] < vertexCount)
+                {
+                    auto buffer = makeMappedVertexBuffer(
+                        renderer, static_cast<vk::DeviceSize>(vertexCount) * sizeof(OverlayVertex));
+                    if (!buffer)
+                    {
+                        logError(buffer.error());
+                        return;
+                    }
+                    renderer.overlay.buffers[f] = *buffer;
+                    renderer.overlay.capacity[f] = vertexCount;
+                }
+                Ref<Buffer> buffer = renderer.overlay.buffers[f];
+                if (!buffer || buffer->mapped == nullptr)
+                {
+                    return;
+                }
+                std::memcpy(buffer->mapped, renderer.overlay.vertices.data(),
+                            static_cast<std::size_t>(vertexCount) * sizeof(OverlayVertex));
+
+                vk::Viewport viewport{};
+                viewport.x = 0.0f;
+                viewport.y = 0.0f;
+                viewport.width = static_cast<float>(renderer.targets.offscreen.extent.width);
+                viewport.height = static_cast<float>(renderer.targets.offscreen.extent.height);
+                viewport.minDepth = 0.0f;
+                viewport.maxDepth = 1.0f;
+                cmd.setViewport(0, viewport);
+                cmd.setScissor(0, vk::Rect2D{ vk::Offset2D{ 0, 0 }, renderer.targets.offscreen.extent });
+                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, renderer.pipelines.overlay->pipeline);
+                const vk::DeviceSize offset = 0;
+                cmd.bindVertexBuffers(0, buffer->buffer, offset);
+                cmd.draw(vertexCount, 1, 0, 0);
+            };
+            addPass(graph, std::move(overlay));
+        }
     }
 
     auto frameGraph(Renderer& renderer) -> RenderGraph&
@@ -1455,28 +1516,112 @@ namespace se
         addPass(graph, std::move(pass));
     }
 
+    void setPresentViewportOnly(Renderer& renderer, bool enabled)
+    {
+        renderer.presentViewportOnly = enabled;
+    }
+
+    auto makeMappedVertexBuffer(Renderer& renderer, vk::DeviceSize bytes) -> Result<Ref<Buffer>>
+    {
+        VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        info.size = bytes;
+        info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        VmaAllocationCreateInfo alloc{};
+        alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VkBuffer raw = VK_NULL_HANDLE;
+        VmaAllocation allocation = nullptr;
+        VmaAllocationInfo mapped{};
+        if (vmaCreateBuffer(renderer.context.allocator, &info, &alloc, &raw, &allocation, &mapped) != VK_SUCCESS)
+        {
+            return Err(std::string{ "makeMappedVertexBuffer: vmaCreateBuffer failed" });
+        }
+        Buffer buffer;
+        buffer.allocator = renderer.context.allocator;
+        buffer.buffer = vk::Buffer{ raw };
+        buffer.alloc = allocation;
+        buffer.mapped = mapped.pMappedData;
+        buffer.size = bytes;
+        return std::make_shared<Buffer>(std::move(buffer));
+    }
+
+    void submitOverlay(Renderer& renderer, std::vector<OverlayVertex> vertices)
+    {
+        renderer.overlay.vertices = std::move(vertices);
+    }
+
+    // Native-viewport host: blit the post-processed offscreen color straight to the
+    // swapchain (Nearest, full extent) and transition it to present, in place of the ui
+    // pass when the scene is embedded in an external window.
+    void presentViewportToSwapchain(Renderer& renderer, vk::CommandBuffer cmd)
+    {
+        Image& src = renderer.targets.offscreen;
+        const vk::Image swap = renderer.swapchain.images[renderer.frame.imageIndex];
+
+        transitionImage(
+            cmd, src.image, src.layout, vk::ImageLayout::eTransferSrcOptimal,
+            vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eColorAttachmentWrite,
+            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+        src.layout = vk::ImageLayout::eTransferSrcOptimal;
+
+        transitionImage(
+            cmd, swap, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
+
+        vk::ImageBlit blit{};
+        blit.srcSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
+        blit.srcOffsets[0] = vk::Offset3D{ 0, 0, 0 };
+        blit.srcOffsets[1] = vk::Offset3D{
+            static_cast<i32>(src.extent.width),
+            static_cast<i32>(src.extent.height),
+            1
+        };
+        blit.dstSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
+        blit.dstOffsets[0] = vk::Offset3D{ 0, 0, 0 };
+        blit.dstOffsets[1] = vk::Offset3D{
+            static_cast<i32>(renderer.swapchain.extent.width),
+            static_cast<i32>(renderer.swapchain.extent.height),
+            1
+        };
+        cmd.blitImage(src.image, vk::ImageLayout::eTransferSrcOptimal,
+                      swap, vk::ImageLayout::eTransferDstOptimal,
+                      blit, vk::Filter::eNearest);
+
+        transitionImage(
+            cmd, swap, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::ePresentSrcKHR,
+            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
+            vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone);
+    }
+
     void endFrame(Renderer& renderer)
     {
         FrameData& frame = renderer.frame.frames[renderer.frame.index];
         RenderGraph& graph = renderer.graph.current;
 
-        // The ui pass samples the (now post-processed) offscreen color and composites
-        // ImGui into the swapchain. Added last so app-authored passes land before it.
-        RgPass ui;
-        ui.name = "ui";
-        ui.kind = RgPassKind::Graphics;
-        ui.accesses = { RgAccess{ renderer.graph.sceneColor, RgUsage::SampledRead } };
-        ui.colors.push_back(RgAttachment{ renderer.graph.swapImage, vk::AttachmentLoadOp::eClear,
-            vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } });
-        ui.renderArea = renderer.swapchain.extent;
-        ui.execute = [&renderer](vk::CommandBuffer cmd)
+        // In native-viewport (present-only) mode no graph pass writes the swapchain;
+        // presentViewportToSwapchain does the offscreen->swapchain blit below instead.
+        if (!renderer.presentViewportOnly)
         {
-            for (RenderFn& fn : renderer.frame.uiSubmissions)
+            // The ui pass samples the (now post-processed) offscreen color and composites
+            // ImGui into the swapchain. Added last so app-authored passes land before it.
+            RgPass ui;
+            ui.name = "ui";
+            ui.kind = RgPassKind::Graphics;
+            ui.accesses = { RgAccess{ renderer.graph.sceneColor, RgUsage::SampledRead } };
+            ui.colors.push_back(RgAttachment{ renderer.graph.swapImage, vk::AttachmentLoadOp::eClear,
+                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } });
+            ui.renderArea = renderer.swapchain.extent;
+            ui.execute = [&renderer](vk::CommandBuffer cmd)
             {
-                fn(cmd);
-            }
-        };
-        addPass(graph, std::move(ui));
+                for (RenderFn& fn : renderer.frame.uiSubmissions)
+                {
+                    fn(cmd);
+                }
+            };
+            addPass(graph, std::move(ui));
+        }
 
         executeRenderGraph(graph, frame.commandBuffer);
 
@@ -1496,6 +1641,9 @@ namespace se
         VmaAllocationInfo captureInfo{};
         vk::Extent2D captureExtent{};
         bool doCapture = renderer.captureNextSwapchainPath.has_value();
+        // Present-only never leaves the swapchain in eColorAttachmentOptimal, so the
+        // window-capture path is invalid here (use screenshot target=viewport instead).
+        if (renderer.presentViewportOnly) { doCapture = false; }
         if (doCapture)
         {
             captureExtent = renderer.swapchain.extent;
@@ -1510,7 +1658,11 @@ namespace se
                 renderer.captureNextSwapchainPath.reset();
             }
         }
-        if (doCapture)
+        if (renderer.presentViewportOnly)
+        {
+            presentViewportToSwapchain(renderer, frame.commandBuffer);
+        }
+        else if (doCapture)
         {
             captureImageToBuffer(
                 frame.commandBuffer, renderer.swapchain.images[renderer.frame.imageIndex], captureExtent,

@@ -511,6 +511,23 @@ export namespace se
         u32 instances = 0;  // total entities drawn
     };
 
+    // A single screen-space overlay vertex: NDC position + flat color. The editor
+    // overlay (gizmo handles + entity billboards) builds a triangle list of these.
+    struct OverlayVertex
+    {
+        glm::vec2 position;  // clip-space NDC ([-1,1])
+        glm::vec4 color;
+    };
+
+    // Per-frame editor overlay geometry, drawn into the post-tonemap scene color so it
+    // composites under present-only mode (where ImGui is skipped). Buffers grow on demand.
+    struct OverlayState
+    {
+        std::vector<OverlayVertex> vertices;
+        std::array<Ref<Buffer>, MaxFramesInFlight> buffers;
+        std::array<u32, MaxFramesInFlight> capacity{};
+    };
+
     // The Vulkan device + allocator the whole renderer borrows from.
     // KHR acceleration-structure / ray-query entry points are NOT statically exported by
     // the system loader (only core funcs are). When RT is available we resolve them via
@@ -665,6 +682,7 @@ export namespace se
         Ref<Pipeline> restirResolve; // ReSTIR resolve (1 shadow ray) + shade
         Ref<Pipeline> fxaa;          // compute FXAA post-process
         Ref<Pipeline> cull;          // compute light-cull (clustered forward)
+        Ref<Pipeline> overlay;       // screen-space editor overlay (gizmo + billboards)
         std::unordered_map<std::string, Ref<Pipeline>> cache;
     };
 
@@ -982,11 +1000,13 @@ export namespace se
         FrameGraphState graph;
 
         bool useDepthPrepass = false;
+        bool presentViewportOnly = false;  // native-viewport host: blit offscreen->swapchain, skip the ui pass
         f32 exposureEv = 0.0f;  // tonemap exposure in stops; the tonemap pass applies exp2(this)
         glm::mat4 prevViewProj{ 1.0f };  // last frame's camera viewProj, for TAA motion vectors
         bool prevViewProjValid = false;  // false until the first frame stores one
         Ref<GpuTexture> defaultWhiteTexture;  // 1x1 white; bound when a material has no albedo
         RenderStats stats;                    // populated each frame by submitDrawList
+        OverlayState overlay;                 // editor gizmo + billboard geometry for the frame
         // Pending window screenshot, consumed in endFrame: the swapchain image is
         // only safely owned in-frame, so the copy is deferred there.
         std::optional<std::string> captureNextSwapchainPath;
@@ -1010,6 +1030,17 @@ export namespace se
     // Reinhard + gamma). beginFrameGraph adds it after the scene + AA passes.
     void addTonemapPass(Renderer& renderer, RenderGraph& graph);
     void endFrame(Renderer& renderer);
+
+    // Native-viewport host: present-only mode blits the offscreen color straight to the
+    // swapchain (no ui pass) for embedding the scene in an external window.
+    void setPresentViewportOnly(Renderer& renderer, bool enabled);
+
+    // The screen-space editor overlay pipeline (gizmo handles + entity billboards). Built
+    // once in initDescriptorResources; the overlay pass draws the per-frame vertex list.
+    auto newOverlayPipeline(Renderer& renderer) -> Result<Ref<Pipeline>>;
+    // Stashes the editor overlay's screen-space triangle list for the current frame; the
+    // editor-overlay graph pass uploads + draws it over the tonemapped scene color.
+    void submitOverlay(Renderer& renderer, std::vector<OverlayVertex> vertices);
 
     // The offscreen Viewport target the editor samples + displays in a panel.
     void setViewportDesiredSize(Renderer& renderer, u32 width, u32 height);
@@ -1057,6 +1088,12 @@ export namespace se
     // Renders a mesh to a square GPU texture (a 3/4 view framed by the mesh AABB, lit by
     // a fixed light) for an asset thumbnail. Synchronous one-off render; safe between frames.
     auto renderMeshThumbnail(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<Ref<GpuTexture>>;
+
+    // Renders/loads an asset to PNG bytes in memory (synchronous, own command buffer + waitIdle;
+    // never on the present path). Mesh: framed like renderMeshThumbnail at size×size. Texture:
+    // read back at the texture's native extent (size is a hint).
+    auto encodeAssetThumbnailPng(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<std::vector<u8>>;
+    auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size) -> Result<std::vector<u8>>;
 
     // Resolves each item's material to a cached PSO, batches by (pipeline, mesh, texture),
     // uploads the frame's instance buffer, and stores the structured draw list on the
