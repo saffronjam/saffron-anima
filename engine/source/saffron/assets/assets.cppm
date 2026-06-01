@@ -573,6 +573,7 @@ export namespace se
         setDirectionalShadow(renderer, shadowViewProj, castShadow);
         setSceneLighting(renderer, lightDir, lightColor, lightIntensity, lightAmbient, eyePosition, lights);
         setClusterCamera(renderer, view, proj, camera.nearPlane, camera.farPlane);  // arms the cull dispatch
+        setSsaoCamera(renderer, view, proj);  // G-buffer + GTAO use the scene's view/proj
 
         submitDrawList(renderer, viewProjection, items);
     }

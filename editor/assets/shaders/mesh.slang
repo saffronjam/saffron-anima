@@ -44,7 +44,7 @@ struct LightGlobals
 {
     float4 directionAmbient;     // xyz = travel direction, w = ambient
     float4 colorIntensity;       // rgb = color, a = intensity
-    uint4 counts;                // x = punctual count, y = directional shadow on, z = IBL ambient on
+    uint4 counts;                // x = punctual count, y = directional shadow, z = IBL, w = SSAO
     float4 eyePosition;          // xyz = world-space camera position (for the view vector)
     float4x4 shadowViewProj;     // world -> directional light clip space
     float4x4 spotShadowViewProj; // world -> shadowed spot light clip space (perspective)
@@ -137,6 +137,10 @@ struct Instance
 [[vk::binding(1, 3)]] SamplerCube prefilteredMap;
 [[vk::binding(2, 3)]] Sampler2D brdfLut;
 static const float IblPrefilterMaxMip = 4.0;  // == IblPrefilterMips - 1 (renderer_detail.cppm)
+
+// Set 4: screen-space AO map (factor in [0,1], 1 = open). Sampled by screen UV; modulates
+// the ambient (indirect) term only when globals.counts.w != 0.
+[[vk::binding(0, 4)]] Sampler2D aoMap;
 
 float3 fresnelSchlickRoughness(float cosT, float3 F0, float roughness)
 {
@@ -330,6 +334,12 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     else
     {
         ambient = albedo * (1.0 - metallic) * globals.directionAmbient.w;
+    }
+    // Screen-space AO darkens only the indirect (ambient) term, sampled at this pixel.
+    if (globals.counts.w != 0)
+    {
+        float2 screenUv = input.position.xy / float2(clusterParams.screenSize.xy);
+        ambient *= aoMap.SampleLevel(screenUv, 0.0).r;
     }
     float3 color = lo + ambient + input.emissive;
     return float4(color, tex.a * input.baseColor.a);

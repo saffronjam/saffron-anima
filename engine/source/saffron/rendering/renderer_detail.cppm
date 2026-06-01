@@ -537,6 +537,7 @@ export namespace se
     }
 
     void updateFxaaSet(Renderer& renderer);  // defined alongside updateTonemapSet below
+    void recreateSsaoTargets(Renderer& renderer);  // defined after the SSAO pipeline helpers
 
     // (Re)create the 1x scratch target FXAA reads from (the scene renders here when
     // FXAA is on); drop it when off. Sized to the offscreen; the GPU is already idle.
@@ -691,6 +692,11 @@ export namespace se
     inline constexpr u32 PointShadowSize = 512;
     inline constexpr vk::Format PointShadowColorFormat = vk::Format::eR32Sfloat;
     inline constexpr f32 PointShadowDistanceBias = 0.08f;
+
+    // SSAO: the thin G-buffer stores a view-space normal (rgb) + view-Z (a); the AO map is
+    // a single-channel factor. Both viewport-sized.
+    inline constexpr vk::Format GNormalFormat = vk::Format::eR16G16B16A16Sfloat;
+    inline constexpr vk::Format AoFormat = vk::Format::eR8Unorm;
 
     // IBL bake sizes. The environment is a procedural HDR sky; it is convolved into a
     // small diffuse-irradiance cube + a roughness-mipped prefiltered specular cube, plus
@@ -1129,6 +1135,195 @@ export namespace se
         pipeline.pipeline = created.value;
         pipeline.layout = *layoutResult;
         return std::make_shared<Pipeline>(std::move(pipeline));
+    }
+
+    // The thin G-buffer prepass pipeline: writes view-space normal (rgb) + view-Z (a) into
+    // an rgba16f color target + its own depth. Instanced (set 2); push = viewProj + view.
+    // Reuses gbuffer.slang. The layout declares sets {bindless, light, instance} for set-2
+    // binding compatibility, like the depth pre-pass.
+    auto makeGbufferPipeline(Renderer& renderer, std::string_view shaderName) -> Result<Ref<Pipeline>>
+    {
+        auto moduleResult = loadShaderModule(renderer.context.device, assetPath(shaderName));
+        if (!moduleResult)
+        {
+            return Err(moduleResult.error());
+        }
+        vk::ShaderModule shaderModule = *moduleResult;
+
+        std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
+        stages[0].stage = vk::ShaderStageFlagBits::eVertex;
+        stages[0].module = shaderModule;
+        stages[0].pName = "vertexMain";
+        stages[1].stage = vk::ShaderStageFlagBits::eFragment;
+        stages[1].module = shaderModule;
+        stages[1].pName = "fragmentMain";
+
+        vk::VertexInputBindingDescription binding{};
+        binding.binding = 0;
+        binding.stride = sizeof(Vertex);
+        binding.inputRate = vk::VertexInputRate::eVertex;
+        std::array<vk::VertexInputAttributeDescription, 3> attributes{
+            vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
+            vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+        vk::PipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.setVertexBindingDescriptions(binding);
+        vertexInput.setVertexAttributeDescriptions(attributes);
+
+        vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+        vk::PipelineViewportStateCreateInfo viewportState{};
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+        vk::PipelineRasterizationStateCreateInfo raster{};
+        raster.polygonMode = vk::PolygonMode::eFill;
+        raster.cullMode = vk::CullModeFlagBits::eNone;
+        raster.frontFace = vk::FrontFace::eCounterClockwise;
+        raster.lineWidth = 1.0f;
+        vk::PipelineMultisampleStateCreateInfo multisample{};
+        multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;  // the G-buffer is 1x (SSAO is post-resolve)
+        vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp = vk::CompareOp::eLess;
+        vk::PipelineColorBlendAttachmentState blendAttachment{};
+        blendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+        vk::PipelineColorBlendStateCreateInfo colorBlend{};
+        colorBlend.setAttachments(blendAttachment);
+        std::array<vk::DynamicState, 2> dynamicStates{ vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+        vk::PipelineDynamicStateCreateInfo dynamic{};
+        dynamic.setDynamicStates(dynamicStates);
+
+        vk::PipelineRenderingCreateInfo renderingInfo{};
+        renderingInfo.setColorAttachmentFormats(GNormalFormat);
+        renderingInfo.depthAttachmentFormat = DepthFormat;
+
+        vk::PushConstantRange pushConstant{};
+        pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
+        pushConstant.offset = 0;
+        pushConstant.size = 2 * sizeof(glm::mat4);
+        std::array<vk::DescriptorSetLayout, 3> setLayouts{
+            renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout, renderer.descriptors.instanceSetLayout };
+        vk::PipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.setSetLayouts(setLayouts);
+        layoutInfo.setPushConstantRanges(pushConstant);
+        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (gbuffer)");
+        if (!layoutResult)
+        {
+            renderer.context.device.destroyShaderModule(shaderModule);
+            return Err(layoutResult.error());
+        }
+
+        vk::GraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.pNext = &renderingInfo;
+        pipelineInfo.setStages(stages);
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &raster;
+        pipelineInfo.pMultisampleState = &multisample;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamic;
+        pipelineInfo.layout = *layoutResult;
+
+        vk::ResultValue<vk::Pipeline> created = renderer.context.device.createGraphicsPipeline(nullptr, pipelineInfo);
+        renderer.context.device.destroyShaderModule(shaderModule);
+        if (created.result != vk::Result::eSuccess)
+        {
+            renderer.context.device.destroyPipelineLayout(*layoutResult);
+            return Err(std::format("createGraphicsPipeline (gbuffer): {}", vk::to_string(created.result)));
+        }
+        Pipeline pipeline;
+        pipeline.device = renderer.context.device;
+        pipeline.pipeline = created.value;
+        pipeline.layout = *layoutResult;
+        return std::make_shared<Pipeline>(std::move(pipeline));
+    }
+
+    // (Re)creates the SSAO targets (G-buffer normal+viewZ, its depth, AO map) at the
+    // viewport extent and rewrites the GTAO + mesh-AO descriptor sets. Called at init and
+    // after the offscreen resizes (the caller has idled the GPU). The AO map is cleared to
+    // white so a fresh map reads "fully open" before the first GTAO dispatch.
+    void recreateSsaoTargets(Renderer& renderer)
+    {
+        renderer.ssao.ready = false;
+        renderer.targets.gNormal.reset();
+        renderer.targets.gDepth.reset();
+        renderer.targets.aoMap.reset();
+        const u32 w = renderer.targets.offscreen.extent.width;
+        const u32 h = renderer.targets.offscreen.extent.height;
+        if (w == 0 || h == 0)
+        {
+            return;
+        }
+        auto gNormal = newColorImage(renderer, w, h, GNormalFormat, false);
+        if (!gNormal) { logError(gNormal.error()); return; }
+        renderer.targets.gNormal = std::move(*gNormal);
+        auto gDepth = newDepthImage(renderer, w, h);
+        if (!gDepth) { logError(gDepth.error()); return; }
+        renderer.targets.gDepth = std::move(*gDepth);
+        auto aoMap = newColorImage(renderer, w, h, AoFormat, true);  // storage (GTAO writes it)
+        if (!aoMap) { logError(aoMap.error()); return; }
+        renderer.targets.aoMap = std::move(*aoMap);
+
+        // Transition the AO map to ShaderReadOnly so the mesh's set-4 sample is valid even
+        // before GTAO first runs. No clear is needed: the shader only samples it when SSAO
+        // is enabled (counts.w), and GTAO writes the whole map earlier in that same frame.
+        {
+            vk::CommandBufferAllocateInfo allocInfo{};
+            allocInfo.commandPool = renderer.frame.frames[0].commandPool;
+            allocInfo.level = vk::CommandBufferLevel::ePrimary;
+            allocInfo.commandBufferCount = 1;
+            auto cmds = checked(renderer.context.device.allocateCommandBuffers(allocInfo), "ssao init cmd");
+            if (!cmds) { logError(cmds.error()); return; }
+            vk::CommandBuffer cmd = (*cmds)[0];
+            vk::CommandBufferBeginInfo begin{};
+            begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+            static_cast<void>(cmd.begin(begin));
+            transitionImage(cmd, renderer.targets.aoMap.image,
+                vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+            static_cast<void>(cmd.end());
+            vk::CommandBufferSubmitInfo cmdInfo{};
+            cmdInfo.commandBuffer = cmd;
+            vk::SubmitInfo2 submitInfo{};
+            submitInfo.setCommandBufferInfos(cmdInfo);
+            static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
+            static_cast<void>(renderer.context.device.waitIdle());
+            renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+            renderer.targets.aoMap.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        }
+
+        // GTAO compute set: g-buffer (sampler) + AO map (storage).
+        vk::DescriptorImageInfo gInfo{ renderer.ssao.sampler, renderer.targets.gNormal.view, vk::ImageLayout::eShaderReadOnlyOptimal };
+        vk::DescriptorImageInfo aoStore{};
+        aoStore.imageView = renderer.targets.aoMap.view;
+        aoStore.imageLayout = vk::ImageLayout::eGeneral;
+        std::array<vk::WriteDescriptorSet, 2> gtaoWrites{};
+        gtaoWrites[0].dstSet = renderer.ssao.gtaoSet;
+        gtaoWrites[0].dstBinding = 0;
+        gtaoWrites[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        gtaoWrites[0].setImageInfo(gInfo);
+        gtaoWrites[1].dstSet = renderer.ssao.gtaoSet;
+        gtaoWrites[1].dstBinding = 1;
+        gtaoWrites[1].descriptorType = vk::DescriptorType::eStorageImage;
+        gtaoWrites[1].setImageInfo(aoStore);
+        renderer.context.device.updateDescriptorSets(gtaoWrites, {});
+
+        // Mesh AO set (set 4): the AO map sampled with the linear sampler.
+        vk::DescriptorImageInfo aoSampled{ renderer.descriptors.linearSampler, renderer.targets.aoMap.view, vk::ImageLayout::eShaderReadOnlyOptimal };
+        vk::WriteDescriptorSet aoWrite{};
+        aoWrite.dstSet = renderer.ssao.aoSet;
+        aoWrite.dstBinding = 0;
+        aoWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        aoWrite.setImageInfo(aoSampled);
+        renderer.context.device.updateDescriptorSets(aoWrite, {});
+
+        renderer.ssao.generation = renderer.ssao.generation + 1;
+        renderer.ssao.ready = true;
     }
 
     // Write a texture into the bindless array at the given slot (set 0, binding 0).
@@ -1743,6 +1938,92 @@ export namespace se
             return Err(iblSet.error());
         }
         renderer.ibl.set = (*iblSet)[0];
+
+        // SSAO: a nearest sampler, the GTAO compute set (g-buffer sampler + AO storage), the
+        // mesh-AO set (set 4 = AO map sampler), both pipelines, and the viewport-sized targets.
+        vk::SamplerCreateInfo ssaoSamplerInfo{};
+        ssaoSamplerInfo.magFilter = vk::Filter::eNearest;
+        ssaoSamplerInfo.minFilter = vk::Filter::eNearest;
+        ssaoSamplerInfo.mipmapMode = vk::SamplerMipmapMode::eNearest;
+        ssaoSamplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+        ssaoSamplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+        ssaoSamplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+        auto ssaoSampler = checked(renderer.context.device.createSampler(ssaoSamplerInfo), "createSampler (ssao)");
+        if (!ssaoSampler)
+        {
+            return Err(ssaoSampler.error());
+        }
+        renderer.ssao.sampler = *ssaoSampler;
+
+        std::array<vk::DescriptorSetLayoutBinding, 2> gtaoBindings{};
+        gtaoBindings[0].binding = 0;  // g-buffer sampler
+        gtaoBindings[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        gtaoBindings[0].descriptorCount = 1;
+        gtaoBindings[0].stageFlags = vk::ShaderStageFlagBits::eCompute;
+        gtaoBindings[1].binding = 1;  // AO storage image
+        gtaoBindings[1].descriptorType = vk::DescriptorType::eStorageImage;
+        gtaoBindings[1].descriptorCount = 1;
+        gtaoBindings[1].stageFlags = vk::ShaderStageFlagBits::eCompute;
+        vk::DescriptorSetLayoutCreateInfo gtaoLayoutInfo{};
+        gtaoLayoutInfo.setBindings(gtaoBindings);
+        auto gtaoLayout = checked(renderer.context.device.createDescriptorSetLayout(gtaoLayoutInfo), "gtaoSetLayout");
+        if (!gtaoLayout)
+        {
+            return Err(gtaoLayout.error());
+        }
+        renderer.ssao.gtaoSetLayout = *gtaoLayout;
+
+        vk::DescriptorSetLayoutBinding aoBinding{};
+        aoBinding.binding = 0;  // AO map sampler (mesh fragment set 4)
+        aoBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        aoBinding.descriptorCount = 1;
+        aoBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+        vk::DescriptorSetLayoutCreateInfo aoLayoutInfo{};
+        aoLayoutInfo.setBindings(aoBinding);
+        auto aoLayout = checked(renderer.context.device.createDescriptorSetLayout(aoLayoutInfo), "aoSetLayout");
+        if (!aoLayout)
+        {
+            return Err(aoLayout.error());
+        }
+        renderer.ssao.aoSetLayout = *aoLayout;
+
+        vk::DescriptorSetAllocateInfo gtaoAlloc{};
+        gtaoAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+        gtaoAlloc.setSetLayouts(renderer.ssao.gtaoSetLayout);
+        auto gtaoSet = checked(renderer.context.device.allocateDescriptorSets(gtaoAlloc), "allocate gtaoSet");
+        if (!gtaoSet)
+        {
+            return Err(gtaoSet.error());
+        }
+        renderer.ssao.gtaoSet = (*gtaoSet)[0];
+
+        vk::DescriptorSetAllocateInfo aoAlloc{};
+        aoAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+        aoAlloc.setSetLayouts(renderer.ssao.aoSetLayout);
+        auto aoSet = checked(renderer.context.device.allocateDescriptorSets(aoAlloc), "allocate aoSet");
+        if (!aoSet)
+        {
+            return Err(aoSet.error());
+        }
+        renderer.ssao.aoSet = (*aoSet)[0];
+
+        Result<Ref<Pipeline>> gbufferPipe = makeGbufferPipeline(renderer, "shaders/gbuffer.spv");
+        if (!gbufferPipe)
+        {
+            return Err(gbufferPipe.error());
+        }
+        renderer.pipelines.gbuffer = *gbufferPipe;
+
+        Result<Ref<Pipeline>> gtaoPipe =
+            newComputePipeline(renderer, "shaders/gtao.spv", renderer.ssao.gtaoSetLayout,
+                               static_cast<u32>(sizeof(glm::mat4) + sizeof(glm::vec4)));
+        if (!gtaoPipe)
+        {
+            return Err(gtaoPipe.error());
+        }
+        renderer.pipelines.gtao = *gtaoPipe;
+
+        recreateSsaoTargets(renderer);
         return {};
     }
 

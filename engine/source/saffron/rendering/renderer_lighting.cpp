@@ -109,10 +109,11 @@ namespace se
         LightUbo ubo;
         ubo.directionAmbient = glm::vec4(glm::normalize(direction), ambient);
         ubo.colorIntensity = glm::vec4(color, intensity);
-        // counts.y = directional-shadow-enabled flag (setDirectionalShadow); counts.z =
-        // IBL-ambient-enabled flag (else the shader uses the flat scalar ambient).
+        // counts: x = punctual count, y = directional-shadow flag, z = IBL-ambient flag,
+        // w = SSAO flag (the mesh multiplies the AO map into the ambient term).
         const u32 iblFlag = (renderer.ibl.useIbl && renderer.ibl.ready) ? 1u : 0u;
-        ubo.counts = glm::uvec4(count, renderer.lighting.shadowPending ? 1u : 0u, iblFlag, 0);
+        const u32 ssaoFlag = (renderer.ssao.useSsao && renderer.ssao.ready) ? 1u : 0u;
+        ubo.counts = glm::uvec4(count, renderer.lighting.shadowPending ? 1u : 0u, iblFlag, ssaoFlag);
         ubo.eyePosition = glm::vec4(eyePosition, 0.0f);
         ubo.shadowViewProj = renderer.lighting.shadowViewProj;
         ubo.spotShadowViewProj = renderer.lighting.spotShadowViewProj;

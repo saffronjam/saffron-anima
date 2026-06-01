@@ -46,6 +46,7 @@ namespace se
                              { "depthPrepass", depthPrepassEnabled(ctx.renderer) },
                              { "shadows", shadowsEnabled(ctx.renderer) },
                              { "ibl", iblEnabled(ctx.renderer) },
+                             { "ssao", ssaoEnabled(ctx.renderer) },
                              { "pipelines", pipelineCount(ctx.renderer) },
                              { "hdr", true },
                              { "exposureEv", exposureEv(ctx.renderer) },
@@ -117,6 +118,28 @@ namespace se
                 }
                 setIbl(ctx.renderer, enabled);
                 return json{ { "ibl", iblEnabled(ctx.renderer) } };
+            });
+
+        registerCommand(reg, "set-ssao", "set-ssao {0|1} — toggle screen-space ambient occlusion (GTAO)",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                const json value = positionalOr(params, "enabled", 0);
+                bool enabled = true;
+                if (value.is_number())
+                {
+                    enabled = value.get<double>() != 0.0;
+                }
+                else if (value.is_boolean())
+                {
+                    enabled = value.get<bool>();
+                }
+                else if (value.is_string())
+                {
+                    const std::string s = value.get<std::string>();
+                    enabled = !(s == "0" || s == "false" || s == "off");
+                }
+                setSsao(ctx.renderer, enabled);
+                return json{ { "ssao", ssaoEnabled(ctx.renderer) } };
             });
 
         registerCommand(reg, "set-shadows", "set-shadows {0|1} — toggle the directional shadow map",

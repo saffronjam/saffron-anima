@@ -311,6 +311,8 @@ namespace se
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 1, frameSets, {});
         // Set 3 = IBL (irradiance + prefiltered + BRDF LUT); baked once, always valid.
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 3, renderer.ibl.set, {});
+        // Set 4 = the SSAO map (white when SSAO is off / not yet computed; always valid).
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 4, renderer.ssao.aoSet, {});
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &list.viewProj);
         for (const DrawBatch& batch : list.batches)
         {
@@ -365,6 +367,37 @@ namespace se
         cmd.setDepthBias(ShadowDepthBiasConstant, 0.0f, ShadowDepthBiasSlope);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 2, list.instanceSet, {});
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &lightViewProj);
+        for (const DrawBatch& batch : list.batches)
+        {
+            vk::DeviceSize offset = 0;
+            cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
+            cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
+            for (const Submesh& submesh : batch.mesh->submeshes)
+            {
+                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex,
+                                submesh.vertexOffset, batch.baseInstance);
+            }
+        }
+    }
+
+    // Records the thin G-buffer prepass: view-space normal + view-Z, for SSAO. The push
+    // constant is the camera viewProj + view (set per frame on the Ssao state).
+    void recordGbuffer(Renderer& renderer, vk::CommandBuffer cmd)
+    {
+        SceneDrawList& list = renderer.frame.sceneDrawList;
+        if (!list.valid || !renderer.pipelines.gbuffer)
+        {
+            return;
+        }
+        vk::PipelineLayout layout = renderer.pipelines.gbuffer->layout;
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, renderer.pipelines.gbuffer->pipeline);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 2, list.instanceSet, {});
+        struct GbufferPush
+        {
+            glm::mat4 viewProj;
+            glm::mat4 view;
+        } push{ renderer.ssao.viewProj, renderer.ssao.view };
+        cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(push), &push);
         for (const DrawBatch& batch : list.batches)
         {
             vk::DeviceSize offset = 0;

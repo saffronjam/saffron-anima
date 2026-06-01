@@ -576,6 +576,8 @@ export namespace se
         Ref<Pipeline> depthPrepass;  // vertex-only depth pre-pass
         Ref<Pipeline> shadowDepth;   // vertex-only depth pass into the shadow map (depth-biased)
         Ref<Pipeline> pointShadow;   // color (distance) + depth pass into a point shadow cube face
+        Ref<Pipeline> gbuffer;       // thin G-buffer prepass (view normal + view-Z)
+        Ref<Pipeline> gtao;          // compute screen-space AO from the G-buffer
         Ref<Pipeline> fxaa;          // compute FXAA post-process
         Ref<Pipeline> cull;          // compute light-cull (clustered forward)
         std::unordered_map<std::string, Ref<Pipeline>> cache;
@@ -594,6 +596,11 @@ export namespace se
         Image pointShadowCube;
         Image pointShadowDepth;
         std::array<vk::ImageView, 6> pointShadowFaces{};  // per-face render views (freed manually)
+        // Screen-space AO: a thin G-buffer (view normal rgb + view-Z in .a) + its depth
+        // scratch, and the GTAO output (r8). Sized to the viewport, recreated with it.
+        Image gNormal;
+        Image gDepth;
+        Image aoMap;
         // MSAA: when sampleCount > 1 the scene renders to these multisampled targets and
         // resolves color into offscreen. Sized to the viewport, recreated with it.
         Image msaaColor;
@@ -626,12 +633,34 @@ export namespace se
         bool useIbl = true;     // false = flat scalar ambient fallback
     };
 
+    // Screen-space ambient occlusion (GTAO-lite). When on, a G-buffer prepass + a compute
+    // pass produce an AO factor the mesh multiplies into the IBL/flat ambient term. The
+    // descriptor sets/layouts are built once; the camera transforms are written per frame.
+    struct Ssao
+    {
+        bool useSsao = true;
+        bool ready = false;                          // sets/views valid (built after targets exist)
+        glm::mat4 view{ 1.0f };                      // world -> view (G-buffer prepass)
+        glm::mat4 viewProj{ 1.0f };                  // world -> clip (G-buffer prepass)
+        glm::mat4 invProjection{ 1.0f };             // clip -> view (GTAO reconstruct)
+        f32 radius = 1.0f;
+        f32 strength = 3.0f;
+        vk::Sampler sampler;                         // nearest, clamp — samples the G-buffer
+        vk::DescriptorSetLayout gtaoSetLayout;       // compute set 0: g-buffer sampler + AO storage
+        vk::DescriptorSet gtaoSet;
+        vk::DescriptorSetLayout aoSetLayout;         // set 4 in the mesh pipeline: the AO map sampler
+        vk::DescriptorSet aoSet;
+        u32 generation = 0;                          // bumped when targets recreate (sets refreshed)
+    };
+
     // The frame as a render graph + the resource handles app-authored passes reference.
     struct FrameGraphState
     {
         RenderGraph current;
         RgResource sceneColor;  // the offscreen color handle, for app-authored passes
         RgResource swapImage;
+        RgResource aoResource;  // the AO map handle when SSAO ran this frame
+        bool hasAo = false;
     };
 
     struct Renderer
@@ -645,6 +674,7 @@ export namespace se
         Pipelines pipelines;
         Targets targets;
         Ibl ibl;
+        Ssao ssao;
         FrameGraphState graph;
 
         bool useDepthPrepass = false;
@@ -764,6 +794,14 @@ export namespace se
     // Image-based lighting: toggle split-sum IBL ambient vs the flat scalar fallback.
     void setIbl(Renderer& renderer, bool enabled);
     auto iblEnabled(const Renderer& renderer) -> bool;
+    // Screen-space ambient occlusion (GTAO): toggle; AO modulates the ambient term only.
+    void setSsao(Renderer& renderer, bool enabled);
+    auto ssaoEnabled(const Renderer& renderer) -> bool;
+    // Records the G-buffer prepass (view normal + view-Z) for the SSAO pass body.
+    void recordGbuffer(Renderer& renderer, vk::CommandBuffer cmd);
+    // Feeds the camera transforms the SSAO G-buffer + GTAO passes need (view, proj). The
+    // proj is the SAME Y-flipped projection the scene renders with (so the AO map aligns).
+    void setSsaoCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj);
     // Directional shadow map: toggle + the per-frame light-space transform. renderScene
     // fits the transform to the scene each frame; beginFrameGraph runs the depth pass.
     void setShadows(Renderer& renderer, bool enabled);

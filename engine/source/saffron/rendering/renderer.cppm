@@ -270,6 +270,8 @@ namespace se
         renderer.pipelines.depthPrepass.reset();
         renderer.pipelines.shadowDepth.reset();
         renderer.pipelines.pointShadow.reset();
+        renderer.pipelines.gbuffer.reset();
+        renderer.pipelines.gtao.reset();
         for (vk::ImageView& face : renderer.targets.pointShadowFaces)
         {
             if (face)
@@ -285,6 +287,9 @@ namespace se
         renderer.targets.spotShadowMap.reset();
         renderer.targets.pointShadowCube.reset();
         renderer.targets.pointShadowDepth.reset();
+        renderer.targets.gNormal.reset();
+        renderer.targets.gDepth.reset();
+        renderer.targets.aoMap.reset();
         renderer.ibl.envCube.reset();
         renderer.ibl.irradianceCube.reset();
         renderer.ibl.prefilteredCube.reset();
@@ -356,6 +361,18 @@ namespace se
         if (renderer.ibl.sampler)
         {
             renderer.context.device.destroySampler(renderer.ibl.sampler);
+        }
+        if (renderer.ssao.gtaoSetLayout)
+        {
+            renderer.context.device.destroyDescriptorSetLayout(renderer.ssao.gtaoSetLayout);
+        }
+        if (renderer.ssao.aoSetLayout)
+        {
+            renderer.context.device.destroyDescriptorSetLayout(renderer.ssao.aoSetLayout);
+        }
+        if (renderer.ssao.sampler)
+        {
+            renderer.context.device.destroySampler(renderer.ssao.sampler);
         }
 
         for (FrameData& frame : renderer.frame.frames)
@@ -443,6 +460,7 @@ namespace se
                 }
                 recreateMsaaTargets(renderer);  // MSAA targets follow the offscreen extent
                 recreateFxaaTarget(renderer);   // and the FXAA scratch target
+                recreateSsaoTargets(renderer);  // and the SSAO G-buffer + AO map
             }
             else
             {
@@ -656,12 +674,78 @@ namespace se
             addPass(graph, std::move(depthPass));
         }
 
+        // Screen-space AO: a thin G-buffer prepass (view normal + view-Z) then a GTAO
+        // compute pass writing the AO map, which the scene pass samples into its ambient.
+        // The graph derives the gNormal ColorWrite->SampledReadCompute + aoMap
+        // General<->ShaderReadOnly transitions from the declared usages.
+        const bool doSsao = renderer.ssao.useSsao && renderer.ssao.ready &&
+                            renderer.pipelines.gbuffer && renderer.pipelines.gtao &&
+                            renderer.targets.gNormal.image && renderer.targets.aoMap.image;
+        if (doSsao)
+        {
+            RgResource gNormalRes = importImage(graph, renderer.targets.gNormal.image, renderer.targets.gNormal.view,
+                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+            RgResource gDepthRes = importImage(graph, renderer.targets.gDepth.image, renderer.targets.gDepth.view,
+                vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
+            RgResource aoRes = importImage(graph, renderer.targets.aoMap.image, renderer.targets.aoMap.view,
+                vk::ImageAspectFlagBits::eColor, renderer.targets.aoMap.layout, &renderer.targets.aoMap.layout);
+
+            RgPass gpass;
+            gpass.name = "gbuffer";
+            gpass.kind = RgPassKind::Graphics;
+            gpass.colors.push_back(RgAttachment{ gNormalRes, vk::AttachmentLoadOp::eClear,
+                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } } });
+            gpass.depth = RgAttachment{ gDepthRes, vk::AttachmentLoadOp::eClear,
+                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+            gpass.renderArea = offscreen.extent;
+            gpass.execute = [&renderer](vk::CommandBuffer cmd)
+        {
+                recordGbuffer(renderer, cmd);
+            };
+            addPass(graph, std::move(gpass));
+
+            RgPass aopass;
+            aopass.name = "gtao";
+            aopass.kind = RgPassKind::Compute;
+            aopass.accesses = { RgAccess{ gNormalRes, RgUsage::SampledReadCompute },
+                                RgAccess{ aoRes, RgUsage::StorageImageRWCompute } };
+            const vk::Extent2D extent = offscreen.extent;
+            const glm::mat4 invProj = renderer.ssao.invProjection;
+            const f32 radius = renderer.ssao.radius;
+            const f32 strength = renderer.ssao.strength;
+            aopass.execute = [&renderer, extent, invProj, radius, strength](vk::CommandBuffer cmd)
+        {
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.gtao->pipeline);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                    renderer.pipelines.gtao->layout, 0, renderer.ssao.gtaoSet, {});
+                struct GtaoPush
+                {
+                    glm::mat4 invProjection;
+                    glm::vec4 params;
+                } push{ invProj, glm::vec4(radius, strength, 0.0f, 0.0f) };
+                cmd.pushConstants(renderer.pipelines.gtao->layout, vk::ShaderStageFlagBits::eCompute,
+                                  0, sizeof(push), &push);
+                cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+            };
+            addPass(graph, std::move(aopass));
+            renderer.graph.aoResource = aoRes;
+            renderer.graph.hasAo = true;
+        }
+        else
+        {
+            renderer.graph.hasAo = false;
+        }
+
         RgPass scene;
         scene.name = "scene";
         scene.kind = RgPassKind::Graphics;
         if (doCull)
         {
             scene.accesses = { RgAccess{ clusterBuffer, RgUsage::StorageReadFragment } };
+        }
+        if (doSsao)
+        {
+            scene.accesses.push_back(RgAccess{ renderer.graph.aoResource, RgUsage::SampledRead });
         }
         if (doShadow)
         {
@@ -673,13 +757,14 @@ namespace se
         }
         // MSAA: render to the multisampled color, resolve into the offscreen (don't store
         // the multisampled samples). Otherwise render straight into the offscreen.
-        scene.color = RgAttachment{ sceneColorAttachment, vk::AttachmentLoadOp::eClear,
+        RgAttachment sceneColorAtt{ sceneColorAttachment, vk::AttachmentLoadOp::eClear,
             vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } };
         if (msaa)
         {
-            scene.color->storeOp = vk::AttachmentStoreOp::eDontCare;
-            scene.color->resolve = sceneOutput;
+            sceneColorAtt.storeOp = vk::AttachmentStoreOp::eDontCare;
+            sceneColorAtt.resolve = sceneOutput;
         }
+        scene.colors.push_back(sceneColorAtt);
         // Load the pre-pass depth when present; otherwise clear it here as before.
         vk::AttachmentLoadOp depthLoad = vk::AttachmentLoadOp::eClear;
         if (doDepthPrepass)
@@ -765,8 +850,8 @@ namespace se
         ui.name = "ui";
         ui.kind = RgPassKind::Graphics;
         ui.accesses = { RgAccess{ renderer.graph.sceneColor, RgUsage::SampledRead } };
-        ui.color = RgAttachment{ renderer.graph.swapImage, vk::AttachmentLoadOp::eClear,
-            vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } };
+        ui.colors.push_back(RgAttachment{ renderer.graph.swapImage, vk::AttachmentLoadOp::eClear,
+            vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } });
         ui.renderArea = renderer.swapchain.extent;
         ui.execute = [&renderer](vk::CommandBuffer cmd)
         {
@@ -917,6 +1002,23 @@ namespace se
     auto iblEnabled(const Renderer& renderer) -> bool
     {
         return renderer.ibl.useIbl && renderer.ibl.ready;
+    }
+
+    void setSsao(Renderer& renderer, bool enabled)
+    {
+        renderer.ssao.useSsao = enabled;
+    }
+
+    auto ssaoEnabled(const Renderer& renderer) -> bool
+    {
+        return renderer.ssao.useSsao && renderer.ssao.ready;
+    }
+
+    void setSsaoCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj)
+    {
+        renderer.ssao.view = view;
+        renderer.ssao.viewProj = proj * view;
+        renderer.ssao.invProjection = glm::inverse(proj);
     }
 
     void setShadows(Renderer& renderer, bool enabled)
