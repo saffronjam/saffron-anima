@@ -1,0 +1,30 @@
+baseURL = 'https://saffronjam.github.io/saffron-engine/'
+title = 'saffron-engine'
+theme = 'hugo-book'
+
+enableGitInfo = false
+disablePathToLower = true
+
+[params]
+  BookTheme = 'saffron'      # custom dark, low-colour mixin in assets/_custom.scss
+  BookSection = '/'          # render every top-level section in the sidebar
+  BookToC = true
+  BookSearch = true
+  BookRepo = 'https://github.com/saffronjam/saffron-engine'
+  BookEditLink = '{{ .Site.Params.BookRepo }}/edit/main/docs/content/{{ .File.Path }}'
+
+[markup]
+  [markup.goldmark.renderer]
+    unsafe = true                       # mermaid/katex codefences + GitHub alerts
+  [markup.goldmark.extensions.passthrough]
+    enable = true                       # keep raw LaTeX; KaTeX renders it client-side
+    [markup.goldmark.extensions.passthrough.delimiters]
+      inline = [['\(', '\)'], ['$', '$']]
+      block = [['\[', '\]'], ['$$', '$$']]
+  [markup.highlight]
+    style = 'base16-snazzy'             # dark-friendly code colours
+    noClasses = true
+    tabWidth = 4
+
+# Pages with `math = true` in their front matter load KaTeX (see
+# layouts/_partials/docs/inject/head.html) and render the $…$ / $$…$$ above.
