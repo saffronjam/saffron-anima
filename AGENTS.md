@@ -16,6 +16,13 @@ section/banner dividers ever**, brief `///` doc comments on exported declaration
 and no change-journey notes ("previously/used to/refactor/now that…"). Say what the
 code does now — and *why* if it's non-obvious — never by contrast with the past.
 
+**Commits** follow an `/agent-commit`-style format: subject
+`<category>: short description` (lowercase after the colon, first line <72 chars; categories
+`feat|fix|refactor|docs|test|chore|build|ci|perf|style`; optional `fix(scope):` when every change
+is one component), a blank line, then one bullet per specific change in plain words. **No emoji, no
+AI attribution, no `Co-Authored-By` trailer** — commit as the repo's git author only (this overrides
+the harness default). `main` is an intentional orphan fresh-start; keep its history clean and logical.
+
 ---
 
 ## TL;DR for a new session
@@ -134,7 +141,8 @@ SaffronEngine/
 │   ├── assets/models/      # source models (cube.gltf/.obj), copied next to the exe
 │   └── source/main.cpp     # client app: builds AppConfig, attaches a Layer, calls se::run()
 ├── tools/se/               # the `se` control CLI (json over the unix socket; no engine dep)
-└── plans/                  # phased implementation plans for FUTURE expansions (not yet built)
+├── plans/                  # phased implementation plans for FUTURE expansions (not yet built)
+└── docs/                   # Hugo (hugo-book) docs site — per-concept explanations + how-to/reference/tutorials
 ```
 
 Modules form a DAG (real imports, not a single chain): `Signal→Core`, `Json→Core`,
@@ -191,7 +199,7 @@ Working and verified (validation-clean) in the toolbox:
   passed around as **`Ref<T>` = `std::shared_ptr<T>`** logical objects (no opaque handles, no base class).
   Factories return `std::expected<Ref<T>, ...>`; the dtor frees the `vk::`/VMA resource when the last `Ref`
   drops. Teardown contract: the client releases its `Ref`s in `onExit` and `run` calls `waitGpuIdle` first,
-  so nothing outlives `vmaDestroyAllocator`. See `meta-layer-resources` memory.
+  so nothing outlives `vmaDestroyAllocator`.
 - ✅ Slang shaders compiled to SPIR-V in CMake → graphics + compute pipelines, recorded via the
   `submit(lambda)` seam / `onRender` hook.
 - ✅ Two-pass frame: scene → offscreen `Image`, then ImGui → swapchain. The scene shows
@@ -202,18 +210,23 @@ Working and verified (validation-clean) in the toolbox:
 - ✅ entt `Scene`/`Entity` + value components + `forEach`.
 - ✅ **Modular `ComponentRegistry`** (struct-of-closures itable; `registerComponent<C>`) driving
   registry-based **JSON scene save/load** + the editor — adding a component is one `registerComponent`
-  call, no central edits. See `ecs-architecture` memory.
+  call, no central edits.
 - ✅ Editor: **Hierarchy** + generic **Inspector** (add/remove component) + File save/load; selection
   via `SubscriberList<Entity>`.
 - ✅ **Control plane** (`Saffron.Control`) + the `se` CLI: a non-blocking unix socket, drained per
   frame on the main thread, drives the running editor (list/create/destroy/select entities,
   add/remove/set component, set-transform, set-material, save/load scene + save/load project,
   import-model/texture, render-stats, set-clustered, pick, inspect, list-assets, rename-asset,
-  assign-asset, focus, screenshot viewport|window to PNG, quit). See `control-plane` memory.
+  assign-asset, focus, screenshot viewport|window to PNG, quit).
 
 > **Keep `se` current.** When a feature adds engine state worth driving or inspecting, add a matching
 > control command (one `registerCommand` in `control.cppm`) so the running editor stays scriptable and
 > visually debuggable from the CLI. Treat it as part of "done" for a feature, not an afterthought.
+
+> **Keep `docs/` current.** When a change adds or alters a rendering/engine concept, update the matching
+> explanation page under `docs/content/` (and its hub `_index.md` row) in the same change — treat it as part
+> of "done", like the `se` command above. The docs are a Hugo (hugo-book) site organised by Diátaxis;
+> conventions, the page style, and how to build are in `docs/README.md`.
 
 - ✅ **Model import + mesh rendering**: `Saffron.Geometry` imports glTF (cgltf) + OBJ (tinyobjloader) into a
   common `Mesh`, baked to a versioned `.smesh`; `GpuMesh` (VMA vertex/index buffers) + a depth-tested mesh
@@ -232,8 +245,8 @@ Working and verified (validation-clean) in the toolbox:
   `PointLightComponent`/`SpotLightComponent` → a per-frame light SSBO (set 1); the engine's first **compute**
   pipeline (`light_cull.slang`) culls them into a 16×9×24 froxel grid (exponential view-space Z), dispatched in
   `endFrame` before the scene pass with a compute→fragment barrier; the mesh fragment loops only its cluster's
-  lights. `se set-clustered 0` falls back to a brute-force loop (verified pixel-identical). See `clustered-lighting`
-  memory. (Per-cluster cap 64; excess lights are dropped silently.)
+  lights. `se set-clustered 0` falls back to a brute-force loop (verified pixel-identical).
+  (Per-cluster cap 64; excess lights are dropped silently.)
 - ✅ **Scene authoring**: in-viewport **ImGuizmo** translate/rotate/scale (drawn into the Viewport window so it
   clips + takes input; un-flipped projection so it is not mirrored; W/E/R cycle; `glm::decompose` delta
   write-back) + a **Create** menu (Empty / Cube / Point/Spot/Directional Light / Camera). `TransformComponent`
@@ -251,12 +264,12 @@ Working and verified (validation-clean) in the toolbox:
   targets for asset tiles). Import via the modal/drag-drop (catalog-only, no auto-spawn). The whole project
   (catalog + scene) saves to one **`project.json`** (`saveProject`/`loadProject`; legacy `asset_registry.json`
   migrated on first load). `se list-assets`/`rename-asset`/`assign-asset`/`save-project`/`load-project`.
-  See `asset-catalog` memory. (Non-latin names round-trip; rendering them needs a broader font — follow-up.)
+  (Non-latin names round-trip; rendering them needs a broader font — follow-up.)
 - ✅ **Render graph** (`Saffron.Rendering:RenderGraph`): passes declare resource reads/writes (`RgUsage`) +
   color/depth attachments; the graph derives all barriers + layout transitions and records each pass body. It
   replaced the hand-written `endFrame` (the cull→scene→ui frame is now declared, not coded). **App-authorable**:
   layers add passes via the `onRenderGraph(RenderGraph&)` hook. Single graphics queue, no transient aliasing
-  (right-sized; seams left for aliasing/async). See `render-graph-architecture` memory.
+  (right-sized; seams left for aliasing/async).
 - ✅ **Post-process** demonstrator: an in-place compute tonemap (Reinhard+gamma) added to the graph from a layer
   (`se set-postprocess`); proves app-authored passes + RMW transitions derive correctly.
 - ✅ **Draw-item layer**: `renderScene` emits a flat `DrawItem` list; `submitDrawList` batches it + stores a
@@ -315,10 +328,6 @@ feature, check `plans/` first — if a plan covers it, follow and update that pl
 than starting cold.
 
 - `plans/lighting/` — dynamic lighting roadmap: PBR+HDR → IBL → shadows → screen-space
-  GI → temporal → DDGI (no-bake GI) → ray tracing → ReSTIR. See the `lighting-roadmap`
-  memory for the investigation behind it.
+  GI → temporal → DDGI (no-bake GI) → ray tracing → ReSTIR.
 - `plans/skybox/` — skybox + scene-environment rendering (shares cubemap/IBL infra with
   `plans/lighting/phase-2`).
-
-See the memory notes (`build-environment`, `saffron-rewrite-plan`,
-`code-style-go-conventions`) for deeper rationale.
