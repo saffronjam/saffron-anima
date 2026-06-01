@@ -582,6 +582,20 @@ export namespace se
             shadowViewProj = lightProj * lightView;
         }
         setDirectionalShadow(renderer, shadowViewProj, castShadow);
+        // RT: hand the frame's instance transforms + meshes to the renderer for the per-frame
+        // TLAS build (used by ray-query shadows when enabled + supported).
+        {
+            std::vector<glm::mat4> rtModels;
+            std::vector<Ref<GpuMesh>> rtMeshes;
+            rtModels.reserve(items.size());
+            rtMeshes.reserve(items.size());
+            for (const DrawItem& it : items)
+            {
+                rtModels.push_back(it.model);
+                rtMeshes.push_back(it.mesh);
+            }
+            setRtScene(renderer, std::move(rtModels), std::move(rtMeshes));
+        }
         // DDGI: fit the probe volume to the scene AABB (padded a little so probes sit just
         // outside the geometry), upload the box proxy, and pass the sun for the trace.
         // Done before setSceneLighting, which reads the volume placement into the light UBO.

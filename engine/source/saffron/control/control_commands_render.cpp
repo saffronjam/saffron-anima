@@ -50,6 +50,9 @@ namespace se
                              { "contactShadows", contactShadowsEnabled(ctx.renderer) },
                              { "ssgi", ssgiEnabled(ctx.renderer) },
                              { "ddgi", ddgiEnabled(ctx.renderer) },
+                             { "rtSupported", rtSupported(ctx.renderer) },
+                             { "rtShadows", rtShadowsEnabled(ctx.renderer) },
+                             { "blasCount", rtBlasCount(ctx.renderer) },
                              { "pipelines", pipelineCount(ctx.renderer) },
                              { "hdr", true },
                              { "exposureEv", exposureEv(ctx.renderer) },
@@ -177,6 +180,26 @@ namespace se
                 }
                 setSsgi(ctx.renderer, enabled);
                 return json{ { "ssgi", ssgiEnabled(ctx.renderer) } };
+            });
+
+        registerCommand(reg, "set-rt-shadows", "set-rt-shadows {0|1} — hardware ray-query shadows (if supported)",
+            [](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                if (!rtSupported(ctx.renderer))
+                {
+                    return Err(std::string{ "ray tracing not supported on this device" });
+                }
+                const json value = positionalOr(params, "enabled", 0);
+                bool enabled = true;
+                if (value.is_number()) { enabled = value.get<double>() != 0.0; }
+                else if (value.is_boolean()) { enabled = value.get<bool>(); }
+                else if (value.is_string())
+                {
+                    const std::string s = value.get<std::string>();
+                    enabled = !(s == "0" || s == "false" || s == "off");
+                }
+                setRtShadows(ctx.renderer, enabled);
+                return json{ { "rtShadows", rtShadowsEnabled(ctx.renderer) } };
             });
 
         registerCommand(reg, "set-gi", "set-gi {off|ddgi} — DDGI probe global illumination (multi-bounce)",

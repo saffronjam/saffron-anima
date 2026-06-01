@@ -65,11 +65,19 @@ namespace se
         std::memcpy(static_cast<char*>(stagingMapped.pMappedData) + vertexBytes, mesh.indices.data(), indexBytes);
         vmaFlushAllocation(renderer.context.allocator, stagingAllocation, 0, VK_WHOLE_SIZE);
 
+        // When RT is on, the vertex/index buffers also feed BLAS builds: they need shader
+        // device address + AS-build-input usage.
+        VkBufferUsageFlags rtUsage = 0;
+        if (renderer.context.rtSupported)
+        {
+            rtUsage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+        }
         auto makeDeviceBuffer = [&](vk::DeviceSize size, VkBufferUsageFlags usage, VkBuffer& outBuffer, VmaAllocation& outAlloc) -> bool
         {
             VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
             info.size = size;
-            info.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            info.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT | rtUsage;
             VmaAllocationCreateInfo alloc{};
             alloc.usage = VMA_MEMORY_USAGE_AUTO;
             return vmaCreateBuffer(renderer.context.allocator, &info, &alloc, &outBuffer, &outAlloc, nullptr) == VK_SUCCESS;
@@ -78,6 +86,7 @@ namespace se
         GpuMesh gpu;
         gpu.allocator = renderer.context.allocator;
         gpu.indexCount = static_cast<u32>(mesh.indices.size());
+        gpu.vertexCount = static_cast<u32>(mesh.vertices.size());
         gpu.submeshes = mesh.submeshes;
         gpu.boundsMin = glm::vec3(std::numeric_limits<f32>::max());
         gpu.boundsMax = glm::vec3(std::numeric_limits<f32>::lowest());
@@ -134,9 +143,23 @@ namespace se
         renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
         vmaDestroyBuffer(renderer.context.allocator, staging, stagingAllocation);
 
+        auto meshRef = std::make_shared<GpuMesh>(std::move(gpu));
+        // Build this mesh's BLAS once (RT geometry occlusion oracle) when RT is available.
+        if (renderer.context.rtSupported)
+        {
+            if (Result<Ref<AccelerationStructure>> blas = buildBlas(renderer, *meshRef); blas)
+            {
+                meshRef->blas = *blas;
+                renderer.rt.blasCount = renderer.rt.blasCount + 1;
+            }
+            else
+            {
+                logWarn(std::format("BLAS build failed: {}", blas.error()));
+            }
+        }
         logInfo(std::format("uploaded mesh: {} vertices, {} indices, {} submeshes",
                             mesh.vertices.size(), mesh.indices.size(), mesh.submeshes.size()));
-        return std::make_shared<GpuMesh>(std::move(gpu));
+        return meshRef;
     }
 
     // Ensures the current frame's instance buffer holds at least `count` elements,
@@ -316,6 +339,12 @@ namespace se
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 4, renderer.ssao.meshSet, {});
         // Set 5 = DDGI probe atlases (irradiance + distance); gated by screenFlags.z.
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 5, renderer.ddgi.meshSet, {});
+        // Set 6 = the RT TLAS (only when RT is supported + the set is valid this frame).
+        if (renderer.context.rtSupported && renderer.rt.meshSets[renderer.frame.index])
+        {
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 6,
+                renderer.rt.meshSets[renderer.frame.index], {});
+        }
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &list.viewProj);
         for (const DrawBatch& batch : list.batches)
         {

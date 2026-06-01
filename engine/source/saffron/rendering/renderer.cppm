@@ -92,6 +92,7 @@ namespace se
         features12.descriptorBindingPartiallyBound = VK_TRUE;
         features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
         features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+        features12.bufferDeviceAddress = VK_TRUE;  // required by KHR acceleration structures
 
         vkb::PhysicalDeviceSelector selector{ renderer.context.vkbInstance };
         auto physicalResult = selector
@@ -106,7 +107,36 @@ namespace se
             return Err(std::format("no suitable GPU: {}", physicalResult.error().message()));
         }
 
+        // Ray tracing is OPTIONAL: enable the KHR AS + ray-query + deferred-host-ops
+        // extensions only if the selected device has them (enable_extension_if_present does
+        // not fail otherwise). RT support = both core extensions present AND their feature
+        // bits set; we only chain the RT feature structs + enable RT then.
+        const bool hasAsExt = physicalResult.value().enable_extension_if_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        const bool hasRqExt = physicalResult.value().enable_extension_if_present(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        physicalResult.value().enable_extension_if_present(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+        bool rtSupported = false;
+        if (hasAsExt && hasRqExt)
+        {
+            VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
+            VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
+            asFeat.pNext = &rqFeat;
+            VkPhysicalDeviceFeatures2 feat2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+            feat2.pNext = &asFeat;
+            vkGetPhysicalDeviceFeatures2(physicalResult.value().physical_device, &feat2);
+            rtSupported = asFeat.accelerationStructure == VK_TRUE && rqFeat.rayQuery == VK_TRUE;
+        }
+
         vkb::DeviceBuilder deviceBuilder{ physicalResult.value() };
+        // Chain the RT feature structs into device creation only when supported.
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR asEnable{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
+        VkPhysicalDeviceRayQueryFeaturesKHR rqEnable{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
+        if (rtSupported)
+        {
+            asEnable.accelerationStructure = VK_TRUE;
+            rqEnable.rayQuery = VK_TRUE;
+            deviceBuilder.add_pNext(&asEnable);
+            deviceBuilder.add_pNext(&rqEnable);
+        }
         auto deviceResult = deviceBuilder.build();
         if (!deviceResult)
         {
@@ -124,6 +154,31 @@ namespace se
         renderer.context.graphicsQueue = vk::Queue{ queueResult.value() };
         renderer.context.graphicsQueueFamily = renderer.context.vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
+        // Resolve the KHR acceleration-structure / ray-query device entry points (not
+        // statically exported by the loader; the engine otherwise uses static dispatch).
+        renderer.context.rtSupported = rtSupported;
+        if (rtSupported)
+        {
+            VkDevice dev = renderer.context.vkbDevice.device;
+            auto load = [dev](const char* n) { return vkGetDeviceProcAddr(dev, n); };
+            renderer.context.rt.getBuildSizes = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(load("vkGetAccelerationStructureBuildSizesKHR"));
+            renderer.context.rt.createAccel = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(load("vkCreateAccelerationStructureKHR"));
+            renderer.context.rt.destroyAccel = reinterpret_cast<PFN_vkDestroyAccelerationStructureKHR>(load("vkDestroyAccelerationStructureKHR"));
+            renderer.context.rt.cmdBuild = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(load("vkCmdBuildAccelerationStructuresKHR"));
+            renderer.context.rt.getAccelAddress = reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(load("vkGetAccelerationStructureDeviceAddressKHR"));
+            if (renderer.context.rt.getBuildSizes == nullptr || renderer.context.rt.createAccel == nullptr ||
+                renderer.context.rt.destroyAccel == nullptr || renderer.context.rt.cmdBuild == nullptr ||
+                renderer.context.rt.getAccelAddress == nullptr)
+            {
+                logWarn("ray tracing: failed to resolve AS entry points; disabling RT");
+                renderer.context.rtSupported = false;
+            }
+            else
+            {
+                logInfo("ray tracing available (KHR acceleration_structure + ray_query)");
+            }
+        }
+
         // Highest MSAA level the device supports for both color + depth framebuffers (capped at 8x).
         vk::SampleCountFlags sampleCounts = renderer.context.physicalDevice.getProperties().limits.framebufferColorSampleCounts &
                                             renderer.context.physicalDevice.getProperties().limits.framebufferDepthSampleCounts;
@@ -136,6 +191,11 @@ namespace se
         allocatorInfo.physicalDevice = physicalResult.value().physical_device;
         allocatorInfo.device = renderer.context.vkbDevice.device;
         allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+        if (renderer.context.rtSupported)
+        {
+            // BDA is needed to feed vertex/index/instance buffer addresses to AS builds.
+            allocatorInfo.flags = allocatorInfo.flags | VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        }
         if (vmaCreateAllocator(&allocatorInfo, &renderer.context.allocator) != VK_SUCCESS)
         {
             return Err(std::string{ "vmaCreateAllocator failed" });
@@ -288,6 +348,12 @@ namespace se
         renderer.ddgi.irradiance.reset();
         renderer.ddgi.distance.reset();
         renderer.ddgi.rays.reset();
+        for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
+        {
+            renderer.rt.tlas[i].reset();
+            renderer.rt.instanceBuffers[i].reset();
+            renderer.rt.scratchBuffers[i].reset();
+        }
         for (vk::ImageView& face : renderer.targets.pointShadowFaces)
         {
             if (face)
@@ -415,6 +481,10 @@ namespace se
         if (renderer.ddgi.sampler)
         {
             renderer.context.device.destroySampler(renderer.ddgi.sampler);
+        }
+        if (renderer.rt.meshLayout)
+        {
+            renderer.context.device.destroyDescriptorSetLayout(renderer.rt.meshLayout);
         }
 
         for (FrameData& frame : renderer.frame.frames)
@@ -1022,6 +1092,22 @@ namespace se
             renderer.graph.hasDdgi = false;
         }
 
+        // RT: build the per-frame TLAS over the scene's mesh instances (a Compute-kind pass;
+        // recordTlasBuild self-manages the AS-build -> fragment ray-query barrier). The mesh
+        // fragment then traces inline ray-query shadows when rtShadows is on.
+        renderer.rt.tlasReady = false;
+        if (renderer.rt.buildPending && renderer.pipelines.cull /*any frame work*/)
+        {
+            RgPass tlasPass;
+            tlasPass.name = "tlas-build";
+            tlasPass.kind = RgPassKind::Compute;
+            tlasPass.execute = [&renderer](vk::CommandBuffer cmd)
+        {
+                buildTlas(renderer, cmd, renderer.rt.frameModels, renderer.rt.frameMeshes);
+            };
+            addPass(graph, std::move(tlasPass));
+        }
+
         RgPass scene;
         scene.name = "scene";
         scene.kind = RgPassKind::Graphics;
@@ -1421,6 +1507,89 @@ namespace se
     {
         return renderer.ssao.ready &&
                (renderer.ssao.useSsao || renderer.ssao.useContact || renderer.ssao.useSsgi);
+    }
+
+    auto rtSupported(const Renderer& renderer) -> bool
+    {
+        return renderer.context.rtSupported;
+    }
+
+    void setRtShadows(Renderer& renderer, bool enabled)
+    {
+        renderer.rt.useRtShadows = enabled && renderer.context.rtSupported;
+    }
+
+    auto rtShadowsEnabled(const Renderer& renderer) -> bool
+    {
+        return renderer.rt.useRtShadows && renderer.context.rtSupported && renderer.rt.tlasReady;
+    }
+
+    auto rtBlasCount(const Renderer& renderer) -> u32
+    {
+        return renderer.rt.blasCount;
+    }
+
+    void setRtScene(Renderer& renderer, std::vector<glm::mat4> models, std::vector<Ref<GpuMesh>> meshes)
+    {
+        // Capture this frame's instances; the TLAS-build graph pass consumes them when RT
+        // shadows are on. Only worth building when something will trace against it.
+        renderer.rt.frameModels = std::move(models);
+        renderer.rt.frameMeshes = std::move(meshes);
+        renderer.rt.buildPending = renderer.context.rtSupported && renderer.rt.useRtShadows &&
+                                   !renderer.rt.frameModels.empty();
+    }
+
+    void buildTlas(Renderer& renderer, vk::CommandBuffer cmd,
+                   const std::vector<glm::mat4>& models, const std::vector<Ref<GpuMesh>>& meshes)
+    {
+        renderer.rt.tlasReady = false;
+        if (!renderer.context.rtSupported || models.empty())
+        {
+            return;
+        }
+        const u32 f = renderer.frame.index;
+        // Pack one VkAccelerationStructureInstanceKHR per mesh instance that has a BLAS.
+        std::vector<VkAccelerationStructureInstanceKHR> instances;
+        instances.reserve(models.size());
+        for (std::size_t i = 0; i < models.size() && i < meshes.size(); i = i + 1)
+        {
+            if (!meshes[i] || !meshes[i]->blas)
+            {
+                continue;
+            }
+            VkAccelerationStructureInstanceKHR inst{};
+            // VkTransformMatrixKHR is row-major 3x4; glm is column-major — transpose into rows.
+            const glm::mat4& m = models[i];
+            for (u32 r = 0; r < 3; r = r + 1)
+            {
+                for (u32 c = 0; c < 4; c = c + 1)
+                {
+                    inst.transform.matrix[r][c] = m[c][r];
+                }
+            }
+            inst.instanceCustomIndex = static_cast<u32>(i);
+            inst.mask = 0xFF;
+            inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+            inst.accelerationStructureReference = static_cast<u64>(meshes[i]->blas->address);
+            instances.push_back(inst);
+        }
+        const u32 count = static_cast<u32>(instances.size());
+        if (count == 0)
+        {
+            return;
+        }
+        if (Result<void> ok = ensureTlasCapacity(renderer, f, count); !ok)
+        {
+            logError(ok.error());
+            return;
+        }
+        std::memcpy(renderer.rt.instanceBuffers[f]->mapped, instances.data(),
+                    count * sizeof(VkAccelerationStructureInstanceKHR));
+        vmaFlushAllocation(renderer.context.allocator, renderer.rt.instanceBuffers[f]->alloc, 0,
+                           count * sizeof(VkAccelerationStructureInstanceKHR));
+        recordTlasBuild(renderer, cmd, f, count);
+        renderer.rt.frameInstanceCount = count;
+        renderer.rt.tlasReady = true;
     }
 
     void setDdgi(Renderer& renderer, bool enabled)

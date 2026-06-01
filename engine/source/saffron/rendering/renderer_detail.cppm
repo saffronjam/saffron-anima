@@ -396,6 +396,310 @@ export namespace se
         return result;
     }
 
+    // ---- Ray tracing (KHR acceleration structures via the resolved RtDispatch) ----
+
+    // Device address of a buffer (core 1.2 vkGetBufferDeviceAddress, statically exported).
+    auto bufferDeviceAddress(Renderer& renderer, vk::Buffer buffer) -> vk::DeviceAddress
+    {
+        VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+        info.buffer = static_cast<VkBuffer>(buffer);
+        return vkGetBufferDeviceAddress(static_cast<VkDevice>(renderer.context.device), &info);
+    }
+
+    // A device-local buffer with a chosen usage (e.g. AS storage / scratch / instances),
+    // optionally shader-device-address-enabled. Returned as a Ref<Buffer> (RAII).
+    auto makeRtBuffer(Renderer& renderer, vk::DeviceSize bytes, VkBufferUsageFlags usage, bool hostVisible)
+        -> Result<Ref<Buffer>>
+    {
+        VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        info.size = bytes;
+        info.usage = usage;
+        VmaAllocationCreateInfo alloc{};
+        alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        void* mapped = nullptr;
+        VmaAllocationInfo allocInfo{};
+        if (hostVisible)
+        {
+            alloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        }
+        VkBuffer raw = VK_NULL_HANDLE;
+        VmaAllocation allocation = nullptr;
+        if (vmaCreateBuffer(renderer.context.allocator, &info, &alloc, &raw, &allocation, &allocInfo) != VK_SUCCESS)
+        {
+            return Err(std::string{ "makeRtBuffer: vmaCreateBuffer failed" });
+        }
+        Buffer b;
+        b.allocator = renderer.context.allocator;
+        b.buffer = vk::Buffer{ raw };
+        b.alloc = allocation;
+        b.mapped = hostVisible ? allocInfo.pMappedData : nullptr;
+        b.size = bytes;
+        return std::make_shared<Buffer>(std::move(b));
+    }
+
+    // Creates an AccelerationStructure (BLAS or TLAS) of the given size + type: allocates the
+    // backing AS storage buffer, calls vkCreateAccelerationStructureKHR, fetches its device
+    // address. The caller records the build separately.
+    auto createAccelStructure(Renderer& renderer, vk::DeviceSize size,
+                              VkAccelerationStructureTypeKHR type) -> Result<Ref<AccelerationStructure>>
+    {
+        auto storage = makeRtBuffer(renderer, size,
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+        if (!storage) { return Err(storage.error()); }
+
+        VkAccelerationStructureCreateInfoKHR ci{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
+        ci.buffer = static_cast<VkBuffer>((*storage)->buffer);
+        ci.size = size;
+        ci.type = type;
+        VkAccelerationStructureKHR rawAs = VK_NULL_HANDLE;
+        if (renderer.context.rt.createAccel(static_cast<VkDevice>(renderer.context.device), &ci, nullptr, &rawAs) != VK_SUCCESS)
+        {
+            return Err(std::string{ "vkCreateAccelerationStructureKHR failed" });
+        }
+
+        AccelerationStructure as;
+        as.device = renderer.context.device;
+        as.allocator = renderer.context.allocator;
+        as.destroyFn = renderer.context.rt.destroyAccel;
+        as.handle = vk::AccelerationStructureKHR{ rawAs };
+        as.buffer = (*storage)->buffer;
+        as.alloc = (*storage)->alloc;
+        (*storage)->buffer = nullptr;  // ownership moved into the AS
+        (*storage)->alloc = nullptr;
+
+        VkAccelerationStructureDeviceAddressInfoKHR ai{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR };
+        ai.accelerationStructure = rawAs;
+        as.address = renderer.context.rt.getAccelAddress(static_cast<VkDevice>(renderer.context.device), &ai);
+        return std::make_shared<AccelerationStructure>(std::move(as));
+    }
+
+    // Builds a BLAS for one mesh (one geometry over its whole vertex/index buffer). Synchronous
+    // one-off (own command buffer + waitIdle), like uploadMesh. PREFER_FAST_TRACE (no compaction
+    // for v1 — correctness first). Called from uploadMesh when RT is supported.
+    auto buildBlas(Renderer& renderer, const GpuMesh& mesh) -> Result<Ref<AccelerationStructure>>
+    {
+        VkAccelerationStructureGeometryKHR geom{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+        geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geom.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+        geom.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+        geom.geometry.triangles.vertexData.deviceAddress = bufferDeviceAddress(renderer, mesh.vertexBuffer);
+        geom.geometry.triangles.vertexStride = sizeof(Vertex);
+        geom.geometry.triangles.maxVertex = mesh.vertexCount > 0 ? mesh.vertexCount - 1 : 0;
+        geom.geometry.triangles.indexType = VK_INDEX_TYPE_UINT32;
+        geom.geometry.triangles.indexData.deviceAddress = bufferDeviceAddress(renderer, mesh.indexBuffer);
+
+        const u32 triangleCount = mesh.indexCount / 3;
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+        buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        buildInfo.geometryCount = 1;
+        buildInfo.pGeometries = &geom;
+
+        VkAccelerationStructureBuildSizesInfoKHR sizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+        renderer.context.rt.getBuildSizes(static_cast<VkDevice>(renderer.context.device),
+            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &triangleCount, &sizes);
+
+        auto blas = createAccelStructure(renderer, sizes.accelerationStructureSize, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
+        if (!blas) { return Err(blas.error()); }
+        auto scratch = makeRtBuffer(renderer, sizes.buildScratchSize,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+        if (!scratch) { return Err(scratch.error()); }
+
+        buildInfo.dstAccelerationStructure = static_cast<VkAccelerationStructureKHR>((*blas)->handle);
+        buildInfo.scratchData.deviceAddress = bufferDeviceAddress(renderer, (*scratch)->buffer);
+        VkAccelerationStructureBuildRangeInfoKHR range{};
+        range.primitiveCount = triangleCount;
+        const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+
+        vk::CommandBufferAllocateInfo cmdAlloc{};
+        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
+        cmdAlloc.commandBufferCount = 1;
+        auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "blas cmd");
+        if (!cmds) { return Err(cmds.error()); }
+        vk::CommandBuffer cmd = (*cmds)[0];
+        vk::CommandBufferBeginInfo begin{};
+        begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+        static_cast<void>(cmd.begin(begin));
+        renderer.context.rt.cmdBuild(static_cast<VkCommandBuffer>(cmd), 1, &buildInfo, &pRange);
+        static_cast<void>(cmd.end());
+        vk::CommandBufferSubmitInfo cmdInfo{}; cmdInfo.commandBuffer = cmd;
+        vk::SubmitInfo2 submitInfo{}; submitInfo.setCommandBufferInfos(cmdInfo);
+        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
+        static_cast<void>(renderer.context.device.waitIdle());
+        renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        return *blas;
+    }
+
+    // Ensures the frame's TLAS instance buffer holds `count` instances (host-visible, AS
+    // build input + BDA), growing to the next power of two. Allocates/resizes the TLAS +
+    // scratch lazily inside recordTlasBuild (sizes depend on count).
+    auto ensureTlasCapacity(Renderer& renderer, u32 frame, u32 count) -> Result<void>
+    {
+        if (renderer.rt.instanceBuffers[frame] && renderer.rt.instanceCapacity[frame] >= count)
+        {
+            return {};
+        }
+        u32 capacity = renderer.rt.instanceCapacity[frame];
+        if (capacity == 0) { capacity = 64; }
+        while (capacity < count) { capacity = capacity * 2; }
+        auto buf = makeRtBuffer(renderer, static_cast<vk::DeviceSize>(capacity) * sizeof(VkAccelerationStructureInstanceKHR),
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+        if (!buf) { return Err(buf.error()); }
+        renderer.rt.instanceBuffers[frame] = *buf;
+        renderer.rt.instanceCapacity[frame] = capacity;
+        return {};
+    }
+
+    // Records the per-frame TLAS build into `cmd`: queries sizes for `count` instances,
+    // (re)creates the TLAS + scratch on a capacity change, builds, then writes the TLAS into
+    // the frame's mesh set (set 6). A graph compute pass supplies cmd; the graph emits the
+    // AS-build -> fragment barrier via the declared usage (StorageWriteCompute on a sentinel).
+    void recordTlasBuild(Renderer& renderer, vk::CommandBuffer cmd, u32 frame, u32 count)
+    {
+        VkAccelerationStructureGeometryKHR geom{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+        geom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+        geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geom.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+        geom.geometry.instances.arrayOfPointers = VK_FALSE;
+        geom.geometry.instances.data.deviceAddress = bufferDeviceAddress(renderer, renderer.rt.instanceBuffers[frame]->buffer);
+
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+        buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+        buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+        buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        buildInfo.geometryCount = 1;
+        buildInfo.pGeometries = &geom;
+
+        // Size for the instance-buffer capacity (>= count) so the TLAS is stable until the
+        // buffer regrows; query both that and the actual count's scratch.
+        const u32 capacity = renderer.rt.instanceCapacity[frame];
+        VkAccelerationStructureBuildSizesInfoKHR capSizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+        renderer.context.rt.getBuildSizes(static_cast<VkDevice>(renderer.context.device),
+            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &capacity, &capSizes);
+        VkAccelerationStructureBuildSizesInfoKHR sizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+        renderer.context.rt.getBuildSizes(static_cast<VkDevice>(renderer.context.device),
+            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &count, &sizes);
+
+        // (Re)create the TLAS when the slot still holds the shared empty seed (capacity 0) or
+        // is too small for this frame's instance count.
+        if (renderer.rt.tlasCapacity[frame] < count)
+        {
+            auto tlas = createAccelStructure(renderer, capSizes.accelerationStructureSize, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
+            if (!tlas) { logError(tlas.error()); return; }
+            renderer.rt.tlas[frame] = *tlas;
+            renderer.rt.tlasCapacity[frame] = capacity;
+            // Write the new TLAS into the frame's mesh set (set 6, binding 0).
+            VkWriteDescriptorSetAccelerationStructureKHR asWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR };
+            VkAccelerationStructureKHR handle = static_cast<VkAccelerationStructureKHR>(renderer.rt.tlas[frame]->handle);
+            asWrite.accelerationStructureCount = 1;
+            asWrite.pAccelerationStructures = &handle;
+            VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            w.pNext = &asWrite;
+            w.dstSet = static_cast<VkDescriptorSet>(renderer.rt.meshSets[frame]);
+            w.dstBinding = 0;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+            vkUpdateDescriptorSets(static_cast<VkDevice>(renderer.context.device), 1, &w, 0, nullptr);
+        }
+        const vk::DeviceSize scratchNeeded = glm::max(sizes.buildScratchSize, capSizes.buildScratchSize);
+        if (!renderer.rt.scratchBuffers[frame] || renderer.rt.scratchCapacity[frame] < scratchNeeded)
+        {
+            auto scratch = makeRtBuffer(renderer, scratchNeeded,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+            if (!scratch) { logError(scratch.error()); return; }
+            renderer.rt.scratchBuffers[frame] = *scratch;
+            renderer.rt.scratchCapacity[frame] = static_cast<u32>(scratchNeeded);
+        }
+
+        buildInfo.dstAccelerationStructure = static_cast<VkAccelerationStructureKHR>(renderer.rt.tlas[frame]->handle);
+        buildInfo.scratchData.deviceAddress = bufferDeviceAddress(renderer, renderer.rt.scratchBuffers[frame]->buffer);
+        VkAccelerationStructureBuildRangeInfoKHR range{};
+        range.primitiveCount = count;
+        const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+        renderer.context.rt.cmdBuild(static_cast<VkCommandBuffer>(cmd), 1, &buildInfo, &pRange);
+
+        // Barrier: the AS build (build stage / write) -> the fragment shader ray-query read.
+        vk::MemoryBarrier2 barrier{};
+        barrier.srcStageMask = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR;
+        barrier.srcAccessMask = vk::AccessFlagBits2::eAccelerationStructureWriteKHR;
+        barrier.dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader;
+        barrier.dstAccessMask = vk::AccessFlagBits2::eAccelerationStructureReadKHR;
+        vk::DependencyInfo dep{};
+        dep.setMemoryBarriers(barrier);
+        cmd.pipelineBarrier2(dep);
+    }
+
+    // Builds a 0-instance TLAS (synchronous) and writes it into every frame's mesh set, so
+    // set 6 always references a valid AS even before/without a real per-frame build (the
+    // mesh fragment statically references rtScene regardless of the runtime flag).
+    auto seedEmptyTlas(Renderer& renderer) -> Result<void>
+    {
+        VkAccelerationStructureGeometryKHR geom{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+        geom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+        geom.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+        buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+        buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+        buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        buildInfo.geometryCount = 1;
+        buildInfo.pGeometries = &geom;
+        const u32 zero = 0;
+        VkAccelerationStructureBuildSizesInfoKHR sizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+        renderer.context.rt.getBuildSizes(static_cast<VkDevice>(renderer.context.device),
+            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &zero, &sizes);
+
+        auto empty = createAccelStructure(renderer, glm::max<vk::DeviceSize>(sizes.accelerationStructureSize, 256),
+                                          VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
+        if (!empty) { return Err(empty.error()); }
+        auto scratch = makeRtBuffer(renderer, glm::max<vk::DeviceSize>(sizes.buildScratchSize, 256),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+        if (!scratch) { return Err(scratch.error()); }
+        buildInfo.dstAccelerationStructure = static_cast<VkAccelerationStructureKHR>((*empty)->handle);
+        buildInfo.scratchData.deviceAddress = bufferDeviceAddress(renderer, (*scratch)->buffer);
+        VkAccelerationStructureBuildRangeInfoKHR range{};  // 0 instances
+        const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+
+        vk::CommandBufferAllocateInfo cmdAlloc{};
+        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
+        cmdAlloc.commandBufferCount = 1;
+        auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "empty tlas cmd");
+        if (!cmds) { return Err(cmds.error()); }
+        vk::CommandBuffer cmd = (*cmds)[0];
+        vk::CommandBufferBeginInfo begin{};
+        begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+        static_cast<void>(cmd.begin(begin));
+        renderer.context.rt.cmdBuild(static_cast<VkCommandBuffer>(cmd), 1, &buildInfo, &pRange);
+        static_cast<void>(cmd.end());
+        vk::CommandBufferSubmitInfo cmdInfo{}; cmdInfo.commandBuffer = cmd;
+        vk::SubmitInfo2 submitInfo{}; submitInfo.setCommandBufferInfos(cmdInfo);
+        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
+        static_cast<void>(renderer.context.device.waitIdle());
+        renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+
+        // Hold the empty TLAS in every frame slot + write it into every mesh set. The first
+        // real per-frame build overwrites a slot's TLAS (and re-writes its set) on demand.
+        VkAccelerationStructureKHR handle = static_cast<VkAccelerationStructureKHR>((*empty)->handle);
+        for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
+        {
+            renderer.rt.tlas[i] = *empty;  // shared until a real build replaces this slot
+            VkWriteDescriptorSetAccelerationStructureKHR asWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR };
+            asWrite.accelerationStructureCount = 1;
+            asWrite.pAccelerationStructures = &handle;
+            VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            w.pNext = &asWrite;
+            w.dstSet = static_cast<VkDescriptorSet>(renderer.rt.meshSets[i]);
+            w.dstBinding = 0;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+            vkUpdateDescriptorSets(static_cast<VkDevice>(renderer.context.device), 1, &w, 0, nullptr);
+        }
+        return {};
+    }
+
     // A cube-compatible image (6 array layers, N mips) usable both as a sampled cubemap
     // (the default eCube view) and as a 2D-array storage image (compute fills it via
     // per-mip transient views). Used for the IBL environment/irradiance/prefiltered cubes.
@@ -1944,14 +2248,16 @@ export namespace se
         }
         renderer.descriptors.fxaaSetLayout = *fxaaLayout;
 
-        std::array<vk::DescriptorPoolSize, 4> poolSizes{
+        std::array<vk::DescriptorPoolSize, 5> poolSizes{
             vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 1024 },
             vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, 4 * MaxFramesInFlight + 8 },
             // + the DDGI box SSBO; bumped for it.
             vk::DescriptorPoolSize{ vk::DescriptorType::eStorageBuffer, 8 * MaxFramesInFlight + 16 },
             // tonemap/fxaa/TAA(4) + screen-space chain + DDGI (voxel/ray/atlas storages)
             // ~= two dozen; plus generous headroom.
-            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 48 } };
+            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 48 },
+            // RT: one TLAS descriptor per in-flight frame (set 6).
+            vk::DescriptorPoolSize{ vk::DescriptorType::eAccelerationStructureKHR, MaxFramesInFlight + 2 } };
         vk::DescriptorPoolCreateInfo poolInfo{};
         poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;  // texture sets freed on Ref drop
         poolInfo.maxSets = 1024 + 8 * MaxFramesInFlight + 64;
@@ -2601,6 +2907,41 @@ export namespace se
             renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
         }
         renderer.ddgi.ready = true;
+
+        // ---- Ray tracing: the TLAS descriptor set (set 6 in the mesh pipeline) ----
+        // Only meaningful when RT is supported; the layout always exists so the mesh PSO
+        // layout is stable (the set is bound + the shader gates the trace on a UBO flag).
+        if (renderer.context.rtSupported)
+        {
+            vk::DescriptorSetLayoutBinding tlasBinding{};
+            tlasBinding.binding = 0;
+            tlasBinding.descriptorType = vk::DescriptorType::eAccelerationStructureKHR;
+            tlasBinding.descriptorCount = 1;
+            tlasBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+            vk::DescriptorSetLayoutCreateInfo tlasLayoutInfo{};
+            tlasLayoutInfo.setBindings(tlasBinding);
+            auto tlasLayout = checked(renderer.context.device.createDescriptorSetLayout(tlasLayoutInfo), "rtMeshLayout");
+            if (!tlasLayout) { return Err(tlasLayout.error()); }
+            renderer.rt.meshLayout = *tlasLayout;
+            for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
+            {
+                vk::DescriptorSetAllocateInfo ai{};
+                ai.descriptorPool = renderer.descriptors.descriptorPool;
+                ai.setSetLayouts(renderer.rt.meshLayout);
+                auto s = checked(renderer.context.device.allocateDescriptorSets(ai), "allocate rtMeshSet");
+                if (!s) { return Err(s.error()); }
+                renderer.rt.meshSets[i] = (*s)[0];
+            }
+
+            // Build a minimal empty TLAS (0 instances) so set 6 always holds a VALID
+            // acceleration structure — the mesh fragment statically references rtScene even
+            // when the runtime ray-query flag is off, so an unwritten descriptor would be a
+            // validation error. Per-frame builds overwrite the set with the real TLAS.
+            if (Result<void> seeded = seedEmptyTlas(renderer); !seeded)
+            {
+                return Err(seeded.error());
+            }
+        }
 
         return {};
     }

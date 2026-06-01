@@ -123,10 +123,17 @@ namespace se
         pushConstant.offset = 0;
         pushConstant.size = sizeof(glm::mat4);  // viewProj
 
-        std::array<vk::DescriptorSetLayout, 6> setLayouts{
+        // Sets 0-5 are always present; set 6 (the RT TLAS) is appended only when RT is
+        // supported (its layout needs the AS extension). The mesh shader's set-6 binding is
+        // compiled in but unused unless the ray-query path is taken (gated by a UBO flag).
+        std::vector<vk::DescriptorSetLayout> setLayouts{
             renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout,
             renderer.descriptors.instanceSetLayout, renderer.ibl.setLayout,
             renderer.ssao.meshSetLayout, renderer.ddgi.meshLayout };
+        if (renderer.context.rtSupported && renderer.rt.meshLayout)
+        {
+            setLayouts.push_back(renderer.rt.meshLayout);
+        }
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);

@@ -130,8 +130,11 @@ namespace se
         ubo.spotShadow = glm::uvec4(renderer.lighting.spotShadowLightIndex,
                                     renderer.lighting.spotShadowPending ? 1u : 0u, 0, 0);
         ubo.pointShadow = glm::vec4(renderer.lighting.pointShadowPos, renderer.lighting.pointShadowFar);
+        // pointShadowMeta.z = RT-shadow flag (the mesh traces a ray-query shadow per light
+        // instead of / in addition to the shadow maps). Requires rtSupported + a built TLAS.
+        const u32 rtFlag = (renderer.rt.useRtShadows && renderer.context.rtSupported) ? 1u : 0u;
         ubo.pointShadowMeta = glm::uvec4(renderer.lighting.pointShadowLightIndex,
-                                         renderer.lighting.pointShadowPending ? 1u : 0u, 0, 0);
+                                         renderer.lighting.pointShadowPending ? 1u : 0u, rtFlag, 0);
         std::memcpy(renderer.lighting.lightMapped[frame], &ubo, sizeof(ubo));
         vmaFlushAllocation(renderer.context.allocator, renderer.lighting.lightAllocs[frame], 0, sizeof(ubo));
         renderer.lighting.frameLightCount = count;

@@ -155,6 +155,26 @@ static const float IblPrefilterMaxMip = 4.0;  // == IblPrefilterMips - 1 (render
 [[vk::binding(0, 5)]] Sampler2D ddgiIrradiance;
 [[vk::binding(1, 5)]] Sampler2D ddgiDistance;
 
+// Set 6: the ray-tracing TLAS for inline ray-query shadows (pointShadowMeta.z gates it).
+// Present only when the device supports RT (the PSO layout omits set 6 otherwise), but the
+// binding compiles unconditionally — it is only accessed under the runtime flag.
+[[vk::binding(0, 6)]] RaytracingAccelerationStructure rtScene;
+
+// Trace one TerminateOnFirstHit shadow ray from worldPos toward `toLight` (a unit dir);
+// returns 1 = lit (no occluder within maxDist), 0 = shadowed.
+float rayQueryShadow(float3 worldPos, float3 toLight, float maxDist)
+{
+    RayDesc ray;
+    ray.Origin = worldPos + toLight * 0.02;  // bias off the surface to avoid self-hit
+    ray.Direction = toLight;
+    ray.TMin = 0.0;
+    ray.TMax = maxDist;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(rtScene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, ray);
+    q.Proceed();
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
+}
+
 float2 ddgiOctEncode(float3 d)
 {
     d /= (abs(d.x) + abs(d.y) + abs(d.z));
@@ -315,17 +335,23 @@ float3 punctual(GpuLight lt, uint lightIndex, float3 worldPos, float3 n, float3 
 
     float cone = 1.0;
     float shadow = 1.0;
+    // Ray-traced punctual shadow (one ray toward the light) when RT shadows are on — applies
+    // to every punctual light, vs the map paths that shadow only one spot + one point light.
+    if (globals.pointShadowMeta.z != 0)
+    {
+        shadow = rayQueryShadow(worldPos, l, dist);
+    }
     if (lt.directionType.w > 0.5)
     {
         float3 spotDir = normalize(lt.directionType.xyz);
         float cosAngle = dot(spotDir, -l);
         cone = smoothstep(lt.spotCos.y, lt.spotCos.x, cosAngle);
-        if (globals.spotShadow.y != 0 && lightIndex == globals.spotShadow.x)
+        if (globals.pointShadowMeta.z == 0 && globals.spotShadow.y != 0 && lightIndex == globals.spotShadow.x)
         {
             shadow = pcfShadow(spotShadowMap, globals.spotShadowViewProj, worldPos);
         }
     }
-    else if (globals.pointShadowMeta.y != 0 && lightIndex == globals.pointShadowMeta.x)
+    else if (globals.pointShadowMeta.z == 0 && globals.pointShadowMeta.y != 0 && lightIndex == globals.pointShadowMeta.x)
     {
         shadow = pointShadow(worldPos);
     }
@@ -376,7 +402,12 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     // attenuated by the shadow map + screen-space contact shadows (directional only in v1).
     float3 lDir = -normalize(globals.directionAmbient.xyz);
     float shadow = 1.0;
-    if (globals.counts.y != 0)
+    if (globals.pointShadowMeta.z != 0)
+    {
+        // Ray-traced directional shadow (a long ray toward the sun) — A/B vs the map.
+        shadow = rayQueryShadow(input.worldPos, lDir, 1e4);
+    }
+    else if (globals.counts.y != 0)
     {
         shadow = pcfShadow(shadowMap, globals.shadowViewProj, input.worldPos);
     }

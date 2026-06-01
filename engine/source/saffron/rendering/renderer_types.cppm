@@ -184,6 +184,8 @@ export namespace se
         }
     };
 
+    struct AccelerationStructure;  // defined below; GpuMesh holds a Ref (shared_ptr) to its BLAS
+
     // A device-local mesh: vertex + index buffers + the submesh ranges. Move-only
     // like Pipeline/Image; owned by the Renderer and freed before the allocator.
     struct GpuMesh
@@ -194,9 +196,11 @@ export namespace se
         vk::Buffer indexBuffer;
         VmaAllocation indexAlloc = nullptr;
         u32 indexCount = 0;
+        u32 vertexCount = 0;
         std::vector<Submesh> submeshes;
         glm::vec3 boundsMin{ 0.0f };  // local-space AABB, for ray picking
         glm::vec3 boundsMax{ 0.0f };
+        Ref<AccelerationStructure> blas;  // ray-tracing BLAS (null when RT is unsupported)
 
         GpuMesh() = default;
         GpuMesh(const GpuMesh&) = delete;
@@ -337,6 +341,54 @@ export namespace se
         }
     };
 
+    // A ray-tracing acceleration structure (BLAS or TLAS): owns the vk handle + its backing
+    // device buffer, freed (handle then buffer) before the allocator. Move-only like the
+    // other meta-layer resources. Destroyed via the resolved RtDispatch (no static dispatch).
+    struct AccelerationStructure
+    {
+        vk::Device device;                 // borrowed
+        VmaAllocator allocator = nullptr;  // borrowed
+        PFN_vkDestroyAccelerationStructureKHR destroyFn = nullptr;  // borrowed
+        vk::AccelerationStructureKHR handle;
+        vk::DeviceAddress address = 0;
+        vk::Buffer buffer;
+        VmaAllocation alloc = nullptr;
+
+        AccelerationStructure() = default;
+        AccelerationStructure(const AccelerationStructure&) = delete;
+        auto operator=(const AccelerationStructure&) -> AccelerationStructure& = delete;
+        AccelerationStructure(AccelerationStructure&& o) noexcept
+            : device(o.device), allocator(o.allocator), destroyFn(o.destroyFn), handle(o.handle),
+              address(o.address), buffer(o.buffer), alloc(o.alloc)
+        {
+            o.handle = nullptr; o.buffer = nullptr; o.alloc = nullptr; o.allocator = nullptr;
+        }
+        auto operator=(AccelerationStructure&& o) noexcept -> AccelerationStructure&
+        {
+            if (this != &o)
+            {
+                reset();
+                device = o.device; allocator = o.allocator; destroyFn = o.destroyFn; handle = o.handle;
+                address = o.address; buffer = o.buffer; alloc = o.alloc;
+                o.handle = nullptr; o.buffer = nullptr; o.alloc = nullptr; o.allocator = nullptr;
+            }
+            return *this;
+        }
+        ~AccelerationStructure() { reset(); }
+        void reset()
+        {
+            if (destroyFn != nullptr && device && handle)
+            {
+                destroyFn(static_cast<VkDevice>(device), static_cast<VkAccelerationStructureKHR>(handle), nullptr);
+            }
+            if (allocator != nullptr && buffer)
+            {
+                vmaDestroyBuffer(allocator, static_cast<VkBuffer>(buffer), alloc);
+            }
+            handle = nullptr; buffer = nullptr; alloc = nullptr;
+        }
+    };
+
     // A move-only VMA buffer. When mapped is non-null the allocation is persistently
     // mapped for per-frame host writes. Frees itself before the allocator.
     struct Buffer
@@ -460,6 +512,19 @@ export namespace se
     };
 
     // The Vulkan device + allocator the whole renderer borrows from.
+    // KHR acceleration-structure / ray-query entry points are NOT statically exported by
+    // the system loader (only core funcs are). When RT is available we resolve them via
+    // vkGetDeviceProcAddr and call through the C API — the engine otherwise uses Vulkan-Hpp
+    // static dispatch, so these few extension calls stay manual.
+    struct RtDispatch
+    {
+        PFN_vkGetAccelerationStructureBuildSizesKHR getBuildSizes = nullptr;
+        PFN_vkCreateAccelerationStructureKHR createAccel = nullptr;
+        PFN_vkDestroyAccelerationStructureKHR destroyAccel = nullptr;
+        PFN_vkCmdBuildAccelerationStructuresKHR cmdBuild = nullptr;
+        PFN_vkGetAccelerationStructureDeviceAddressKHR getAccelAddress = nullptr;
+    };
+
     struct VulkanContext
     {
         vkb::Instance vkbInstance;  // vk-bootstrap keeps the bits we need for clean teardown
@@ -471,6 +536,8 @@ export namespace se
         vk::Queue graphicsQueue;
         u32 graphicsQueueFamily = 0;
         VmaAllocator allocator = nullptr;
+        bool rtSupported = false;  // KHR acceleration_structure + ray_query present + enabled
+        RtDispatch rt;
     };
 
     // The surface swapchain + its per-image sync, recreated as a unit on resize.
@@ -776,6 +843,31 @@ export namespace se
         vk::DescriptorSet meshSet;
     };
 
+    // Hardware ray tracing: a per-frame TLAS over the scene's mesh instances + inline
+    // ray-query shadows in the mesh fragment, feature-gated (off unless context.rtSupported).
+    // BLAS live on each GpuMesh; this owns the TLAS + its instance buffer (ping-ponged per
+    // in-flight frame) + the TLAS descriptor set (set 6) the mesh binds.
+    struct Rt
+    {
+        bool useRtShadows = false;  // runtime toggle (only meaningful when rtSupported)
+        std::array<Ref<AccelerationStructure>, MaxFramesInFlight> tlas;
+        std::array<u32, MaxFramesInFlight> tlasCapacity{};  // instances the slot's TLAS is sized for (0 = empty seed)
+        std::array<Ref<Buffer>, MaxFramesInFlight> instanceBuffers;  // VkAccelerationStructureInstanceKHR[]
+        std::array<u32, MaxFramesInFlight> instanceCapacity{};
+        std::array<Ref<Buffer>, MaxFramesInFlight> scratchBuffers;   // TLAS build scratch
+        std::array<u32, MaxFramesInFlight> scratchCapacity{};
+        u32 frameInstanceCount = 0;
+        bool tlasReady = false;     // a TLAS has been built this frame (bind is valid)
+        vk::DescriptorSetLayout meshLayout;  // set 6: the TLAS
+        std::array<vk::DescriptorSet, MaxFramesInFlight> meshSets;
+        u32 blasCount = 0;          // built BLAS count (rt-stats)
+        // This frame's instance transforms + meshes, captured by renderScene + consumed by
+        // the TLAS-build graph pass. Cleared each frame in beginFrame.
+        std::vector<glm::mat4> frameModels;
+        std::vector<Ref<GpuMesh>> frameMeshes;
+        bool buildPending = false;  // RT shadows on + instances present this frame
+    };
+
     // The frame as a render graph + the resource handles app-authored passes reference.
     struct FrameGraphState
     {
@@ -807,6 +899,7 @@ export namespace se
         Ibl ibl;
         Ssao ssao;
         Ddgi ddgi;
+        Rt rt;
         FrameGraphState graph;
 
         bool useDepthPrepass = false;
@@ -947,6 +1040,18 @@ export namespace se
                       const std::vector<glm::vec4>& boxMaxs, const std::vector<glm::vec4>& boxAlbedos,
                       glm::vec3 volumeMin, glm::vec3 volumeExtent,
                       glm::vec3 sunDir, glm::vec3 sunColor, f32 sunIntensity);
+    // Hardware ray tracing (feature-gated). rtSupported reports device capability; the
+    // toggle is a no-op when unsupported. RT shadows trace one ray-query per light.
+    auto rtSupported(const Renderer& renderer) -> bool;
+    void setRtShadows(Renderer& renderer, bool enabled);
+    auto rtShadowsEnabled(const Renderer& renderer) -> bool;
+    auto rtBlasCount(const Renderer& renderer) -> u32;
+    // Captures the frame's instance transforms + meshes for the TLAS-build pass (renderScene).
+    void setRtScene(Renderer& renderer, std::vector<glm::mat4> models, std::vector<Ref<GpuMesh>> meshes);
+    // Builds the per-frame TLAS over the scene's mesh instances (model matrix per instance).
+    // Records into the active command buffer (a graph compute pass). Arms tlasReady.
+    void buildTlas(Renderer& renderer, vk::CommandBuffer cmd,
+                   const std::vector<glm::mat4>& models, const std::vector<Ref<GpuMesh>>& meshes);
     // Records the G-buffer prepass (view normal + view-Z) for the screen-space pass bodies.
     void recordGbuffer(Renderer& renderer, vk::CommandBuffer cmd);
     // Feeds the camera the screen-space passes need: view, proj (SAME Y-flipped projection
