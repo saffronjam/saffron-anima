@@ -726,6 +726,7 @@ export namespace se
         Image scratch;
         vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1;     // 1 = MSAA off
         vk::SampleCountFlagBits maxSampleCount = vk::SampleCountFlagBits::e1;  // device cap
+        vk::SampleCountFlags supportedSampleCounts = vk::SampleCountFlagBits::e1;  // counts the color+depth MSAA formats accept
         bool fxaaEnabled = false;  // FXAA post-process (mutually exclusive with MSAA)
         bool taaEnabled = false;   // TAA resolve (mutually exclusive with MSAA/FXAA)
         u32 desiredWidth = 0;      // requested by the UI panel (applied next frame)

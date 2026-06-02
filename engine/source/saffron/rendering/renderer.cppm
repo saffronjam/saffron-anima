@@ -185,9 +185,18 @@ namespace se
             }
         }
 
-        // Highest MSAA level the device supports for both color + depth framebuffers (capped at 8x).
+        // Sample counts valid for the MSAA targets: the framebuffer limits intersected with each
+        // target format's own imageCreateSampleCounts. The generic limits are not enough — llvmpipe,
+        // e.g., accepts 2x as a framebuffer count yet rejects it for R16G16B16A16_SFLOAT / D32_SFLOAT.
         vk::SampleCountFlags sampleCounts = renderer.context.physicalDevice.getProperties().limits.framebufferColorSampleCounts &
                                             renderer.context.physicalDevice.getProperties().limits.framebufferDepthSampleCounts;
+        auto colorFmt = renderer.context.physicalDevice.getImageFormatProperties(
+            OffscreenColorFormat, vk::ImageType::e2D, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eColorAttachment, {});
+        if (colorFmt.result == vk::Result::eSuccess) { sampleCounts = sampleCounts & colorFmt.value.sampleCounts; }
+        auto depthFmt = renderer.context.physicalDevice.getImageFormatProperties(
+            DepthFormat, vk::ImageType::e2D, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment, {});
+        if (depthFmt.result == vk::Result::eSuccess) { sampleCounts = sampleCounts & depthFmt.value.sampleCounts; }
+        renderer.targets.supportedSampleCounts = sampleCounts;
         if (sampleCounts & vk::SampleCountFlagBits::e8) { renderer.targets.maxSampleCount = vk::SampleCountFlagBits::e8; }
         else if (sampleCounts & vk::SampleCountFlagBits::e4) { renderer.targets.maxSampleCount = vk::SampleCountFlagBits::e4; }
         else if (sampleCounts & vk::SampleCountFlagBits::e2) { renderer.targets.maxSampleCount = vk::SampleCountFlagBits::e2; }

@@ -37,6 +37,23 @@ import :Detail;
 
 namespace se
 {
+    // The largest sample count not exceeding `requested` that the MSAA color+depth formats
+    // accept (e1 if none) — a count valid as a framebuffer limit can still be unsupported for
+    // a specific format, and creating an image with it is invalid (VUID-VkImageCreateInfo-samples).
+    static auto clampSampleCount(vk::SampleCountFlags supported, vk::SampleCountFlagBits requested)
+        -> vk::SampleCountFlagBits
+    {
+        for (vk::SampleCountFlagBits candidate :
+             { vk::SampleCountFlagBits::e8, vk::SampleCountFlagBits::e4, vk::SampleCountFlagBits::e2 })
+        {
+            if (static_cast<u32>(candidate) <= static_cast<u32>(requested) && (supported & candidate))
+            {
+                return candidate;
+            }
+        }
+        return vk::SampleCountFlagBits::e1;
+    }
+
     void setDepthPrepass(Renderer& renderer, bool enabled)
     {
         renderer.useDepthPrepass = enabled;
@@ -54,10 +71,7 @@ namespace se
         if (msaaSamples >= 8) { count = vk::SampleCountFlagBits::e8; }
         else if (msaaSamples >= 4) { count = vk::SampleCountFlagBits::e4; }
         else if (msaaSamples >= 2) { count = vk::SampleCountFlagBits::e2; }
-        if (static_cast<u32>(count) > static_cast<u32>(renderer.targets.maxSampleCount))
-        {
-            count = renderer.targets.maxSampleCount;
-        }
+        count = clampSampleCount(renderer.targets.supportedSampleCounts, count);
 
         waitGpuIdle(renderer);
         renderer.targets.sampleCount = count;
