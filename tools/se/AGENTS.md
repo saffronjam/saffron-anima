@@ -1,7 +1,7 @@
-# tools/se — SaffronEditor control CLI
+# tools/se — SaffronEngine control CLI
 
 A minimal C++20 single-file binary (`source/main.cpp`) that speaks JSON over the
-unix socket exposed by the running `SaffronEditor`. No engine dependency — it only
+unix socket exposed by the running `SaffronEngine`. No engine dependency — it only
 links `nlohmann_json`.
 
 ## Usage

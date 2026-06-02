@@ -302,7 +302,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    args::ArgumentParser parser("se — SaffronEditor control CLI");
+    args::ArgumentParser parser("se — SaffronEngine control CLI");
     parser.Prog("se");
     args::HelpFlag help(parser, "help", "show this help", {'h', "help"});
     args::MapFlag<std::string, OutputMode> output(parser, "output",

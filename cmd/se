@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-EDITOR_BIN = REPO_ROOT / "build/debug/bin/SaffronEditor"
+ENGINE_BIN = REPO_ROOT / "build/debug/bin/SaffronEngine"
 SE_BIN = REPO_ROOT / "build/debug/bin/se"
 
 
@@ -52,11 +52,11 @@ def cmd_start(attach: bool, build: bool) -> int:
     if is_engine_running(path):
         print("se: engine already running")
         return 0
-    if not EDITOR_BIN.exists():
-        print(f"se: editor binary not found: {EDITOR_BIN}", file=sys.stderr)
+    if not ENGINE_BIN.exists():
+        print(f"se: engine binary not found: {ENGINE_BIN}", file=sys.stderr)
         print("se: hint: se start --build", file=sys.stderr)
         return 1
-    toolbox_cmd = ["toolbox", "run", "-c", "saffron-build", str(EDITOR_BIN)]
+    toolbox_cmd = ["toolbox", "run", "-c", "saffron-build", str(ENGINE_BIN)]
     if attach:
         os.execv("/usr/bin/toolbox", toolbox_cmd)
     subprocess.Popen(
