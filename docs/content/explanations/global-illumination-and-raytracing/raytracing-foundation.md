@@ -5,40 +5,45 @@ weight = 6
 
 # Acceleration structures
 
-The hardware ray-tracing path traces real triangles, not the voxel proxy. It needs two
-acceleration structures: a per-mesh **BLAS** (bottom-level, the triangles) built once on upload,
-and a per-frame **TLAS** (top-level, the scene's instances) rebuilt every frame. The TLAS lets a
-ray query the whole scene by walking instances down into their meshes' triangles. Both are owned as
-RAII meta-layer resources and fed buffer device addresses.
+An acceleration structure is a GPU spatial index that lets a ray find the triangle it hits without
+testing every triangle in the scene. Hardware ray tracing traces real triangles rather than a voxel
+proxy, and a ray query needs this index to run in sublinear time.
+
+The structure is two-level. A per-mesh **BLAS** (bottom-level) holds a mesh's triangles and is built
+once on upload. A per-frame **TLAS** (top-level) holds the scene's instances and is rebuilt every
+frame. A ray query enters the TLAS, walks each instance down into its mesh, and tests the triangles
+in that mesh's BLAS. Both structures are owned as RAII meta-layer resources and reference their data
+by buffer device address.
 
 > [!NOTE]
 > The RT path is feature-gated (see [device gating](../raytracing-device-gating/)). On the
-> software dev GPU it runs at roughly 1 FPS, so it's correctness-validated and waits on real
+> software dev GPU it runs at roughly 1 FPS, so it is correctness-validated and waits on real
 > ray-tracing hardware.
 
 ## The acceleration-structure resource
 
-A BLAS and a TLAS are the same `AccelerationStructure` type: a move-only wrapper owning the
+A BLAS and a TLAS share one `AccelerationStructure` type: a move-only wrapper owning the
 `vk::AccelerationStructureKHR` handle, its backing device buffer, and its device address. Like
-every [meta-layer resource](../../vulkan-foundation/) it frees itself in order (handle, then
-buffer) before the allocator. It destroys through a resolved function pointer because the destroy
-entry point isn't statically exported.
+every [meta-layer resource](../../vulkan-foundation/) it frees itself in order, handle then
+buffer, before the allocator. It destroys through a resolved function pointer because the destroy
+entry point is not statically exported.
 
-`createAccelStructure` is the shared constructor: it allocates the storage buffer (with
-`ACCELERATION_STRUCTURE_STORAGE` + `SHADER_DEVICE_ADDRESS` usage), calls
+`createAccelStructure` is the shared constructor. It allocates the storage buffer with
+`ACCELERATION_STRUCTURE_STORAGE` and `SHADER_DEVICE_ADDRESS` usage, calls
 `vkCreateAccelerationStructureKHR`, then fetches the AS device address. The caller records the
 build separately.
 
 ## One BLAS per mesh, built on upload
 
 `buildBlas` builds a bottom-level AS over a `GpuMesh`'s whole vertex/index buffer as a single
-triangles geometry. The vertex and index data are passed by *device address* — which is why those
+triangles geometry. The vertex and index data are passed by device address, which is why those
 buffers, and BDA on the allocator, are enabled when RT is supported.
 
-The build queries its sizes (`getBuildSizes`), allocates the AS plus a scratch buffer, and records
-the build on a one-off command buffer with a `waitIdle` — the same synchronous shape as mesh
-upload, since it happens once at load. It uses `PREFER_FAST_TRACE` and no compaction (correctness
-first for v1). The result is stored as `GpuMesh::blas`, a `Ref` that's null when RT is unsupported.
+The build queries its sizes with `getBuildSizes`, allocates the AS plus a scratch buffer, and
+records the build on a one-off command buffer with a `waitIdle`. This is the same synchronous shape
+as mesh upload, since it happens once at load. It uses `PREFER_FAST_TRACE` and no compaction,
+favouring correctness for v1. The result is stored as `GpuMesh::blas`, a `Ref` that is null when RT
+is unsupported.
 
 ## One TLAS per frame, over the instances
 
@@ -57,17 +62,17 @@ inst.accelerationStructureReference = meshes[i]->blas->address;
 ```
 
 The instance buffer is host-visible, ping-ponged per in-flight frame, and grown to the next power
-of two when the instance count outgrows it. The TLAS and its scratch are (re)created only when
+of two when the instance count outgrows it. The TLAS and its scratch are recreated only when
 capacity changes; otherwise the same TLAS is rebuilt in place. After the build, `recordTlasBuild`
-writes the new TLAS into the frame's descriptor set (set 6) and emits the AS-build→fragment-shader
-barrier itself.
+writes the new TLAS into the frame's descriptor set (set 6) and emits the AS-build to
+fragment-shader barrier itself.
 
 ## The empty-TLAS seed
 
 The mesh fragment statically references the TLAS in set 6 regardless of the runtime flag, so the
 descriptor must always point at a valid AS. `seedEmptyTlas` builds a zero-instance TLAS at init and
 writes it into every frame's set. The first real per-frame build overwrites a slot on demand; until
-then, ray queries against the empty TLAS simply miss.
+then, ray queries against the empty TLAS miss.
 
 ## In the code
 
@@ -82,9 +87,9 @@ then, ray queries against the empty TLAS simply miss.
 
 > [!WARNING]
 > `VkTransformMatrixKHR` is a row-major 3×4; GLM is column-major. `buildTlas` transposes each model
-> matrix into rows when packing instances — skip that and instances render at the wrong transform
-> (or mirrored). The BLAS build is also a synchronous `waitIdle` per mesh, fine for load-time upload
-> but a stall if ever called per frame.
+> matrix into rows when packing instances; without that transpose, instances render at the wrong
+> transform or mirrored. The BLAS build is also a synchronous `waitIdle` per mesh, fine for load-time
+> upload but a stall if ever called per frame.
 
 ## Related
 

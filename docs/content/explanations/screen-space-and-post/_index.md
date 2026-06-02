@@ -5,9 +5,10 @@ weight = 11
 
 # Screen-space & post
 
-Effects that work in screen space, plus the color step at the end. A thin G-buffer (view-space
-normal + depth) feeds ambient occlusion, contact shadows, SSGI, and the temporal passes; tonemapping
-maps the linear HDR scene down to something a display can show.
+Screen-space effects approximate lighting and shading from the rendered image itself, then a final
+color step maps the result to the display. A thin G-buffer of view-space normal and depth feeds
+ambient occlusion, contact shadows, SSGI, and the temporal passes; tonemapping reduces the linear
+HDR scene to the range a display can show.
 
 ## Pages
 

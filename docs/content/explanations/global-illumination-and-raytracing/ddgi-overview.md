@@ -5,12 +5,13 @@ weight = 1
 
 # DDGI overview
 
-Dynamic Diffuse Global Illumination gives the engine a multi-bounce indirect term that tracks
-moving geometry. [Image-based lighting](../../image-based-lighting/ibl-overview/) only gives a
-static ambient, and [screen-space GI](../../screen-space-and-post/) can only bounce what's on
-screen. DDGI re-traces a grid of irradiance probes every frame against a coarse voxel copy of
-the scene; the mesh fragment then samples the nearest probes for diffuse indirect light. The
-trace is software, so DDGI runs on any GPU including the llvmpipe dev device.
+Dynamic Diffuse Global Illumination is a real-time technique that computes multi-bounce diffuse
+indirect light from a grid of irradiance probes re-traced every frame. Each probe gathers radiance
+by tracing rays against a coarse voxel copy of the scene; a shaded surface then samples the nearest
+probes for its diffuse indirect term.
+
+The probe volume tracks moving geometry, so indirect light updates as the scene changes. The trace
+is software, so DDGI runs on any GPU including the llvmpipe dev device.
 
 ## The per-frame pipeline
 
@@ -44,25 +45,27 @@ term (gated on `screenFlags.z`).
 
 ## Why probes over screen-space
 
-Screen-space GI is bounded by the framebuffer: light from off-screen or back-facing geometry
-contributes nothing, and the term flickers as the camera turns. DDGI stores irradiance in world
-space, so a surface lit by a wall behind the camera stays lit. The cost is a fixed per-frame
-budget (five compute passes regardless of view) and coarse spatial resolution — one probe every
-couple of meters. That's why DDGI is the *diffuse* indirect term only; specular still comes from
-IBL and screen-space reflections.
+Screen-space GI is bounded by the framebuffer. Light from off-screen or back-facing geometry
+contributes nothing, and the term flickers as the camera turns.
+[Image-based lighting](../../image-based-lighting/ibl-overview/) gives only a static ambient, and
+[screen-space GI](../../screen-space-and-post/) can bounce only what is on screen. DDGI stores
+irradiance in world space, so a surface lit by a wall behind the camera stays lit. The cost is a
+fixed per-frame budget (five compute passes regardless of view) and coarse spatial resolution — one
+probe every couple of meters. DDGI is therefore the *diffuse* indirect term only; specular still
+comes from IBL and screen-space reflections.
 
-## Multi-bounce, almost for free
+## Multi-bounce convergence
 
 The trace samples last frame's irradiance atlas at each ray hit and folds it back in. A ray that
 hits a lit wall picks up that wall's bounce, which was itself fed by the bounce before it. Each
-frame adds one bounce, and the temporal blend converges to many bounces over a fraction of a
-second with no extra rays. That feedback is why the volume is re-traced rather than baked.
+frame adds one bounce, and the temporal blend converges to many bounces over a fraction of a second
+with no extra rays. That feedback is why the volume is re-traced rather than baked.
 
 ## A self-fitting volume
 
-The probe cage isn't authored. `setDdgiScene` runs from `renderScene` each frame with the
-scene's world AABB, and the volume fits to it (padded slightly so probes sit just outside the
-geometry). Move or resize the scene and the cage follows, which keeps DDGI dynamic.
+The probe cage is not authored. `setDdgiScene` runs from `renderScene` each frame with the scene's
+world AABB, and the volume fits to it, padded slightly so probes sit just outside the geometry.
+Moving or resizing the scene moves the cage with it, which keeps DDGI dynamic.
 
 ## In the code
 

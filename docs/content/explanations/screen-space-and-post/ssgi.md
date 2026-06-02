@@ -6,11 +6,14 @@ math = true
 
 # SSGI
 
-Direct light hits a red wall, bounces, and tints the white floor beside it. That second bounce is
-global illumination, and a forward renderer doesn't get it for free. SSGI approximates one bounce in
-screen space: each pixel fires a few short rays into the hemisphere above it, and where a ray hits
-nearby geometry it gathers that surface's lit color from the previous frame as incoming indirect
-radiance. The gathered radiance adds to the ambient term.
+Screen-space global illumination (SSGI) approximates one bounce of indirect diffuse light using only
+the data already on screen. Each pixel fires a few short rays into the hemisphere above it, and where
+a ray hits nearby geometry it gathers that surface's lit color from the previous frame as incoming
+indirect radiance.
+
+Indirect light is the second bounce: direct light strikes a red wall and tints the white floor beside
+it. A forward renderer computes only direct lighting, so this bounce must be approximated separately.
+The gathered radiance adds to the ambient term.
 
 ## How it works
 
@@ -28,7 +31,7 @@ across the four rays, so the small ray count covers the hemisphere without a fix
 
 Each ray marches in view space, projecting to the screen and reading the stored depth at every step. A
 hit registers the first time the ray dips just behind the stored surface, inside a thickness window
-like the [contact shadow](../contact-shadows/) march. On a hit the ray gathers `prevColor` — the
+like the [contact shadow](../contact-shadows/) march. On a hit the ray gathers `prevColor`, the
 previous frame's resolved linear-HDR color:
 
 ```hlsl
@@ -40,10 +43,10 @@ if (diff > 0.02 && diff < radius * 0.5)
 }
 ```
 
-Using last frame's image is what makes a screen-space bounce affordable: the hit surface's full
-lighting (direct + ambient) is already computed and sitting in a texture. The cost is a one-frame lag
-and a dependence on whatever was on screen last frame. The four rays are averaged, scaled by an
-intensity knob, and stored in an `rgba16f` map.
+Reading last frame's image makes a screen-space bounce affordable: the hit surface's full lighting
+(direct + ambient) is already computed and sitting in a texture. The cost is a one-frame lag and a
+dependence on whatever was on screen last frame. The four rays are averaged, scaled by an intensity
+knob, and stored in an `rgba16f` map.
 
 ### Where the radiance lands
 
@@ -59,12 +62,12 @@ if (globals.screenFlags.y != 0)
 }
 ```
 
-It adds to the indirect term, never the direct lights, and only for non-metals (metals have no diffuse
-response). Gated by `screenFlags.y`.
+It adds to the indirect term, never the direct lights, and only for non-metals, since metals have no
+diffuse response. The whole contribution is gated by `screenFlags.y`.
 
 ### Feeding the next frame
 
-For SSGI to read last frame's color, last frame has to save it before the in-place tonemap turns it
+SSGI reads last frame's color, so each frame must save it before the in-place tonemap turns it
 display-referred. A `ssgi-history` compute pass copies the scene's resolved linear-HDR color into
 `prevColor` right after the scene pass, then a barrier-only pass restores `prevColor` to its resting
 `ShaderReadOnly` layout for next frame. The renderer imports the `prevColor` handle once and tracks its
@@ -87,9 +90,9 @@ flowchart LR
 | Where GI is added | `mesh.slang` | `ssgiMap`, `screenFlags.y` |
 
 > [!NOTE]
-> SSGI only sees what's on screen. A bounce off a surface that's off-screen or hidden behind nearer
-> geometry simply doesn't happen, because the gather can only read pixels the previous frame stored.
-> That's the defining limit of any screen-space method, and the reason the lighting roadmap moves on to
+> SSGI sees only what is on screen. A bounce off a surface that is off-screen or hidden behind nearer
+> geometry does not happen, because the gather can read only pixels the previous frame stored. This is
+> the defining limit of any screen-space method, and the reason the lighting roadmap moves on to
 > world-space [DDGI](../../global-illumination-and-raytracing/) for off-screen bounce.
 
 ## Related

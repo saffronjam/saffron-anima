@@ -6,16 +6,16 @@ math = true
 
 # Probe atlases
 
-The traced rays are raw radiance samples; they have to become something the mesh fragment can read
-with one filtered lookup. DDGI keeps two octahedral atlases per probe volume: an **irradiance**
-atlas (directional incoming light) and a **moment** atlas (mean and mean-squared hit distance, for
-the Chebyshev visibility test). Both are integrated from the ray image, blended temporally, and
-gutter-fixed so bilinear sampling never reads across a tile edge.
+A probe atlas is an octahedral texture that stores a DDGI probe's filtered lighting so a mesh
+fragment can read it with one lookup. Each probe volume keeps two: an **irradiance** atlas, holding
+directional incoming light, and a **moment** atlas, holding mean and mean-squared hit distance for
+the Chebyshev visibility test. Both are integrated from the per-frame ray image, blended temporally,
+and gutter-fixed so bilinear sampling never reads across a tile edge.
 
 Each probe occupies one tile in each atlas. A tile is an `interior × interior` block of octahedral
-texels plus a one-texel gutter on every side, so its full size is `interior + 2`. The irradiance
+texels plus a one-texel gutter on every side, giving a full size of `interior + 2`. The irradiance
 atlas uses an 8×8 interior (`DdgiIrrInterior`); the moment atlas uses 16×16 (`DdgiDistInterior`),
-since distance needs more directional resolution to localize occluders.
+because distance needs more directional resolution to localize occluders.
 
 ## Integrating rays into a texel
 
@@ -28,7 +28,7 @@ E(\mathbf{d}_\text{texel}) = \frac{\sum_r \max(0,\ \mathbf{d}_\text{texel}\cdot\
 {\sum_r \max(0,\ \mathbf{d}_\text{texel}\cdot\mathbf{d}_r)}
 $$
 
-This is a cosine-weighted hemispherical gather — exactly the irradiance a Lambertian surface facing
+This cosine-weighted hemispherical gather yields the irradiance a Lambertian surface facing
 $\mathbf{d}_\text{texel}$ would receive. The shader rebuilds each ray's direction with the same
 Fibonacci formula the trace used.
 
@@ -44,9 +44,9 @@ w_r = \max(0,\ \mathbf{d}_\text{texel}\cdot\mathbf{d}_r)^{50}
 $$
 
 The power-50 cosine makes each texel pull almost entirely from rays aligned with it, so a distance
-texel localizes the occluder in *its* direction rather than averaging the whole hemisphere. Those
-two moments ($\overline{r}$, $\overline{r^2}$) are stored in an `rg16f` texel and are what
-[probe sampling](../probe-volume-and-sampling/) reads back for the Chebyshev variance bound.
+texel localizes the occluder in *its* direction rather than averaging the whole hemisphere. The two
+moments ($\overline{r}$, $\overline{r^2}$) are stored in an `rg16f` texel, and
+[probe sampling](../probe-volume-and-sampling/) reads them back for the Chebyshev variance bound.
 
 ## Temporal hysteresis
 
@@ -57,10 +57,9 @@ $$
 A_t = \operatorname{lerp}(A_\text{new},\ A_{t-1},\ \alpha)
 $$
 
-so each frame nudges the atlas 5% toward the new estimate. That suppresses the noise of only 64
-rays per frame — over ~20 frames the volume converges to a smooth, many-sample result. On the first
-frame after enable or resize, `firstFrame` forces $\alpha = 0$ so there's no stale history to blend
-in.
+so each frame nudges the atlas 5% toward the new estimate. This suppresses the noise of only 64 rays
+per frame: over ~20 frames the volume converges to a smooth, many-sample result. On the first frame
+after enable or resize, `firstFrame` forces $\alpha = 0$ so no stale history blends in.
 
 ## The octahedral border wrap
 
@@ -73,7 +72,7 @@ interior source:
 - **Edge** texels copy from the same edge with the run reversed (the octahedron's fold mirrors the
   coordinate: $\text{src} = \text{last} - (\ell - 1)$).
 
-Without this, a probe lit from one direction would show a dark seam where bilinear sampling crossed
+Without this wrap, a probe lit from one direction shows a dark seam where bilinear sampling crosses
 the tile edge into the gutter. The blend passes early-out on the gutter texels, leaving the border
 pass as their sole writer.
 

@@ -6,40 +6,42 @@ math = true
 
 # Contact shadows
 
-The directional shadow map handles the big picture — buildings casting onto the ground — but its
-resolution can't resolve the thin gap where one surface almost touches another. Contact shadows fill
-that gap. From each pixel the pass marches a short ray toward the sun against the
-[thin G-buffer](../thin-gbuffer/); if the ray passes behind nearer geometry, the pixel sits in a fine
-contact shadow. It's a cheap supplement that darkens only the directional direct term.
+A contact shadow is a short-range shadow computed by marching a screen-space ray toward the light and
+testing it against the depth buffer. It resolves the fine occlusion where one surface nearly touches
+another, the thin gap a shadow map cannot resolve at its working resolution.
+
+The technique supplements the directional shadow map rather than replacing it. The map handles the
+coarse term — large geometry casting onto the ground — while the contact pass darkens the small
+contacts the map misses. It reads the [thin G-buffer](../thin-gbuffer/), costs little, and affects
+only the directional direct term.
 
 ## How it works
 
-Each pixel reconstructs its view-space position $p$ and normal $n$, offsets a little along the normal
-to dodge self-occlusion, and steps along the view-space light direction $l$:
+Each pixel reconstructs its view-space position $p$ and normal $n$, offsets along the normal to avoid
+self-occlusion, and steps along the view-space light direction $l$:
 
 $$
 s_i = p + n\,\epsilon \;+\; l \cdot \text{rayLen} \cdot \frac{i}{\text{steps}}, \qquad i = 1 \dots \text{steps}
 $$
 
-At each step it projects the marched view position back to the screen, samples the stored depth there,
-and compares. The stored surface lies between the pixel and the light when it's nearer than the ray
-sample — but only if the gap falls inside a thickness window, so a wall far behind the ray isn't
-mistaken for an occluder.
+At each step the pass projects the marched view position back to the screen, samples the stored depth
+there, and compares. The stored surface lies between the pixel and the light when it is nearer than the
+ray sample, but only when the gap falls inside a thickness window.
 
-The thickness check is the crux. View-space depth is one value per pixel, so the G-buffer can't tell a
-thin object from an infinitely deep one. The window says "treat the stored surface as a solid slab of
-this thickness"; a hit counts only if the ray dips just behind it. Without the window, every surface in
-front of the ray would shadow everything behind it. The march also stops early if a sample falls
-off-screen or behind the near plane, and skips background samples (`surfZ > -1e-4`). The output is `r8`
-occlusion where 1 means lit.
+The thickness check is the crux of the method. View-space depth holds one value per pixel, so the
+G-buffer cannot distinguish a thin object from an infinitely deep one. The window treats each stored
+surface as a solid slab of a fixed thickness, and a hit counts only when the ray dips just behind it.
+Without the window, every surface in front of the ray would shadow everything behind it. The march
+stops early when a sample falls off-screen or behind the near plane, and skips background samples
+(`surfZ > -1e-4`). The output is `r8` occlusion where 1 means lit.
 
 The push constant supplies the projection (to project marched positions to screen), its inverse (to
-reconstruct view positions), the light direction in view space, and the ray length / step count /
+reconstruct view positions), the light direction in view space, and the ray length, step count, and
 thickness packed into a `params` vector.
 
 ### Combining with the shadow map
 
-In the mesh fragment shader the directional shadow starts from the map (PCF) or a ray-query, then the
+In the mesh fragment shader the directional shadow starts from the map (PCF) or a ray query, then the
 contact factor multiplies in:
 
 ```hlsl
@@ -49,9 +51,9 @@ if (globals.screenFlags.x != 0)
 }
 ```
 
-Multiplying means the two only darken, never brighten: a pixel the map already shadowed stays
-shadowed, and a lit pixel can pick up a fine contact occlusion the map missed. The effect is
-directional-only in this version, gated by `screenFlags.x`.
+Multiplying means the two factors only darken, never brighten: a pixel the map already shadowed stays
+shadowed, and a lit pixel can pick up a fine contact occlusion the map missed. The effect applies to
+the directional light only, gated by `screenFlags.x`.
 
 ## In the code
 

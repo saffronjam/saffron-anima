@@ -5,15 +5,16 @@ weight = 12
 
 # Global illumination & ray tracing
 
-The dynamic-indirect and stochastic-direct tier. [Image-based lighting](../image-based-lighting/)
-gives a static ambient term and [screen-space](../screen-space-and-post/) effects fake indirect
-light from what's on screen; this section covers fully dynamic GI that tracks moving geometry:
-DDGI irradiance probes fed by a software voxel trace, an optional hardware ray-tracing path
-(BLAS/TLAS + ray-query shadows), and ReSTIR for many-light direct lighting.
+Dynamic global illumination computes indirect light that tracks moving geometry, and ray tracing
+resolves visibility and direct lighting stochastically. [Image-based lighting](../image-based-lighting/)
+supplies only a static ambient term, and [screen-space](../screen-space-and-post/) effects
+approximate indirect light from what is on screen. This section covers the fully dynamic tier: DDGI
+irradiance probes fed by a software voxel trace, an optional hardware ray-tracing path (BLAS/TLAS
+plus ray-query shadows), and ReSTIR for many-light direct lighting.
 
 > [!NOTE]
 > The RT and ReSTIR paths need a ray-query-capable GPU and run at roughly 1 FPS on the software
-> (llvmpipe) dev device, so they're feature-gated. DDGI's software trace runs everywhere.
+> (llvmpipe) dev device, so they are feature-gated. DDGI's software trace runs everywhere.
 
 ## Pages
 

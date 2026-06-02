@@ -6,7 +6,9 @@ math = true
 
 # PCF filtering
 
-Percentage-closer filtering averages several comparison samples around the lookup point so a shadow edge fades over a few texels instead of snapping from lit to dark. The 2D shadow maps (directional and spot) use a 3×3 grid of hardware comparison taps, giving a visibility factor in $[0, 1]$ rather than a hard bit. The same `pcfShadow` function serves both maps.
+Percentage-closer filtering averages several depth-comparison samples around a lookup point so a shadow edge fades over a few texels instead of snapping from lit to dark. The result is a visibility factor in $[0, 1]$ rather than a single lit-or-shadowed bit.
+
+The 2D shadow maps (directional and spot) use a 3×3 grid of hardware comparison taps. The same `pcfShadow` function serves both maps.
 
 ## How it works
 
@@ -16,11 +18,11 @@ The maps are bound as `Sampler2DShadow`, a comparison sampler. Each tap returns 
 sum += map.SampleCmp(uv + float2(x, y) * texel, ndc.z);
 ```
 
-Averaging gives 0, 1/9, 2/9, …, 1 — a quantized soft edge. `SampleCmp` runs the depth-less-than-or-equal test in the sampler hardware.
+`SampleCmp` runs the depth-less-than-or-equal test in the sampler hardware. Averaging nine results yields 0, 1/9, 2/9, …, 1, a quantized soft edge.
 
 ## Off-map and beyond-far cases
 
-The early-out guard is the load-bearing part. A fragment can project outside the map, past its far plane, or behind the light, and in all of those there's no valid shadow information:
+A fragment can project outside the map, past its far plane, or behind the light. None of these positions carry valid shadow information, so an early-out guard handles each case:
 
 | Condition | Meaning | Result |
 |---|---|---|
@@ -28,11 +30,11 @@ The early-out guard is the load-bearing part. A fragment can project outside the
 | `uv` outside $[0,1]^2$ | outside the light frustum | lit |
 | `ndc.z > 1` | past the far plane | lit |
 
-Treating "no information" as lit is the safe default: it avoids a hard black band at the frustum edge or a shadow that swallows everything past the far plane. The trade is that geometry genuinely outside the frustum is never shadowed, which is why the directional frustum is [fit to the whole scene](../directional-shadows/).
+Treating absent information as lit is the safe default. It avoids a hard black band at the frustum edge and a shadow that swallows everything past the far plane. The cost is that geometry genuinely outside the frustum is never shadowed, which is why the directional frustum is [fit to the whole scene](../directional-shadows/).
 
 ## Design and trade-offs
 
-A fixed 3×3 kernel is the cheapest filter that visibly helps. It hides the texel grid at the cost of a constant-width penumbra — the softening is the same regardless of occluder distance, so it doesn't model contact-hardening soft shadows. Wider kernels, Poisson-disk taps, or a rotated kernel would smooth more at more cost; this engine keeps the averaged grid and leaves those as drop-in changes to one function. The point light does not use this path — its cube stores distance and does a hard comparison (see [point shadows](../point-light-cube-shadows/)).
+A fixed 3×3 kernel is the cheapest filter that visibly helps. It hides the texel grid at the cost of a constant-width penumbra: the softening is the same regardless of occluder distance, so it does not model contact-hardening soft shadows. Wider kernels, Poisson-disk taps, or a rotated kernel smooth more at more cost. The engine keeps the averaged grid and leaves those as drop-in changes to one function. The point light does not use this path; its cube stores distance and does a hard comparison (see [point shadows](../point-light-cube-shadows/)).
 
 ## In the code
 

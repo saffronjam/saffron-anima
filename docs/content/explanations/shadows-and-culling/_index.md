@@ -5,7 +5,7 @@ weight = 10
 
 # Shadows & culling
 
-How occlusion and per-light visibility are computed. Shadow-casting lights render depth (or distance) that the mesh fragment compares against, and clustered culling narrows the per-fragment light loop to nearby lights.
+Shadows and culling are the two visibility computations a forward renderer performs each frame. A shadow-casting light renders depth or distance from its own viewpoint; the mesh fragment then compares its position against that map to decide whether the light reaches it. Clustered culling partitions the view frustum into cells and assigns each cell only the lights that touch it, narrowing the per-fragment light loop to nearby lights.
 
 ## Pages
 

@@ -6,10 +6,10 @@ math = true
 
 # ReSTIR
 
-ReSTIR (Reservoir Spatiotemporal Importance Resampling) is the engine's many-light direct lighting
-path. Instead of looping every light per pixel, each pixel keeps one *reservoir* — a single chosen
-light plus a weight — and improves that choice over time and across neighbours by resampling. The
-result is good direct lighting from many lights at the cost of one shadow ray per pixel.
+ReSTIR (Reservoir Spatiotemporal Importance Resampling) is a direct-lighting technique that shades
+many lights at the cost of one shadow ray per pixel. Each pixel keeps one *reservoir* — a single
+chosen light plus a weight — and refines that choice over time and across neighbours by resampling,
+rather than looping every light every frame.
 
 > [!NOTE]
 > ReSTIR is feature-gated on ray-query support and runs at ~1 FPS on the software dev GPU. It's
@@ -24,11 +24,11 @@ holds the target pdf of the chosen sample.
 
 ## Resampled importance sampling
 
-For one pixel we want to sample lights proportional to their actual contribution $\hat p$ (the
-*target function*: a light's unshadowed radiance at this surface). We can't sample $\hat p$
-directly, so RIS draws $K$ candidates from a cheap source distribution (here the pixel's froxel
-cluster light list, uniform) and keeps one proportional to $\hat p / p_\text{source}$. Each
-candidate's resampling weight is
+Ideal sampling draws lights proportional to their actual contribution $\hat p$ — the *target
+function*, a light's unshadowed radiance at this surface. Sampling $\hat p$ directly is intractable,
+so RIS draws $K$ candidates from a cheap source distribution (here the pixel's froxel cluster light
+list, uniform) and keeps one proportional to $\hat p / p_\text{source}$. Each candidate's resampling
+weight is
 
 $$
 w_i = \frac{\hat p(x_i)}{p_\text{source}(x_i)}
@@ -46,13 +46,13 @@ candidate lights — one light evaluated, many accounted for.
 
 ## Spatiotemporal reuse
 
-The power of ReSTIR is that reservoirs combine. Two reservoirs merge by treating each as a single
-weighted sample and running WRS again, so a pixel can borrow good light choices from its **own pixel
-last frame** (reprojected via the [motion vector](../../screen-space-and-post/)) and from a few
-**screen neighbours** with similar depth and normal. A merge accumulates $M$ and reweights the
-incoming sample by its target function *at this pixel*, so a neighbour's light is only kept if it's
-actually good here. Over frames, each pixel's reservoir effectively integrates thousands of
-candidate evaluations while only ever storing one.
+Reservoirs combine, and that is what makes ReSTIR effective. Two reservoirs merge by treating each
+as a single weighted sample and running WRS again, so a pixel can borrow good light choices from its
+**own pixel last frame** (reprojected via the [motion vector](../../screen-space-and-post/)) and
+from a few **screen neighbours** with similar depth and normal. A merge accumulates $M$ and reweights
+the incoming sample by its target function *at this pixel*, so a neighbour's light is kept only if it
+is good here. Over frames, each pixel's reservoir integrates thousands of candidate evaluations while
+storing only one.
 
 ## The three passes
 
@@ -73,18 +73,17 @@ flowchart LR
    into the previous buffer for next frame.
 
 [ReSTIR passes](../restir-passes/) covers each in detail. The mesh fragment samples the resolved
-radiance and adds it as the diffuse direct term (gated on `screenFlags.w`), replacing its per-light
-loop — the sampled value already includes geometry × visibility × $W$, so the fragment only applies
-`albedo / PI`.
+radiance and adds it as the diffuse direct term, gated on `screenFlags.w`. The sampled value already
+includes geometry × visibility × $W$, so the fragment only applies `albedo / PI`.
 
-## Why one ray, not a loop
+## Cost against light count
 
-The clustered-forward path loops every light in a pixel's cluster (capped at 64), each fully shaded,
-none shadowed beyond the one map. ReSTIR collapses that to a single stochastic sample that's
+The clustered-forward path loops every light in a pixel's cluster (capped at 64), each fully shaded
+and none shadowed beyond the one map. ReSTIR collapses that to a single stochastic sample,
 importance-resampled to land on the lights that matter, then traces exactly one visibility ray for
-it. With thousands of lights the clustered loop becomes a per-pixel bottleneck; ReSTIR's cost is
-fixed at three compute passes plus one ray regardless of light count. The trade is noise (one sample
-is noisy) against the temporal/spatial reuse and
+it. The clustered loop scales with light count and becomes a per-pixel bottleneck at thousands of
+lights; ReSTIR's cost is fixed at three compute passes plus one ray regardless of light count. The
+trade is noise — one sample is noisy — against the spatiotemporal reuse and
 [temporal accumulation](../../screen-space-and-post/) that smooth it.
 
 ## In the code

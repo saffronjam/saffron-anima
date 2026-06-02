@@ -5,18 +5,20 @@ weight = 8
 
 # Compute post-process
 
-Every screen-space and post-process pass in the engine shares one skeleton: a compute shader that reads
-one or more images and writes a result image, plus a render-graph declaration naming which images it
-touches and how. The graph turns those declarations into barriers and layout transitions. Once you see
-the shape — in the [tonemap](../tonemap-and-exposure/), GTAO, SSGI, FXAA, TAA — you've seen all of them.
+A compute post-process pass is a compute shader that reads one or more screen-space images and writes a
+result image, paired with a render-graph declaration naming which images it touches and how. The graph
+turns those declarations into barriers and layout transitions.
+
+Every screen-space and post-process effect in the engine follows this one skeleton. The
+[tonemap](../tonemap-and-exposure/), GTAO, SSGI, FXAA, and TAA passes are all instances of it.
 
 ## How it works
 
-A compute post-process pass is two halves: a shader and a graph declaration.
+A compute post-process pass has two halves: a shader and a graph declaration.
 
-**The shader.** One invocation per pixel, dispatched in 8×8 thread groups. It reads inputs (as samplers
-or storage images), does its math, and writes to a storage image. A bounds check stops edge groups from
-writing past the extent:
+**The shader.** One invocation runs per pixel, dispatched in 8×8 thread groups. It reads inputs as
+samplers or storage images, does its math, and writes to a storage image. A bounds check stops edge
+groups from writing past the extent:
 
 ```hlsl
 [numthreads(8, 8, 1)]
@@ -30,11 +32,11 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
 }
 ```
 
-Inputs read at arbitrary UVs are bound as `Sampler2D` (the neighborhood reads in TAA, the G-buffer taps
-in GTAO). The output — and any image read and written at the same texel — is bound as an `RWTexture2D`
-with an explicit `[[vk::image_format(...)]]`.
+Inputs read at arbitrary UVs are bound as `Sampler2D`, such as the neighborhood reads in TAA and the
+G-buffer taps in GTAO. The output — and any image read and written at the same texel — is bound as an
+`RWTexture2D` with an explicit `[[vk::image_format(...)]]`.
 
-**The declaration.** The host side names the resources and how the pass uses each, then provides the
+**The declaration.** The host side names the resources and how the pass uses each, then supplies the
 body as a closure. The FXAA pass is the smallest complete example:
 
 ```cpp
@@ -52,8 +54,8 @@ fxaaPass.execute = [&renderer, extent](vk::CommandBuffer cmd)
 addPass(graph, std::move(fxaaPass));
 ```
 
-The dispatch group count rounds the extent up to the 8×8 group size — the same `(n + 7) / 8` the
-shader's bounds check then trims back.
+The dispatch group count rounds the extent up to the 8×8 group size with `(n + 7) / 8`, and the
+shader's bounds check trims the overshoot back.
 
 ### The two usages that carry the pattern
 
@@ -66,9 +68,9 @@ Two `RgUsage` values do almost all the work:
 
 A compute post-process declares its inputs as `SampledReadCompute` and its output as
 `StorageImageRWCompute`, and the graph derives every transition. The tonemap is the purest case: a
-single image declared `StorageImageRWCompute`, read and written at the same texel, no second target. It
-transitions the offscreen **Color → General** before the pass and **General → ShaderReadOnly** after —
-neither barrier written by hand.
+single image declared `StorageImageRWCompute`, read and written at the same texel, with no second
+target. The graph transitions the offscreen image **Color → General** before the pass and **General →
+ShaderReadOnly** after, neither barrier written by hand.
 
 ```mermaid
 flowchart TD
@@ -80,10 +82,10 @@ flowchart TD
 
 ### Why a closure, not a fixed signature
 
-The pass body is a `std::function<void(vk::CommandBuffer)>` capturing whatever it needs — the pipeline,
-the descriptor set, push-constant data, the extent. The graph doesn't know or care what a pass does; it
-reads the declared `accesses` to derive barriers, then calls the closure between them. That's the same
-`submit(lambda)` seam the rest of the engine uses, narrowed to a graph pass.
+The pass body is a `std::function<void(vk::CommandBuffer)>` that captures whatever it needs: the
+pipeline, the descriptor set, push-constant data, the extent. The graph does not know what a pass does.
+It reads the declared `accesses` to derive barriers, then calls the closure between them. This is the
+same `submit(lambda)` seam the rest of the engine uses, narrowed to a graph pass.
 
 ## In the code
 
@@ -96,7 +98,7 @@ reads the declared `accesses` to derive barriers, then calls the closure between
 
 > [!NOTE]
 > An image read and written in the same dispatch is bound once as `RWTexture2D` and declared once as
-> `StorageImageRWCompute`. Don't import it twice or alias it as a second resource — the graph tracks one
+> `StorageImageRWCompute`. Do not import it twice or alias it as a second resource — the graph tracks one
 > layout per imported handle, and a second handle for the same image would mis-track the transitions.
 > The SSGI history copy reuses the single `prevColor` handle for both its read and write for this reason.
 
