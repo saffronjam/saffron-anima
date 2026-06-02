@@ -25,10 +25,10 @@ flowchart TD
     Rendering[Saffron.Rendering<br/>+ :RenderGraph :Types :Detail]
     Ui[Saffron.Ui]
     Assets[Saffron.Assets]
-    Editor[Saffron.Editor]
+    SceneEdit[Saffron.SceneEdit]
     Control[Saffron.Control]
     App[Saffron.App]
-    EditorApp[Saffron.EditorApp]
+    Host[Saffron.Host]
 
     Signal --> Core
     Json --> Core
@@ -48,53 +48,53 @@ flowchart TD
     Assets --> Geometry
     Assets --> Rendering
     Assets --> Scene
-    Editor --> Core
-    Editor --> Signal
-    Editor --> Scene
-    Editor --> Json
-    Editor --> Ui
-    Control --> Editor
+    SceneEdit --> Core
+    SceneEdit --> Signal
+    SceneEdit --> Scene
+    SceneEdit --> Json
+    SceneEdit --> Ui
+    Control --> SceneEdit
     Control --> Rendering
     Control --> Assets
     App --> Core
     App --> Window
     App --> Rendering
     App --> Ui
-    EditorApp --> App
-    EditorApp --> Editor
-    EditorApp --> Control
-    EditorApp --> Assets
+    Host --> App
+    Host --> SceneEdit
+    Host --> Control
+    Host --> Assets
 ```
 
 `Saffron.Rendering` is itself split (see [module partitions](../module-partitions/)): the primary
 re-exports the `:RenderGraph` and `:Types` partitions, so a consumer importing `Saffron.Rendering`
 gets the render-graph and renderer types in one import.
 
-## Why EditorApp is its own module
+## Why Host is its own module
 
-The editor application glue — the `Layer` callbacks, thumbnail cache, import routing, the
-`onCreate`/`onExit` closures — calls into `App`, `Editor`, `Control`, `Assets`, and the rest at
-once. It cannot live in `Saffron.Editor`, because `Control` already imports `Editor`
-(`Control → Editor`); glue inside `Editor` reaching back into `Control` would form a cycle. So it
+The host application glue — the `Layer` callbacks, thumbnail cache, import routing, the
+`onCreate`/`onExit` closures — calls into `App`, `SceneEdit`, `Control`, `Assets`, and the rest at
+once. It cannot live in `Saffron.SceneEdit`, because `Control` already imports `SceneEdit`
+(`Control → SceneEdit`); glue inside `SceneEdit` reaching back into `Control` would form a cycle. So it
 sits in a separate module above everything:
 
 ```cpp
-export module Saffron.EditorApp;
+export module Saffron.Host;
 
 import Saffron.App;
-import Saffron.Editor;
+import Saffron.SceneEdit;
 import Saffron.Control;
 import Saffron.Assets;
 // ...
-export auto runEditor(const char* title, int w, int h) -> int;
+export auto runHost(const char* title, int w, int h) -> int;
 ```
 
-That keeps the graph acyclic. The editor executable's `main.cpp` is then a six-line stub that
-imports `Saffron.EditorApp` and calls `runEditor`.
+That keeps the graph acyclic. The host executable's `main.cpp` is then a six-line stub that
+imports `Saffron.Host` and calls `runHost`.
 
 > [!NOTE]
-> `Saffron.EditorApp` exists only because `Control → Editor` already holds. The editor-app glue
-> needs both, so it lives in a module above both rather than inside `Editor`, which would cycle.
+> `Saffron.Host` exists only because `Control → SceneEdit` already holds. The host glue
+> needs both, so it lives in a module above both rather than inside `SceneEdit`, which would cycle.
 
 ## In the code
 
@@ -103,8 +103,8 @@ imports `Saffron.EditorApp` and calls `runEditor`.
 | Module list + order | `engine/CMakeLists.txt` | `FILE_SET CXX_MODULES FILES` |
 | Root module | `core.cppm` | `export module Saffron.Core;` |
 | Re-exported partitions | `renderer.cppm` | `export import :RenderGraph;`, `export import :Types;` |
-| Top-of-graph glue | `editor_app.cppm` | `export module Saffron.EditorApp;`, `runEditor` |
-| Thin entry point | `editor/source/main.cpp` | `import Saffron.EditorApp;`, `se::runEditor` |
+| Top-of-graph glue | `host.cppm` | `export module Saffron.Host;`, `runHost` |
+| Thin entry point | `engine/source/main.cpp` | `import Saffron.Host;`, `se::runHost` |
 
 ## Related
 - [Module partitions](../module-partitions/) — how `Saffron.Rendering` is split internally

@@ -11,7 +11,7 @@ engine starts.
 
 ## Build-time compile
 
-The shader sources live under `editor/assets/shaders/`, one file per pass (`mesh.slang`,
+The shader sources live under `engine/assets/shaders/`, one file per pass (`mesh.slang`,
 `light_cull.slang`, `gtao.slang`, `taa.slang`, and so on). The CMake function
 `saffron_compile_shaders(target, src_dir, out_dir)` globs every `*.slang`, runs `slangc` on each,
 and makes the target depend on the results:
@@ -30,7 +30,7 @@ add_custom_command(
 The editor wires it up so the shaders build alongside the executable and land in `bin/shaders/`:
 
 ```cmake
-saffron_compile_shaders(SaffronEditor
+saffron_compile_shaders(SaffronEngine
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
     ${SAFFRON_RUNTIME_DIR}/shaders)
 ```
@@ -59,8 +59,8 @@ so the fetch is a no-op after the first configure.
 |---|---|---|
 | The compile function | `cmake/CompileShaders.cmake` | `saffron_compile_shaders`, the `slangc` flags |
 | Locating the compiler | `cmake/Slang.cmake` | `SAFFRON_SLANGC`, `SAFFRON_SLANG_VERSION` |
-| Wiring it to the build | `editor/CMakeLists.txt` | `saffron_compile_shaders(SaffronEditor ...)` |
-| The shader sources | `editor/assets/shaders/` | `mesh.slang`, `light_cull.slang`, `taa.slang`, … |
+| Wiring it to the build | `engine/CMakeLists.txt` | `saffron_compile_shaders(SaffronEngine ...)` |
+| The shader sources | `engine/assets/shaders/` | `mesh.slang`, `light_cull.slang`, `taa.slang`, … |
 
 ## Related
 - [Build environment](../build-environment/) — where `slangc` runs (the toolbox)

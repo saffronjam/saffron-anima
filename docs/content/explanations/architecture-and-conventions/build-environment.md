@@ -23,7 +23,7 @@ toolbox run -c saffron-build bash -lc '
   cd /var/home/saffronjam/repos/SaffronEngine
   cmake --preset debug            # first time / after CMake changes
   cmake --build build/debug -j1   # -j1 on purpose, see below
-  ./build/debug/bin/SaffronEditor
+  ./build/debug/bin/SaffronEngine
 '
 ```
 
@@ -39,7 +39,7 @@ and validation. Hardware acceleration needs `mesa-vulkan-drivers` installed in t
 For headless or automated verification, bound the run so it exits on its own:
 
 ```sh
-SAFFRON_EXIT_AFTER_FRAMES=5 ./build/debug/bin/SaffronEditor
+SAFFRON_EXIT_AFTER_FRAMES=5 ./build/debug/bin/SaffronEngine
 ```
 
 ## Why -j1
