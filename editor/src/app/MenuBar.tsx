@@ -13,7 +13,7 @@
 /// popovers in the side docks.
 import { useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { client, type EntityPreset } from "../control/client";
+import { client, type EntityPreset, type ProjectInfo } from "../control/client";
 import { useEditorStore } from "../state/store";
 import { CREATE_PRESETS } from "./CreateMenu";
 import {
@@ -27,7 +27,9 @@ import {
 
 const JSON_FILTER = [{ name: "Saffron Project / Scene", extensions: ["json"] }];
 const MODEL_FILTER = [{ name: "Models", extensions: ["gltf", "glb", "obj", "smesh"] }];
-const TEXTURE_FILTER = [{ name: "Images", extensions: ["png", "jpg", "jpeg", "hdr", "tga", "bmp"] }];
+const TEXTURE_FILTER = [
+  { name: "Images", extensions: ["png", "jpg", "jpeg", "hdr", "tga", "bmp"] },
+];
 const PNG_FILTER = [{ name: "PNG image", extensions: ["png"] }];
 
 export function MenuBar() {
@@ -35,6 +37,8 @@ export function MenuBar() {
   const selectEntity = useEditorStore((s) => s.selectEntity);
   const refreshAssets = useEditorStore((s) => s.refreshAssets);
   const resetSceneState = useEditorStore((s) => s.resetSceneState);
+  const setProject = useEditorStore((s) => s.setProject);
+  const project = useEditorStore((s) => s.project);
   const [status, setStatus] = useState<string | null>(null);
 
   const ready = phase === "ready";
@@ -48,12 +52,25 @@ export function MenuBar() {
   };
 
   const saveProject = async (): Promise<void> => {
-    const path = await save({ defaultPath: "project.json", filters: JSON_FILTER });
+    try {
+      const res = await client.saveProject();
+      setProject(res);
+      await rememberProject(res);
+      flash(`Saved project → ${res.path}`);
+    } catch (err) {
+      flash(`Save project failed: ${errorText(err)}`);
+    }
+  };
+
+  const saveProjectAs = async (): Promise<void> => {
+    const path = await save({ defaultPath: project?.path ?? "project.json", filters: JSON_FILTER });
     if (!path) {
       return;
     }
     try {
       const res = await client.saveProject(path);
+      setProject(res);
+      await rememberProject(res);
       flash(`Saved project → ${res.path}`);
     } catch (err) {
       flash(`Save project failed: ${errorText(err)}`);
@@ -66,10 +83,28 @@ export function MenuBar() {
       return;
     }
     try {
-      const res = await client.loadProject(selection);
+      const res = await client.openProject(selection);
       // Mirror the engine's own reset: clear entities/selection/assets/env and let
       // the poll re-fetch against the loaded scene.
+      setProject(res);
       resetSceneState();
+      await rememberProject(res);
+      flash(`Loaded project ← ${res.path}`);
+    } catch (err) {
+      flash(`Load project failed: ${errorText(err)}`);
+    }
+  };
+
+  const openProjectFolder = async (): Promise<void> => {
+    const selection = await open({ directory: true, multiple: false });
+    if (typeof selection !== "string") {
+      return;
+    }
+    try {
+      const res = await client.openProject(selection);
+      setProject(res);
+      resetSceneState();
+      await rememberProject(res);
       flash(`Loaded project ← ${res.path}`);
     } catch (err) {
       flash(`Load project failed: ${errorText(err)}`);
@@ -161,8 +196,12 @@ export function MenuBar() {
             File
           </MenubarTrigger>
           <MenubarContent align="start" className="min-w-48">
-            <MenubarItem onSelect={() => void saveProject()}>Save Project…</MenubarItem>
-            <MenubarItem onSelect={() => void loadProject()}>Load Project…</MenubarItem>
+            <MenubarItem onSelect={() => void saveProject()}>Save Project</MenubarItem>
+            <MenubarItem onSelect={() => void saveProjectAs()}>Save Project As…</MenubarItem>
+            <MenubarItem onSelect={() => void loadProject()}>Open Project…</MenubarItem>
+            <MenubarItem onSelect={() => void openProjectFolder()}>
+              Open Project Folder…
+            </MenubarItem>
             <MenubarItem onSelect={() => void saveScene()}>Save Scene…</MenubarItem>
             <MenubarItem onSelect={() => void loadScene()}>Load Scene…</MenubarItem>
             <MenubarSeparator />
@@ -207,4 +246,13 @@ function errorText(err: unknown): string {
     return err.message;
   }
   return String(err);
+}
+
+async function rememberProject(project: ProjectInfo): Promise<void> {
+  await client.rememberRecentProject({
+    path: project.path,
+    name: project.name,
+    displayName: project.displayName,
+    lastOpenedAt: new Date().toISOString(),
+  });
 }

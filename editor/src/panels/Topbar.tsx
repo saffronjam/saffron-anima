@@ -7,11 +7,7 @@ import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
 import type { GizmoState } from "../protocol";
 import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type GizmoOp = GizmoState["op"];
 type GizmoSpace = GizmoState["space"];
@@ -20,6 +16,7 @@ export function Topbar() {
   const phase = useEditorStore((s) => s.engineStatus.phase);
   const gizmo = useEditorStore((s) => s.gizmo);
   const setGizmo = useEditorStore((s) => s.setGizmo);
+  const project = useEditorStore((s) => s.project);
 
   const ready = phase === "ready";
 
@@ -34,7 +31,12 @@ export function Topbar() {
 
   return (
     <header className="flex h-[38px] flex-none items-center justify-between border-b border-border bg-card px-3">
-      <div className="font-semibold tracking-tight">Saffron Editor</div>
+      <div className="flex min-w-0 items-baseline gap-2">
+        <span className="font-semibold tracking-tight">Saffron Editor</span>
+        {project ? (
+          <span className="truncate text-xs text-muted-foreground">{project.displayName}</span>
+        ) : null}
+      </div>
       <div className="flex items-center gap-2.5">
         <div
           className="flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5"
@@ -116,9 +118,7 @@ export function Topbar() {
           </Button>
         </div>
       </div>
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-        {phase}
-      </div>
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{phase}</div>
     </header>
   );
 }
