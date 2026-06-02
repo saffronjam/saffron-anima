@@ -118,8 +118,8 @@ namespace se
         }
         const se::f32 distance = glm::length(se::cameraPosition(cam) - transform.translation);
         const se::f32 axisLen = std::max(0.75f, distance * 0.22f);
-        const std::array<se::NativeGizmoHandle, 3> handles{
-            se::NativeGizmoHandle::X, se::NativeGizmoHandle::Y, se::NativeGizmoHandle::Z };
+        const std::array<se::NativeGizmoHandle, 3> handles{ se::NativeGizmoHandle::X, se::NativeGizmoHandle::Y,
+                                                            se::NativeGizmoHandle::Z };
         for (se::u32 i = 0; i < 3; i = i + 1)
         {
             const se::GizmoProjection end =
@@ -128,7 +128,8 @@ namespace se
             {
                 continue;
             }
-            addLine(vertices, origin.pixel, end.pixel, 5.0f, se::axisColor(handles[i], editor.nativeGizmo), width, height);
+            addLine(vertices, origin.pixel, end.pixel, 5.0f, se::axisColor(handles[i], editor.nativeGizmo), width,
+                    height);
             addBox(vertices, end.pixel, editor.nativeGizmo.mode == se::NativeGizmoMode::Scale ? 12.0f : 8.0f,
                    se::axisColor(handles[i], editor.nativeGizmo), width, height);
         }
@@ -141,7 +142,8 @@ namespace se
             };
             for (const auto& [handle, offset] : planes)
             {
-                const se::GizmoProjection center = se::viewportProject(cam, width, height, transform.translation + offset);
+                const se::GizmoProjection center =
+                    se::viewportProject(cam, width, height, transform.translation + offset);
                 if (center.visible)
                 {
                     addBox(vertices, center.pixel, 18.0f, se::axisColor(handle, editor.nativeGizmo), width, height);
@@ -169,8 +171,8 @@ namespace se
                         cam, width, height, transform.translation + (a * std::cos(t) + b * std::sin(t)) * radius);
                     if (i > 0 && prev.visible && cur.visible)
                     {
-                        addLine(vertices, prev.pixel, cur.pixel, 3.0f,
-                                se::axisColor(handles[axis], editor.nativeGizmo), width, height);
+                        addLine(vertices, prev.pixel, cur.pixel, 3.0f, se::axisColor(handles[axis], editor.nativeGizmo),
+                                width, height);
                     }
                     prev = cur;
                 }
@@ -186,8 +188,8 @@ namespace se
     // Colored screen-space glyphs for light/camera/empty entities (the overlay vertex
     // format has no UV/sampler, so the SVG billboards become solid glyphs): point = filled
     // warm box, spot = box + a short cone line along its direction, camera = box outline.
-    void buildSceneEditBillboards(se::SceneEditContext& editor, const se::CameraView& cam, se::u32 width, se::u32 height,
-                               std::vector<se::OverlayVertex>& vertices)
+    void buildSceneEditBillboards(se::SceneEditContext& editor, const se::CameraView& cam, se::u32 width,
+                                  se::u32 height, std::vector<se::OverlayVertex>& vertices)
     {
         if (width == 0 || height == 0)
         {
@@ -196,43 +198,67 @@ namespace se
         const glm::vec4 selectedColor{ 1.0f, 0.78f, 0.18f, 1.0f };
         const se::f32 half = 12.0f;
 
-        se::forEach<se::PointLightComponent>(editor.scene, [&](se::Entity e, se::PointLightComponent&)
-        {
-            if (!se::hasComponent<se::TransformComponent>(editor.scene, e)) { return; }
-            const glm::vec3 pos = se::getComponent<se::TransformComponent>(editor.scene, e).translation;
-            const se::GizmoProjection p = se::viewportProject(cam, width, height, pos);
-            if (!p.visible) { return; }
-            const bool sel = editor.selected.handle == e.handle;
-            addBox(vertices, p.pixel, half * 2.0f, sel ? selectedColor : glm::vec4{ 1.0f, 0.85f, 0.35f, 0.9f },
-                   width, height);
-        });
-        se::forEach<se::SpotLightComponent>(editor.scene, [&](se::Entity e, se::SpotLightComponent&)
-        {
-            if (!se::hasComponent<se::TransformComponent>(editor.scene, e)) { return; }
-            const se::TransformComponent& t = se::getComponent<se::TransformComponent>(editor.scene, e);
-            const se::GizmoProjection p = se::viewportProject(cam, width, height, t.translation);
-            if (!p.visible) { return; }
-            const bool sel = editor.selected.handle == e.handle;
-            const glm::vec4 color = sel ? selectedColor : glm::vec4{ 0.45f, 0.85f, 1.0f, 0.9f };
-            addBox(vertices, p.pixel, half * 2.0f, color, width, height);
-            // A short cone line along the spot's forward (-Z rotated by the transform).
-            const glm::vec3 forward = glm::quat(t.rotation) * glm::vec3{ 0.0f, 0.0f, -1.0f };
-            const se::GizmoProjection tip = se::viewportProject(cam, width, height, t.translation + forward * 0.6f);
-            if (tip.visible)
+        se::forEach<se::PointLightComponent>(
+            editor.scene,
+            [&](se::Entity e, se::PointLightComponent&)
             {
-                addLine(vertices, p.pixel, tip.pixel, 3.0f, color, width, height);
-            }
-        });
-        se::forEach<se::CameraComponent>(editor.scene, [&](se::Entity e, se::CameraComponent&)
-        {
-            if (!se::hasComponent<se::TransformComponent>(editor.scene, e)) { return; }
-            const glm::vec3 pos = se::getComponent<se::TransformComponent>(editor.scene, e).translation;
-            const se::GizmoProjection p = se::viewportProject(cam, width, height, pos);
-            if (!p.visible) { return; }
-            const bool sel = editor.selected.handle == e.handle;
-            addBoxOutline(vertices, p.pixel, half * 2.2f, sel ? selectedColor : glm::vec4{ 0.85f, 0.85f, 0.9f, 0.9f },
-                          width, height);
-        });
+                if (!se::hasComponent<se::TransformComponent>(editor.scene, e))
+                {
+                    return;
+                }
+                const glm::vec3 pos = se::getComponent<se::TransformComponent>(editor.scene, e).translation;
+                const se::GizmoProjection p = se::viewportProject(cam, width, height, pos);
+                if (!p.visible)
+                {
+                    return;
+                }
+                const bool sel = editor.selected.handle == e.handle;
+                addBox(vertices, p.pixel, half * 2.0f, sel ? selectedColor : glm::vec4{ 1.0f, 0.85f, 0.35f, 0.9f },
+                       width, height);
+            });
+        se::forEach<se::SpotLightComponent>(
+            editor.scene,
+            [&](se::Entity e, se::SpotLightComponent&)
+            {
+                if (!se::hasComponent<se::TransformComponent>(editor.scene, e))
+                {
+                    return;
+                }
+                const se::TransformComponent& t = se::getComponent<se::TransformComponent>(editor.scene, e);
+                const se::GizmoProjection p = se::viewportProject(cam, width, height, t.translation);
+                if (!p.visible)
+                {
+                    return;
+                }
+                const bool sel = editor.selected.handle == e.handle;
+                const glm::vec4 color = sel ? selectedColor : glm::vec4{ 0.45f, 0.85f, 1.0f, 0.9f };
+                addBox(vertices, p.pixel, half * 2.0f, color, width, height);
+                // A short cone line along the spot's forward (-Z rotated by the transform).
+                const glm::vec3 forward = glm::quat(t.rotation) * glm::vec3{ 0.0f, 0.0f, -1.0f };
+                const se::GizmoProjection tip = se::viewportProject(cam, width, height, t.translation + forward * 0.6f);
+                if (tip.visible)
+                {
+                    addLine(vertices, p.pixel, tip.pixel, 3.0f, color, width, height);
+                }
+            });
+        se::forEach<se::CameraComponent>(
+            editor.scene,
+            [&](se::Entity e, se::CameraComponent&)
+            {
+                if (!se::hasComponent<se::TransformComponent>(editor.scene, e))
+                {
+                    return;
+                }
+                const glm::vec3 pos = se::getComponent<se::TransformComponent>(editor.scene, e).translation;
+                const se::GizmoProjection p = se::viewportProject(cam, width, height, pos);
+                if (!p.visible)
+                {
+                    return;
+                }
+                const bool sel = editor.selected.handle == e.handle;
+                addBoxOutline(vertices, p.pixel, half * 2.2f,
+                              sel ? selectedColor : glm::vec4{ 0.85f, 0.85f, 0.9f, 0.9f }, width, height);
+            });
     }
 
     // Builds the combined overlay (billboards first, gizmo on top) + submits it to the renderer.
@@ -278,7 +304,8 @@ namespace se
                 gizmo.dragging = true;
                 gizmo.startMouse = mouse;
                 gizmo.target = editor.selected;
-                se::TransformComponent& transform = se::getComponent<se::TransformComponent>(editor.scene, editor.selected);
+                se::TransformComponent& transform =
+                    se::getComponent<se::TransformComponent>(editor.scene, editor.selected);
                 gizmo.startTranslation = transform.translation;
                 gizmo.startRotation = transform.rotation;
                 gizmo.startScale = transform.scale;
@@ -333,47 +360,95 @@ export namespace se
             // present-only host renders no inspector, so no draw lambdas / thumbnails.
             se::registerBuiltinComponents(state->editor->registry);
 
-            // Auto-load project.json from the working directory if it exists; otherwise seed
-            // a default scene with a cube so a fresh checkout starts with something visible.
+            // Auto-load a selected project, then legacy root project.json; otherwise wait
+            // for the Tauri project picker to create/open one.
             constexpr const char* defaultProject = "project.json";
-            if (std::filesystem::exists(defaultProject))
+            auto applyProject = [state](const se::ProjectInfo& project)
             {
-                if (auto result = se::loadProject(state->assets, app.renderer,
-                        state->editor->registry, state->editor->scene, defaultProject))
+                state->editor->projectLoaded = project.loaded;
+                state->editor->projectRoot = project.root;
+                state->editor->projectPath = project.path;
+                state->editor->projectName = project.name;
+                state->editor->projectDisplayName = project.displayName;
+                state->editor->scenePath = project.path;
+            };
+            if (const char* selected = std::getenv("SAFFRON_PROJECT"); selected != nullptr && selected[0] != '\0')
+            {
+                se::ProjectInfo project;
+                se::Result<void> result = {};
+                if (se::validProjectName(selected) && !std::filesystem::exists(se::projectJsonPath(selected)))
                 {
-                    state->editor->scenePath = defaultProject;
+                    result = se::createProject(state->assets, app.renderer, state->editor->registry,
+                                               state->editor->scene, project, selected, "");
+                }
+                else
+                {
+                    result = se::loadProject(state->assets, app.renderer, state->editor->registry, state->editor->scene,
+                                             project, selected);
+                }
+                if (result)
+                {
+                    applyProject(project);
                 }
                 else
                 {
                     se::logError(result.error());
                 }
             }
-            else
+            else if (std::getenv("SAFFRON_AUTO_EMPTY_PROJECT") != nullptr)
             {
-                auto cube = se::importModel(state->assets, app.renderer, se::assetPath("models/cube.gltf"));
-                if (cube) { se::spawnModel(state->editor->scene, "Cube", *cube); }
-                else      { se::logError(cube.error()); }
+                se::ProjectInfo project;
+                if (auto result = se::createAutoEmptyProject(state->assets, app.renderer, state->editor->registry,
+                                                             state->editor->scene, project))
+                {
+                    applyProject(project);
+                }
+                else
+                {
+                    se::logError(result.error());
+                }
+            }
+            else if (std::filesystem::exists(defaultProject))
+            {
+                se::ProjectInfo project;
+                if (auto result = se::loadProject(state->assets, app.renderer, state->editor->registry,
+                                                  state->editor->scene, project, defaultProject))
+                {
+                    applyProject(project);
+                }
+                else
+                {
+                    se::logError(result.error());
+                }
             }
 
             // The native-viewport host has no hierarchy panel to select from; auto-select
             // the first mesh entity so the embedded viewport starts with something selected.
             se::Entity renderable{ entt::null };
             se::forEach<se::MeshComponent>(state->editor->scene,
-                [&renderable](se::Entity entity, se::MeshComponent&)
-                {
-                    if (renderable.handle == entt::null) { renderable = entity; }
-                });
-            if (renderable.handle != entt::null) { se::setSelection(*state->editor, renderable); }
+                                           [&renderable](se::Entity entity, se::MeshComponent&)
+                                           {
+                                               if (renderable.handle == entt::null)
+                                               {
+                                                   renderable = entity;
+                                               }
+                                           });
+            if (renderable.handle != entt::null)
+            {
+                se::setSelection(*state->editor, renderable);
+            }
 
             // Raw SDL pointer → overlay-gizmo hover/drag + mesh ray-pick. This works
             // only when the reparented child window actually receives mouse events; the
             // command-driven gizmo-pointer path is the robust fallback (control plane).
-            app.window.eventSinks.push_back([state, &app](const SDL_Event& event)
-            {
-                se::syncNativeGizmo(*state->editor);
-                const se::CameraView cam = se::sceneEditCameraView(state->editor->camera);
-                static_cast<void>(handleNativeGizmoPointer(*state->editor, state->assets, app.renderer, cam, event));
-            });
+            app.window.eventSinks.push_back(
+                [state, &app](const SDL_Event& event)
+                {
+                    se::syncNativeGizmo(*state->editor);
+                    const se::CameraView cam = se::sceneEditCameraView(state->editor->camera);
+                    static_cast<void>(
+                        handleNativeGizmoPointer(*state->editor, state->assets, app.renderer, cam, event));
+                });
 
             se::Layer layer;
             layer.name = "HostLayer";
@@ -407,15 +482,16 @@ export namespace se
             };
             se::attachLayer(app, std::move(layer));
 
-            app.window.onKeyPressed.subscribe([&app](se::i32 key, bool isRepeat)
-            {
-                static_cast<void>(isRepeat);
-                if (key == KeyEscape)
+            app.window.onKeyPressed.subscribe(
+                [&app](se::i32 key, bool isRepeat)
                 {
-                    app.window.shouldClose = true;
-                }
-                return false;
-            });
+                    static_cast<void>(isRepeat);
+                    if (key == KeyEscape)
+                    {
+                        app.window.shouldClose = true;
+                    }
+                    return false;
+                });
         };
 
         config.onExit = [state](se::App&)
