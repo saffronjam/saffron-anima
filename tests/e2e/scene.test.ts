@@ -1,0 +1,72 @@
+// Scene/entity operations, validated by READ-BACK through inspect/list/get — mutate, then
+// query and assert the observed state. Entities are addressed by NAME, not id: ids are u64
+// emitted as JSON numbers and the plain JSON.parse in the harness would corrupt ids > 2^53,
+// so name resolution is both safer here and a realistic client path.
+
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { Engine } from "./harness.ts";
+import type { EntityList } from "@saffron/protocol";
+
+let engine: Engine;
+beforeAll(async () => {
+  engine = await Engine.boot();
+});
+afterAll(async () => {
+  await engine?.shutdown();
+});
+
+const names = (list: EntityList) => list.entities.map((e) => e.name);
+
+test("create-entity appears in list-entities, destroy-entity removes it", async () => {
+  const name = "e2e-lifecycle";
+  await engine.call("create-entity", { args: [name] });
+  expect(names(await engine.call<EntityList>("list-entities"))).toContain(name);
+
+  await engine.call("destroy-entity", { entity: name });
+  expect(names(await engine.call<EntityList>("list-entities"))).not.toContain(name);
+});
+
+test("set-transform is observable via inspect", async () => {
+  const name = "e2e-xform";
+  await engine.call("create-entity", { args: [name] }); // createEntity adds a Transform
+  await engine.call("set-transform", { entity: name, translation: { x: 1.5, y: -2, z: 3.25 } });
+
+  const info = await engine.call<{ components: { Transform: { translation: Vec3 } } }>("inspect", {
+    entity: name,
+  });
+  expect(info.components.Transform.translation).toEqual({ x: 1.5, y: -2, z: 3.25 });
+});
+
+test("add-component / remove-component are observable via inspect", async () => {
+  const name = "e2e-components";
+  await engine.call("create-entity", { args: [name] });
+
+  await engine.call("add-component", { entity: name, component: "Material" });
+  let info = await engine.call<{ components: Record<string, unknown> }>("inspect", { entity: name });
+  expect(info.components).toHaveProperty("Material");
+
+  await engine.call("remove-component", { entity: name, component: "Material" });
+  info = await engine.call<{ components: Record<string, unknown> }>("inspect", { entity: name });
+  expect(info.components).not.toHaveProperty("Material");
+});
+
+test("set-gizmo round-trips through get-gizmo", async () => {
+  await engine.call("set-gizmo", { op: "rotate", space: "local" });
+  expect(await engine.call("get-gizmo")).toEqual({ op: "rotate", space: "local" });
+
+  await engine.call("set-gizmo", { op: "translate", space: "world" });
+  expect(await engine.call("get-gizmo")).toEqual({ op: "translate", space: "world" });
+});
+
+// Negative oracles: bad input must be REJECTED (ok:false), not silently accepted.
+test("invalid input is rejected, not silently accepted", async () => {
+  await expect(engine.call("set-aa", { args: ["nonsense"] })).rejects.toThrow();
+  await expect(engine.call("inspect", { entity: "does-not-exist" })).rejects.toThrow();
+  await expect(engine.call("set-exposure", { args: ["not-a-number"] })).rejects.toThrow();
+});
+
+interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
