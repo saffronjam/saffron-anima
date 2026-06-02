@@ -30,6 +30,7 @@ export interface Protocol {
   Mesh?: Mesh;
   Name?: Name;
   PointLight?: PointLight;
+  ProjectInfo?: ProjectInfo;
   RenderStats?: RenderStats;
   Selection?: Selection;
   SpotLight?: SpotLight;
@@ -278,6 +279,19 @@ export interface InspectResult {
   components: Components;
 }
 /**
+ * The active project state: whether a project is loaded plus its root, project file path, stable name, and display name.
+ *
+ * This interface was referenced by `Protocol`'s JSON-Schema
+ * via the `definition` "ProjectInfo".
+ */
+export interface ProjectInfo {
+  loaded: boolean;
+  root: string;
+  path: string;
+  name: string;
+  displayName: string;
+}
+/**
  * Per-frame renderer statistics plus the active feature toggles.
  *
  * This interface was referenced by `Protocol`'s JSON-Schema
@@ -350,4 +364,9 @@ export interface CommandResultMap {
   "set-environment": Environment;
   "get-thumbnail": Thumbnail;
   "view-asset": Thumbnail;
+  "get-project": ProjectInfo;
+  "new-project": ProjectInfo;
+  "open-project": ProjectInfo;
+  "save-project": ProjectInfo;
+  "load-project": ProjectInfo;
 }

@@ -86,6 +86,11 @@ export interface CommandResultMap {
   "set-environment": Environment;
   "get-thumbnail": Thumbnail;
   "view-asset": Thumbnail;
+  "get-project": ProjectInfo;
+  "new-project": ProjectInfo;
+  "open-project": ProjectInfo;
+  "save-project": ProjectInfo;
+  "load-project": ProjectInfo;
 }
 `;
 
