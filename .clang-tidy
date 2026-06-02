@@ -1,0 +1,22 @@
+# SaffronEngine clang-tidy: bug-focused, tuned to the Go-flavored C++ style in
+# CONVENTIONS.md. Run via `make lint` (run-clang-tidy -p build/debug). Checks that
+# fight the conventions (public-field structs, leading `void`, no `[[nodiscard]]`
+# noise) or that are notoriously noisy on Vulkan code are disabled.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  performance-*,
+  clang-analyzer-*,
+  misc-*,
+  -misc-no-recursion,
+  -misc-non-private-member-variables-in-classes,
+  -misc-include-cleaner,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-use-nodiscard
+
+# Only diagnose our own headers; skip the std module and vendored third-party.
+HeaderFilterRegex: '(engine/source|tools/se)'
+WarningsAsErrors: ''
+FormatStyle: file
