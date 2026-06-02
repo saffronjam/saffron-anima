@@ -12,7 +12,8 @@
 // toolbox without a network/`bun install`. The engine needs a display to open its swapchain;
 // run this under a compositor, e.g. weston headless with WAYLAND_DISPLAY + SDL_VIDEODRIVER.
 
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import net from 'node:net'
@@ -22,6 +23,7 @@ const REPO = join(HERE, '..', '..')
 const SCHEMA_DIR = join(REPO, 'schemas', 'control')
 const ENGINE = process.env.SAFFRON_ENGINE_BIN ?? join(REPO, 'build', 'debug', 'bin', 'SaffronEngine')
 const SOCK = process.env.SAFFRON_CONTROL_SOCK ?? `/tmp/saffron-contract-${process.pid}.sock`
+const APPDATA = process.env.SAFFRON_APPDATA_DIR ?? mkdtempSync(join(tmpdir(), 'saffron-contract-appdata.'))
 
 // ---- compact JSON Schema (subset) validator ---------------------------------
 const schemaCache = new Map<string, any>()
@@ -109,9 +111,17 @@ function firstResultId(raw: string): string | undefined {
 // ---- run ---------------------------------------------------------------------
 async function main(): Promise<number> {
   if (!existsSync(ENGINE)) { console.error(`engine binary not found: ${ENGINE}`); return 2 }
-  // cwd = this dir (no project.json) so the engine seeds its default cube → a mesh asset
-  // exists for the get-thumbnail fixture.
-  const proc = Bun.spawn([ENGINE], { cwd: HERE, env: { ...process.env, SAFFRON_CONTROL_SOCK: SOCK }, stdout: 'ignore', stderr: 'ignore' })
+  const proc = Bun.spawn([ENGINE], {
+    cwd: HERE,
+    env: {
+      ...process.env,
+      SAFFRON_CONTROL_SOCK: SOCK,
+      SAFFRON_APPDATA_DIR: APPDATA,
+      SAFFRON_AUTO_EMPTY_PROJECT: '1',
+    },
+    stdout: 'ignore',
+    stderr: 'ignore',
+  })
 
   // Wait for the socket to bind (the engine must reach its first frame).
   let up = false
@@ -138,6 +148,8 @@ async function main(): Promise<number> {
     // bytes as strings (never JSON.parse'd into a lossy JS number).
     const cubeRaw = await expect('add-entity', { preset: 'cube' }, 'entity-ref.schema.json')
     const cubeId = cubeRaw ? firstResultId(cubeRaw) : undefined
+    await expect('get-project', {}, 'project-info.schema.json')
+    await expect('save-project', {}, 'project-info.schema.json')
     await expect('list-entities', {}, 'entity-list.schema.json')
     await expect('get-selection', {}, 'selection.schema.json')
     if (cubeId !== undefined) {
@@ -154,6 +166,9 @@ async function main(): Promise<number> {
     const meshId = assetsRaw ? firstResultId(assetsRaw) : undefined  // seeded catalog = the cube mesh
     if (meshId) await expect('get-thumbnail', { asset: meshId }, 'thumbnail.schema.json')
     else errors.push('list-assets: no mesh asset to thumbnail')
+    const second = `contract-second-${process.pid}`
+    await expect('new-project', { name: second, displayName: 'Contract Second Project' }, 'project-info.schema.json')
+    await expect('open-project', { path: second }, 'project-info.schema.json')
 
     // The error envelope: a bad command must come back ok:false with a string error.
     const bad = await call('definitely-not-a-command')
@@ -164,6 +179,7 @@ async function main(): Promise<number> {
     await call('quit').catch(() => {})
   } finally {
     proc.kill()
+    if (process.env.SAFFRON_APPDATA_DIR === undefined) rmSync(APPDATA, { recursive: true, force: true })
   }
 
   for (const c of checked) console.log(`  ok  ${c}`)

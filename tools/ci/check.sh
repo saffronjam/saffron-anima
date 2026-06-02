@@ -31,6 +31,9 @@ step "engine present-only smoke (bounded, headless)"
 step "control schema contract test (live se output vs schemas/control)"
 ( cd "$REPO/tools/check-control-schema" && bun run check.ts ) || fail=1
 
+step "project startup and asset layout smoke"
+( "$REPO/tools/check-projects/check.sh" ) || fail=1
+
 step "frontend: gen @saffron/protocol + tsc --noEmit + vite build"
 ( cd "$REPO/editor" && bun run build ) || fail=1
 
