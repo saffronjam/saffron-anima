@@ -5,10 +5,14 @@ weight = 4
 
 # Image decoding
 
-Textures arrive as encoded PNG or JPG bytes: a file on disk, an external image referenced
-by a model, or bytes embedded inside a glTF. `decodeImage` and `decodeImageFromMemory` turn
-any of those into tightly packed RGBA8 pixels through stb_image, the only form the GPU
-upload path accepts.
+Image decoding turns encoded image bytes — PNG or JPG — into raw, tightly packed RGBA8
+pixels. A GPU sampler reads uncompressed pixels in a fixed format, so an encoded file must be
+decoded before it can become a texture.
+
+Encoded textures reach the engine from several sources: a file on disk, an external image
+referenced by a model, or bytes embedded inside a glTF. `decodeImage` and
+`decodeImageFromMemory` normalize all of them into the single shape the upload path accepts,
+using stb_image.
 
 ## One output shape
 
@@ -30,12 +34,15 @@ path assume a single format.
 
 ## File versus memory
 
-The two entry points differ only in where stb_image reads from. `decodeImage` reads a path,
-used when resolving a copied texture file out of the asset directory.
-`decodeImageFromMemory` decodes a byte vector, used for the albedo bytes the
-[importer](../gltf-and-obj-import/) carried out of a glTF buffer view or an external file.
+The two entry points differ only in where stb_image reads from:
+
+- `decodeImage` reads a path, used when resolving a copied texture file out of the asset
+  directory.
+- `decodeImageFromMemory` decodes a byte vector, used for the albedo bytes the
+  [importer](../gltf-and-obj-import/) carried out of a glTF buffer view or an external file.
+
 Both copy the decoded pixels into the `rgba` vector and immediately `stbi_image_free` the
-stb buffer, so ownership is the `std::vector`. A decode failure becomes an `Err`. The
+stb buffer, so the `std::vector` owns the result. A decode failure becomes an `Err`. The
 channel count stb reports is ignored, since the forced `STBI_rgb_alpha` already normalized
 it.
 
@@ -45,7 +52,7 @@ Decoding is half of a texture import. The [asset server](../asset-server-and-cat
 passes the decoded RGBA8 to `uploadTexture` with a trailing `true` that requests an sRGB
 format. Albedo is authored in sRGB and must be sampled with hardware sRGB-to-linear
 conversion so the [BRDF](../../lighting-and-brdf/cook-torrance-brdf/) sees linear color. The
-decode itself is format-agnostic; the sRGB decision is made at upload, not here.
+decode itself is format-agnostic; the sRGB decision belongs to the upload step, not here.
 
 ## In the code
 

@@ -5,9 +5,12 @@ weight = 1
 
 # Vertex layout
 
-Every importer converts into one CPU-side type, `Mesh`, and every vertex is the same
-32-byte struct. Fixing both up front lets a single mesh pipeline, a single `.smesh`
-on-disk stride, and a single upload path serve glTF and OBJ alike.
+A vertex layout is the fixed memory format of a single mesh vertex: which attributes it
+carries, in what order, and at what total stride. Saffron uses one CPU-side mesh type,
+`Mesh`, and one 32-byte vertex struct for every importer.
+
+A single fixed layout lets one mesh pipeline, one `.smesh` on-disk stride, and one upload
+path serve glTF and OBJ alike. The format is the same in memory, on disk, and on the GPU.
 
 ## The vertex
 
@@ -26,11 +29,11 @@ static_assert(sizeof(Vertex) == 32, "Vertex must stay 32 bytes (the .smesh on-di
 The `static_assert` is load-bearing. The [`.smesh` format](../smesh-format/) writes the
 vertex array as a raw byte blob and the loader reads it straight back, so the in-memory
 stride is the disk stride. Adding a member without bumping the format version would
-silently misalign every baked mesh on disk.
+misalign every baked mesh on disk.
 
-Tangents are deliberately absent (deferred to material time). Normal-mapped PBR will need
-a tangent basis, but that is a later phase, and adding it now would widen the stride for
-geometry that does not use it.
+Tangents are absent, deferred to material time. Normal-mapped PBR needs a tangent basis,
+but that is a later phase; adding it now would widen the stride for geometry that does not
+use it.
 
 ## Mesh and submeshes
 
@@ -67,9 +70,10 @@ shared array. Indices are 32-bit throughout, and the loader rejects any file who
 
 ## Why submeshes
 
-Submeshes let one logical model carry several draw ranges over shared buffers. The draw
-path loops every batch's `mesh->submeshes` and issues one `drawIndexed` per submesh, so a
-model with three glTF primitives becomes three draw calls against one bound buffer pair.
+A submesh is one `drawIndexed` call's worth of arguments over the mesh's shared buffers, so
+one logical model can carry several draw ranges. The draw path loops every batch's
+`mesh->submeshes` and issues one `drawIndexed` per submesh. A model with three glTF
+primitives becomes three draw calls against one bound buffer pair.
 
 A submesh does not select a material. `materialSlot` is reserved at 0 and the draw path
 ignores it; material comes from the per-entity

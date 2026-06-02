@@ -5,10 +5,13 @@ weight = 3
 
 # .smesh format
 
-Importing a glTF or OBJ means parsing JSON or text, de-duplicating vertices, and maybe
-regenerating normals. `.smesh` is the baked result: a 64-byte header followed by three raw
-arrays, loaded by reading bytes straight into the vectors. A model is baked once on import,
-and every later load reads the `.smesh`.
+`.smesh` is a baked binary mesh format: a 64-byte header followed by three raw arrays of
+vertices, indices, and submeshes. A model is baked once on import, and every later load
+reads the `.smesh` directly.
+
+Importing a glTF or OBJ means parsing JSON or text, de-duplicating vertices, and possibly
+regenerating normals. The baked format moves that cost off the runtime path: a load reads
+the arrays straight into pre-sized vectors with no per-element decode.
 
 ## Layout
 
@@ -34,17 +37,17 @@ struct SMeshHeader
 static_assert(sizeof(SMeshHeader) == 64, "SMeshHeader must be exactly 64 bytes");
 ```
 
-The arrays are written as raw byte blobs, no per-element serialization. That works because
-`Vertex` and `Submesh` have [asserted fixed sizes](../mesh-and-vertex-layout/) (32 and 16
-bytes), so the in-memory layout is the on-disk layout. The header records `vertexStride`
-and `indexWidth` so the loader can reject a file written by an incompatible build.
+The arrays are written as raw byte blobs with no per-element serialization. `Vertex` and
+`Submesh` have [asserted fixed sizes](../mesh-and-vertex-layout/) (32 and 16 bytes), so the
+in-memory layout is the on-disk layout. The header records `vertexStride` and `indexWidth`
+so the loader can reject a file written by an incompatible build.
 
 ## Why a custom binary format
 
-The trade is import cost for load cost. The runtime path never re-parses glTF/OBJ; it does
-three contiguous reads into pre-sized vectors. The format is versioned
+The format trades import cost for load cost. The runtime path never re-parses glTF or OBJ;
+it does three contiguous reads into pre-sized vectors. The format is versioned
 (`MeshFormatVersion`, currently 1) so a layout change is detected rather than silently
-misread, and self-describing enough to validate without trusting the producer, which
+misread. It is also self-describing enough to validate without trusting the producer, which
 matters because a `.smesh` is read back as raw memory.
 
 ## Loading defensively
@@ -64,8 +67,8 @@ if (header.verticesOffset != sizeof(SMeshHeader) ||
 ```
 
 The checks run in order: file at least header-sized, magic `SMSH`, version match, stride
-and index-width match, then the layout-consistency block. Without it a malformed huge
-`vertexCount` would reach `resize()` and abort on a giant allocation. Rejecting the file as
+and index-width match, then the layout-consistency block. A malformed huge `vertexCount`
+would otherwise reach `resize()` and abort on a giant allocation. Rejecting the file as
 inconsistent or truncated first keeps a corrupt file from crashing the process.
 
 ## Self-test

@@ -5,11 +5,11 @@ weight = 10
 
 # Theme & fonts
 
-The editor's React UI is built with shadcn/ui (Radix primitives copied into the repo) on Tailwind CSS v4, not hand-rolled CSS. The dark `theme::` palette from the old engine survives — it is mapped one-to-one onto shadcn's CSS tokens, and the app is forced dark. The two fonts carry over too: Roboto for the chrome, Roboto Mono for data fields.
+A theme is the set of colors and fonts that gives every editor surface one consistent look. The editor's React UI is built with shadcn/ui (Radix primitives copied into the repo) on Tailwind CSS v4. Its dark palette and two fonts — Roboto for the chrome, Roboto Mono for data — are the engine's own, so the React editor reads identically to the C++ build.
 
 ## The palette as shadcn tokens
 
-shadcn styles every component from a small set of CSS custom properties (`--background`, `--primary`, `--border`, …). The editor sets those variables to the engine's exact theme hexes, so the React UI reads as the same dark editor the C++ build did:
+shadcn styles every component from a small set of CSS custom properties (`--background`, `--primary`, `--border`, …). The editor sets those variables to the engine's theme hexes, so the React UI carries the same dark palette:
 
 ```css
 :root {
@@ -25,22 +25,22 @@ shadcn styles every component from a small set of CSS custom properties (`--back
 }
 ```
 
-`index.html` pins `class="dark"` on `<html>` and the same hexes drive both `:root` and `.dark`, so there is no light mode to fall into — the editor runs in one known-modern webview, so a single forced-dark palette is all it needs. An `@theme inline` block re-exports each variable as a Tailwind color (`--color-background: var(--background)`) so utilities like `bg-background` and `border-border` resolve to the palette.
+`index.html` pins `class="dark"` on `<html>`, and the same hexes drive both `:root` and `.dark`. The editor runs in one known webview, so a single forced-dark palette is all it needs and there is no light mode to fall into. An `@theme inline` block re-exports each variable as a Tailwind color (`--color-background: var(--background)`), so utilities like `bg-background` and `border-border` resolve to the palette.
 
 ## Two fonts, one monospace
 
-Data reads better in a monospace face, so the chrome uses Roboto and number/data fields use Roboto Mono — the same two TTFs the C++ editor loaded. Tauri runs offline (no font CDN), so both are bundled and declared with `@font-face`; Vite fingerprints the `.ttf` into the build:
+The chrome uses Roboto; number and data fields use Roboto Mono, which aligns digits in a column. Both are the TTFs the C++ editor loaded. Tauri runs offline with no font CDN, so both are bundled and declared with `@font-face`, and Vite fingerprints the `.ttf` into the build:
 
 ```css
 @font-face { font-family: "Roboto";      src: url("./assets/fonts/Roboto-Regular.ttf") format("truetype"); }
 @font-face { font-family: "Roboto Mono";  src: url("./assets/fonts/RobotoMono-Regular.ttf") format("truetype"); }
 ```
 
-`--font-sans` names Roboto and `--font-mono` names Roboto Mono. Chrome (labels, buttons, menus, hierarchy rows) uses `--font-sans`; data — the inspector number/vector/color inputs, the entity and asset names, the render-stats counters — uses `font-mono`, mirroring the old `uiMonoFont` rule.
+`--font-sans` names Roboto and `--font-mono` names Roboto Mono. Chrome — labels, buttons, menus, hierarchy rows — uses `--font-sans`. Data uses `font-mono`: the inspector number, vector, and color inputs, the entity and asset names, and the render-stats counters.
 
 ## Layout: a resizable dock
 
-The old ImGui DockBuilder default is reproduced with `react-resizable-panels` (shadcn's `resizable`): Hierarchy plus a tabbed Inspector/Environment/Stats column on the left, Assets along the bottom, [Viewport](../viewport-panel/) in the center. The split ratios mirror the DockBuilder splits (left 0.20, bottom 0.28, the left column split 0.45/0.55). The C++ editor floated Render Stats as its own window; tabbing it next to Inspector and Environment is the accepted parity choice and keeps every panel in a non-viewport region.
+The dock is reproduced with `react-resizable-panels` (shadcn's `resizable`): Hierarchy plus a tabbed Inspector/Environment/Stats column on the left, Assets along the bottom, [Viewport](../viewport-panel/) in the center. The split ratios are left 0.20, bottom 0.28, and a 0.45/0.55 split within the left column. Render Stats is tabbed next to Inspector and Environment, which keeps every panel in a non-viewport region.
 
 > [!NOTE]
 > Every panel, handle, and Radix portal lives outside the viewport rect on purpose. The reparented native window always paints over its rect, so the dock arrangement is also the occlusion strategy — see [the native bridge](../tauri-editor-and-x11-bridge/) page.

@@ -5,11 +5,14 @@ weight = 4
 
 # Component registry
 
-Three subsystems need to know things about a component: the serializer turns it to and from JSON,
-the editor draws and adds and removes it, and entity cloning copies it. The naive design routes
-all three through a central `switch (componentType)` that every new component edits. The registry
-replaces those switches with a table of closures. Registering a component is one call, and
-nothing central changes.
+A component registry is a runtime table that pairs each component type with the operations
+cross-cutting features perform on it: serialize, deserialize, add, remove, clone, and draw. Each
+entry is a row of closures, so a feature dispatches on a component without naming its type.
+
+Several subsystems need per-component knowledge. The serializer converts a component to and from
+JSON, the editor draws, adds, and removes it, and entity cloning copies it. A registry holds that
+knowledge in one place. Registering a component is a single call, and no central code changes when
+a new component is added.
 
 ## The itable
 
@@ -38,10 +41,10 @@ JSON string). Both map to the same row.
 
 ## Registering is one call
 
-`registerComponent<C>` takes the type, a name, and three closures: a draw function, a to-JSON,
-and a from-JSON. It synthesizes everything else from the existing generic component functions —
-`has`, `addDefault`, `remove`, `copyTo`, and the `Scene/Entity` adapters around
-`serialize`/`deserialize` are all generated.
+`registerComponent<C>` takes the type, a name, and three closures: a draw function, a to-JSON, and
+a from-JSON. It synthesizes everything else from the generic component functions. `has`,
+`addDefault`, `remove`, `copyTo`, and the `Scene/Entity` adapters around `serialize`/`deserialize`
+are all generated.
 
 ```cpp
 template <typename C>
@@ -53,7 +56,7 @@ void registerComponent(ComponentRegistry& reg, std::string name,
 ```
 
 The caller writes only the genuinely per-component parts: how it draws, and how its fields map to
-JSON. The `deserialize` closure adds the component (with defaults) before calling `fromJson`, so a
+JSON. The `deserialize` closure adds the component with defaults before calling `fromJson`, so a
 load never assumes the component already exists. All eight built-in components are registered this
 way in `editor_components.cpp`, one call each.
 
@@ -64,18 +67,18 @@ auto findById(const ComponentRegistry&, entt::id_type) -> const ComponentTraits*
 auto findByName(const ComponentRegistry&, const std::string&) -> const ComponentTraits*;
 ```
 
-Serialization walks `scene.registry.storage()`, gets each storage's id, and calls `findById` to
-discover what to write. Loading reads JSON keys and calls `findByName`. The two indexes are why
-the same table drives both the type-keyed and string-keyed paths.
+Serialization walks `scene.registry.storage()`, takes each storage's id, and calls `findById` to
+discover what to write. Loading reads JSON keys and calls `findByName`. The two indexes let one
+table drive both the type-keyed and string-keyed paths.
 
 ## Why closures, not entt::meta
 
-entt ships a reflection system (`entt::meta`) that could carry this data. The engine uses a
-hand-built struct-of-closures for the same reason the rest of the codebase avoids heavy
-machinery: a `std::function` table is plain, debuggable data you read top to bottom, and it keeps
-the per-component UI and JSON code next to the registration call rather than scattered across
-reflection attributes. The `drawInspector` field is even left opaque at the scene layer — its
-ImGui body is defined in the editor module — so `Saffron.Scene` never imports ImGui.
+entt ships a reflection system, `entt::meta`, that could carry this data. The engine uses a
+hand-built struct-of-closures for the reason the rest of the codebase avoids heavy machinery. A
+`std::function` table is plain, debuggable data read top to bottom, and it keeps the per-component
+UI and JSON code next to the registration call rather than scattered across reflection attributes.
+The `drawInspector` field stays opaque at the scene layer — its ImGui body is defined in the editor
+module — so `Saffron.Scene` never imports ImGui.
 
 > [!TIP]
 > The `name` string is a stable contract, not a display nicety. It is the JSON key on disk and

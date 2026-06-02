@@ -5,10 +5,13 @@ weight = 7
 
 # Picking
 
-Left-clicking in the viewport selects the entity under the cursor. `pickEntity` does it with a
-camera ray against each entity's world-space mesh AABB, returning the nearest hit (or a null
-entity, which deselects). It lives in `Saffron.Assets` because it needs the GPU mesh bounds the
-asset server caches.
+Picking maps a point on screen to the scene entity beneath it. A left-click in the viewport casts a
+ray from the camera through the cursor, tests it against each entity's world-space mesh bounds, and
+selects the nearest hit.
+
+The goal is "which object", not a pixel-exact silhouette. A bounding-box test answers that question
+cheaply and is robust enough for click selection. `pickEntity` lives in `Saffron.Assets` because it
+needs the GPU mesh bounds the asset server caches.
 
 ## From click to ray
 
@@ -26,10 +29,10 @@ const glm::vec3 origin = glm::vec3(nearH) / nearH.w;
 const glm::vec3 dir    = glm::normalize(glm::vec3(farH) / farH.w - origin);
 ```
 
-Two clip-space points at the same xy — one on the near plane (depth 0, the engine's
-`GLM_FORCE_DEPTH_ZERO_TO_ONE` convention) and one on the far plane (depth 1) — unproject to a
-world-space origin and direction. The flip and the matched depth range are why the ray lands
-where the pixel was drawn.
+Two clip-space points share the same xy: one on the near plane (depth 0, the engine's
+`GLM_FORCE_DEPTH_ZERO_TO_ONE` convention) and one on the far plane (depth 1). They unproject to a
+world-space origin and direction. Reusing the renderer's flip and depth range is what makes the ray
+land where the pixel was drawn.
 
 ## World AABB per entity
 
@@ -52,9 +55,9 @@ for (u32 corner = 0; corner < 8; corner = corner + 1)
 }
 ```
 
-Transforming eight corners is cheap and keeps the slab test in one coordinate system. The
-resulting box is axis-aligned in world space, so a rotated mesh gets a looser fit — fine for click
-selection, where the goal is "which object", not pixel-exact silhouettes.
+Transforming eight corners is cheap and keeps the slab test in one coordinate system. The resulting
+box is axis-aligned in world space, so a rotated mesh gets a looser fit. That is acceptable for
+click selection.
 
 ## The slab test
 
@@ -72,11 +75,11 @@ f32 t = tEnter;
 if (t < 0.0f) t = tExit;                       // origin inside the box
 ```
 
-`invDir` is `1.0f / dir`; an axis-aligned ray component gives an infinity there, which the
+`invDir` is `1.0f / dir`. An axis-aligned ray component produces an infinity there, which the
 `min`/`max` handle correctly, so no special-casing is needed. The intersection distance `t` is
 `tEnter`, or `tExit` when the camera is inside the box. The function keeps the smallest `t` across
-all entities, so the nearest object wins. A miss everywhere returns `Entity{ entt::null }`, and
-the caller clears the selection.
+all entities, so the nearest object wins. A miss everywhere returns `Entity{ entt::null }`, and the
+caller clears the selection.
 
 > [!TIP]
 > Picking depends on the AABB matching the flipped projection. The renderer applies

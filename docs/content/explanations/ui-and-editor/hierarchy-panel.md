@@ -5,17 +5,19 @@ weight = 5
 
 # Hierarchy panel
 
-The Hierarchy panel lists every entity in the scene and lets you create, copy, delete, and select them. It is a flat list (the scene has no parenting), and a pure render of the store's `entities` slice — the panel never fetches; the [reconcile poll](../selection/) keeps the list current, and the panel re-renders when it changes.
+The Hierarchy panel is the editor view that lists every entity in the scene and provides create, copy, delete, and select operations on them. The list is flat, since the scene has no parenting.
+
+The panel renders directly from the store's `entities` slice and never fetches on its own. The [reconcile poll](../selection/) keeps that slice current, and the panel re-renders whenever it changes.
 
 ## A render of the store
 
-The list comes from `store.entities`, which the reconcile poll refreshes only when `sceneVersion` changes. Each entity is a row; a left-click selects it, a right-click opens a Radix context menu with Copy and Delete. The header carries a Create dropdown ([the same preset list](#creating-entities) the menu bar uses).
+The list comes from `store.entities`, which the reconcile poll refreshes only when `sceneVersion` changes. Each entity is a row: a left-click selects it, a right-click opens a Radix context menu with Copy and Delete. The header carries a Create dropdown, [the same preset list](#creating-entities) the menu bar uses.
 
-Because the context menu and Create dropdown are Radix portals, they must render in a non-viewport region or they would be hidden behind the reparented native viewport window. The Hierarchy lives in the left dock, so its menus open over the sidebar and are never occluded.
+The context menu and Create dropdown are Radix portals, so they must render in a non-viewport region to avoid being hidden behind the reparented native viewport window. The Hierarchy lives in the left dock, so its menus open over the sidebar and are never occluded.
 
 ## Selection is optimistic
 
-Clicking a row sets the selection locally *and* tells the engine, so the row highlights without waiting a poll interval:
+Clicking a row sets the selection locally and tells the engine in the same step, so the row highlights without waiting a poll interval:
 
 ```ts
 const onSelect = (entity: EntityRef): void => {
@@ -28,11 +30,11 @@ The poll confirms via `selectionVersion`; the engine is authoritative if a newer
 
 ## Creating entities
 
-The Create dropdown maps menu labels to `add-entity` presets — Empty, Cube, Point/Spot/Directional Light, Camera. The engine spawns the entity, adds the right component, and auto-selects it, so on success the panel mirrors that selection locally and the `sceneVersion` bump refreshes the list. The C++ editor's `onCreateCube` indirection is gone: the engine resolves and uploads the cube mesh itself behind `add-entity cube`, because the editor and engine are the same process now.
+The Create dropdown maps menu labels to `add-entity` presets — Empty, Cube, Point/Spot/Directional Light, Camera. The engine spawns the entity, adds the right component, and auto-selects it. On success the panel mirrors that selection locally, and the `sceneVersion` bump refreshes the list. The engine resolves and uploads the cube mesh itself behind `add-entity cube`.
 
 ## Copy and delete
 
-Copy and delete go through the engine, so there is no in-process deferred-mutation dance — the commands are safe to call from a menu handler:
+Copy and delete go through the engine, so the commands are safe to call directly from a menu handler:
 
 ```ts
 const onCopy = (id) =>
@@ -44,9 +46,9 @@ const onDelete = (id) => {
 };
 ```
 
-`copy-entity` is a deep duplicate engine-side (every component, a fresh UUID) and selects the copy; the panel mirrors that selection and lets the `sceneVersion` bump refresh the list. `destroy-entity` clears the selection locally first if the deleted entity was selected, matching the engine's own clear-on-destroy.
+`copy-entity` is a deep duplicate on the engine side — every component, a fresh UUID — and selects the copy; the panel mirrors that selection and lets the `sceneVersion` bump refresh the list. `destroy-entity` clears the selection locally first when the deleted entity was selected, matching the engine's own clear-on-destroy.
 
-Rename is not inline here — it is the Inspector's `Name` field, the same as the old editor.
+Rename is not inline here; it lives in the Inspector's `Name` field.
 
 ## In the code
 

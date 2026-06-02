@@ -5,11 +5,16 @@ weight = 11
 
 # Mesh thumbnails
 
-A mesh in the [Assets panel](../assets-panel-and-thumbnails/) shows a small rendered 3/4 preview of itself, not a generic icon. `renderMeshThumbnail` draws the mesh once into a tiny offscreen image with a camera auto-framed to its bounds; the engine then reads that image back as a base64 PNG and the webview shows it as an `<img>`. The render is engine-side; the transport is the control socket.
+A mesh thumbnail is a small rendered 3/4 preview of an asset, drawn from the mesh itself rather than a
+generic icon. The mesh is rendered once into a tiny offscreen image with a camera auto-framed to its
+bounds, read back as a base64 PNG, and shown in the webview as an `<img>`. The render is engine-side;
+the transport is the control socket.
 
-## Auto-framing the mesh
+## How it works
 
-The preview camera is placed from the mesh's bounding box so any mesh fills the frame regardless of size. It finds the center and a bounding radius, then backs the camera off by the distance that fits that radius in the field of view:
+The preview camera is placed from the mesh's bounding box so any mesh fills the frame regardless of
+size. It finds the center and a bounding radius, then backs the camera off by the distance that fits
+that radius in the field of view:
 
 ```cpp
 const glm::vec3 center = (mesh->boundsMin + mesh->boundsMax) * 0.5f;
@@ -20,11 +25,18 @@ const f32 distance = radius / glm::tan(fovy * 0.5f) * 1.3f;
 const glm::vec3 eye = center + glm::normalize(glm::vec3(1.0f, 0.7f, 1.0f)) * distance;
 ```
 
-The eye offset `(1, 0.7, 1)` gives the canonical 3/4 view. The `1.3` factor leaves a margin so the mesh doesn't touch the edges, and the degenerate-radius guard keeps a flat or point mesh from putting the camera on top of it. Near/far planes are derived from the framing distance for a tight depth range, and the projection's Y is flipped to match the viewport convention so the thumbnail comes out upright.
+The eye offset `(1, 0.7, 1)` gives the canonical 3/4 view. The `1.3` factor leaves a margin so the
+mesh does not touch the edges, and the degenerate-radius guard keeps a flat or point mesh from putting
+the camera on top of it. Near and far planes are derived from the framing distance for a tight depth
+range, and the projection's Y is flipped to match the viewport convention so the thumbnail comes out
+upright.
 
 ## A one-shot render
 
-The thumbnail pipeline is deliberately bare: vertex position/normal/uv in, a two-matrix push constant (MVP and a normal matrix), no descriptor sets, no lighting, no materials. The mesh shows in a flat color. The image is rendered with a one-time-submit command buffer through dynamic rendering — clear to dark gray, draw each submesh, then transition to transfer-source for the readback:
+The thumbnail pipeline is deliberately bare: vertex position, normal, and uv in; a two-matrix push
+constant (MVP and a normal matrix); no descriptor sets, no lighting, no materials. The mesh shows in a
+flat color. The image is rendered with a one-time-submit command buffer through dynamic rendering —
+clear to dark gray, draw each submesh, then transition to transfer-source for the readback:
 
 ```cpp
 transitionImage(cmd, color.image, eUndefined, eColorAttachmentOptimal, ...);
@@ -38,13 +50,22 @@ for (const Submesh& submesh : mesh->submeshes)
 cmd.endRendering();
 ```
 
-This is synchronous — submit, then `waitIdle` — which is fine because thumbnails are built lazily and once, between frames on the [control-drain step, off the present path](../../tooling-and-control/asset-commands/). The pipeline is built on first use and cached on the renderer (`renderer.pipelines.thumbnail`), so the second thumbnail reuses it. A texture asset skips the render and copies its decoded image straight back.
+The render is synchronous — submit, then `waitIdle`. Thumbnails are built lazily and once, between
+frames on the [control-drain step, off the present path](../../tooling-and-control/asset-commands/),
+so the wait is acceptable. The pipeline is built on first use and cached on the renderer
+(`renderer.pipelines.thumbnail`), so the second thumbnail reuses it. A texture asset skips the render
+and copies its decoded image straight back.
 
 ## Across the socket as a PNG
 
-There is no shared GPU context with the webview, so the rendered image is read back into a host-visible staging buffer, encoded to a PNG in memory, and returned as base64 in the `get-thumbnail` result (`{format, size, base64}`). The Assets panel asks for 128px; the [View modal](../assets-panel-and-thumbnails/) re-renders at 512px through `view-asset`.
+There is no shared GPU context with the webview. The rendered image is read back into a host-visible
+staging buffer, encoded to a PNG in memory, and returned as base64 in the `get-thumbnail` result
+(`{format, size, base64}`). The [Assets panel](../assets-panel-and-thumbnails/) asks for 128px; the
+View modal re-renders at 512px through `view-asset`.
 
-The webview decodes the base64 to a `Blob`, makes an object URL, and caches it by asset id — so the readback runs once per asset, not once per tile or per frame. That [blob-URL cache](../assets-panel-and-thumbnails/) is where the size-reuse and de-dup live.
+The webview decodes the base64 to a `Blob`, makes an object URL, and caches it by asset id. The
+readback runs once per asset, not once per tile or per frame. That
+[blob-URL cache](../assets-panel-and-thumbnails/) is where the size-reuse and de-dup live.
 
 ## In the code
 

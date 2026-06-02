@@ -5,10 +5,14 @@ weight = 5
 
 # Serialization
 
-Saving and loading a scene is entirely registry-driven. There is no per-component code in the
-save/load path — it walks entt storage, asks the [component registry](../component-registry/)
-what each thing is, and dumps or restores it. The result is a JSON document that round-trips
-entities, their components, and their stable identities.
+Scene serialization converts a live entt scene into a JSON document and back, preserving every
+entity, its components, and its stable identity. The save and load paths are registry-driven: they
+hold no per-component code, instead walking entt storage and asking the
+[component registry](../component-registry/) what each thing is.
+
+This keeps the format open to extension. Adding a component to the registry makes it serializable
+without touching the save/load path, and the round-trip is symmetric — a document written by one
+build reads back into an equivalent scene.
 
 ## The document shape
 
@@ -32,12 +36,12 @@ map of component name to component JSON:
 
 `sceneToJson` returns the document without file IO, so it can be embedded inside the larger
 `project.json` (see [project serialization](../../geometry-and-assets/project-serialization/)).
-`writeScene`/`readScene` add the file layer on top.
+`writeScene` and `readScene` add the file layer on top.
 
 ## Serialize: walk storage, look up by id
 
-`serializeEntity` iterates the entity's storage sets, and for each one whose id the registry
-knows, calls that row's `serialize` closure:
+`serializeEntity` iterates the entity's storage sets and, for each one whose id the registry knows,
+calls that row's `serialize` closure:
 
 ```cpp
 for (auto&& [id, set] : scene.registry.storage())
@@ -49,15 +53,15 @@ for (auto&& [id, set] : scene.registry.storage())
 }
 ```
 
-A storage with no registered row is skipped silently — that is how `IdComponent` stays out of the
-`components` map (it is written as the top-level `id` instead). `sceneToJson` iterates
-`forEach<IdComponent>` so every entity with an identity gets an entry.
+A storage with no registered row is skipped silently. That is how `IdComponent` stays out of the
+`components` map — it is written as the top-level `id` instead. `sceneToJson` iterates
+`forEach<IdComponent>`, so every entity with an identity gets an entry.
 
 ## Deserialize: look up by name, add then fill
 
-`deserializeEntity` reads each JSON key, finds the row by name, and runs its `deserialize` closure
-(which adds the component with defaults if missing, then fills it from JSON). An unknown key logs
-a warning and is skipped rather than failing the load, so a file from a build with an extra
+`deserializeEntity` reads each JSON key, finds the row by name, and runs its `deserialize` closure.
+That closure adds the component with defaults if missing, then fills it from JSON. An unknown key
+logs a warning and is skipped rather than failing the load, so a file from a build with an extra
 component still opens. A parse failure inside a known component propagates as a
 [`Result` error](../../core-and-conventions/error-handling/) with the component name prefixed.
 
@@ -72,12 +76,12 @@ auto result = traits->deserialize(scene, entity, it.value());
 if (!result) return Err(std::format("{}: {}", it.key(), result.error()));
 ```
 
-## UUID stability is the whole point
+## UUID stability
 
-entt entity handles are recycled and not stable across runs, so they can never be the on-disk
-identity. Every serialized entity carries a [Uuid](../built-in-components/) in its `IdComponent`,
-and that is what gets written. The load path is deliberately not `createEntity` (which mints fresh
-Uuids); it preserves the stored ids:
+entt entity handles are recycled and not stable across runs, so they cannot serve as the on-disk
+identity. Every serialized entity instead carries a [Uuid](../built-in-components/) in its
+`IdComponent`, and that is what gets written. The load path does not call `createEntity`, which
+would mint fresh Uuids; it preserves the stored ids:
 
 ```cpp
 scene.registry.clear();
@@ -100,10 +104,10 @@ for (const nlohmann::json& entry : doc["entities"])
 ## Versioning
 
 The document carries `version` (`SceneVersion`, currently `1`). `sceneFromJson` rejects any other
-version up front rather than guessing at an old layout. Bumping the version is how a breaking
-layout change announces itself. A headless `runSceneSerializationSelfTest` registers Name +
-Transform, builds a two-entity scene, writes and reads it back, and confirms the cube's
-translation survived — a round-trip smoke test with no GPU.
+version up front rather than guessing at an old layout. Bumping the version announces a breaking
+layout change. A headless `runSceneSerializationSelfTest` registers Name and Transform, builds a
+two-entity scene, writes and reads it back, and confirms the cube's translation survived — a
+round-trip smoke test with no GPU.
 
 > [!WARNING]
 > nlohmann/json is compiled `JSON_NOEXCEPTION`, which turns a would-be throw into `std::abort`.

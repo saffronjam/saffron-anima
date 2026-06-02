@@ -5,11 +5,13 @@ weight = 1
 
 # ECS architecture
 
-An ECS keeps game state as plain data in tight storage and runs logic as functions over that
-data, which suits a renderer that walks thousands of objects per frame. SaffronEngine uses entt
-for the storage but drops the usual member-function ergonomics: there is no `Entity` class with
-methods, no `Scene` class hiding the registry. The world is a struct you pass around, and
-everything you do to it is a free function.
+An entity-component-system (ECS) is a data-oriented architecture: game state is plain data in tight
+storage, entities are identifiers that group components, and logic runs as functions over that data.
+The layout suits a renderer that walks thousands of objects per frame.
+
+SaffronEngine builds its scene on entt for the storage and discards the usual member-function
+ergonomics. There is no `Entity` class with methods and no `Scene` class hiding the registry. The
+world is a struct passed by reference, and every operation on it is a free function.
 
 ## The world is a struct
 
@@ -28,7 +30,7 @@ struct Scene
 struct Entity { entt::entity handle = entt::null; };
 ```
 
-The scene is always passed explicitly. This is the Go habit of passing the world rather than
+The scene is always passed explicitly, following the Go habit of passing the world rather than
 reaching for `this`.
 
 ## Operations are free functions
@@ -51,8 +53,8 @@ template <typename C> void removeComponent(Scene&, Entity);
 
 ## Iteration: forEach over a view
 
-The one iteration primitive is `forEach`, a thin wrapper over an entt view. You list the
-component types you want and get a callback per matching entity:
+The one iteration primitive is `forEach`, a thin wrapper over an entt view. It takes the component
+types to match and runs a callback for each entity that carries all of them:
 
 ```cpp
 template <typename... C, typename Fn>
@@ -71,10 +73,10 @@ camera and invert its model matrix into a view.
 
 ## Why this shape
 
-entt already gives sparse-set storage, views, and grouping. Wrapping it in a class hierarchy
-would hide those and re-add the OOP the engine dropped. Keeping `Scene` a struct and operations
-free functions lets the same registry feed the renderer, the serializer, and the editor with
-none of them owning a privileged scene API. The per-component behavior lives in the
+entt already provides sparse-set storage, views, and grouping. A class hierarchy on top would hide
+those and reintroduce the OOP the engine avoids. Keeping `Scene` a struct and its operations free
+functions lets the same registry feed the renderer, the serializer, and the editor, with none of
+them owning a privileged scene API. Per-component behavior lives in the
 [component registry](../component-registry/), which is data, not inheritance.
 
 ## In the code

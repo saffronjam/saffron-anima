@@ -5,10 +5,20 @@ weight = 9
 
 # Project files
 
-A project is the asset catalog plus the scene, and both save to one file: `project.json`.
-`saveProject` writes them together, `loadProject` replaces them together, and a legacy
-two-file layout is migrated on first load. Tying them into one document means a saved
-project always has the catalog its scene's UUIDs resolve against.
+A project is the asset catalog and the scene serialized together into one file, `project.json`.
+A scene refers to its meshes and textures by UUID; the catalog is the table those UUIDs resolve
+against. Persisting both in one document guarantees that a saved project always carries the catalog
+its scene needs.
+
+`saveProject` writes the two halves together and `loadProject` replaces them together. A version
+field at the document root gates loading, and an older two-file layout is migrated on first read.
+
+## How it works
+
+A project save serializes three things into one JSON document: a version, the asset catalog, and
+the scene. The catalog half lists every asset by id, name, type, and path. The scene half is the
+registry-driven scene serializer. A load reverses this, after first making the GPU idle so the
+previous project's resources can be released safely.
 
 ## One document, two halves
 
@@ -26,15 +36,14 @@ auto saveProject(AssetServer& assets, ComponentRegistry& reg, Scene& scene,
 }
 ```
 
-`catalogToJson` serializes every `AssetEntry` as `{id, name, type, path}`, with the type
-written as a string (`"mesh"`/`"texture"`/`"other"`) so the file is readable and stable
-across enum reordering. `sceneToJson` is the registry-driven scene serializer. The document
-carries a `version` field checked on load; an unrecognized version is an `Err` rather than a
-best-effort parse.
+`catalogToJson` serializes every `AssetEntry` as `{id, name, type, path}`. The type is written
+as a string (`"mesh"`/`"texture"`/`"other"`), so the file stays readable and stable across enum
+reordering. `sceneToJson` is the registry-driven scene serializer. The `version` field is checked
+on load; an unrecognized version is an `Err` rather than a best-effort parse.
 
-Note what is not saved: the GPU caches and `AssetServer::root`. The catalog stores paths
-relative to the root, and the root is set when the server is created, so a project file is
-portable across machines as long as the asset directory travels with it.
+Two things are deliberately not saved: the GPU caches and `AssetServer::root`. The catalog stores
+paths relative to the root, and the root is set when the server is created. A project file is
+therefore portable across machines as long as the asset directory travels with it.
 
 ## Loading replaces both, after a device idle
 
@@ -47,17 +56,16 @@ return sceneFromJson(reg, scene, doc.value("scene", json::object()));
 ```
 
 The ordering matters. The GPU caches hold `Ref`s to meshes and textures the old project
-uploaded, and loading a new one must drop them. But a `Ref` dropping frees a `GpuMesh`,
-which frees Vulkan buffers that may still be referenced by a frame in flight. So
-`loadProject` calls `waitGpuIdle` first, then clears the caches, then swaps the catalog and
-scene. With the caches empty, the new scene's UUIDs re-resolve from the new catalog on the
-next `renderScene`, [uploading lazily](../asset-server-and-catalog/) as they are first
-drawn.
+uploaded, and loading a new one must drop them. Dropping a `Ref` frees a `GpuMesh`, which frees
+Vulkan buffers that may still be referenced by a frame in flight. So `loadProject` calls
+`waitGpuIdle` first, then clears the caches, then swaps the catalog and scene. With the caches
+empty, the new scene's UUIDs re-resolve from the new catalog on the next `renderScene`,
+[uploading lazily](../asset-server-and-catalog/) as they are first drawn.
 
 ## Legacy migration
 
-Before the unified document there was a separate `asset_registry.json` mapping id → path,
-with no names. `newAssetServer` migrates it on construction:
+An older `asset_registry.json` mapped id → path, with no names. `newAssetServer` migrates it on
+construction:
 
 ```cpp
 entry.id   = Uuid{ std::strtoull(it.key().c_str(), nullptr, 10) };
@@ -67,8 +75,8 @@ putAsset(assets.catalog, std::move(entry));
 ```
 
 The old file had no human names, so migration synthesizes one from each path's filename stem
-and dedups it with `uniqueName`. After migration the catalog lives in `project.json` like
-any other. The legacy file is read defensively: anything that is not a string entry under
+and dedups it with `uniqueName`. After migration the catalog lives in `project.json` like any
+other catalog. The legacy file is read defensively: anything that is not a string entry under
 `meshes`/`textures` is skipped.
 
 ## In the code

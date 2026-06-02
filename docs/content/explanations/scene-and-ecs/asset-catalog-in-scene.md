@@ -5,17 +5,20 @@ weight = 6
 
 # Asset catalog
 
-A `MeshComponent` or `MaterialComponent` references an asset by [Uuid](../scene-serialization/),
-not by name. The mapping from id to a human name and a file path is the `AssetCatalog`. It is
+An asset catalog maps each asset's stable id to a human name and a file path. Components reference
+assets by [Uuid](../scene-serialization/) rather than by name, so the catalog is what turns a
+stored id into something a person can read and a loader can open.
+
+The mapping lets the registry-driven inspector show asset names instead of raw ids. The catalog is
 defined in `Saffron.Scene` and owned by the
-[AssetServer](../../geometry-and-assets/asset-server-and-catalog/), but the `Scene` borrows a
-read-only pointer so the registry-driven inspector can show names instead of raw ids.
+[AssetServer](../../geometry-and-assets/asset-server-and-catalog/); the `Scene` borrows a read-only
+pointer to it.
 
 ## What the catalog holds
 
 Each entry maps an asset's stable id to a display name and the relative path of its baked
-`.smesh` or copied texture under the project's asset root. The catalog is a list of these plus an
-id index.
+`.smesh` or copied texture under the project's asset root. The catalog is a list of these entries
+plus an id index.
 
 ```cpp
 enum class AssetType { Mesh, Texture, Other };
@@ -35,8 +38,8 @@ struct AssetCatalog
 };
 ```
 
-This is a catalog, not a filesystem view — names are arbitrary, renameable UTF-8 labels, and two
-assets can share a base name (`uniqueName` disambiguates with " (2)", " (3)", …).
+This is a catalog, not a filesystem view. Names are arbitrary, renameable UTF-8 labels, and two
+assets can share a base name; `uniqueName` disambiguates with " (2)", " (3)", and so on.
 
 ## The helpers
 
@@ -49,17 +52,17 @@ auto renameAsset(AssetCatalog&, Uuid id, std::string name) -> bool;
 auto uniqueName(const AssetCatalog&, const std::string& base) -> std::string;
 ```
 
-`putAsset` is upsert: an existing id overwrites that entry, otherwise it appends and records the
+`putAsset` is an upsert: an existing id overwrites that entry, otherwise it appends and records the
 index. `findAsset` returns null on a miss, the usual optional-by-pointer convention.
 
 ## Why the scene only borrows it
 
-The pointer is `const` and not owned. The `AssetServer` owns the real catalog (it also owns the
-GPU caches keyed by the same ids); the editor sets `scene.catalog` to point at it each frame
-before drawing the inspector. The inspector's mesh and material pickers read the catalog through
-this borrow to turn a stored Uuid into a name in a combo box. Because the scene only borrows, the
-catalog is not part of scene serialization — it is serialized separately and travels with the
-scene inside the one [`project.json`](../../geometry-and-assets/project-serialization/).
+The pointer is `const` and not owned. The `AssetServer` owns the real catalog and the GPU caches
+keyed by the same ids; the editor sets `scene.catalog` to point at it each frame before drawing the
+inspector. The inspector's mesh and material pickers read the catalog through this borrow to turn a
+stored Uuid into a name in a combo box. Because the scene only borrows it, the catalog is not part
+of scene serialization. It is serialized separately and travels with the scene inside the one
+[`project.json`](../../geometry-and-assets/project-serialization/).
 
 > [!NOTE]
 > The borrow is set per-frame and can be null. Code that reads `scene.catalog` checks it first; a

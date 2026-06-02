@@ -5,7 +5,15 @@ weight = 9
 
 # Selection
 
-There is one selected entity at a time, and it lives in two places: the engine (authoritative) and the React store (a fast local mirror). You select by clicking a row in the [hierarchy](../hierarchy-panel/), clicking a light/camera billboard in the viewport, or ray-picking a mesh; clicking empty space deselects. The two stay in sync through a version-stamped poll, with optimistic local writes so the UI never feels a round-trip.
+Selection is the editor's notion of the one entity currently being edited. It exists in two places at once: the engine holds the authoritative value, and the React store keeps a fast local mirror.
+
+A user selects in three ways:
+
+- clicking a row in the [hierarchy](../hierarchy-panel/);
+- clicking a light or camera billboard in the viewport;
+- ray-picking a mesh.
+
+Clicking empty space deselects. The two copies stay in agreement through a version-stamped poll, and local writes apply optimistically, so the interface never waits on a round-trip to the engine.
 
 ## Optimistic select, then reconcile
 
@@ -16,7 +24,7 @@ selectEntity(id);                              // local highlight, no wait
 void client.selectEntity(id).catch(() => {});  // tell the engine
 ```
 
-The engine bumps a `selectionVersion` on every selection change (from `select`, `deselect`, `pick`, or a destroy that clears it). The reconcile poll reads `get-selection` each tick — it returns `{entity, selectionVersion, sceneVersion}` — and only re-applies the selection when the version or the selected id actually changed. So the common case (nothing changed) costs one cheap call, and an *external* change (e.g. `se select`) still propagates back into the store within a tick.
+The engine bumps a `selectionVersion` on every selection change, whether from `select`, `deselect`, `pick`, or a destroy that clears it. The reconcile poll reads `get-selection` each tick; it returns `{entity, selectionVersion, sceneVersion}`, and re-applies the selection only when the version or the selected id has changed. The common case (nothing changed) costs one cheap call, while an external change such as `se select` still propagates back into the store within a tick.
 
 ```ts
 const nextSelectedId = selection.entity ? selection.entity.id : null;
@@ -26,11 +34,11 @@ const selectionChanged =
 if (selectionChanged) live.setSelectedId(nextSelectedId);
 ```
 
-When the selection (or `sceneVersion`) changes, the poll re-`inspect`s the new entity into `componentsBySelected`, which is what the [inspector](../inspector/) renders. Writes are gated off while `dragActive`, so a gizmo or scrub drag in progress is never clobbered by a poll.
+When the selection or `sceneVersion` changes, the poll re-`inspect`s the new entity into `componentsBySelected`, which the [inspector](../inspector/) renders. Writes are gated off while `dragActive`, so a poll never clobbers a gizmo or scrub drag in progress.
 
 ## Picking in the viewport
 
-A plain left-click in the viewport (a press that doesn't travel far enough to be a [gizmo](../gizmo/) drag) is a ray-pick. The [viewport panel](../viewport-panel/) maps the click to `{u,v}` in `[0,1]` and calls `pick`:
+A plain left-click in the viewport is a ray-pick: a press that does not travel far enough to count as a [gizmo](../gizmo/) drag. The [viewport panel](../viewport-panel/) maps the click to `{u,v}` in `[0,1]` and calls `pick`:
 
 ```ts
 const result = await client.pick(u, v);
@@ -38,9 +46,9 @@ if (result.hit && result.id) setSelectedId(result.id);
 else setSelectedId(null);   // empty space deselects
 ```
 
-The engine builds a ray from the [editor camera](../editor-camera/) through that UV, tests billboards first then the nearest mesh AABB, selects the hit (bumping `selectionVersion`), and returns `{hit, id?, name?}`. A miss returns `{hit:false}` and deselects. The store update is optimistic; the reconcile poll confirms it via the version it just bumped.
+The engine builds a ray from the [editor camera](../editor-camera/) through that UV, tests billboards first then the nearest mesh AABB, selects the hit while bumping `selectionVersion`, and returns `{hit, id?, name?}`. A miss returns `{hit:false}` and deselects. The store update is optimistic, and the reconcile poll confirms it through the version it just bumped.
 
-The ray + AABB math and the Vulkan-clip caveat are covered in [Picking](../../scene-and-ecs/picking/). The click-vs-drag split (so a click on a gizmo handle drags rather than picks) lives in the viewport panel's pointer gesture.
+The ray and AABB math, along with the Vulkan-clip caveat, are covered in [Picking](../../scene-and-ecs/picking/). The click-versus-drag split, which makes a click on a gizmo handle drag rather than pick, lives in the viewport panel's pointer gesture.
 
 ## In the code
 

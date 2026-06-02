@@ -5,9 +5,11 @@ weight = 6
 
 # Inspector
 
-The Inspector shows the selected entity's components and lets you edit, add, and remove them. It is a React panel with no per-component code: it reads the live `inspect` result from the store and renders whatever components and fields the engine returned, picking a widget for each field by its value shape. A component added engine-side with `registerComponent` shows up here automatically, with a sensible widget even before it has an explicit hint.
+The Inspector is the editor panel for viewing and editing the components of the selected entity. It is data-driven: it holds no per-component code, rendering whatever components and fields the engine returns and choosing a widget for each field from its value shape.
 
-## Data-driven, no switch
+A component registered engine-side with `registerComponent` appears here automatically, with a sensible widget even before it has an explicit hint. The panel describes itself entirely from the live `inspect` result, so the editor and the engine never drift on what an entity holds.
+
+## How it works
 
 The panel reads `componentsBySelected` (the `inspect` result, kept fresh by the [reconcile poll](../selection/)) and iterates its `components` map. For each present component it draws a header and walks its fields, handing every `(component, field, value)` to `renderField`:
 
@@ -19,17 +21,23 @@ The panel reads `componentsBySelected` (the `inspect` result, kept fresh by the 
 ))}
 ```
 
-There is deliberately no `if (component === "Transform")` branch in the render path. Components draw in a canonical order (`Name`, `Transform`, `Mesh`, …) and any unknown component falls in after, but that is ordering only — never a render switch.
+The render path has no `if (component === "Transform")` branch. Components draw in a canonical order (`Name`, `Transform`, `Mesh`, …) and any unknown component falls in after, but that is ordering only, never a render switch.
 
 ## Picking a widget
 
-`renderField` resolves a field to a widget in three steps: (1) the explicit `FIELD_HINTS` table keyed `Component.field`, which mirrors the old C++ per-component widgets; else (2) the value's shape — `{x,y,z}`→vec3, `{x,y,z,w}`→vec4, number, boolean, string; else (3) a read-only text fallback so an unmapped field is still visible. The hint also carries min/max/step, slider-vs-drag, and the asset kind for uuid fields.
+`renderField` resolves a field to a widget in three steps:
 
-The one unit conversion lives at the widget boundary: `Transform.rotation` is **radians on the wire** but shown in **degrees**, driven by the hint's `convertRadians` flag. (SpotLight `innerAngle`/`outerAngle` are degrees on *both* sides — their `unit:"deg"` is just a label and clamp, no conversion.) Material's `baseColor`/`emissive` use color swatches; `metallic`/`roughness` are sliders; `albedoTexture` and `Mesh.mesh` are [asset pickers](../asset-pickers-and-drag-drop/).
+1. The explicit `FIELD_HINTS` table, keyed `Component.field`, which mirrors the C++ per-component widgets.
+2. The value's shape — `{x,y,z}`→vec3, `{x,y,z,w}`→vec4, number, boolean, string.
+3. A read-only text fallback, so an unmapped field is still visible.
+
+A hint also carries min/max/step, slider-vs-drag, and the asset kind for uuid fields.
+
+One unit conversion lives at the widget boundary. `Transform.rotation` is radians on the wire but shown in degrees, driven by the hint's `convertRadians` flag. SpotLight `innerAngle`/`outerAngle` are degrees on both sides, so their `unit:"deg"` is a label and clamp only, no conversion. Material's `baseColor`/`emissive` use color swatches, `metallic`/`roughness` are sliders, and `albedoTexture` and `Mesh.mesh` are [asset pickers](../asset-pickers-and-drag-drop/).
 
 ## Read-modify-write
 
-The engine's `set-component` rewrites the whole component (no merge), so a single-field edit builds the full DTO with that one field patched and sends the lot:
+The engine's `set-component` rewrites the whole component rather than merging, so a single-field edit builds the full DTO with that one field patched and sends the lot:
 
 ```ts
 const onFieldChange = (component, field, next) => {
@@ -40,13 +48,17 @@ const onFieldChange = (component, field, next) => {
 };
 ```
 
-`applyOptimisticComponent` overlays the change on the live inspect result so the widget updates without waiting a poll interval. High-frequency edits (drag a number, move a slider) funnel through a per-(component,field) coalescer, and the drag brackets flip `store.dragActive` so the reconcile poll won't overwrite the optimistic value mid-drag.
+`applyOptimisticComponent` overlays the change on the live inspect result so the widget updates without waiting a poll interval. High-frequency edits — dragging a number, moving a slider — funnel through a per-(component,field) coalescer, and the drag brackets flip `store.dragActive` so the reconcile poll will not overwrite the optimistic value mid-drag.
 
-A few fields skip the full-DTO write because the engine has merge helpers for them: `Transform` uses `set-transform` and `Material` uses `set-material` (send only the changed field); `Mesh.mesh` and `Material.albedoTexture` use the dedicated `assign-asset`; any other uuid field uses the single-field merge `set-component-field`.
+A few fields skip the full-DTO write because the engine offers merge helpers for them:
+
+- `Transform` uses `set-transform` and `Material` uses `set-material`, sending only the changed field.
+- `Mesh.mesh` and `Material.albedoTexture` use the dedicated `assign-asset`.
+- Any other uuid field uses the single-field merge `set-component-field`.
 
 ## Add and remove
 
-`add-component` and `remove-component` are guarded the same way the engine is. Remove only shows for removable components — `Name` and `Transform` are in `NON_REMOVABLE`, so the inspector won't strip an entity of its identity or place in the world. The **Add Component** dropdown lists every registered component the entity doesn't already have; selecting one calls `add-component`, and the new component appears on the next reconcile tick.
+`add-component` and `remove-component` are guarded the same way the engine guards them. Remove only shows for removable components: `Name` and `Transform` are in `NON_REMOVABLE`, so the inspector cannot strip an entity of its identity or place in the world. The Add Component dropdown lists every registered component the entity does not already have; selecting one calls `add-component`, and the new component appears on the next reconcile tick.
 
 ## In the code
 

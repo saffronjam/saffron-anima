@@ -5,12 +5,19 @@ weight = 6
 
 # Asset catalog
 
-The `AssetServer` is the project's single owner of assets: a named catalog that maps stable
-UUIDs to files on disk, plus two UUID-keyed GPU caches so entities sharing an asset upload
-it once. Components reference assets by `Uuid`, and the server turns a `Uuid` into a live
-`Ref<GpuMesh>` or `Ref<GpuTexture>`.
+An asset catalog is a named registry that maps stable UUIDs to files on disk, decoupling
+the assets a project references from where those files live. Components reference an asset
+by `Uuid`; the catalog resolves that id to a name, a type, and a relative path.
 
-## What it owns
+The catalog gives every asset an identity that survives renaming and moving its file. A
+scene stores a `Uuid` rather than a path, so editing the asset's location or display name
+never breaks the reference. Around the catalog sits the asset server, which turns a `Uuid`
+into a live GPU resource.
+
+## The server
+
+The `AssetServer` is the project's single owner of assets: the catalog plus two UUID-keyed
+GPU caches, so entities sharing an asset upload it once.
 
 ```cpp
 struct AssetServer
@@ -22,16 +29,16 @@ struct AssetServer
 };
 ```
 
-The catalog is the source of truth; the two maps are caches over it. The catalog says
-"asset 42 is a mesh at `meshes/42.smesh`", and the cache says "asset 42 is already uploaded,
-here is its `Ref`". `newAssetServer` creates the asset root with its `meshes/` and
-`textures/` subdirectories and migrates any legacy `asset_registry.json`. The catalog is
-normally populated by [loading a project](../project-serialization/).
+The catalog is the source of truth; the two maps are caches over it. The catalog records
+that asset 42 is a mesh at `meshes/42.smesh`; the cache records that asset 42 is already
+uploaded and holds its `Ref`. `newAssetServer` creates the asset root with its `meshes/`
+and `textures/` subdirectories and migrates any legacy `asset_registry.json`. The catalog
+is normally populated by [loading a project](../project-serialization/).
 
 ## The catalog
 
-The catalog lives in `Saffron.Scene`, not `Saffron.Assets`, because the registry-driven
-inspector needs to read it without depending on the renderer:
+The catalog is a named registry, not a filesystem view. Each entry pairs a human-facing
+name the user can rename with a separate on-disk path:
 
 ```cpp
 enum class AssetType { Mesh, Texture, Other };
@@ -51,16 +58,16 @@ struct AssetCatalog
 };
 ```
 
-It is a named registry, not a filesystem view. An entry has a human name the user can
-rename, separate from its on-disk path. `putAsset` inserts or replaces by id and keeps
-`byId` in sync; `findAsset` resolves an id to a `const AssetEntry*`; `uniqueName` appends
-` (2)`, ` (3)`, … so two imports of `cube.gltf` get distinct names. The `Scene` borrows a
-`const AssetCatalog*` so inspector pickers can read it without owning it.
+`putAsset` inserts or replaces by id and keeps `byId` in sync; `findAsset` resolves an id
+to a `const AssetEntry*`; `uniqueName` appends ` (2)`, ` (3)`, … so two imports of
+`cube.gltf` get distinct names. The catalog lives in `Saffron.Scene`, not `Saffron.Assets`,
+so the registry-driven inspector can read it without depending on the renderer; the `Scene`
+borrows a `const AssetCatalog*` for inspector pickers.
 
 ## Resolving an id to a GPU resource
 
-`loadMeshAsset` and `loadTextureAsset` are the resolve-on-demand front doors, sharing a
-three-step shape: check the cache; on a miss, look the id up in the catalog and load +
+`loadMeshAsset` and `loadTextureAsset` are the resolve-on-demand front doors. Both share a
+three-step shape: check the cache; on a miss, look the id up in the catalog and load and
 upload the file; cache the result.
 
 ```cpp
@@ -72,22 +79,22 @@ auto mesh = loadMesh(assets.root + "/" + entry->path);
 // ... uploadMesh, cache, return ...
 ```
 
-The cache means many entities referencing the same mesh trigger one `loadMesh` +
-[`uploadMesh`](../gpu-mesh-upload/); the rest are map hits. `renderScene` calls these once
-per entity per frame, so the caching keeps that cheap.
+The cache means many entities referencing the same mesh trigger one `loadMesh` and one
+[`uploadMesh`](../gpu-mesh-upload/); the rest are map hits. `renderScene` calls these
+resolvers once per entity per frame, so the caching keeps that cheap.
 
 ## Negative caching
 
-A failed load does not return null and forget. It stores a null `Ref` in the cache:
+A failed load stores a null `Ref` in the cache rather than returning null and forgetting:
 
 ```cpp
 assets.meshRefByUuid[id.value] = nullptr;  // a broken asset isn't retried + re-logged each frame
 ```
 
 On the next frame the lookup hits that null `Ref` and returns it immediately, without
-re-reading the broken file or re-logging. The entry being present, even holding null, marks
-that the asset has been tried. Because `renderScene` runs every frame, without this a
-missing or corrupt asset would spam the log and re-hit the disk 60 times a second.
+re-reading the broken file or re-logging. The entry's presence, even holding null, marks
+the asset as tried. Because `renderScene` runs every frame, this keeps a missing or corrupt
+asset from flooding the log and re-hitting the disk many times a second.
 
 ## In the code
 

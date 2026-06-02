@@ -5,7 +5,7 @@ weight = 4
 
 # Render commands
 
-The render commands flip renderer feature switches and read back the last frame's draw counters. Each is a thin shell over one renderer `set*`/`*Enabled` accessor, and each toggle returns the resolved state so a script can confirm what actually took effect.
+The render commands are control-plane commands that flip renderer feature switches and read back the last frame's draw counters. Each wraps one renderer `set*`/`*Enabled` accessor and returns the resolved state, so a script can confirm what actually took effect rather than what it requested.
 
 ## Liveness and stats
 
@@ -15,11 +15,11 @@ The render commands flip renderer feature switches and read back the last frame'
 | `help` | — | Lists every registered command with its one-line help (registry order). |
 | `render-stats` | — | Returns last frame's scene counters plus the state of every render feature. |
 
-`render-stats` is the broad read: draw calls, batches, instances, and a flag for each toggleable feature — `clustered`, `depthPrepass`, `shadows`, `ibl`, `ssao`, `contactShadows`, `ssgi`, `ddgi`, `rtSupported`, `rtShadows`, `restir`, `blasCount`, `pipelines`, `hdr`, `exposureEv`, and `aa`.
+`render-stats` is the broad read. It returns draw calls, batches, instances, and a flag for each toggleable feature: `clustered`, `depthPrepass`, `shadows`, `ibl`, `ssao`, `contactShadows`, `ssgi`, `ddgi`, `rtSupported`, `rtShadows`, `restir`, `blasCount`, `pipelines`, `hdr`, `exposureEv`, and `aa`.
 
 ## Feature toggles
 
-Most toggles take a `{0|1}` (also accepting `true`/`false`/`off`) and report back the boolean. A few take an enum string.
+Most toggles take a `{0|1}` (also accepting `true`/`false`/`off`) and report back the boolean. A few take an enum string instead.
 
 | Command | Params | Effect |
 |---|---|---|
@@ -38,16 +38,16 @@ Most toggles take a `{0|1}` (also accepting `true`/`false`/`off`) and report bac
 
 ## The toggle shape
 
-The boolean toggles share one parse block: a number is true when non-zero, a bool is itself, and a string is false only for `0`/`false`/`off`. Then they call the renderer setter and read the state straight back.
+The boolean toggles share one parse block: a number is true when non-zero, a bool is itself, and a string is false only for `0`/`false`/`off`. The command then calls the renderer setter and reads the state straight back.
 
 ```cpp
 setSsao(ctx.renderer, enabled);
 return json{ { "ssao", ssaoEnabled(ctx.renderer) } };
 ```
 
-Returning the queried state rather than the requested value is deliberate. A feature the hardware cannot provide reports its real result: ray-query shadows and ReSTIR both gate on `rtSupported(ctx.renderer)` up front and error if ray tracing is unavailable, so a script never silently believes it turned RT on. `set-aa` is the one enum toggle — it maps the mode string to a sample count plus `fxaa`/`taa` flags, rejects anything else, and returns the renderer's canonical `aaMode` string.
+Returning the queried state rather than the requested value is deliberate. A feature the hardware cannot provide reports its real result. Ray-query shadows and ReSTIR both gate on `rtSupported(ctx.renderer)` up front and error if ray tracing is unavailable, so a script never falsely believes it turned RT on. `set-aa` is the one enum toggle: it maps the mode string to a sample count plus `fxaa`/`taa` flags, rejects anything else, and returns the renderer's canonical `aaMode` string.
 
-The expectation is that a new render feature ships its `set*`/`*Enabled` pair *and* a matching command, so the editor stays drivable and visually debuggable via a [screenshot](../screenshots-and-capture/) after the toggle. `render-stats` is where each new flag surfaces.
+A new render feature ships its `set*`/`*Enabled` pair *and* a matching command, so the editor stays drivable and visually debuggable via a [screenshot](../screenshots-and-capture/) after the toggle. `render-stats` is where each new flag surfaces.
 
 ## In the code
 

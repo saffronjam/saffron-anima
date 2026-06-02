@@ -5,9 +5,9 @@ weight = 3
 
 # Scene commands
 
-The scene commands list, create, and edit entities in the running editor's scene. Anything that edits a component routes through that component's registered `serialize`/`deserialize`, so the wire shape is identical to a scene file — there is no second code path for "set this from the CLI".
+The scene commands are the control-plane verbs that list, create, and edit entities in the running editor's scene. Each edit routes through the target component's registered `serialize`/`deserialize`, so the wire shape is identical to a scene file. There is no separate code path for editing from the CLI.
 
-Most commands take an `{entity}` argument. `resolveEntity` accepts a UUID (number or numeric string) or a name; the UUID is tried first because it is stable across reloads. A miss returns an error, not a null entity.
+Most commands take an `{entity}` argument. `resolveEntity` accepts a UUID (number or numeric string) or a name, and tries the UUID first because it is stable across reloads. A miss returns an error, not a null entity.
 
 ## The commands
 
@@ -35,7 +35,7 @@ Most commands take an `{entity}` argument. `resolveEntity` accepts a UUID (numbe
 
 ## Presets
 
-`add-entity` takes a `preset` that names what to spawn, matching the editor's **Create** menu:
+`add-entity` takes a `preset` naming what to spawn, matching the editor's **Create** menu:
 
 | Preset | Spawns |
 |---|---|
@@ -61,28 +61,28 @@ An unknown preset is an error, not a silent fall-through to `empty`.
 
 `get-camera`/`set-camera` drive the same editor [fly-camera](../../ui-and-editor/) the viewport uses — the scene-view eye, not an ECS `CameraComponent`. `set-camera` merges fields the same way the transform commands do.
 
-`get-gizmo`/`set-gizmo` read and write **one** gizmo state. The in-viewport ImGuizmo path and the W/E/R shortcut both read it, and any future native (non-ImGuizmo) manipulation path is meant to read the same state, so the gizmo mode is consistent no matter who set it. `op` selects translate/rotate/scale; `space` selects world vs. local.
+`get-gizmo`/`set-gizmo` read and write a single gizmo state. The in-viewport ImGuizmo path and the W/E/R shortcut both read it, and any future native manipulation path reads the same state, so the gizmo mode stays consistent regardless of who set it. `op` selects translate, rotate, or scale; `space` selects world or local.
 
-`dump-schema` returns the actual runtime shapes — it serializes a default of each registered component, the `SceneEnvironment`, and the render-stats block — so a tool can discover the wire shape without parsing C++. It is the **codegen seam**: see [Shared types](../shared-types/) for where the schema-first pipeline takes over.
+`dump-schema` returns the live runtime shapes: it serializes a default of each registered component, the `SceneEnvironment`, and the render-stats block, so a tool can discover the wire shape without parsing C++. It is the **codegen seam** — see [Shared types](../shared-types/) for where the schema-first pipeline takes over.
 
 ## Polling counters
 
-`EditorContext` carries two monotonically increasing counters a UI can poll to diff cheaply instead of re-listing the whole scene every frame:
+`EditorContext` carries two monotonically increasing counters a UI can poll to diff cheaply instead of re-listing the whole scene each frame:
 
 | Counter | Bumped when |
 |---|---|
 | `sceneVersion` | `add-entity`, `copy-entity`, `destroy-entity`, and scene/project `load`. |
 | `selectionVersion` | every `setSelection` (including `select`, `deselect`, `pick`, and an entity destroy that clears it). |
 
-A client reads the counter once, then re-fetches the entity list or the selection only when the number changes. The counters live on the context, not the wire, so any command that mutates the scene bumps the right one regardless of who invoked it.
+A client reads a counter once, then re-fetches the entity list or the selection only when the number changes. The counters live on the context, not the wire, so any command that mutates the scene bumps the right one regardless of who invoked it.
 
 ## Merge, don't reset
 
-`set-transform`, `set-material`, and `set-light` first `serialize` the current value, copy the provided fields over it, then `deserialize` the merged body. That is why setting only the translation leaves scale untouched. Vectors are `{x,y,z}` objects (`baseColor` is `{x,y,z,w}`), matching the scene-file encoding. `set-material --unlit` and the render toggles coerce strings like `0`/`false`/`off` to the right type so a CLI-supplied string does not abort the no-throw JSON path.
+`set-transform`, `set-material`, and `set-light` first `serialize` the current value, copy the provided fields over it, then `deserialize` the merged body. Setting only the translation therefore leaves scale untouched. Vectors are `{x,y,z}` objects (`baseColor` is `{x,y,z,w}`), matching the scene-file encoding. `set-material --unlit` and the render toggles coerce strings like `0`/`false`/`off` to the right type so a CLI-supplied string does not abort the no-throw JSON path.
 
 ## Picking and focus
 
-`pick` builds a ray from the editor camera through the given viewport UV (converted to NDC `u*2-1, v*2-1`) and calls `pickEntity`, which hits the nearest entity by world-space mesh AABB; empty space returns `{hit:false}` and deselects. `focus` reads the entity's `TransformComponent.translation` and pulls the editor camera back along its forward axis so the target sits in view. Both use the same editor [fly-camera](../../ui-and-editor/) the viewport uses.
+`pick` builds a ray from the editor camera through the given viewport UV (converted to NDC `u*2-1, v*2-1`) and calls `pickEntity`, which hits the nearest entity by world-space mesh AABB. Empty space returns `{hit:false}` and deselects. `focus` reads the entity's `TransformComponent.translation` and pulls the editor camera back along its forward axis so the target sits in view. Both use the same editor [fly-camera](../../ui-and-editor/) the viewport uses.
 
 ## In the code
 

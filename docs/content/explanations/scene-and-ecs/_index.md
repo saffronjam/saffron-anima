@@ -5,9 +5,10 @@ weight = 6
 
 # Scene & ECS
 
-The game world is an entt registry of value components. The design choice worth knowing is
-the component registry: a struct-of-closures table that teaches the serializer and the editor
-about a component in one `registerComponent` call, with no central switch to edit.
+The scene is the game world, modelled as an entt registry of value components. At its centre is the
+component registry, a struct-of-closures table that describes a component to the serializer and the
+editor through one `registerComponent` call. No central switch needs editing when a component is
+added.
 
 ## Pages
 

@@ -5,7 +5,7 @@ weight = 5
 
 # Asset commands
 
-The asset commands import models and textures, browse and rename the project asset catalog, wire assets onto entities, and save or load the project. They touch both the `AssetServer` (catalog and GPU caches) and the scene. `screenshot` and `quit` live here too, rounding out a scriptable session.
+The asset commands are the control-plane verbs that manage a project's assets: importing models and textures, browsing and renaming the catalog, binding assets onto entities, and saving or loading the project. They act on both the `AssetServer` — the catalog and its GPU caches — and the scene. The `screenshot` and `quit` commands sit alongside them to complete a scriptable session.
 
 ## Import and catalog
 
@@ -17,7 +17,7 @@ The asset commands import models and textures, browse and rename the project ass
 | `rename-asset` | `{asset, name}` | Renames a catalog entry (selected by id or current name). |
 | `assign-asset` | `{entity, slot, asset}` | Sets the entity's mesh or albedo slot to a catalog asset. |
 
-`import-model` is the one command that also spawns: it imports, bakes the `.smesh`, then `spawnModel`s an entity and selects it. `import-texture` only adds to the catalog; you attach the result with `assign-asset` or `set-material --albedoTexture`. `assign-asset` takes `slot: mesh|albedo`, resolves the asset by id or name, adds the target component if the entity lacks it, and writes the asset id into the slot.
+`import-model` is the only command that also spawns. It imports, bakes the `.smesh`, then `spawnModel`s an entity and selects it. `import-texture` adds to the catalog alone; the result is attached later with `assign-asset` or `set-material --albedoTexture`. `assign-asset` takes `slot: mesh|albedo`, resolves the asset by id or name, adds the target component if the entity lacks it, and writes the asset id into the slot.
 
 ## Thumbnails and previews
 
@@ -26,9 +26,9 @@ The asset commands import models and textures, browse and rename the project ass
 | `get-thumbnail` | `{asset, size=128}` | Renders a small preview of a catalog asset; returns the PNG as base64. |
 | `view-asset` | `{asset, size=512}` | Same as `get-thumbnail` at a larger default size, for a full-asset look. |
 
-Both resolve the `asset` by id or name and return `{format: "png", size, base64}` — the encoded image bytes inline in the JSON result, so a remote UI can show a preview without sharing a filesystem. The asset's type picks the path: a **mesh** is drawn as a framed 3D render through `renderMeshThumbnail` (the same preview the Assets panel tiles use), a **texture** is the image itself read straight back from the GPU.
+Both resolve the `asset` by id or name and return `{format: "png", size, base64}`: the encoded image bytes inline in the JSON result, so a remote UI can show a preview without sharing a filesystem. The asset's type selects the path. A **mesh** is drawn as a framed 3D render through `renderMeshThumbnail`, the same preview the Assets panel tiles use. A **texture** is the image itself, read straight back from the GPU.
 
-The work is a synchronous GPU→CPU readback: the command records **its own command buffer**, renders or copies into a host-visible staging buffer, then `waitIdle`s before encoding the PNG to memory. That mirrors [`captureViewport`](../screenshots-and-capture/) — it runs **between frames on the command-drain step, never on the present path**, so it never stalls or tears a frame in flight. Because it blocks for a GPU round-trip it is heavier than the list/rename commands; a UI should request a thumbnail once and cache the result, keying off the catalog version rather than re-fetching every frame.
+The work is a synchronous GPU→CPU readback. The command records its own command buffer, renders or copies into a host-visible staging buffer, then `waitIdle`s before encoding the PNG to memory. That mirrors [`captureViewport`](../screenshots-and-capture/): it runs between frames on the command-drain step, never on the present path, so it never stalls or tears a frame in flight. Because it blocks for a GPU round-trip, it is heavier than the list and rename commands. A UI should request a thumbnail once and cache the result, keying off the catalog version rather than re-fetching every frame.
 
 ## Save and load
 
@@ -39,7 +39,7 @@ The work is a synchronous GPU→CPU readback: the command records **its own comm
 | `save-project` | `{path=project.json}` | Writes the asset catalog + scene as one file. |
 | `load-project` | `{path=project.json}` | Reads catalog + scene; clears selection. |
 
-The project commands are the whole-project pair: one `project.json` holds the catalog and the scene together, which is what `load-project` needs so mesh and texture UUIDs in the scene resolve against the catalog it just loaded. All four set `ctx.editor.scenePath` so the editor knows the active file.
+The project commands are the whole-project pair. One `project.json` holds the catalog and the scene together, which is what `load-project` needs so that mesh and texture UUIDs in the scene resolve against the catalog it just loaded. All four set `ctx.editor.scenePath` so the editor knows the active file.
 
 ## Session control
 
@@ -48,7 +48,7 @@ The project commands are the whole-project pair: one `project.json` holds the ca
 | `screenshot` | `{target: viewport\|window, path}` | Writes a PNG. `viewport` is captured immediately; `window` is deferred to end-of-frame. |
 | `quit` | — | Sets `window.shouldClose`, ending the run loop. |
 
-`screenshot` reports `pending`: `false` for a viewport grab (done synchronously), `true` for a window grab (written when the current frame presents). The [capture](../screenshots-and-capture/) path is its own page.
+`screenshot` reports `pending`: `false` for a viewport grab, done synchronously, and `true` for a window grab, written when the current frame presents. The [capture](../screenshots-and-capture/) path has its own page.
 
 ## In the code
 

@@ -5,10 +5,12 @@ weight = 7
 
 # Import pipeline
 
-`importModel` and `importTexture` are the write side of the asset system. They take an
-external file, copy or bake it into the project's asset directory, upload it to the GPU, and
-add a named entry to the [catalog](../asset-server-and-catalog/). Resolution (turning a
-cached id back into a `Ref`) is the read side; this page is import.
+The import pipeline is the write side of the asset system: it turns an external file into a
+project asset. An import copies or bakes the source into the project's asset directory,
+uploads it to the GPU, and adds a named entry to the [catalog](../asset-server-and-catalog/).
+
+Resolution — turning a cached id back into a `Ref` — is the read side. This page covers
+import alone.
 
 ## Importing a model
 
@@ -24,14 +26,20 @@ putAsset(assets.catalog, AssetEntry{ meshId, uniqueName(...), AssetType::Mesh, r
 assets.meshRefByUuid[meshId.value] = *meshRef;             // seed the cache
 ```
 
-In order: parse the source through the [importer](../gltf-and-obj-import/), mint a UUID,
-bake the mesh to a [`.smesh`](../smesh-format/) named by that UUID, upload it, add a catalog
-entry named by the source filename stem (deduped by `uniqueName`), and seed the GPU cache so
-the just-uploaded `Ref` is reused instead of re-loaded. The on-disk asset is the baked
-`.smesh`; the source glTF/OBJ is read once and never referenced again.
+The steps run in order:
+
+1. Parse the source through the [importer](../gltf-and-obj-import/).
+2. Mint a UUID.
+3. Bake the mesh to a [`.smesh`](../smesh-format/) named by that UUID.
+4. Upload it to the GPU.
+5. Add a catalog entry named by the source filename stem, deduped by `uniqueName`.
+6. Seed the GPU cache so the just-uploaded `Ref` is reused rather than reloaded.
+
+The on-disk asset is the baked `.smesh`. The source glTF/OBJ is read once and never
+referenced again.
 
 If the model carried an albedo, its bytes run through `registerTextureBytes`, and the
-returned texture id is reported back on the `ImportResult` with the base color:
+returned texture id is reported on the `ImportResult` with the base color:
 
 ```cpp
 struct ImportResult
@@ -42,14 +50,14 @@ struct ImportResult
 };
 ```
 
-`importModel` deliberately does not spawn an entity or save the project; it only populates
-the catalog. Spawning is a separate step (`spawnModel` builds the entity with a
-`MeshComponent` + `MaterialComponent` from the `ImportResult`).
+`importModel` does not spawn an entity or save the project; it only populates the catalog.
+Spawning is a separate step: `spawnModel` builds the entity with a `MeshComponent` and
+`MaterialComponent` from the `ImportResult`.
 
 ## Importing a texture
 
-A standalone texture follows the same shape through `registerTextureBytes`, which is also
-what `importModel` reuses for embedded albedo. It decodes the bytes to check they are a
+A standalone texture follows the same shape through `registerTextureBytes`, which
+`importModel` also reuses for embedded albedo. It decodes the bytes to confirm they are a
 valid image, uploads, then writes the original encoded bytes to disk:
 
 ```cpp
@@ -65,11 +73,12 @@ rather than storing bulky raw RGBA. The `true` argument requests sRGB, since alb
 authored in sRGB. `importTexture` is the thin wrapper that reads a file off disk into bytes
 and calls `registerTextureBytes` with the filename stem as the name.
 
-## The unit of dedup is the import, not the file
+## Deduplication
 
-Each import mints a fresh `newUuid()`, so importing `cube.gltf` twice produces two catalog
-entries (`cube`, `cube (2)`), two `.smesh` files, and two uploads. The engine deduplicates
-at resolve time: multiple entities referencing the same UUID share one GPU upload via the
+Deduplication is per import, not per file. Each import mints a fresh `newUuid()`, so importing
+`cube.gltf` twice produces two catalog entries (`cube`, `cube (2)`), two `.smesh` files, and two
+uploads. Deduplication happens at
+resolve time: multiple entities referencing the same UUID share one GPU upload via the
 cache. There is no content hashing to collapse two imports of identical bytes into one
 asset.
 

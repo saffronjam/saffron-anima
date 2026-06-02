@@ -5,31 +5,35 @@ weight = 2
 
 # Model import
 
-Two source formats, two third-party parsers, one output. `importGltf` drives cgltf and
-`importObj` drives tinyobjloader, and both funnel into the same
-[`Mesh`](../mesh-and-vertex-layout/) plus an `ImportedMaterial`. The format is picked by
-file extension; the caller never sees which parser ran.
+Model import reads a 3D model file and converts it into the engine's own geometry: a
+[`Mesh`](../mesh-and-vertex-layout/) plus an `ImportedMaterial`. Two source formats are
+supported — glTF and OBJ — and each has its own parser, but both produce the same output.
+
+The format is chosen by file extension, and the caller never sees which parser ran. glTF
+goes through cgltf, OBJ through tinyobjloader; both run on their no-throw C-style surfaces,
+so a parse failure becomes an `Err` rather than an exception, matching the engine's
+[error-as-value rule](../../core-and-conventions/error-handling/).
 
 ## Dispatch by extension
 
 `importModelFile` (mesh only) and `importModelWithMaterial` (mesh + primary material) both
-branch on a case-insensitive suffix check. An unknown extension is an `Err`, not a guess.
-Both parsers run through their no-throw C-style surfaces, so a parse failure becomes an
-`Err`, matching the engine's [error-as-value rule](../../core-and-conventions/error-handling/).
+branch on a case-insensitive suffix check. An unknown extension returns an `Err`.
 
 ## glTF through cgltf
 
 cgltf parses the JSON and loads the buffers in two calls; either failing returns `Err`. The
 importer walks every mesh's triangle primitives and reads each into a fresh submesh.
-Attributes are looked up by type: `POSITION` is required (a primitive without it is
-skipped), `NORMAL` and `TEXCOORD_0` are optional. Vertices are read one at a time through
-the accessor API, which handles whatever component type and stride the file used.
+Attributes are looked up by type:
 
-Each primitive gets a `vertexOffset` equal to the current vertex count, so its indices stay
-zero-based against its own block. Indices are bounds-checked against the primitive's vertex
-count, and an out-of-range index aborts with an `Err`. A primitive with no index buffer
-gets a synthesized `0..vertexCount` sequence. One source mesh with several primitives
-becomes several submeshes over the shared buffers.
+- `POSITION` is required; a primitive without it is skipped.
+- `NORMAL` and `TEXCOORD_0` are optional.
+
+Vertices are read one at a time through the accessor API, which handles whatever component
+type and stride the file used. Each primitive gets a `vertexOffset` equal to the current
+vertex count, so its indices stay zero-based against its own block. Indices are
+bounds-checked against the primitive's vertex count, and an out-of-range index aborts with
+an `Err`. A primitive with no index buffer gets a synthesized `0..vertexCount` sequence. One
+source mesh with several primitives becomes several submeshes over the shared buffers.
 
 ## OBJ through tinyobjloader
 
@@ -44,9 +48,9 @@ auto it = uniqueVertices.find(key);
 ```
 
 One OBJ shape becomes one submesh. Because the indices already point into the shared array,
-OBJ submeshes leave `vertexOffset` at 0, the opposite choice from glTF. One correctness fix
-lives here: OBJ's texture V origin is bottom-left while Vulkan samples top-left, so the
-importer flips V on read (`1.0f - v`). glTF needs no flip.
+OBJ submeshes leave `vertexOffset` at 0, the opposite choice from glTF. OBJ's texture V
+origin is bottom-left while Vulkan samples top-left, so the importer flips V on read
+(`1.0f - v`). glTF needs no flip.
 
 ## Missing normals
 
@@ -73,7 +77,7 @@ glTF reads `pbr_metallic_roughness.base_color_factor` and the base-color texture
 come from an embedded buffer view or an external file resolved next to the glTF. OBJ reads
 the first non-negative material id, taking `diffuse` as the base color and
 `diffuse_texname` as the albedo file. The encoded bytes are carried as-is; decoding happens
-later in [image decoding](../image-decoding/).
+later, in [image decoding](../image-decoding/).
 
 ## In the code
 

@@ -5,9 +5,9 @@ weight = 5
 
 # Geometry & assets
 
-How a model on disk becomes triangles on the GPU. `Saffron.Geometry` imports glTF and OBJ
-into one common `Mesh` and bakes it to a versioned `.smesh`; `Saffron.Assets` owns the
-asset server, the UUID-keyed GPU caches, the named catalog, and `renderScene`.
+The asset path turns a model on disk into triangles the GPU can draw. Import reads glTF and OBJ
+into one common `Mesh` and bakes it to a versioned `.smesh`; the asset server then keys meshes and
+textures by UUID, caches their GPU resources, names them in a catalog, and feeds the draw list.
 
 ## Pages
 

@@ -5,11 +5,13 @@ weight = 7
 
 # Asset pickers
 
-A `MeshComponent` or `MaterialComponent` references an asset by Uuid, not by name. The [inspector](../inspector/) edits that Uuid with a picker combo showing each asset's thumbnail and name, and the same field doubles as a drop target so you can drag a tile from the [Assets panel](../assets-panel-and-thumbnails/) onto it. `AssetPicker` is one reusable React widget the inspector (and the [environment panel](../theme-and-fonts/)) mount on any uuid field.
+An asset picker is a form control that edits a reference to a catalog asset. A component field stores the asset's Uuid rather than its name, and the picker presents that Uuid as a thumbnail and a label the user can change.
+
+The picker serves two channels into the same field: a dropdown combo that lists candidate assets, and a drop target that accepts a tile dragged from elsewhere in the editor. Both are type-gated, so a field that holds a mesh can only ever be assigned a mesh. `AssetPicker` is one reusable React widget; the [inspector](../inspector/) and the [environment panel](../theme-and-fonts/) mount it on any uuid field.
 
 ## The picker combo
 
-`AssetPicker` is a shadcn `Popover` listing `(none)` plus every catalog asset of the field's `assetType`. It reads `store.assets`, filters by type, shows the current selection's name and swatch, and emits `onChange(id)` when you pick — `(none)` emits `"0"`:
+`AssetPicker` is a shadcn `Popover` listing `(none)` plus every catalog asset of the field's `assetType`. It reads `store.assets`, filters by type, shows the current selection's name and swatch, and emits `onChange(id)` when the user picks — `(none)` emits `"0"`:
 
 ```ts
 const options = assets.filter((a) => a.type === assetType);  // mesh fields list only meshes
@@ -17,13 +19,13 @@ const isNone = value === NONE_UUID || value === "";
 const selected = isNone ? null : (options.find((a) => a.id === value) ?? null);
 ```
 
-A Mesh field passes `assetType: "mesh"`, an albedo or sky field `"texture"`, so a field can only ever hold the right kind of asset. Each row draws a small swatch through `getThumbnailUrl` at 64px — the same [blob-URL cache](../assets-panel-and-thumbnails/) the tiles use, so the picker and the grid never double-fetch a thumbnail.
+A Mesh field passes `assetType: "mesh"`, an albedo or sky field `"texture"`, so a field can only hold the right kind of asset. Each row draws a small swatch through `getThumbnailUrl` at 64px — the same [blob-URL cache](../assets-panel-and-thumbnails/) the tiles use, so the picker and the grid never double-fetch a thumbnail.
 
-The picker is **field-agnostic**: it only emits the chosen id. The inspector owns the write — `Mesh.mesh` and `Material.albedoTexture` go through the dedicated `assign-asset`, every other uuid field through `set-component-field`. The id is a **string** end-to-end (engine Uuids are u64), never `Number()`d.
+The picker is **field-agnostic**: it only emits the chosen id. The inspector owns the write. `Mesh.mesh` and `Material.albedoTexture` go through the dedicated `assign-asset`; every other uuid field goes through `set-component-field`. The id is a **string** end-to-end (engine Uuids are u64), never `Number()`d.
 
-## Drag-drop, type-gated
+## Type-gated drag-drop
 
-A tile is an HTML5 drag source carrying `application/x-se-asset` — a JSON `{id, type}`, the React analog of the old `AssetDragPayload`. The picker is the matching drop target and accepts only when the dragged asset's type matches its own field type:
+A tile is an HTML5 drag source carrying `application/x-se-asset` — a JSON `{id, type}` payload. The picker is the matching drop target and accepts only when the dragged asset's type matches its own field type:
 
 ```ts
 const onDrop = (event) => {
@@ -33,11 +35,11 @@ const onDrop = (event) => {
 };
 ```
 
-Dragging a texture onto a Mesh field does nothing — the same type comparison guards both the combo filter and the drop, so a mismatched drop can't land. This is a distinct channel from the OS file drop the [Assets panel](../assets-panel-and-thumbnails/) listens for (which imports a new asset rather than assigning an existing one).
+Dragging a texture onto a Mesh field does nothing: the same type comparison guards both the combo filter and the drop, so a mismatched drop cannot land. This is a distinct channel from the OS file drop the [Assets panel](../assets-panel-and-thumbnails/) listens for, which imports a new asset rather than assigning an existing one.
 
 ## Kept out of the viewport
 
-Like every Radix popover in the editor, the picker's dropdown is portalled to the document root. It must open over a non-viewport region or the reparented native window would occlude it, so the pickers live in the side docks (inspector / environment) where their popovers open over the sidebar. Same rule as the menus and the loading overlay — the [native bridge](../tauri-editor-and-x11-bridge/) page covers why.
+Like every Radix popover in the editor, the picker's dropdown is portalled to the document root. It must open over a non-viewport region, or the reparented native window would occlude it. The pickers therefore live in the side docks (inspector and environment), where their popovers open over the sidebar. The same rule governs the menus and the loading overlay — the [native bridge](../tauri-editor-and-x11-bridge/) page covers why.
 
 ## In the code
 

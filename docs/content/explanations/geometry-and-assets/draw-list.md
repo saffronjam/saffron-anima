@@ -5,13 +5,17 @@ weight = 8
 
 # Draw list
 
-`renderScene` walks the ECS into a flat list of `DrawItem`s, and `submitDrawList` buckets
-that list into instanced draws the
-[render graph](../../frame-and-render-graph/render-graph-overview/) passes consume. This is
-the seam between what the scene contains and what Vulkan records: the scene is gathered once
-into data, and several passes replay it.
+A draw list is a flat snapshot of everything the scene wants drawn this frame, gathered once
+from the ECS into plain data and then replayed by every geometry pass. It sits between the
+scene description and the Vulkan commands: the scene is walked one time into a list of items,
+and the [render graph](../../frame-and-render-graph/render-graph-overview/) passes consume
+that list rather than the live scene.
 
-## Gather: ECS → DrawItem
+Decoupling the gather from the record keeps the scene traversal in one place. A frame draws
+the same geometry several times — shaded color, depth, shadows, G-buffer, motion — and each
+pass reads from the same prepared list instead of walking the registry again.
+
+## Gather: ECS into DrawItem
 
 `renderScene` iterates every entity with a `TransformComponent` and a `MeshComponent`,
 resolves the mesh through [`loadMeshAsset`](../asset-server-and-catalog/), reads the optional
@@ -30,24 +34,24 @@ struct DrawItem
 };
 ```
 
-The same loop does double duty: it transforms each mesh's local AABB by its model matrix to
-accumulate the world-space scene bounds, which then fit the
+The same loop also accumulates the world-space scene bounds: it transforms each mesh's local
+AABB by its model matrix, and those bounds fit the
 [directional shadow](../../shadows-and-culling/directional-shadows/) frustum and the DDGI
-probe volume. Gathering the draw list and gathering the scene extents happen in one pass.
-`renderScene` also collects lights, sets the shadow/cluster/SSAO camera state, and finally
-calls `submitDrawList(renderer, viewProjection, items)`.
+probe volume. The draw list and the scene extents are gathered in one pass. `renderScene`
+also collects lights, sets the shadow/cluster/SSAO camera state, and finally calls
+`submitDrawList(renderer, viewProjection, items)`.
 
-## Bucket: DrawItem → instanced batches
+## Bucket: DrawItem into instanced batches
 
-`submitDrawList` groups items into batches keyed on `(pipeline, mesh)`. The key does not
-include the texture. Albedo is [bindless](../../materials-and-pipelines/bindless-textures/),
-a per-instance index into one global texture array carried in the instance data, so two
-items that differ only by texture still batch together. Each item becomes one
-`InstanceData` (model matrix, normal matrix, base color, bindless texture index,
-metallic/roughness, emissive). The buckets flatten into one contiguous instance array plus
-per-batch `(baseInstance, instanceCount)` ranges, written into the frame's instance SSBO.
+`submitDrawList` groups items into batches keyed on `(pipeline, mesh)`. The key omits the
+texture. Albedo is [bindless](../../materials-and-pipelines/bindless-textures/) — a
+per-instance index into one global texture array, carried in the instance data — so two
+items that differ only by texture still batch together. Each item becomes one `InstanceData`
+(model matrix, normal matrix, base color, bindless texture index, metallic/roughness,
+emissive). The buckets flatten into one contiguous instance array plus per-batch
+`(baseInstance, instanceCount)` ranges, written into the frame's instance SSBO.
 
-The result is stashed on the frame, not recorded immediately:
+The result is stored on the frame, not recorded immediately:
 
 ```cpp
 struct SceneDrawList
@@ -90,8 +94,8 @@ material binds. All iterate `batch.mesh->submeshes` identically.
 
 `submitDrawList` fills `RenderStats` while flattening: draw calls (one `drawIndexed` per
 submesh per batch), batch count, and total instances. These are inspectable through the
-control plane, which is how instanced batching is verified live: two textured cubes
-collapsing to one batch shows up as `batches = 1`.
+control plane, which verifies instanced batching live — two textured cubes collapsing to one
+batch show up as `batches = 1`.
 
 ## In the code
 

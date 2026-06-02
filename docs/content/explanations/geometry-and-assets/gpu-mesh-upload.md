@@ -5,10 +5,14 @@ weight = 5
 
 # Mesh upload
 
-`uploadMesh` is the bridge from a CPU-side [`Mesh`](../mesh-and-vertex-layout/) to a
-device-local `GpuMesh` the renderer can draw. It stages the vertex and index data through a
-host-visible buffer, copies it into device-local buffers with one submission, and computes
-the local-space AABB used for picking and shadow fitting.
+Mesh upload moves a CPU-side [`Mesh`](../mesh-and-vertex-layout/) into device-local Vulkan
+buffers the renderer can draw. The result is a `GpuMesh`: vertex and index buffers in GPU
+memory, plus the metadata a draw needs.
+
+The fastest memory for the GPU to read is device-local, which the CPU cannot write directly.
+Upload therefore copies the data through an intermediate host-visible buffer, and computes
+the mesh's local-space bounding box along the way for picking and shadow fitting. `uploadMesh`
+is the engine's single entry point for this.
 
 ## Stage, then copy
 
@@ -27,8 +31,8 @@ copy is recorded on a one-time-submit command buffer, submitted on the graphics 
 the upload blocks on `device.waitIdle()` before the staging buffer is destroyed.
 
 That `waitIdle` is a deliberate simplification. Mesh upload is an import-time operation, not
-a per-frame one, so a full device idle is acceptable and keeps the staging lifetime
-trivially correct. There is no async transfer queue here.
+a per-frame one, so a full device idle is acceptable and keeps the staging lifetime trivially
+correct. There is no async transfer queue.
 
 ## What a GpuMesh holds
 
@@ -53,20 +57,19 @@ them off the GPU mesh directly.
 
 ## The bounds
 
-While staging, `uploadMesh` sweeps every vertex position to find the local-space AABB. This
-is computed once and stored on the `GpuMesh`. It is the box that
-[picking](../../scene-and-ecs/picking/) transforms into world space for its ray test, and
-the box `renderScene` accumulates into the scene AABB that fits the
-[directional shadow](../../shadows-and-culling/directional-shadows/) frustum. Computing it
-here means neither caller re-scans vertices.
+Upload sweeps every vertex position to find the local-space axis-aligned bounding box. This
+is computed once and stored on the `GpuMesh`. [Picking](../../scene-and-ecs/picking/)
+transforms the box into world space for its ray test, and `renderScene` accumulates it into
+the scene AABB that fits the
+[directional shadow](../../shadows-and-culling/directional-shadows/) frustum. Computing it at
+upload time means neither caller re-scans vertices.
 
 ## The RT branch
 
-When ray tracing is supported, two things change. The vertex and index buffers get
-`SHADER_DEVICE_ADDRESS` and `ACCELERATION_STRUCTURE_BUILD_INPUT` usage so they can feed a
-BLAS build, and after the buffers are live `uploadMesh` builds the mesh's BLAS once and
-stores it. On hardware without RT support none of this runs and `blas` stays null. Either
-way the geometry buffers are identical.
+When ray tracing is supported, the vertex and index buffers gain `SHADER_DEVICE_ADDRESS` and
+`ACCELERATION_STRUCTURE_BUILD_INPUT` usage so they can feed a BLAS build, and once the buffers
+are live `uploadMesh` builds the mesh's BLAS once and stores it. On hardware without RT support
+none of this runs and `blas` stays null. The geometry buffers are identical either way.
 
 ## In the code
 

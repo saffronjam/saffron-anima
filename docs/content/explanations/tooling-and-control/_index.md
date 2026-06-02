@@ -5,7 +5,7 @@ weight = 15
 
 # Tooling & control
 
-A running editor is scriptable. A non-blocking unix socket, drained once per frame on the main thread, lets the `se` CLI speak JSON to create entities, set components, import assets, toggle render features, and grab screenshots. Every new engine feature is expected to ship a matching command so the editor stays drivable from a script.
+The control plane is a JSON-over-unix-socket protocol that drives a running editor from outside the process. The socket is non-blocking and drained once per frame on the main thread, so commands apply between frames without stalling the render loop. Through it the `se` CLI creates entities, sets components, imports assets, toggles render features, and grabs screenshots. Each engine feature ships a matching command, which keeps the editor scriptable and visually debuggable from a shell.
 
 ## Pages
 
