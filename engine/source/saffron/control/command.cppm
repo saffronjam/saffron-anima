@@ -15,7 +15,7 @@ import Saffron.Core;
 import Saffron.Window;
 import Saffron.Rendering;
 import Saffron.Scene;
-import Saffron.Editor;
+import Saffron.SceneEdit;
 import Saffron.Assets;
 
 export namespace se
@@ -28,7 +28,7 @@ export namespace se
     {
         Window& window;
         Renderer& renderer;
-        EditorContext& editor;
+        SceneEditContext& sceneEdit;
         AssetServer& assets;
     };
 
@@ -107,5 +107,5 @@ export namespace se
 
     /// Drains and runs any pending control commands on the calling (main) thread.
     /// Call once per frame.
-    void pollControl(ControlContext& ctx, Window& window, Renderer& renderer, EditorContext& editor, AssetServer& assets);
+    void pollControl(ControlContext& ctx, Window& window, Renderer& renderer, SceneEditContext& editor, AssetServer& assets);
 }

@@ -24,7 +24,7 @@ import Saffron.Json;
 import Saffron.Window;
 import Saffron.Rendering;
 import Saffron.Scene;
-import Saffron.Editor;
+import Saffron.SceneEdit;
 import Saffron.Assets;
 
 namespace se
@@ -76,7 +76,7 @@ namespace se
         {
             return Err(std::string{ "missing 'entity' (uuid or name)" });
         }
-        Scene& scene = ctx.editor.scene;
+        Scene& scene = ctx.sceneEdit.scene;
 
         // UUID first (stable across reloads); a numeric string counts as a UUID.
         u64 wanted = 0;
@@ -324,7 +324,7 @@ namespace se
         delete ctx;
     }
 
-    void pollControl(ControlContext& ctx, Window& window, Renderer& renderer, EditorContext& editor, AssetServer& assets)
+    void pollControl(ControlContext& ctx, Window& window, Renderer& renderer, SceneEditContext& editor, AssetServer& assets)
     {
         if (!ctx.active)
         {

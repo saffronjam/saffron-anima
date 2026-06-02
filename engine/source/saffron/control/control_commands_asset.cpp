@@ -14,7 +14,7 @@ import Saffron.Core;
 import Saffron.Window;
 import Saffron.Rendering;
 import Saffron.Scene;
-import Saffron.Editor;
+import Saffron.SceneEdit;
 import Saffron.Assets;
 
 namespace se
@@ -86,9 +86,9 @@ namespace se
                 {
                     return Err(imported.error());
                 }
-                Entity entity = spawnModel(ctx.editor.scene, "Mesh", *imported);
-                setSelection(ctx.editor, entity);
-                json result = entityRef(ctx.editor.scene, entity);
+                Entity entity = spawnModel(ctx.sceneEdit.scene, "Mesh", *imported);
+                setSelection(ctx.sceneEdit, entity);
+                json result = entityRef(ctx.sceneEdit.scene, entity);
                 result["mesh"] = imported->mesh.value;
                 result["albedoTexture"] = imported->albedoTexture.value;
                 return result;
@@ -170,19 +170,19 @@ namespace se
                 }
                 if (slot == "mesh")
                 {
-                    if (!hasComponent<MeshComponent>(ctx.editor.scene, *entity))
+                    if (!hasComponent<MeshComponent>(ctx.sceneEdit.scene, *entity))
                     {
-                        addComponent<MeshComponent>(ctx.editor.scene, *entity);
+                        addComponent<MeshComponent>(ctx.sceneEdit.scene, *entity);
                     }
-                    getComponent<MeshComponent>(ctx.editor.scene, *entity).mesh = match->id;
+                    getComponent<MeshComponent>(ctx.sceneEdit.scene, *entity).mesh = match->id;
                 }
                 else if (slot == "albedo")
                 {
-                    if (!hasComponent<MaterialComponent>(ctx.editor.scene, *entity))
+                    if (!hasComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity))
                     {
-                        addComponent<MaterialComponent>(ctx.editor.scene, *entity);
+                        addComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity);
                     }
-                    getComponent<MaterialComponent>(ctx.editor.scene, *entity).albedoTexture = match->id;
+                    getComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity).albedoTexture = match->id;
                 }
                 else
                 {
@@ -199,12 +199,12 @@ namespace se
                 {
                     return Err(std::string{ "missing 'path'" });
                 }
-                auto result = writeScene(ctx.editor.registry, ctx.editor.scene, path);
+                auto result = writeScene(ctx.sceneEdit.registry, ctx.sceneEdit.scene, path);
                 if (!result)
                 {
                     return Err(result.error());
                 }
-                ctx.editor.scenePath = path;
+                ctx.sceneEdit.scenePath = path;
                 return json{ { "path", path } };
             });
 
@@ -216,14 +216,14 @@ namespace se
                 {
                     return Err(std::string{ "missing 'path'" });
                 }
-                auto result = readScene(ctx.editor.registry, ctx.editor.scene, path);
+                auto result = readScene(ctx.sceneEdit.registry, ctx.sceneEdit.scene, path);
                 if (!result)
                 {
                     return Err(result.error());
                 }
-                ctx.editor.scenePath = path;
-                ctx.editor.sceneVersion += 1;
-                setSelection(ctx.editor, Entity{ entt::null });
+                ctx.sceneEdit.scenePath = path;
+                ctx.sceneEdit.sceneVersion += 1;
+                setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return json{ { "path", path } };
             });
 
@@ -231,12 +231,12 @@ namespace se
             [](EngineContext& ctx, const json& params) -> Result<json>
             {
                 const std::string path = asString(positionalOr(params, "path", 0), "project.json");
-                auto result = saveProject(ctx.assets, ctx.editor.registry, ctx.editor.scene, path);
+                auto result = saveProject(ctx.assets, ctx.sceneEdit.registry, ctx.sceneEdit.scene, path);
                 if (!result)
                 {
                     return Err(result.error());
                 }
-                ctx.editor.scenePath = path;
+                ctx.sceneEdit.scenePath = path;
                 return json{ { "path", path } };
             });
 
@@ -245,14 +245,14 @@ namespace se
             {
                 const std::string path = asString(positionalOr(params, "path", 0), "project.json");
                 Result<void> result =
-                    loadProject(ctx.assets, ctx.renderer, ctx.editor.registry, ctx.editor.scene, path);
+                    loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene, path);
                 if (!result)
                 {
                     return Err(result.error());
                 }
-                ctx.editor.scenePath = path;
-                ctx.editor.sceneVersion += 1;
-                setSelection(ctx.editor, Entity{ entt::null });
+                ctx.sceneEdit.scenePath = path;
+                ctx.sceneEdit.sceneVersion += 1;
+                setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return json{ { "path", path } };
             });
 
