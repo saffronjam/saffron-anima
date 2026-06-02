@@ -5,7 +5,7 @@ weight = 1
 
 # Control plane
 
-A running `SaffronEditor` listens on a unix socket. Each frame the main thread drains whatever requests arrived, runs them, and writes back a reply. That is the whole control plane: a non-blocking socket, a registry of named commands, and a once-per-frame drain. It makes the editor scriptable from the [`se` CLI](../se-cli-protocol/) and from tests.
+A running `SaffronEngine` host listens on a unix socket. Each frame the main thread drains whatever requests arrived, runs them, and writes back a reply. That is the whole control plane: a non-blocking socket, a registry of named commands, and a once-per-frame drain. It makes the editor scriptable from the [`se` CLI](../se-cli-protocol/) and from tests.
 
 ## A command is data plus a closure
 

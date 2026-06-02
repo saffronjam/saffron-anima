@@ -5,7 +5,7 @@ weight = 14
 
 # UI & editor
 
-The editor is a Tauri desktop app: a React/TypeScript front-end (shadcn/ui + Tailwind) in a webview, with the engine running as a separate process. The webview never renders the scene — the engine's own SDL/Vulkan window is reparented as a native child over the viewport div and presents directly, while ImGui is skipped (present-only mode). Every editor operation rides the JSON-over-unix-socket [control protocol](../tooling-and-control/control-plane-architecture/), and a focus-gated reconcile poll keeps a small Zustand store in sync with the running engine. The old Dear ImGui editor is retired; `SaffronEditor` (`editor-old/`) survives only as the headless viewport host.
+The editor is a Tauri desktop app: a React/TypeScript front-end (shadcn/ui + Tailwind) in a webview, with the engine running as a separate process. The webview never renders the scene — the engine's own SDL/Vulkan window is reparented as a native child over the viewport div and presents directly, while ImGui is skipped (present-only mode). Every editor operation rides the JSON-over-unix-socket [control protocol](../tooling-and-control/control-plane-architecture/), and a focus-gated reconcile poll keeps a small Zustand store in sync with the running engine. The old Dear ImGui editor is retired; the `SaffronEngine` host executable (built from the `engine/` project) survives only as the headless viewport host.
 
 ## Pages
 

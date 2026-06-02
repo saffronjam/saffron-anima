@@ -7,11 +7,11 @@ weight = 1
 
 The editor is a Tauri desktop app: a React/TypeScript front-end in a webview, a thin Rust backend, and the engine running as a separate process. The webview never renders the 3D scene. Instead the engine's own SDL/Vulkan window is reparented as a native child *over* a placeholder div, so the scene you see in the viewport is the engine presenting directly to its swapchain — the webview just owns the surrounding chrome. Every editor operation that touches the scene goes over the same JSON-over-unix-socket [control protocol](../../tooling-and-control/control-plane-architecture/) the `se` CLI speaks.
 
-This replaces the old Dear ImGui editor. The C++ `SaffronEditor` target survives as `editor-old/` — a headless viewport host that boots the engine, opens its window, and drains the control socket, with no ImGui panels of its own.
+This replaces the old Dear ImGui editor. The engine project builds the `SaffronEngine` host executable — a headless viewport host that boots the engine, opens its window, and drains the control socket, with no ImGui panels of its own.
 
 ## Two processes, one socket
 
-The Rust backend spawns `SaffronEditor` with `SAFFRON_EDITOR_NATIVE_VIEWPORT=1`, a per-instance `SAFFRON_CONTROL_SOCK` (pid-scoped so two editor windows don't collide), and `SDL_VIDEODRIVER=x11`. From then on the engine is the renderer and the webview is the UI, talking only over that socket.
+The Rust backend spawns `SaffronEngine` with `SAFFRON_EDITOR_NATIVE_VIEWPORT=1`, a per-instance `SAFFRON_CONTROL_SOCK` (pid-scoped so two editor windows don't collide), and `SDL_VIDEODRIVER=x11`. From then on the engine is the renderer and the webview is the UI, talking only over that socket.
 
 The TypeScript side is a typed client over **one** generic Rust passthrough. Every scene/asset/render command is `invoke('control', { cmd, params })`; the Rust layer forwards it verbatim, turns an engine `ok:false` into a rejected promise, and otherwise resolves the result JSON. Adding a new `se` command needs zero Rust change — the typed wrapper in `client.ts` and a schema entry are all that move.
 

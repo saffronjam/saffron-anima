@@ -5,7 +5,7 @@ weight = 2
 
 # Viewport panel
 
-The viewport panel renders no pixels. It is a `div` the engine's native SaffronEditor window is reparented *over* — the panel only owns the screen rectangle and keeps the native window glued to it. The 3D scene you see inside it is the engine presenting directly to its swapchain ([present-only mode](../tauri-editor-and-x11-bridge/)); the panel's job is bounds-sync, pointer forwarding, and occlusion handling.
+The viewport panel renders no pixels. It is a `div` the engine's native SaffronEngine window is reparented *over* — the panel only owns the screen rectangle and keeps the native window glued to it. The 3D scene you see inside it is the engine presenting directly to its swapchain ([present-only mode](../tauri-editor-and-x11-bridge/)); the panel's job is bounds-sync, pointer forwarding, and occlusion handling.
 
 ## Attach to a real rect
 
