@@ -2,6 +2,7 @@
 /build/
 /out/
 /install/
+/appdata/
 
 # CMake / IDE
 CMakeUserPresets.json
