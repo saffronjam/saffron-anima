@@ -42,6 +42,11 @@ The editor lives in `editor/`; it spawns and embeds the host:
 cd editor && bun install && bun run tauri dev
 ```
 
+Convenience targets wrap the above (run inside the toolbox; `make help` lists them): `make run` starts
+the editor, `make run-engine` only the host, `make run-docs` the docs site, and `make format` /
+`make lint` / `make prepare-for-commit` cover style (clang-format + clang-tidy for C++, oxfmt + oxlint
+for TypeScript).
+
 ## More
 
 - Concept-by-concept docs: [`docs/content/overview.md`](docs/content/overview.md) (Hugo site).

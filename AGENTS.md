@@ -59,6 +59,16 @@ toolbox run -c saffron-build bash -lc '
   contract test → frontend `bun run build`. `make check` wraps it once the toolbox/bun/display are set
   up (also `make engine|editor|schema`). There is intentionally no GitHub-hosted CI (a stock runner
   can't reproduce the toolbox); `.github/workflows/ci.yml` targets a self-hosted runner.
+- `make e2e` runs the `tests/e2e` suite — TypeScript on `bun test` that boots a headless engine and
+  drives it over the control plane (typed via `@saffron/protocol`), asserting responses and a
+  validation-clean log. It is the language-appropriate place for engine behaviour tests: the wire is
+  JSON, so the driver need not be C++.
+- Convenience targets (all run inside the toolbox; `make help` lists them): `make run` starts the
+  editor, which spawns the engine; `make run-engine` starts only the present-only host; `make run-docs`
+  serves the Hugo site. `make format` runs clang-format (`.clang-format`) over the C++ and oxfmt over
+  the editor TypeScript; `make lint` runs the clang-format check + clang-tidy (`.clang-tidy`) + oxlint
+  (`editor/.oxlintrc.json`); `make prepare-for-commit` does format then lint. clang-format enforces the
+  layout `CONVENTIONS.md` describes — adopting it is a one-time normalization across the tree.
 
 ### The editor (Tauri/React)
 
@@ -68,9 +78,9 @@ With `bun` on PATH inside the toolbox:
 cd editor && bun install && bun run check && bun run tauri dev
 ```
 
-`bun run check` regenerates `@saffron/protocol` from `schemas/control` and typechecks. `tauri dev`
-spawns `build/debug/bin/SaffronEngine` (override with `SAFFRON_ENGINE_BIN`) and needs an X11/XWayland
-display for the reparent.
+`bun run check` regenerates `@saffron/protocol` from `schemas/control` and typechecks; `bun run format`
+(oxfmt) and `bun run lint` (oxlint) cover style. `tauri dev` spawns `build/debug/bin/SaffronEngine`
+(override with `SAFFRON_ENGINE_BIN`) and needs an X11/XWayland display for the reparent.
 
 ## Architecture
 
@@ -131,6 +141,7 @@ editor/                 Tauri/React/TS editor — src/ (React + Zustand + typed 
 schemas/control/        hand-authored JSON Schemas (draft 2020-12) — the wire contract → @saffron/protocol
 tools/se/               the `se` control CLI (json over the unix socket; no engine dep)
 tools/ci/, tools/check-control-schema/   the reproducible gate + the live-vs-schema contract test
+tests/e2e/              end-to-end tests (bun) driving a headless engine over the control plane
 cmake/                  Dependencies.cmake (FetchContent deps + imgui/vma targets) + vma/stb impl TUs
 docs/                   Hugo (hugo-book) docs site — per-concept explanations + how-to/reference/tutorials
 plans/                  phased, dependency-ordered plans for future expansions
