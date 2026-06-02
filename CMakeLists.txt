@@ -18,7 +18,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
 endif()
 
-# Single output location for the runnable editor + its assets/shaders.
+# Single output location for the runnable engine + its assets/shaders.
 set(SAFFRON_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${SAFFRON_RUNTIME_DIR}")
 
@@ -29,5 +29,4 @@ include(Slang)
 include(CompileShaders)
 
 add_subdirectory(engine)
-add_subdirectory(editor-old)
 add_subdirectory(tools/se)

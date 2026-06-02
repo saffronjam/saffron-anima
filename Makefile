@@ -36,7 +36,7 @@ help:
 	@echo 'Targets:'
 	@echo '  make help     - show this help (default)'
 	@echo '  make check    - run the full reproducible gate (tools/ci/check.sh)'
-	@echo '  make engine   - cmake configure + build the engine/editor (-j1)'
+	@echo '  make engine   - cmake configure + build the engine binary (-j1)'
 	@echo '  make editor   - build the TypeScript/Tauri frontend (bun run build)'
 	@echo '  make schema   - run the control-schema contract test'
 	@echo
@@ -48,7 +48,7 @@ help:
 check:
 	"$(REPO)tools/ci/check.sh"
 
-## engine: configure + build the C++26 engine and editor binary (-j1 avoids a clang module-BMI ICE)
+## engine: configure + build the C++26 engine binary SaffronEngine (-j1 avoids a clang module-BMI ICE)
 engine:
 	cmake --preset debug
 	cmake --build "$(BUILD_DIR)" -j1
