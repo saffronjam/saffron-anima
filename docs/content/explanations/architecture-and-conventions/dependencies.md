@@ -5,21 +5,26 @@ weight = 7
 
 # Dependencies
 
-The engine pulls most of its libraries in as pinned, vendored source built statically through
-CMake's FetchContent. Only the two pieces that belong to the platform — SDL3 and the Vulkan
-headers/loader — come from the system. It is all set up in one place, `cmake/Dependencies.cmake`.
+A third-party dependency is a library the engine consumes but does not author. Each one is either
+*vendored* — pinned to a tag and built from source alongside the engine — or *system* — found as a
+package the platform already provides. The choice turns on ABI stability and platform ownership.
+
+Most of the engine's libraries are vendored. Only the two pieces that belong to the platform, SDL3
+and the Vulkan headers and loader, come from the system. The whole set is declared in one place,
+`cmake/Dependencies.cmake`.
 
 ## System vs vendored
 
-SDL3 and Vulkan are found as system packages. They have stable C ABIs and ship with the platform,
-so vendoring them buys nothing:
+A system dependency has a stable C ABI and ships with the platform, so building it from source buys
+nothing. SDL3 and Vulkan meet that bar and are found as system packages:
 
 ```cmake
 find_package(Vulkan REQUIRED)        # headers + loader
 find_package(SDL3 REQUIRED CONFIG)   # SDL3 3.4.x, C ABI
 ```
 
-Everything else is declared with a pinned tag and built from source:
+A vendored dependency is pinned to a tag and built from source, so every build resolves the same
+revision. Everything else falls into this group:
 
 ```cmake
 FetchContent_Declare(EnTT GIT_REPOSITORY ... GIT_TAG v3.16.0 GIT_SHALLOW ON)
@@ -28,14 +33,14 @@ FetchContent_Declare(glm  GIT_REPOSITORY ... GIT_TAG 1.0.1   GIT_SHALLOW ON)
 FetchContent_MakeAvailable(EnTT glm VulkanMemoryAllocator vk-bootstrap nlohmann_json imgui imguizmo)
 ```
 
-A few deps are header-only with an implementation macro, so each needs a translation unit of its
-own. VMA, stb (image write + decode), cgltf, tinyobjloader, and nanosvg each get a one-line static
-library that defines the implementation macro in a single `.cpp` under `cmake/`. ImGui has no
+A few dependencies are header-only with an implementation macro, so each needs a translation unit
+of its own. VMA, stb (image write and decode), cgltf, tinyobjloader, and nanosvg each get a one-line
+static library that defines the implementation macro in a single `.cpp` under `cmake/`. ImGui has no
 upstream CMake, so the build compiles its core, the SDL3 and Vulkan backends, and ImGuizmo into one
 `imgui` static library.
 
 A single interface target aggregates everything the engine links against, so each engine target
-just links `saffron_third_party`:
+links only `saffron_third_party`:
 
 ```cmake
 add_library(saffron_third_party INTERFACE)
@@ -46,7 +51,7 @@ target_link_libraries(saffron_third_party INTERFACE
 
 ## Definitions that enforce the house rules
 
-The aggregate target also sets the compile definitions that keep third-party libraries inside the
+The aggregate target also sets the compile definitions that hold third-party libraries to the
 engine's no-exceptions, Vulkan-clip-space rules:
 
 ```cmake

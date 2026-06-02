@@ -5,28 +5,28 @@ weight = 4
 
 # Ownership
 
-The renderer has no opaque handles and no GPU resource base class. A Vulkan resource is a
-small struct that owns its handles, frees them in its destructor, and is shared as a
-`Ref<T>`. The whole scheme rests on one alias in `Saffron.Core` and one ordering rule at
-shutdown.
+Ownership is the question of which value is responsible for freeing a resource, and when. In
+Saffron a GPU resource is a small struct that owns its Vulkan handles, frees them in its
+destructor, and is shared through a reference-counted pointer. The last reference to drop
+runs the destructor.
 
-## Ref is a shared_ptr
+There are no opaque handles and no GPU resource base class. The scheme rests on one type
+alias in `Saffron.Core` and one ordering rule at shutdown.
+
+## How it works
+
+A logical resource — a pipeline, a mesh, a texture — is passed around as a `Ref<T>`, which
+is an alias for a shared pointer:
 
 ```cpp
 template <typename T>
 using Ref = std::shared_ptr<T>;
 ```
 
-A logical resource — a pipeline, a mesh, a texture — is passed around as `Ref<T>` rather
-than an integer handle into some manager. There is no base class and no registry
-indirection: the `Ref` is the ownership. The last `Ref` to drop runs the destructor, which
-is where the Vulkan handle gets freed.
-
-## Wrappers own and free their handles
-
-Each resource type is a move-only struct holding a borrowed `vk::Device` (and a borrowed
-`VmaAllocator` where it allocates), the owned handles, and a destructor that frees them.
-`Pipeline` is the simplest:
+The `Ref` is the ownership: no integer handle into a manager, no base class, no registry
+indirection. Each resource type is a move-only struct holding a borrowed `vk::Device` (and a
+borrowed `VmaAllocator` where it allocates), the owned handles, and a destructor that frees
+them. `Pipeline` is the simplest:
 
 ```cpp
 struct Pipeline
@@ -46,15 +46,12 @@ struct Pipeline
 Copy is deleted; move steals the handles and nulls the source, so a moved-from object's
 destructor is a no-op. `reset()` checks `device` is non-null before destroying, so a
 default-constructed or moved-from wrapper frees nothing. `Image`, `Buffer`, `GpuMesh`,
-`GpuTexture`, `Image3D`, and `AccelerationStructure` all follow this pattern. The
-move-only-ness is the one place the codebase writes operator overloads, and the
-[conventions](../go-flavored-design/) call it out: this is resource management, not the
-operator overloading the style otherwise bans.
+`GpuTexture`, `Image3D`, and `AccelerationStructure` follow the same pattern.
 
-## Factories return a Result of a Ref
+## Fallible factories
 
-You don't construct these directly. A factory builds the resource, and because that can
-fail, it returns `Result<Ref<T>>`:
+These types are not constructed directly. A factory builds the resource, and because that
+can fail, it returns `Result<Ref<T>>`:
 
 ```cpp
 auto uploadMesh(Renderer& renderer, const Mesh& mesh) -> Result<Ref<GpuMesh>>;
@@ -62,19 +59,18 @@ auto newMeshPipeline(Renderer& renderer, std::string_view shaderName, bool unlit
     -> Result<Ref<Pipeline>>;
 ```
 
-So the [error model](../error-handling/) and the ownership model meet at the call site:
-you check the `Result`, then you hold a `Ref`. The renderer keeps its own `Ref`s in caches
-and vectors; a layer or the asset server holds others. The resource lives until every one
-of them drops.
+The [error model](../error-handling/) and the ownership model meet at the call site: check
+the `Result`, then hold the `Ref`. The renderer keeps its own `Ref`s in caches and vectors;
+a layer or the asset server holds others. The resource lives until every one of them drops.
 
 ## Teardown rule
 
-A GPU resource cannot be freed while an in-flight command buffer still references it, and
-it must not outlive the VMA allocator or the device. Those two constraints define the
-shutdown order, and `run` enforces it. `waitGpuIdle` blocks on `device.waitIdle()` first,
-then the layers detach and `onExit` runs — which is where the client drops the `Ref`s it
-held. Those destructors are now safe because the GPU is idle. The renderer (allocator and
-device inside it) is destroyed last, after every resource it could have outlived is gone.
+A GPU resource cannot be freed while an in-flight command buffer still references it, and it
+must not outlive the VMA allocator or the device. Those two constraints define the shutdown
+order, which `run` enforces. `waitGpuIdle` blocks on `device.waitIdle()` first, then the
+layers detach and `onExit` runs — where the client drops the `Ref`s it held. Those
+destructors are safe because the GPU is idle. The renderer, which holds the allocator and
+device, is destroyed last, after every resource it could have outlived is gone.
 
 ```mermaid
 flowchart TD
@@ -84,6 +80,12 @@ flowchart TD
     D --> E[wrapper destructors free vk / VMA handles]
     E --> F[renderer destroyed: VMA allocator, then device]
 ```
+
+## Move-only as a convention exception
+
+Move-only resource wrappers are the one place the codebase defines operator overloads. The
+[conventions](../go-flavored-design/) permit this as resource management, distinct from the
+operator overloading the style otherwise bans.
 
 ## In the code
 

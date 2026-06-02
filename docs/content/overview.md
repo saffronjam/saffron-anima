@@ -5,15 +5,15 @@ weight = 5
 
 # Overview
 
-A one-read map of the whole engine. Everything here is expanded in the
-[explanation pages](../explanations/); follow the links for the full story.
+A one-read map of the whole engine. The [explanation pages](../explanations/) expand each
+topic; follow the links for the full account.
 
 ## Shape of a program
 
-A client (the editor, or your own app) fills an `AppConfig` and calls `se::run`, which
-owns the window, renderer, UI, and main loop. You extend it by attaching **layers**. A
-`Layer` is a struct of optional callbacks, the Go-interface pattern rather than a virtual
-base class.
+A client — the editor or a standalone app — fills an `AppConfig` and calls `se::run`,
+which owns the window, renderer, UI, and main loop. Clients extend it by attaching
+**layers**. A `Layer` is a struct of optional callbacks, the Go-interface pattern rather
+than a virtual base class.
 
 ```cpp
 auto config = se::AppConfig{ /* window */, .onCreate = ..., .onExit = ... };
@@ -24,7 +24,7 @@ See [the main loop](../explanations/app-lifecycle-and-window/main-loop-and-run/)
 
 ## One frame
 
-`run` drives this sequence every frame. The back half is the interesting part: layers
+`run` drives this sequence every frame. The back half does the substantive work: layers
 record GPU work and add render-graph passes, then the renderer derives the barriers and
 executes the frame.
 
@@ -47,15 +47,14 @@ engine's [resource ownership model](../explanations/core-and-conventions/).
 
 ## Render graph
 
-Rather than hand-write barriers and layout transitions, each pass **declares** what it
-does with each resource (`ColorWrite`, `SampledRead`, `StorageImageRWCompute`, …). The
-graph turns those declarations into the right `vk::ImageMemoryBarrier2` /
-`vk::MemoryBarrier2` and layout transitions, then records each pass body inside its
-rendering scope. A pass never writes a barrier by hand.
+Each pass **declares** what it does with each resource (`ColorWrite`, `SampledRead`,
+`StorageImageRWCompute`, …) rather than writing barriers by hand. The graph turns those
+declarations into the right `vk::ImageMemoryBarrier2` / `vk::MemoryBarrier2` and layout
+transitions, then records each pass body inside its rendering scope.
 
-That abstraction makes the rest tractable. Light culling, the scene pass, shadow passes,
-post-processing, and the ImGui pass are all declared passes over imported images. Start
-at the [render graph overview](../explanations/frame-and-render-graph/render-graph-overview/).
+Light culling, the scene pass, shadow passes, post-processing, and the ImGui pass are all
+declared passes over imported images. Start at the
+[render graph overview](../explanations/frame-and-render-graph/render-graph-overview/).
 
 ## Modules
 

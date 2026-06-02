@@ -5,15 +5,17 @@ weight = 5
 
 # Build environment
 
-The engine builds inside a toolbox container, not on the host. The host is Fedora Silverblue, an
-immutable OS with no C++ toolchain by design, so the compiler, Vulkan SDK, and shader tools all
-live in one dedicated container instead.
+The build environment is a single container that holds the entire C++ toolchain. The host runs no
+compiler, so all building, testing, and running happens inside that container.
+
+A toolbox is a Fedora development container with the home directory shared host-side. It isolates
+the toolchain from an immutable host while leaving project files editable from either side.
 
 ## The toolbox
 
 The dev machine is Fedora **Silverblue 43**, ostree-booted, with home under `/var/home`. It ships
 no `g++`/`cmake`/clang/Vulkan SDK on the host. Everything builds inside the **`saffron-build`**
-container (created from `fedora-toolbox:43`). The home directory is shared host↔toolbox, so files
+container, created from `fedora-toolbox:43`. The home directory is shared host-to-toolbox, so files
 edited on the host are visible inside the container immediately.
 
 Every build, test, or run command goes through the toolbox:
@@ -27,14 +29,15 @@ toolbox run -c saffron-build bash -lc '
 '
 ```
 
-The container carries the full toolchain: Clang/Clang++ **21.1.8** with **libc++ 21** (which ships
-the `std` module that `import std` needs), CMake **3.31.11**, Ninja, lld, and Vulkan
-headers/loader/validation-layers/tools **1.4.341**, plus SDL3-devel **3.4.8**. The Slang compiler
-prebuilt lives under `~/.cache/saffron-slang/`. The `debug`/`release` presets pin `clang++`,
+The container carries the full toolchain: Clang/Clang++ **21.1.8** with **libc++ 21**, which ships
+the `std` module that `import std` needs, CMake **3.31.11**, Ninja, lld, and Vulkan
+headers/loader/validation-layers/tools **1.4.341**, plus SDL3-devel **3.4.8**. The prebuilt Slang
+compiler lives under `~/.cache/saffron-slang/`. The `debug`/`release` presets pin `clang++`,
 `-stdlib=libc++`, and `-fuse-ld=lld` with Ninja.
 
-The GPU inside the toolbox is currently **llvmpipe** (Mesa software Vulkan), fine for correctness
-and validation. Hardware acceleration needs `mesa-vulkan-drivers` installed in the container.
+The GPU inside the toolbox is **llvmpipe**, Mesa's software Vulkan, which is sufficient for
+correctness and validation. Hardware acceleration needs `mesa-vulkan-drivers` installed in the
+container.
 
 For headless or automated verification, bound the run so it exits on its own:
 
@@ -44,9 +47,9 @@ SAFFRON_EXIT_AFTER_FRAMES=5 ./build/debug/bin/SaffronEngine
 
 ## Why -j1
 
-Parallel builds in the toolbox intermittently `SIGBUS` on the same Clang 21 + libc++ `import std`
-BMI-serialization ICE described in [module partitions](../module-partitions/). It hits a random
-module TU and is non-deterministic. `-j1` serializes the module builds and is reliable.
+Parallel builds in the toolbox intermittently `SIGBUS` on the Clang 21 + libc++ `import std`
+BMI-serialization ICE described in [module partitions](../module-partitions/). The fault lands on a
+random module TU and is non-deterministic. `-j1` serializes the module builds and is reliable.
 
 > [!WARNING]
 > Build with `-j1`. Parallel module builds in the toolbox intermittently `SIGBUS` on a Clang +

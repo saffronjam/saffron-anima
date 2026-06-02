@@ -5,9 +5,14 @@ weight = 3
 
 # Module partitions
 
-A module like `Saffron.Rendering` is too big for one file. The engine splits it into an interface
-partition plus a set of plain `.cpp` implementation units. The shape of that split is forced by a
-real Clang toolchain bug, not by taste.
+A module partition is a named fragment of a single C++ module, declared with a colon
+(`Saffron.Rendering:Types`), that the primary module interface stitches into one logical unit. A
+module can also be spread across implementation units: plain `.cpp` files that open the module with
+a bare declaration and export nothing.
+
+Together these split a large module across many files. `Saffron.Rendering` uses interface
+partitions for its exported surface and implementation units for its feature code. The choice
+between the two is forced by a Clang toolchain bug rather than by preference.
 
 ## Interface partitions and impl units
 
@@ -50,12 +55,11 @@ In CMake the difference is the file set. Interface partitions go in `FILE_SET CX
 
 ## Why impl units instead of more partitions
 
-The obvious split would make every feature its own interface partition
-(`export module Saffron.Rendering:Pipelines;` and so on). That triggers a flaky Clang 21 + libc++
-`import std` BMI-serialization crash: an internal compiler error in `ASTWriter` while serializing
-std declarations, surfacing as a `SIGBUS` in a random translation unit. An implementation unit
-produces no BMI, so there is nothing to serialize and no ICE. That is the whole reason feature
-code lives in `.cpp` files.
+Making every feature its own interface partition (`export module Saffron.Rendering:Pipelines;` and
+so on) triggers a flaky Clang 21 + libc++ `import std` BMI-serialization crash: an internal compiler
+error in `ASTWriter` while serializing std declarations, surfacing as a `SIGBUS` in a random
+translation unit. An implementation unit produces no BMI, so there is nothing to serialize and no
+ICE. Feature code therefore lives in `.cpp` files.
 
 The same mechanism covers the editor (`:Context` partition plus five `.cpp` units) and the control
 plane (`:Command` partition plus four `.cpp` units). It is the codebase-wide pattern for splitting

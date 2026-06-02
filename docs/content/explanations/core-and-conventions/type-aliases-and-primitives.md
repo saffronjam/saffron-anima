@@ -5,14 +5,18 @@ weight = 3
 
 # Type aliases
 
-`Saffron.Core` sits at the bottom of the module DAG, and most of what it exports is small:
-fixed-width number aliases and a couple of value types every other module reaches for. The
-point is that the names are short and spelled the same everywhere.
+A type alias gives a familiar type a shorter, clearer name. `Saffron.Core` defines a small
+set of them — fixed-width number names and a few value types — that every other module
+shares.
+
+The names are short and spelled identically everywhere, so a declaration shows the width or
+intent of its type at a glance. `Saffron.Core` sits at the bottom of the module DAG, which is
+why these primitives live there.
 
 ## Number aliases
 
-The integer and float types get short, Go-like names so a field declaration reads the same
-width as the type it holds:
+The integer and float types take short, Go-like names so a field declaration reads at the
+same width as the type it holds:
 
 ```cpp
 using u8  = std::uint8_t;
@@ -23,17 +27,16 @@ using f64 = double;
 // … i8…i64, u16 …
 ```
 
-These are used in preference to `int`, `unsigned`, `float`, and `size_t` throughout the
-codebase. A vertex count is a `u32`, a hash or identity is a `u64`, a shader push constant
-is an `f32`. The width is part of the name, so a struct laid out for the GPU shows its byte
-layout at a glance.
+The codebase prefers these to `int`, `unsigned`, `float`, and `size_t`. A vertex count is a
+`u32`, a hash or identity is a `u64`, a shader push constant is an `f32`. The width is part
+of the name, so a struct laid out for the GPU shows its byte layout directly.
 
 ## TimeSpan
 
-A duration is a `TimeSpan`, a one-field struct holding seconds, with a free function to
-read it in other units. This is the [Go-flavored](../go-flavored-design/) shape in
-miniature: plain data, and a free function that transforms it rather than a method buried
-on the type. The frame delta passed to a layer's `onUpdate` is a `TimeSpan`.
+A duration is a `TimeSpan`: a one-field struct holding seconds, with a free function to read
+it in other units. This is the [Go-flavored](../go-flavored-design/) shape in miniature —
+plain data and a free function that transforms it, rather than a method on the type. The
+frame delta passed to a layer's `onUpdate` is a `TimeSpan`.
 
 ```cpp
 struct TimeSpan
@@ -46,9 +49,9 @@ constexpr auto toMilliseconds(TimeSpan span) -> f32 { return span.seconds * 1000
 
 ## Uuid and newUuid
 
-`Uuid` is a stable 64-bit identity. It exists because entt's own `entt::entity` values are
-not stable across runs — they get reused as entities are created and destroyed — so
-anything serialized and reloaded carries a `Uuid` instead.
+`Uuid` is a stable 64-bit identity. entt's own `entt::entity` values are not stable across
+runs, since they are reused as entities are created and destroyed, so anything serialized and
+reloaded carries a `Uuid` instead.
 
 ```cpp
 auto newUuid() -> Uuid
@@ -60,10 +63,9 @@ auto newUuid() -> Uuid
 ```
 
 `newUuid` draws from a static Mersenne Twister seeded once from `random_device`. The
-distribution starts at 1, so a fresh `Uuid` is never zero — zero reads as "unset", which
-is the default member initializer. Catalog assets and saved-scene entities are keyed by
-`Uuid`, which is how a reloaded `project.json` reconnects a `MeshComponent` to the right
-mesh.
+distribution starts at 1, so a fresh `Uuid` is never zero; zero reads as "unset", the
+default member initializer. Catalog assets and saved-scene entities are keyed by `Uuid`,
+which is how a reloaded `project.json` reconnects a `MeshComponent` to the right mesh.
 
 ## In the code
 

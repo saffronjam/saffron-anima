@@ -5,23 +5,21 @@ weight = 7
 
 # JSON gateway
 
-The engine uses nlohmann/json for scene and project files but never calls the library
-directly. `Saffron.Json` is a thin gateway that wraps every fallible JSON operation in the
-engine's [error-as-value style](../error-handling/), because the way nlohmann is built here
-makes the raw API dangerous to touch.
+The JSON gateway is a thin wrapper around nlohmann/json that converts every fallible JSON
+operation into the engine's [error-as-value style](../error-handling/). Scene and project
+files pass through it; engine code never calls the library directly.
 
-## Why a gateway exists
-
-nlohmann/json compiles with `JSON_NOEXCEPTION`. With exceptions disabled, the library's own
-error path is `std::abort()`. A parse error, a `.dump()` on invalid UTF-8, or a typed read
-like `get<T>()` or `at()` on the wrong type doesn't throw — it kills the process. So the
-gateway's whole job is to convert every operation that *would* abort into a `Result` or a
-checked default, so untrusted JSON can never take down the editor.
+The wrapper exists because of how nlohmann/json is configured here. The library compiles
+with `JSON_NOEXCEPTION`, which means its own error path is `std::abort()` rather than a
+thrown exception. A parse error, a `.dump()` on invalid UTF-8, or a typed read such as
+`get<T>()` or `at()` on the wrong type kills the process outright. The gateway turns each
+operation that would abort into a `Result` or a checked default, so untrusted JSON cannot
+take down the editor.
 
 ## Parse and dump
 
 Parsing uses nlohmann's `allow_exceptions = false` overload, which returns a discarded
-value instead of aborting, and the gateway turns that into an `Err`:
+value instead of aborting. The gateway maps that discarded value to an `Err`:
 
 ```cpp
 auto parseJson(std::string_view text) -> Result<Json>
@@ -34,13 +32,13 @@ auto parseJson(std::string_view text) -> Result<Json>
 
 Serializing is the mirror image. `.dump()` aborts on invalid UTF-8, so `dumpJson` passes
 `error_handler_t::replace`, substituting the replacement character instead of dying. A
-negative indent is compact; zero or more pretty-prints with that many spaces.
+negative indent produces compact output; zero or more pretty-prints with that many spaces.
 
-## Typed reads check the type first
+## Typed reads
 
-The dangerous reads are the typed ones — asking a value for a `u64` it doesn't hold. The
-field readers locate the key, verify the stored type, and only then extract. A missing key
-and a wrong type each become a descriptive `Err`, never an abort.
+A typed read asks a value for a type it may not hold, such as a `u64`. The field readers
+locate the key, verify the stored type, and only then extract. A missing key and a wrong
+type each become a descriptive `Err`, never an abort.
 
 ```cpp
 auto jsonString(const Json& object, std::string_view key) -> Result<std::string>
@@ -52,18 +50,18 @@ auto jsonString(const Json& object, std::string_view key) -> Result<std::string>
 }
 ```
 
-`jsonU64` is the most forgiving of the set: it accepts an unsigned number, a non-negative
-signed number, *and* a numeric string — because the `se` CLI passes bare numbers across the
-socket as strings, and the gateway is the natural place to absorb that.
+`jsonU64` accepts the widest range of inputs: an unsigned number, a non-negative signed
+number, and a numeric string. The `se` CLI passes bare numbers across the socket as
+strings, and the gateway absorbs that conversion.
 
 ## Value-or-default variant
 
-Optional fields don't want a `Result` at every call site. For those, each reader has an
-`Or` twin that swallows the error and returns a fallback — `jsonU64Or`, `jsonStringOr`,
-`jsonF32Or`, `jsonBoolOr`. This is what scene and project loading lean on: a field absent
-in older saves reads as its default rather than failing the whole load, which is how a
-[project file](../../geometry-and-assets/project-serialization/) stays forward-compatible
-as components gain fields.
+Optional fields do not want a `Result` at every call site. Each reader therefore has an `Or`
+twin that swallows the error and returns a fallback: `jsonU64Or`, `jsonStringOr`,
+`jsonF32Or`, `jsonBoolOr`. Scene and project loading rely on these. A field absent from an
+older save reads as its default rather than failing the whole load, which is how a
+[project file](../../geometry-and-assets/project-serialization/) stays forward-compatible as
+components gain fields.
 
 ## In the code
 

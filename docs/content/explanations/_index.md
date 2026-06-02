@@ -5,10 +5,11 @@ weight = 10
 
 # Explanations
 
-How each part of the engine works and why it is built that way. Pages are grouped
-into subsystems and run roughly bottom-up, so reading a section top to bottom works.
+Explanations describe how each part of the engine works and why it is built that
+way. Pages are grouped into subsystems and ordered bottom-up, so a section reads
+top to bottom.
 
-Starting cold, the shortest path through the rendering pipeline is:
+The shortest path through the rendering pipeline is:
 
 1. [Error handling](core-and-conventions/error-handling/) and the Go-flavoured style
 2. [Main loop](app-lifecycle-and-window/main-loop-and-run/)
@@ -16,8 +17,8 @@ Starting cold, the shortest path through the rendering pipeline is:
 4. [Cook-Torrance BRDF](lighting-and-brdf/cook-torrance-brdf/)
 5. [Tonemap and exposure](screen-space-and-post/tonemap-and-exposure/)
 
-That spans error reporting to a lit pixel on screen. Everything else fills in around
-that spine.
+That spans error reporting to a lit pixel on screen; the other sections fill in
+around this spine.
 
 ## The subsystems
 

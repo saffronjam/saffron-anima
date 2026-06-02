@@ -5,12 +5,15 @@ weight = 1
 
 # Go-flavored C++
 
-SaffronEngine is C++ written as if it were Go: small data structs, free functions over plain
-data, errors returned as values, no class hierarchies. The whole codebase follows
-`CONVENTIONS.md`, and those rules are not optional. When a design question comes up, the house
-answer is "how would Go do this?"
+Go-flavored C++ is a coding style that uses C++ as if it were Go: small data structs, free
+functions over plain data, errors returned as values, and no class hierarchies. It trades the
+language's object-oriented machinery for the procedural model that Go enforces by design.
 
-## What you use
+SaffronEngine is written entirely in this style. The whole codebase follows `CONVENTIONS.md`, and
+those rules are not optional. The data stays visible, the control flow stays explicit, and a design
+question resolves to one test: how would Go do this.
+
+## Allowed constructs
 
 - **Structs with public fields and methods.** A method is a function with a receiver. Data is
   visible, not buried behind getters.
@@ -22,7 +25,7 @@ answer is "how would Go do this?"
   destructor. They are move-only — the deleted copy plus defaulted move is resource management,
   not the operator overloading the style otherwise bans.
 
-## What is banned
+## Banned constructs
 
 - **Inheritance and `virtual`.** No base classes. A runtime interface is a struct of function
   values, the explicit version of what a Go interface is under the hood. The clearest example is
@@ -36,9 +39,9 @@ answer is "how would Go do this?"
   functions like `add(a, b)`. GLM's operators are fine; they belong to GLM.
 
 Naming is small and uniform: `PascalCase` types and constants, `camelCase` functions and
-variables, `snake_case` files, one `se` namespace. Value-returning functions use a trailing
-return type so the name lands right after `auto` and signatures align in a column; void functions
-stay `void fn(...)`.
+variables, `snake_case` files, one `se` namespace. Value-returning functions use a trailing return
+type so the name lands right after `auto` and signatures align in a column; void functions stay
+`void fn(...)`.
 
 ```cpp
 auto newRenderer(Window& window) -> Result<Renderer>;   // value-returning: trailing return
@@ -47,13 +50,12 @@ void destroyRenderer(Renderer& renderer);               // void stays plain
 
 ## Why it holds up in a renderer
 
-Graphics code is where OOP engines usually grow the deepest hierarchies: a `Resource` base, a
+Graphics code is where object-oriented engines grow the deepest hierarchies: a `Resource` base, a
 `RenderPass` base, a `Material` base. SaffronEngine has none. A render pass is an
 [`RgPass`](../../frame-and-render-graph/render-graph-overview/) struct with a closure inside it. A
-GPU buffer is a move-only struct passed as a `Ref<T>` (a `std::shared_ptr` alias). A component is
-a plain struct the [registry](../../scene-and-ecs/component-registry/) knows how to serialize. The
-data is visible, the control flow is explicit, and there is no vtable to trace when something
-breaks.
+GPU buffer is a move-only struct passed as a `Ref<T>` (a `std::shared_ptr` alias). A component is a
+plain struct the [registry](../../scene-and-ecs/component-registry/) knows how to serialize. No
+vtable stands between the data and the call site when something breaks.
 
 ## In the code
 

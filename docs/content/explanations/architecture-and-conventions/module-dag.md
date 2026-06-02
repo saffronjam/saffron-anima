@@ -5,9 +5,12 @@ weight = 4
 
 # Module DAG
 
-The engine modules form a directed acyclic graph of real imports, not a single chain. Knowing
-which module sits above which tells you where code belongs, and why some glue lives in its own
-module.
+A module DAG is a dependency structure in which each module imports only the modules below it, and no
+import path forms a cycle. The acyclic constraint is what makes the structure a DAG rather than an
+arbitrary graph.
+
+The shape carries information. The position of a module fixes where a piece of code belongs and what
+it may reach, and it explains why some glue must live in a module of its own.
 
 ## The graph
 
@@ -74,9 +77,9 @@ gets the render-graph and renderer types in one import.
 
 The host application glue — the `Layer` callbacks, thumbnail cache, import routing, the
 `onCreate`/`onExit` closures — calls into `App`, `SceneEdit`, `Control`, `Assets`, and the rest at
-once. It cannot live in `Saffron.SceneEdit`, because `Control` already imports `SceneEdit`
-(`Control → SceneEdit`); glue inside `SceneEdit` reaching back into `Control` would form a cycle. So it
-sits in a separate module above everything:
+once. It cannot live in `Saffron.SceneEdit`. `Control` already imports `SceneEdit`
+(`Control → SceneEdit`), so glue inside `SceneEdit` reaching back into `Control` would form a cycle. It
+sits in a separate module above everything instead:
 
 ```cpp
 export module Saffron.Host;

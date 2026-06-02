@@ -5,9 +5,13 @@ weight = 6
 
 # Shader compilation
 
-Shaders are written in Slang and compiled to SPIR-V as part of the CMake build. The engine has no
-runtime shader compiler: every `.slang` file becomes a `.spv` next to the executable before the
+Shader compilation translates shader source into the binary intermediate form the GPU driver
+accepts. Saffron writes shaders in Slang and compiles them to SPIR-V during the CMake build; there
+is no runtime compiler. Every `.slang` file becomes a `.spv` next to the executable before the
 engine starts.
+
+Compiling ahead of time moves the cost off the critical path and surfaces shader errors at build
+time rather than first use. The build is the single place where shader source meets the toolchain.
 
 ## Build-time compile
 
@@ -35,18 +39,18 @@ saffron_compile_shaders(SaffronEngine
     ${SAFFRON_RUNTIME_DIR}/shaders)
 ```
 
-A few flags carry weight. `-emit-spirv-directly` makes Slang emit SPIR-V without bouncing through
-GLSL. `-fvk-use-entrypoint-name` keeps the entry-point names so the renderer can load multiple
+Several flags carry weight. `-emit-spirv-directly` emits SPIR-V without routing through GLSL.
+`-fvk-use-entrypoint-name` preserves the entry-point names, so the renderer can load multiple
 `[shader(...)]`-tagged entry points from one module. `-matrix-layout-column-major` matches GLM's
-column-major matrices, so a CPU-side transform lands in the shader the right way around. All entry
-points in one `.slang` file compile into a single `.spv`.
+column-major matrices, so a CPU-side transform lands in the shader unchanged. All entry points in
+one `.slang` file compile into a single `.spv`.
 
 ## Finding slangc
 
 `Slang.cmake` locates the compiler before anything compiles. It prefers a `slangc` already on
-`PATH` or under `SAFFRON_SLANG_DIR`; failing that it fetches the official prebuilt release (pinned
-to **2026.10**) with a checksum. In the toolbox the prebuilt sits under `~/.cache/saffron-slang/`,
-so the fetch is a no-op after the first configure.
+`PATH` or under `SAFFRON_SLANG_DIR`; otherwise it fetches the official prebuilt release (pinned to
+**2026.10**) and verifies its checksum. In the toolbox the prebuilt sits under
+`~/.cache/saffron-slang/`, so the fetch is a no-op after the first configure.
 
 > [!NOTE]
 > The shader glob uses `CONFIGURE_DEPENDS`, so adding a new `.slang` is picked up on the next

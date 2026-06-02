@@ -5,7 +5,7 @@ weight = 3
 
 # Vulkan foundation
 
-The low-level Vulkan layer the renderer sits on: Vulkan-Hpp with exceptions off (every call returns a checked `Result`), targeting Vulkan 1.4 so there are no render-pass or framebuffer objects.
+The Vulkan foundation is the low-level graphics layer the renderer sits on. It uses Vulkan-Hpp with exceptions off, so every call returns a checked `Result`. It targets Vulkan 1.4, which has no render-pass or framebuffer objects.
 
 ## Pages
 

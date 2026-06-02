@@ -5,13 +5,13 @@ weight = 5
 
 # Dynamic rendering
 
-Classic Vulkan binds attachments through `VkRenderPass` and `VkFramebuffer` objects you build up front and match against your pipelines. The engine has none. It targets Vulkan 1.4 and binds attachments per pass at record time with `beginRendering` / `endRendering`. There is not a single render-pass or framebuffer object anywhere.
+Dynamic rendering is a Vulkan 1.3 feature that binds attachments at command-record time instead of through pre-built `VkRenderPass` and `VkFramebuffer` objects. A pass becomes a closure plus a list of image views, opened and closed with `beginRendering` / `endRendering`.
 
-The reason is that the pass set changes per frame. Shadows, G-buffer, AO, SSGI, DDGI, and ReSTIR passes all come and go with toggles. A render-pass renderer would have to declare attachment formats and subpass dependencies up front, build framebuffers bound to specific image views, and keep pipelines compatible with the pass they run in — a lot of static plumbing for a moving target. Dynamic rendering makes a pass just a closure plus a list of image views.
+The engine targets Vulkan 1.4 and uses dynamic rendering exclusively; there is no render-pass or framebuffer object anywhere. This suits a pass set that changes per frame: shadows, G-buffer, AO, SSGI, DDGI, and ReSTIR passes come and go with toggles, and each one only needs its attachment views supplied at the moment it records.
 
 ## Recording a pass
 
-The whole frame is recorded by `executeRenderGraph`. For each graphics pass it builds the attachment infos, opens a rendering scope, runs the body, and closes the scope:
+`executeRenderGraph` records the whole frame. For each graphics pass it builds the attachment infos, opens a rendering scope, runs the body, and closes the scope:
 
 ```cpp
 cmd.beginRendering(rendering);
@@ -19,17 +19,17 @@ cmd.beginRendering(rendering);
 cmd.endRendering();
 ```
 
-A compute pass has no attachments, so it skips this and just runs its body after its barriers.
+A compute pass has no attachments, so it skips the rendering scope and runs its body after its barriers.
 
 ## Attachment infos
 
-`vk::RenderingInfo` is filled fresh each pass from the graph's tracked image views. Each color attachment becomes a `vk::RenderingAttachmentInfo` whose load/store ops and clear value come straight from the pass's declared [`RgAttachment`](../../frame-and-render-graph/passes-and-attachments/). The layout is always `eColorAttachmentOptimal`, because the [render graph](../../frame-and-render-graph/render-graph-overview/) has already emitted the barrier that put the image there — dynamic rendering does *not* transition layouts for you, so the graph owns that.
+`vk::RenderingInfo` is filled fresh each pass from the graph's tracked image views. Each color attachment becomes a `vk::RenderingAttachmentInfo` whose load/store ops and clear value come from the pass's declared [`RgAttachment`](../../frame-and-render-graph/passes-and-attachments/). The layout is always `eColorAttachmentOptimal` because the [render graph](../../frame-and-render-graph/render-graph-overview/) has already emitted the barrier that put the image there. Dynamic rendering does *not* transition layouts, so the graph owns that.
 
-Several color attachments go into one `setColorAttachments` call, which is how the [thin G-buffer](../../screen-space-and-post/thin-gbuffer/) writes color and normal targets from one MRT pass. A depth attachment, when present, uses `setPDepthAttachment` and `eDepthAttachmentOptimal`.
+Several color attachments go into one `setColorAttachments` call. This is how the [thin G-buffer](../../screen-space-and-post/thin-gbuffer/) writes color and normal targets from one MRT pass. A depth attachment, when present, uses `setPDepthAttachment` and `eDepthAttachmentOptimal`.
 
 ## MSAA resolve in the attachment
 
-[MSAA](../../anti-aliasing/msaa/) resolve is part of the attachment info, not a separate pass. When a color attachment declares a `resolve` target, the attachment gets a resolve mode and view, so the multisampled image is averaged down into the 1× target at end-of-pass:
+[MSAA](../../anti-aliasing/msaa/) resolve is part of the attachment info rather than a separate pass. When a color attachment declares a `resolve` target, the attachment gets a resolve mode and view, and the multisampled image is averaged down into the 1× target at end-of-pass:
 
 ```cpp
 if (att.resolve)
@@ -40,11 +40,11 @@ if (att.resolve)
 }
 ```
 
-In a render-pass world this would be a resolve attachment in the subpass description. With dynamic rendering it's two fields on the attachment info.
+Under a render pass this resolve would be a resolve attachment in the subpass description; with dynamic rendering it is two fields on the attachment info.
 
 ## Dynamic viewport and scissor
 
-After opening the scope, every graphics pass sets a full-area viewport and scissor from the pass extent. The pipelines are built with dynamic viewport/scissor state, so the same pipeline draws at any size without a rebuild — which matters because the offscreen target resizes with the editor panel.
+After opening the scope, every graphics pass sets a full-area viewport and scissor from the pass extent. The pipelines are built with dynamic viewport/scissor state, so the same pipeline draws at any size without a rebuild. This matters because the offscreen target resizes with the editor panel.
 
 ## In the code
 

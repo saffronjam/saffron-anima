@@ -5,9 +5,10 @@ weight = 1
 
 # Core & conventions
 
-The aliases and helper types in `Saffron.Core`, the signal/slot system, and the
-Go-flavored style the whole codebase follows. The error model and ownership rules here
-reappear on every rendering page, so read this first.
+The core is the foundation layer every other module depends on: the type aliases and helper
+types, the error model, the ownership rules, the signal/slot system, and the Go-flavored style
+the whole codebase follows. These conventions reappear on every later page, so this section comes
+first.
 
 ## Pages
 

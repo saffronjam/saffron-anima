@@ -5,10 +5,14 @@ weight = 6
 
 # Signals
 
-Events flow through one primitive: `SubscriberList<Args...>`. A producer publishes, any
-number of handlers subscribe, and a handler can stop the event from reaching the rest. It
-is a single struct template in `Saffron.Signal`, and it is how the window reports input and
-how selection changes ripple through the editor.
+A signal is a typed broadcast channel: a producer publishes an event, and any number of
+subscribed handlers receive it in turn. The pattern decouples the producer from its
+consumers — the producer knows nothing about who listens, only the event's payload type.
+
+Saffron expresses this with one struct template, `SubscriberList<Args...>` in
+`Saffron.Signal`. A handler may stop the event from reaching the rest, which makes the
+list both a fan-out channel and a prioritized chain. The window reports input through it,
+and selection changes ripple through the editor on it.
 
 ## The shape
 
@@ -27,35 +31,34 @@ struct SubscriberList
 };
 ```
 
-A `SubscriberList<Entity>` carries an entity to each handler; a `SubscriberList<u32, u32>`
-carries a resize's width and height. The `Args...` are the event payload, fixed at the
-type. This is a struct with a method set, not a class hierarchy — the
+The `Args...` are the event payload, fixed at the type. A `SubscriberList<Entity>` carries
+an entity to each handler; a `SubscriberList<u32, u32>` carries a resize's width and
+height. This is a struct with a method set, not a class hierarchy — the
 [Go-flavored](../go-flavored-design/) shape applied to events.
 
-## Subscribe returns a token
+## Subscription tokens
 
-`subscribe` stores the handler under a monotonically increasing id and hands back a
-`SubscriptionId`, a thin `u64` wrapper. You hold it to call `unsubscribe(id)` later, which
-erases the matching entry. Ids only ever increase, so a stale token can't accidentally
+`subscribe` stores the handler under a monotonically increasing id and returns a
+`SubscriptionId`, a thin `u64` wrapper. The caller holds it to call `unsubscribe(id)`
+later, which erases the matching entry. Ids only ever increase, so a stale token cannot
 match a newer subscription.
 
-## A handler returns bool to stop
+## Stop-propagation dispatch
 
-The handler returns `bool`, meaning "stop here". `publish` walks the subscribers in order
-and breaks the moment one returns `true`. This is explicit, Go-style control flow:
-returning `true` is a visible decision in the handler, not a hidden `event.consumed` flag
-mutated somewhere. It is exactly how ImGui takes priority over the rest of the app — its
-event sink returns `true` when it wants a keystroke or click, and later handlers never see
-it.
+A handler returns `bool` to mean "stop here". `publish` walks the subscribers in order and
+breaks the moment one returns `true`, so each list is also a priority chain. The decision
+is explicit: returning `true` is a visible statement in the handler, not a hidden
+`event.consumed` flag mutated elsewhere. ImGui takes priority over the rest of the app this
+way — its event sink returns `true` when it wants a keystroke or click, and later handlers
+never see the event.
 
-## Publish iterates a snapshot
+## Snapshot iteration
 
-`publish` copies `entries` into a local snapshot before looping, because a handler is
-allowed to subscribe or unsubscribe during dispatch — which would otherwise mutate the
-vector being iterated. Iterating the copy fixes the set of handlers for this publish at the
-moment it starts; changes take effect on the next event. It costs one vector copy per
-publish, cheap for the handful of subscribers these lists carry, and it removes a whole
-class of reentrancy bug.
+A handler may subscribe or unsubscribe during dispatch, which would mutate the vector being
+iterated. `publish` guards against that by copying `entries` into a local snapshot before
+looping. The snapshot fixes the set of handlers for this publish at the moment it starts;
+any change takes effect on the next event. The cost is one vector copy per publish — cheap
+for the handful of subscribers these lists carry — and it removes a class of reentrancy bug.
 
 ```cpp
 void publish(Args... args) const
@@ -71,10 +74,10 @@ void publish(Args... args) const
 ## Where it is used
 
 The [window](../../app-lifecycle-and-window/window-and-events/) owns the most-used lists:
-`onResize`, `onKeyPressed`, and friends are each a `SubscriberList`, plus a raw
+`onResize`, `onKeyPressed`, and the rest are each a `SubscriberList`, alongside a raw
 `eventSinks` list ImGui feeds off. The editor uses a `SubscriberList<Entity>` for
-selection, so the hierarchy, inspector, and gizmo all stay in sync without knowing about
-each other. A producer publishes; whoever cares subscribed.
+selection, so the hierarchy, inspector, and gizmo stay in sync without knowing about each
+other.
 
 ## In the code
 
@@ -87,7 +90,7 @@ each other. A producer publishes; whoever cares subscribed.
 
 > [!NOTE]
 > A subscribe/unsubscribe done inside a handler doesn't change who else receives the
-> current event — `publish` froze the list before the loop. Your change lands on the next
+> current event — `publish` froze the list before the loop. The change lands on the next
 > publish.
 
 ## Related

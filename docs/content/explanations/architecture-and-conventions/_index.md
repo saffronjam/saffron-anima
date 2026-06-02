@@ -5,9 +5,9 @@ weight = 16
 
 # Architecture & conventions
 
-How the codebase fits together: the C++26 named-module DAG, the toolbox build, the
-shader pipeline, and the Go-flavored style the whole engine follows. Read this before
-contributing.
+The engine's architecture and conventions are the structure and rules that hold the codebase
+together. They cover the C++26 named-module DAG, the toolbox build, the shader pipeline, and
+the Go-flavored style the whole codebase follows.
 
 ## Pages
 
