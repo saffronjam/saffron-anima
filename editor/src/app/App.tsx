@@ -15,6 +15,8 @@ import { Topbar } from "../panels/Topbar";
 import { Layout } from "./Layout";
 import { useGizmoShortcuts } from "./useGizmoShortcuts";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ProjectStartupModal } from "./ProjectStartupModal";
+import type { ProjectInfo } from "../control/client";
 
 type EnginePhaseEvent = "starting" | "attaching";
 
@@ -34,8 +36,10 @@ function revealEditorWindow(): Promise<void> {
 
 export function App() {
   const setPhase = useEditorStore((s) => s.setPhase);
+  const setProject = useEditorStore((s) => s.setProject);
   const phase = useEditorStore((s) => s.engineStatus.phase);
   const [revealed, setRevealed] = useState(didRevealWindow);
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
 
   // W/E/R → translate/rotate/scale, gated off while a text field is focused.
   useGizmoShortcuts();
@@ -95,6 +99,36 @@ export function App() {
     return stop;
   }, []);
 
+  useEffect(() => {
+    if (phase !== "ready") {
+      return;
+    }
+    let cancelled = false;
+    const syncProject = async (): Promise<void> => {
+      try {
+        const [info, project] = await Promise.all([client.appDataInfo(), client.getProject()]);
+        if (cancelled) {
+          return;
+        }
+        setProject(project.loaded ? project : null);
+        setProjectModalOpen(!project.loaded && !info.envProject && !info.autoEmptyProject);
+      } catch {
+        if (!cancelled) {
+          setProjectModalOpen(false);
+        }
+      }
+    };
+    void syncProject();
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, setProject]);
+
+  const handleProjectLoaded = (project: ProjectInfo): void => {
+    setProject(project);
+    setProjectModalOpen(false);
+  };
+
   return (
     <TooltipProvider delayDuration={300}>
       <div
@@ -104,6 +138,7 @@ export function App() {
         <MenuBar />
         <Topbar />
         <Layout />
+        <ProjectStartupModal open={projectModalOpen} onProjectLoaded={handleProjectLoaded} />
         <footer className="flex h-[22px] flex-none items-center justify-end border-t border-border bg-card px-3">
           <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
             {phase}
