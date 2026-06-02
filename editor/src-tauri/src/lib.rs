@@ -24,6 +24,29 @@ struct EditorState {
     socket_path: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppDataInfo {
+    app_data_dir: String,
+    userdata_dir: String,
+    env_project: bool,
+    auto_empty_project: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecentProject {
+    path: String,
+    name: String,
+    display_name: String,
+    last_opened_at: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RecentProjects {
+    projects: Vec<RecentProject>,
+}
+
 impl Default for EditorState {
     fn default() -> Self {
         Self {
@@ -54,6 +77,37 @@ fn repo_root() -> PathBuf {
         .and_then(|path| path.parent())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn app_data_dir() -> PathBuf {
+    repo_root().join("appdata")
+}
+
+fn userdata_dir() -> PathBuf {
+    app_data_dir().join("userdata")
+}
+
+fn recents_path() -> PathBuf {
+    app_data_dir().join("recent-projects.json")
+}
+
+fn ensure_app_dirs() -> Result<(), String> {
+    fs::create_dir_all(userdata_dir()).map_err(|err| format!("create app data dirs: {err}"))
+}
+
+fn read_recent_projects_file() -> RecentProjects {
+    let path = recents_path();
+    let Ok(text) = fs::read_to_string(path) else {
+        return RecentProjects::default();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn write_recent_projects_file(recents: &RecentProjects) -> Result<(), String> {
+    ensure_app_dirs()?;
+    let text = serde_json::to_string_pretty(recents)
+        .map_err(|err| format!("encode recent projects: {err}"))?;
+    fs::write(recents_path(), text).map_err(|err| format!("write recent projects: {err}"))
 }
 
 fn parent_xid(window: &tauri::WebviewWindow) -> Result<u64, String> {
@@ -113,9 +167,11 @@ fn control_request(socket_path: &str, command: &str) -> Result<Value, String> {
 
 fn spawn_engine(socket_path: &str) -> Result<Child, String> {
     let _ = fs::remove_file(socket_path);
+    ensure_app_dirs()?;
     Command::new(engine_binary())
         .env("SAFFRON_EDITOR_NATIVE_VIEWPORT", "1")
         .env("SAFFRON_CONTROL_SOCK", socket_path)
+        .env("SAFFRON_APPDATA_DIR", app_data_dir())
         .env("SDL_VIDEODRIVER", "x11")
         .current_dir(repo_root())
         .stdout(Stdio::inherit())
@@ -212,6 +268,38 @@ fn quit_engine(state: State<'_, EditorState>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn app_data_info() -> Result<AppDataInfo, String> {
+    ensure_app_dirs()?;
+    Ok(AppDataInfo {
+        app_data_dir: app_data_dir().to_string_lossy().into_owned(),
+        userdata_dir: userdata_dir().to_string_lossy().into_owned(),
+        env_project: std::env::var_os("SAFFRON_PROJECT").is_some(),
+        auto_empty_project: std::env::var_os("SAFFRON_AUTO_EMPTY_PROJECT").is_some(),
+    })
+}
+
+#[tauri::command]
+fn list_recent_projects() -> Result<RecentProjects, String> {
+    ensure_app_dirs()?;
+    let mut recents = read_recent_projects_file();
+    recents.projects.retain(|project| PathBuf::from(&project.path).exists());
+    recents.projects.truncate(12);
+    write_recent_projects_file(&recents)?;
+    Ok(recents)
+}
+
+#[tauri::command]
+fn remember_recent_project(project: RecentProject) -> Result<RecentProjects, String> {
+    ensure_app_dirs()?;
+    let mut recents = read_recent_projects_file();
+    recents.projects.retain(|recent| recent.path != project.path);
+    recents.projects.insert(0, project);
+    recents.projects.truncate(12);
+    write_recent_projects_file(&recents)?;
+    Ok(recents)
+}
+
 // Spawn the engine + poll readiness on a background thread, emitting engine-phase /
 // viewport-error events. React drives the actual attach (it owns the viewport rect).
 fn auto_start(handle: &AppHandle) -> Result<(), String> {
@@ -266,7 +354,10 @@ pub fn run() {
             attach_native_viewport,
             resize_native_viewport,
             quit_engine,
-            engine_alive
+            engine_alive,
+            app_data_info,
+            list_recent_projects,
+            remember_recent_project
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
