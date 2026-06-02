@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project-info.schema.json",
+  "title": "ProjectInfo",
+  "description": "The active project state: whether a project is loaded plus its root, project file path, stable name, and display name.",
+  "type": "object",
+  "properties": {
+    "loaded": { "type": "boolean" },
+    "root": { "type": "string" },
+    "path": { "type": "string" },
+    "name": { "type": "string" },
+    "displayName": { "type": "string" }
+  },
+  "required": ["loaded", "root", "path", "name", "displayName"],
+  "additionalProperties": false
+}
