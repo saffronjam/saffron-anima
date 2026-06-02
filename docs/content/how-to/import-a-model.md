@@ -8,6 +8,9 @@ math = false
 
 Bring a glTF or OBJ model into the project. Three methods are available.
 
+You need an active project first. The editor startup modal creates or opens one, and tests can
+select one with `SAFFRON_PROJECT=<project-name>`.
+
 ## Steps
 
 Choose the one that fits:
@@ -18,7 +21,7 @@ Choose the one that fits:
    ```sh
    se import-model /path/to/model.gltf
    ```
-   `import-model` bakes the mesh to a `.smesh`, uploads it, imports the primary material's albedo, adds catalog entries, then spawns an entity with the mesh + material.
+   `import-model` bakes the mesh to a project-local `.smesh`, uploads it, imports the primary material's albedo, adds catalog entries, then spawns an entity with the mesh + material.
 
 To import just a texture (assign it to a material later):
 ```sh
@@ -28,6 +31,7 @@ se import-texture /path/to/albedo.png
 ## Verify
 
 - List the catalog: `se list-assets` — the mesh (and any albedo texture) appears with name and id.
+- Check the project folder: meshes are under `assets/models`, textures under `assets/textures`.
 - The **Assets** panel shows a tile (3D thumbnail for meshes, image for textures).
 - After `import-model` the new entity is selected. Screenshot it:
   ```sh
@@ -47,3 +51,4 @@ se import-texture /path/to/albedo.png
 - [Import pipeline](../../explanations/geometry-and-assets/import-pipeline/)
 - [glTF and OBJ import](../../explanations/geometry-and-assets/gltf-and-obj-import/)
 - [Asset catalog](../../explanations/geometry-and-assets/asset-server-and-catalog/)
+- [Project files](../../explanations/geometry-and-assets/project-serialization/)

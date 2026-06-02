@@ -21,7 +21,7 @@ textures by UUID, caches their GPU resources, names them in a catalog, and feeds
 | `asset-server-and-catalog` | `AssetServer`, UUID→GPU caches, the named/renameable catalog | `assets.cppm` · `AssetServer` |
 | `import-pipeline` | `importModel` / `importTexture`, baking, negative caching | `assets.cppm` |
 | `draw-list` | `renderScene` → flat `DrawItem` list, `(mesh, albedo)` instanced buckets | `assets.cppm`; `renderer_drawlist.cpp` · `submitDrawList` |
-| `project-serialization` | `saveProject`/`loadProject`, the unified `project.json`, legacy migration | `assets.cppm` |
+| `project-serialization` | project folders, `project.json`, app-data startup, local assets | `assets.cppm`; `control_commands_asset.cpp` |
 
 > [!NOTE]
 > Per-submesh multi-material (`materialSlot`) is reserved in the data model but not yet

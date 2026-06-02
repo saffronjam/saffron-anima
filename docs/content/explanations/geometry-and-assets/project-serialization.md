@@ -5,34 +5,52 @@ weight = 9
 
 # Project files
 
-A project is the asset catalog and the scene serialized together into one file, `project.json`.
-A scene refers to its meshes and textures by UUID; the catalog is the table those UUIDs resolve
-against. Persisting both in one document guarantees that a saved project always carries the catalog
-its scene needs.
+A project is a folder with one `project.json` and a project-local `assets/` directory. A
+scene refers to meshes and textures by UUID; the catalog in `project.json` maps those UUIDs
+to files under the project's asset root. Keeping both in one project folder means the editor
+can copy or archive a project without depending on repo-root runtime assets.
 
-`saveProject` writes the two halves together and `loadProject` replaces them together. A version
-field at the document root gates loading, and an older two-file layout is migrated on first read.
+During local development, app data lives under repo-root `appdata/`, with user projects under
+`appdata/userdata/<project-name>/`. Packaged builds can swap that base directory behind the
+same app-data helper.
+
+```text
+appdata/userdata/<project-name>/
+  project.json
+  assets/
+    models/
+    textures/
+```
+
+The project name is the stable folder-safe id. `displayName` is stored separately in the
+project file and is what the editor shows to users.
 
 ## How it works
 
-A project save serializes three things into one JSON document: a version, the asset catalog, and
-the scene. The catalog half lists every asset by id, name, type, and path. The scene half is the
-registry-driven scene serializer. A load reverses this, after first making the GPU idle so the
-previous project's resources can be released safely.
+A project save serializes five things into one JSON document: a version, the project name,
+the display name, the asset catalog, and the scene. The catalog lists every asset by id, name,
+type, and path. The scene half is the registry-driven scene serializer. A load reverses this,
+after first making the GPU idle so the previous project's resources can be released safely.
 
 ## One document, two halves
 
-```cpp
-inline constexpr int ProjectVersion = 1;
-
-auto saveProject(AssetServer& assets, ComponentRegistry& reg, Scene& scene,
-                 const std::string& path) -> Result<void>
+```json
 {
-    nlohmann::json doc;
-    doc["version"] = ProjectVersion;
-    doc["assets"]  = catalogToJson(assets.catalog);
-    doc["scene"]   = sceneToJson(reg, scene);
-    // write doc to path...
+  "version": 1,
+  "name": "sample-project",
+  "displayName": "Sample Project",
+  "assets": [
+    {
+      "id": 3862017159553017004,
+      "name": "cube",
+      "type": "mesh",
+      "path": "models/3862017159553017004.smesh"
+    }
+  ],
+  "scene": {
+    "version": 2,
+    "entities": []
+  }
 }
 ```
 
@@ -41,9 +59,9 @@ as a string (`"mesh"`/`"texture"`/`"other"`), so the file stays readable and sta
 reordering. `sceneToJson` is the registry-driven scene serializer. The `version` field is checked
 on load; an unrecognized version is an `Err` rather than a best-effort parse.
 
-Two things are deliberately not saved: the GPU caches and `AssetServer::root`. The catalog stores
-paths relative to the root, and the root is set when the server is created. A project file is
-therefore portable across machines as long as the asset directory travels with it.
+Two things are deliberately not saved: the GPU caches and the absolute `AssetServer::root`.
+The catalog stores paths relative to `<project-root>/assets`, and the root is set when the
+project opens.
 
 ## Loading replaces both, after a device idle
 
@@ -62,7 +80,29 @@ Vulkan buffers that may still be referenced by a frame in flight. So `loadProjec
 empty, the new scene's UUIDs re-resolve from the new catalog on the next `renderScene`,
 [uploading lazily](../asset-server-and-catalog/) as they are first drawn.
 
-## Legacy migration
+## Startup and commands
+
+The Tauri editor owns startup project choice. If `SAFFRON_PROJECT` is set, the engine opens
+that project immediately. The value can be a project name under app data, a project directory,
+or a direct `project.json` path. `SAFFRON_AUTO_EMPTY_PROJECT=1` creates an empty test project
+without showing the startup modal.
+
+The control plane exposes project-aware commands:
+
+- `get-project` returns the active project state.
+- `new-project` creates and opens a project.
+- `open-project` opens an existing project folder or file.
+- `save-project` saves the active project when no path is passed.
+- `load-project` remains as a compatibility alias for older tooling.
+
+## Project-local assets
+
+Imported meshes are baked under `assets/models/<uuid>.smesh`. Imported textures are copied
+under `assets/textures/<uuid>.<ext>`. `import-model`, `import-texture`, and the cube/model
+entity preset require an active project so imports cannot accidentally write into the engine's
+runtime asset directory.
+
+## Legacy compatibility
 
 An older `asset_registry.json` mapped id → path, with no names. `newAssetServer` migrates it on
 construction:
@@ -79,6 +119,9 @@ and dedups it with `uniqueName`. After migration the catalog lives in `project.j
 other catalog. The legacy file is read defensively: anything that is not a string entry under
 `meshes`/`textures` is skipped.
 
+Old project catalogs may also contain mesh paths beginning with `meshes/`. Loading keeps those
+paths working. New imports and new saves use `models/`.
+
 ## In the code
 
 | What | File | Symbols |
@@ -87,6 +130,7 @@ other catalog. The legacy file is read defensively: anything that is not a strin
 | Load the project | `assets.cppm` | `loadProject` |
 | Catalog ↔ JSON | `assets.cppm` | `catalogToJson`, `catalogFromJson`, `assetTypeName` |
 | Legacy migration | `assets.cppm` | `newAssetServer` |
+| Project commands | `control_commands_asset.cpp` | `get-project`, `new-project`, `open-project`, `save-project` |
 | Scene half | `scene.cppm` | `sceneToJson`, `sceneFromJson` |
 
 > [!WARNING]

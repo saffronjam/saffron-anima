@@ -73,6 +73,9 @@ Every command registered in `Saffron.Control` and driven by the `se` CLI over th
 
 | Command | Params | Effect |
 |---|---|---|
+| `get-project` | — | active project metadata `{loaded, root, path, name, displayName}` |
+| `new-project` | `{name, displayName?, root?}` | create and open a project |
+| `open-project` | `{path}` | open a project name, directory, or `project.json` |
 | `import-model` | `{path}` | import + bake a model, spawn an entity carrying it (selected) |
 | `import-texture` | `{path}` | import an image into the asset dir; returns its texture id |
 | `list-assets` | — | the project catalog `{id, name, type, path}` |
@@ -80,8 +83,8 @@ Every command registered in `Saffron.Control` and driven by the `se` CLI over th
 | `assign-asset` | `{entity, slot:mesh\|albedo, id\|name}` | assign a catalog asset to the entity's Mesh/Material |
 | `save-scene` | `{path}` | write the scene JSON |
 | `load-scene` | `{path}` | read a scene JSON (deselects) |
-| `save-project` | `{path=project.json}` | assets catalog + scene in one file |
-| `load-project` | `{path=project.json}` | load catalog + scene (deselects) |
+| `save-project` | `{path?}` | save the active project, or save to `path` |
+| `load-project` | `{path=project.json}` | compatibility alias for opening a project (deselects) |
 | `get-thumbnail` | `{asset:id\|name, size=128}` | base64 PNG preview (mesh = 3D render, texture = the image) |
 | `view-asset` | `{asset:id\|name, size=512}` | larger base64 PNG preview (same body as `get-thumbnail`) |
 | `screenshot` | `{target:viewport\|window, path}` | PNG; `viewport` is synchronous, `window` is written at end of frame |
