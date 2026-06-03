@@ -96,15 +96,13 @@ hand-rolled CSS. shadcn is not an npm dependency — `shadcn init` writes `compo
 `src/lib/utils.ts` (`cn`) + the theme CSS variables, and `shadcn add <component>` copies each
 component's source into `src/components/ui/` (we own + can tweak it). Setup follows the official
 Vite guide: a `@/*` path alias in `tsconfig.json` + `vite.config.ts`, `@types/node`, and the
-Tailwind Vite plugin. The editor runs in one known-modern webview, so the dark **`theme::`
-palette** (`ui.cppm:32-47`) is mapped 1:1 onto shadcn's CSS tokens (`--background` `#242424`,
-`--primary` = accent `#ec9e24`, `--input` = propertyField `#0f0f0f`, `--border` = muted
-`#4d4d4d`, `--muted`/`--accent` = groupHeader `#2f2f2f`, `--foreground` `#c0c0c0`, `--popover`
-`#3f464d`, …) and the app is forced dark. lucide-react (already used) is shadcn's icon set, and
-shadcn's `resizable` IS `react-resizable-panels` (phase-9's dock layout). **Phase 9 is therefore
-expressed in shadcn terms** (theme = the token mapping; chrome = Button / DropdownMenu /
-ContextMenu / Select / Slider / Tabs / ScrollArea / Separator / Dialog / Tooltip). Panels built in
-phases 3–8 use shadcn from the start; any built before this decision was recorded are retrofitted.
+Tailwind Vite plugin. The editor runs in one known-modern webview and uses shadcn's CSS token
+shape (`--background`, `--primary`, `--border`, …) with neutral app-level values. lucide-react
+(already used) is shadcn's icon set, and shadcn's `resizable` IS `react-resizable-panels`
+(phase-9's dock layout). **Phase 9 is therefore expressed in shadcn terms** (theme tokens plus
+Button / DropdownMenu / ContextMenu / Select / Slider / Tabs / ScrollArea / Separator / Dialog /
+Tooltip). Panels built in phases 3–8 use shadcn from the start; any built before this decision was
+recorded are retrofitted.
 **Occlusion still applies:** Radix popovers/dialogs/menus portal to the document root — any that
 would overlap the reparented X11 viewport rect must render outside it or while the native window
 is unmapped (same rule as the loading overlay).

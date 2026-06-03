@@ -3,12 +3,8 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Bundle the engine's editor fonts into the webview (Tauri runs offline/CSP-
-   restricted, so no Google-Fonts CDN). These are the same TTFs the C++ editor
-   loads (Roboto-Regular UI + RobotoMono-Regular data fields, ui.cppm:478-489).
-   The --font-sans/--font-mono theme vars below name these families, so declaring
-   @font-face here makes them resolve. url() is resolved by Vite relative to this
-   file, so the .ttf is fingerprinted into the build. */
+/* Keep local font files available for offline Tauri builds. The theme uses system
+   fonts by default, but these faces remain available to component-level styles. */
 @font-face {
   font-family: "Roboto";
   src: url("./assets/fonts/Roboto-Regular.ttf") format("truetype");
@@ -24,52 +20,49 @@
   font-display: swap;
 }
 
-/* The editor is ALWAYS dark: the engine `theme::` palette drives both `:root`
-   and `.dark`, and index.html pins `class="dark"` on <html> so component
-   dark: variants resolve. Hexes mirror the C++ editor theme exactly. */
 :root {
-  --background: #242424;
-  --foreground: #c0c0c0;
-  --card: #1a1a1a;
-  --card-foreground: #c0c0c0;
-  --popover: #3f464d;
-  --popover-foreground: #d2d2d2;
-  --primary: #ec9e24;
-  --primary-foreground: #151515;
-  --secondary: #2f2f2f;
-  --secondary-foreground: #d2d2d2;
-  --muted: #2f2f2f;
-  --muted-foreground: #808080;
-  --accent: #2f2f2f;
-  --accent-foreground: #d2d2d2;
-  --destructive: #b91c1c;
-  --destructive-foreground: #f5f5f5;
-  --border: #4d4d4d;
-  --input: #0f0f0f;
-  --ring: #ec9e24;
-  --radius: 0.15rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --radius: 0.5rem;
 }
 
 .dark {
-  --background: #242424;
-  --foreground: #c0c0c0;
-  --card: #1a1a1a;
-  --card-foreground: #c0c0c0;
-  --popover: #3f464d;
-  --popover-foreground: #d2d2d2;
-  --primary: #ec9e24;
-  --primary-foreground: #151515;
-  --secondary: #2f2f2f;
-  --secondary-foreground: #d2d2d2;
-  --muted: #2f2f2f;
-  --muted-foreground: #808080;
-  --accent: #2f2f2f;
-  --accent-foreground: #d2d2d2;
-  --destructive: #b91c1c;
-  --destructive-foreground: #f5f5f5;
-  --border: #4d4d4d;
-  --input: #0f0f0f;
-  --ring: #ec9e24;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
 }
 
 @theme inline {
@@ -98,14 +91,8 @@
   --radius-lg: calc(var(--radius) + 2px);
   --radius-xl: calc(var(--radius) + 4px);
 
-  /* The families are bundled via the @font-face rules above. UI chrome (labels,
-     buttons, menus, hierarchy names) uses --font-sans (Roboto); data/number fields
-     (NumberDrag/VectorEditor/ColorField inputs, RenderStats counters, entity/asset
-     ids) use --font-mono (Roboto Mono) via Tailwind `font-mono`, mirroring the C++
-     uiMonoFont rule (editor_app.cppm:373). */
-  --font-sans: "Roboto", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-    sans-serif;
-  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 @layer base {
@@ -123,7 +110,7 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
-    font-size: 13px;
+    font-size: 14px;
     -webkit-font-smoothing: antialiased;
   }
 }

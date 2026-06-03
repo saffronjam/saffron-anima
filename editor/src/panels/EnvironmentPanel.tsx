@@ -253,8 +253,8 @@ export function EnvironmentPanel() {
 
 function PanelHeader() {
   return (
-    <div className="flex h-[30px] flex-none items-center border-b border-border px-2.5">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <div className="flex h-10 flex-none items-center border-b border-border px-3">
+      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         Environment
       </span>
     </div>

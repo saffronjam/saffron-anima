@@ -1,33 +1,26 @@
-# Phase 9: Theme, fonts, and dock-like layout parity
+# Phase 9: Theme, fonts, and dock-like layout
 
 **Status:** COMPLETED
 
-<!-- Flip to COMPLETED when the "Done when" checklist passes, validation-clean. Delete this file only after COMPLETED + merged. -->
-
 > **UI toolkit (cross-cutting decision — see the migration README):** the editor uses
-> **shadcn/ui + Tailwind v4**, so this phase is expressed in shadcn terms. The design tokens below
-> become the **shadcn CSS-variable theme** (the `theme::` palette mapped 1:1 onto
-> `--background`/`--primary`/`--input`/`--border`/… with the app forced dark); the hand-rolled
-> buttons/tabs/menus/inputs become shadcn primitives (Button, Tabs, DropdownMenu, ContextMenu,
-> Select, Slider, Input, ScrollArea, Separator, Dialog, Tooltip); and the resizable dock layout
-> uses shadcn's `resizable` (which wraps `react-resizable-panels`, named below). Fonts (Roboto +
-> Roboto Mono) layer on via the Tailwind theme + `@font-face`. The shadcn foundation (Tailwind +
-> `components.json` + base components + the token theme) is set up early and the phases 3–8 panels
-> are built/retrofitted on it; phase 9 finalizes the exact token values, font bundling, and the
-> dock layout/bounds-sync.
+> **shadcn/ui + Tailwind v4**, so this phase is expressed in shadcn terms. The design tokens become
+> the app-level shadcn CSS-variable theme; buttons/tabs/menus/inputs become shadcn primitives
+> (Button, Tabs, DropdownMenu, ContextMenu, Select, Slider, Input, ScrollArea, Separator, Dialog,
+> Tooltip); and the resizable dock layout uses shadcn's `resizable` wrapper over
+> `react-resizable-panels`. Local font files are available through `@font-face`, while the theme
+> defaults to system font stacks. The shadcn foundation (Tailwind + `components.json` + base
+> components + token theme) is set up early and the phases 3–8 panels are built/retrofitted on it;
+> phase 9 finalizes the token plumbing, font availability, and dock layout/bounds-sync.
 
 ## Goal
 
-Bring the TS/Tauri editor to visual + ergonomic parity with the retiring C++ ImGui
-editor: replace the MVP's ad-hoc inline CSS with design tokens + a dark theme that
-matches the engine's `theme::` palette, load Roboto + Roboto Mono (mono for
-data/number fields, mirroring `uiMonoFont`), and adopt a resizable/dockable layout
-that reproduces the default DockBuilder arrangement (Hierarchy/Inspector left, Assets
-bottom, Viewport center). The viewport panel must keep its reparented native X11 child
-window glued to its rect across every dock/panel split-resize, committing the final
-bounds on resize-end so the per-tick `resize-native-viewport` volume stays bounded.
+Bring the TS/Tauri editor onto shadcn/Tailwind primitives with app-level design tokens,
+local font availability, and a resizable layout: Hierarchy/Inspector left, Assets bottom,
+Viewport center. The viewport panel must keep its reparented native X11 child window glued
+to its rect across every dock/panel split-resize, committing the final bounds on resize-end
+so the per-tick `resize-native-viewport` volume stays bounded.
 
-This is the last UI-polish phase before phase-10 retires the C++ editor. It adds **no
+This is a UI-polish phase. It adds **no
 new control commands and no new shared DTOs** — it consumes the existing
 `resize-native-viewport` command (phase-1), the `set-gizmo` command family (phase-2/4),
 and the typed client + Zustand store from phase-3. By this phase all data panels
@@ -45,8 +38,8 @@ phase-1's `resize-native-viewport` and phase-3's `ViewportPanel` bounds-sync glu
   `wt:editor/src/styles.css` (259 lines). It hardcodes hex colors throughout (no
   tokens): `:root { color: #e5e7eb; background: #111316 }` (`styles.css:1-7`), buttons
   `#242930`/`#2d333b`/`#36404b` (`styles.css:20-46`), inputs `#0f1216` with
-  `font-variant-numeric: tabular-nums` (`styles.css:48-58`). These hexes are **NOT** the
-  engine palette (see below) — they must be re-derived from `theme::`.
+  `font-variant-numeric: tabular-nums` (`styles.css:48-58`). The replacement should use
+  shadcn semantic tokens instead of component-local raw colors.
 - The shell is a fixed two-region grid, **not dockable/resizable**:
   `.app-shell { grid-template-rows: 44px 1fr }` (`styles.css:60-65`) and
   `.workspace { grid-template-columns: 260px 1fr }` (`styles.css:118-122`) — a fixed
@@ -74,34 +67,8 @@ phase-1's `resize-native-viewport` and phase-3's `ViewportPanel` bounds-sync glu
   `setInterval` + `window.addEventListener("resize", …)` calling `resize_native_viewport`
   only on a real diff vs `lastViewportBoundsRef` (`wt:editor/src/main.tsx:156-190`).
 
-### Engine theme + fonts + layout to match (main — the parity target)
-- The C++ palette is `namespace theme` in `engine/source/saffron/ui/ui.cppm:30-48`
-  (all `IM_COL32(r,g,b,a)`):
-  - `accent = (236,158,36)` → `#EC9E24` (saffron orange — checkmarks, sliders, docking preview, nav)
-  - `highlight = (39,185,242)` → `#27B9F2`
-  - `background = (36,36,36)` → `#242424` (window/child bg)
-  - `backgroundDark = (26,26,26)` → `#1A1A1A` (scrollbar bg, separators, header-active, docking-empty)
-  - `titlebar = (21,21,21)` → `#151515` (menu/title/tab-dimmed bg)
-  - `propertyField = (15,15,15)` → `#0F0F0F` (frame bg = input bg)
-  - `text = (192,192,192)` → `#C0C0C0`
-  - `textBrighter = (210,210,210)` → `#D2D2D2`
-  - `textDarker = (128,128,128)` → `#808080` (disabled text)
-  - `muted = (77,77,77)` → `#4D4D4D` (borders, buttons, frame-active)
-  - `groupHeader = (47,47,47)` → `#2F2F2F` (headers, button-hover, frame-hover)
-  - `selection = (237,192,119)` → `#EDC077`
-  - `selectionMuted = (237,201,142,23)` → `rgba(237,201,142,0.09)` (text-selected bg)
-  - `backgroundPopup = (63,70,77)` → `#3F464D` (popup bg)
-- Style metrics (`ui.cppm:251-255`): `FrameRounding 2.5`, `FrameBorderSize 1.0`,
-  `WindowBorderSize 1.0`, `TabRounding 3.5`, `IndentSpacing 11.0`. The axis-reset
-  buttons use a 1px frame rounding (`ui.cppm:321`).
-- Fonts (`ui.cppm:478-489`): UI default `Roboto-Regular.ttf` at **17px**, mono
-  `RobotoMono-Regular.ttf` at **16px** loaded into `Ui.monoFont` (`ui.cppm:125`,
-  `uiMonoFont` at `ui.cppm:144,633`). The inspector pushes the mono font for data fields
-  (`editor_app.cppm:373: ImGui::PushFont(se::uiMonoFont(app.ui))`). The TTFs exist at
-  `editor/assets/fonts/{Roboto-Regular.ttf,RobotoMono-Regular.ttf}` (both 33896/22780
-  bytes; copied to `editor-old/assets/fonts/` after the phase-1 move — verified present
-  in `wt:editor-old/assets/fonts/`).
-- The default dock layout is built once in `uiBeginFrame` (`ui.cppm:558-579`):
+### Layout and local assets
+- The dock layout uses these default split ratios:
   - `DockSpaceOverViewport` → split **Left 0.20** off center (`ui.cppm:569`)
   - split **Down 0.28** off the remaining center → bottom (`ui.cppm:570`)
   - split the left node **Down 0.55** → `leftBottom` (`ui.cppm:571`)
@@ -113,7 +80,7 @@ phase-1's `resize-native-viewport` and phase-3's `ViewportPanel` bounds-sync glu
   Their C++ usage mapping is in `editor_app.cppm:101-107` (mesh=box, texture=image,
   file=file, view=eye, point-light=lightbulb, spot-light=flashlight, camera=camera).
   These all have direct `lucide-react` equivalents: `Box`, `Camera`, `Eye`, `File`,
-  `Flashlight`, `Image`, `Lightbulb` — so icon parity is name-mapping, not asset work.
+  `Flashlight`, `Image`, `Lightbulb`.
 
 ### Phase-3/phase-1 plumbing this phase builds on
 - `editor/src/panels/ViewportPanel.tsx` already owns the host div + generalized
@@ -141,41 +108,16 @@ phase-1's `resize-native-viewport` and phase-3's `ViewportPanel` bounds-sync glu
 Ordered steps. All paths under `editor/` unless noted. Build/check inside the toolbox
 (`bun run check`); the engine is unaffected by this phase (no C++ changes).
 
-### 1. Design tokens (`editor/src/styles/tokens.css`)
-Create `editor/src/styles/tokens.css` exposing the engine palette as CSS custom
-properties on `:root`, derived 1:1 from `theme::` (`ui.cppm:32-47`). Use these exact
-hex values so the TS editor reads as the same product:
+### 1. Design tokens (`editor/src/styles.css`)
+Define the shadcn CSS variables on `:root` and `.dark`, and export them through
+Tailwind's `@theme inline` block:
 ```css
 :root {
-  /* surfaces */
-  --bg:            #242424; /* theme::background      */
-  --bg-dark:       #1a1a1a; /* theme::backgroundDark  */
-  --titlebar:      #151515; /* theme::titlebar        */
-  --field:         #0f0f0f; /* theme::propertyField   */
-  --popup:         #3f464d; /* theme::backgroundPopup */
-  --group-header:  #2f2f2f; /* theme::groupHeader     */
-  --muted:         #4d4d4d; /* theme::muted (borders) */
-  /* text */
-  --text:          #c0c0c0; /* theme::text            */
-  --text-bright:   #d2d2d2; /* theme::textBrighter    */
-  --text-dim:      #808080; /* theme::textDarker      */
-  /* accent / state */
-  --accent:        #ec9e24; /* theme::accent          */
-  --highlight:     #27b9f2; /* theme::highlight       */
-  --selection:     #edc077; /* theme::selection       */
-  --selection-bg:  rgba(237,201,142,0.09); /* theme::selectionMuted */
-  /* axis colors (match the C++ vec3Control red/green/blue reset buttons) */
-  --axis-x:        #b91c1c;
-  --axis-y:        #15803d;
-  --axis-z:        #1d4ed8;
-  /* metrics (mirror ui.cppm:251-255) */
-  --radius:        2.5px;   /* FrameRounding   */
-  --radius-tab:    3.5px;   /* TabRounding     */
-  --border-w:      1px;     /* Frame/WindowBorderSize */
-  --font-ui:       "Roboto", ui-sans-serif, system-ui, sans-serif;
-  --font-mono:     "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-size-ui:  14px;
-  --font-size-data:13px;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --border: oklch(0.922 0 0);
+  --radius: 0.5rem;
 }
 ```
 > Keep the C++ point sizes (17/16) as a ratio, not literal px — webview CSS px at
@@ -332,16 +274,12 @@ No engine CMake change. Frontend only:
 
 ## Done when
 
-- [ ] `editor/src/styles/tokens.css` + `theme.css` exist; **no raw hex** remains in
-      component styles (only `var(--…)`); the palette values match `theme::`
-      (`ui.cppm:32-47`) exactly (accent `#ec9e24`, bg `#242424`, field `#0f0f0f`, etc.).
-- [ ] The editor visually matches the C++ dark theme: saffron-orange accent on
-      checkmarks/sliders/active tabs, `#242424` panels, `#151515` title bars,
-      `#0f0f0f` input fields, `#c0c0c0` text — side-by-side with `editor-old`
-      SaffronEditor it reads as the same product.
-- [ ] Roboto + Roboto Mono are bundled (`editor/src/assets/fonts/`) and loaded via
-      `@font-face` + `index.html` preload (no CDN); first paint shows Roboto, not the
-      MVP's Inter/system fallback.
+- [ ] shadcn theme variables exist in `editor/src/styles.css`; component styles use
+      semantic tokens instead of raw colors.
+- [ ] The editor uses the shared shadcn primitives consistently for menus, tabs,
+      controls, dialogs, scroll areas, and split handles.
+- [ ] Roboto + Roboto Mono are available locally via `@font-face` (no CDN), while the
+      app theme can default to system font stacks.
 - [ ] **Data/number fields are monospace** (VectorEditor/NumberDrag inputs, RenderStats
       numbers, entity/asset ids) while chrome (labels/buttons/menus/hierarchy names) is
       Roboto — matching the C++ `uiMonoFont` usage (`editor_app.cppm:373`).

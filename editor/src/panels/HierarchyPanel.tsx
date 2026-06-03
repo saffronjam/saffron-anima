@@ -56,8 +56,8 @@ export function HierarchyPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-[30px] flex-none items-center justify-between border-b border-border pr-2 pl-2.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex h-10 flex-none items-center justify-between border-b border-border px-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Hierarchy
         </span>
         <CreateMenu />
@@ -77,7 +77,7 @@ export function HierarchyPanel() {
                     role="option"
                     aria-selected={entity.id === selectedId}
                     className={cn(
-                      "block w-full truncate rounded-sm px-2 py-1 text-left text-xs",
+                      "block w-full truncate rounded-md px-2.5 py-1.5 text-left text-sm",
                       entity.id === selectedId
                         ? "bg-primary text-primary-foreground"
                         : "text-foreground hover:bg-accent",

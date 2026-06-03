@@ -42,11 +42,11 @@ export function Layout() {
         <ResizablePanelGroup orientation="horizontal" onLayoutChanged={emitLayoutSettled}>
           <ResizablePanel defaultSize={20} minSize={12} className="min-w-0">
             <ResizablePanelGroup orientation="vertical" onLayoutChanged={emitLayoutSettled}>
-              <ResizablePanel defaultSize={45} minSize={15} className="min-h-0 bg-card">
+              <ResizablePanel defaultSize={45} minSize={15} className="min-h-0 bg-background">
                 <HierarchyPanel />
               </ResizablePanel>
               <ResizableHandle />
-              <ResizablePanel defaultSize={55} minSize={15} className="min-h-0 bg-card">
+              <ResizablePanel defaultSize={55} minSize={15} className="min-h-0 bg-background">
                 <LeftBottomTabs />
               </ResizablePanel>
             </ResizablePanelGroup>
@@ -58,7 +58,7 @@ export function Layout() {
         </ResizablePanelGroup>
       </ResizablePanel>
       <ResizableHandle />
-      <ResizablePanel defaultSize={28} minSize={12} className="min-h-0 bg-card">
+      <ResizablePanel defaultSize={28} minSize={12} className="min-h-0 bg-background">
         <AssetsPanel />
       </ResizablePanel>
     </ResizablePanelGroup>
@@ -74,15 +74,15 @@ function LeftBottomTabs() {
     <Tabs defaultValue="inspector" className="flex h-full min-h-0 flex-col gap-0">
       <TabsList
         variant="line"
-        className="h-9 flex-none justify-start gap-0 rounded-none border-b border-border bg-card px-1.5"
+        className="h-10 flex-none justify-start gap-0 rounded-none border-b border-border bg-background px-2"
       >
-        <TabsTrigger value="inspector" className="px-2 text-[11px]">
+        <TabsTrigger value="inspector" className="px-3 text-xs">
           Inspector
         </TabsTrigger>
-        <TabsTrigger value="environment" className="px-2 text-[11px]">
+        <TabsTrigger value="environment" className="px-3 text-xs">
           Environment
         </TabsTrigger>
-        <TabsTrigger value="stats" className="px-2 text-[11px]">
+        <TabsTrigger value="stats" className="px-3 text-xs">
           Stats
         </TabsTrigger>
       </TabsList>

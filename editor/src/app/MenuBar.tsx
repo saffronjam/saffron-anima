@@ -189,10 +189,10 @@ export function MenuBar() {
   };
 
   return (
-    <div className="flex h-[34px] flex-none items-center gap-3 border-b border-border bg-card px-2">
-      <Menubar className="h-7 border-0 bg-transparent p-0 shadow-none">
+    <div className="flex h-10 flex-none items-center gap-3 border-b border-border bg-background px-3">
+      <Menubar className="h-8 border-0 bg-transparent p-0 shadow-none">
         <MenubarMenu>
-          <MenubarTrigger disabled={!ready} className="h-7 px-2 text-[12px]">
+          <MenubarTrigger disabled={!ready} className="h-8 px-2 text-sm">
             File
           </MenubarTrigger>
           <MenubarContent align="start" className="min-w-48">
@@ -214,7 +214,7 @@ export function MenuBar() {
           </MenubarContent>
         </MenubarMenu>
         <MenubarMenu>
-          <MenubarTrigger disabled={!ready} className="h-7 px-2 text-[12px]">
+          <MenubarTrigger disabled={!ready} className="h-8 px-2 text-sm">
             Create
           </MenubarTrigger>
           <MenubarContent align="start" className="min-w-44">
@@ -228,7 +228,7 @@ export function MenuBar() {
         </MenubarMenu>
       </Menubar>
       {status ? (
-        <span className="truncate text-[11px] text-muted-foreground" title={status}>
+        <span className="truncate text-xs text-muted-foreground" title={status}>
           {status}
         </span>
       ) : null}

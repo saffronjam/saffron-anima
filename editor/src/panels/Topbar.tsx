@@ -30,7 +30,7 @@ export function Topbar() {
   };
 
   return (
-    <header className="flex h-[38px] flex-none items-center justify-between border-b border-border bg-card px-3">
+    <header className="flex h-12 flex-none items-center justify-between border-b border-border bg-background px-4">
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="font-semibold tracking-tight">Saffron Editor</span>
         {project ? (
@@ -118,7 +118,7 @@ export function Topbar() {
           </Button>
         </div>
       </div>
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{phase}</div>
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{phase}</div>
     </header>
   );
 }

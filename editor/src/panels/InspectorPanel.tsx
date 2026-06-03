@@ -84,8 +84,8 @@ export function InspectorPanel() {
   if (!selectedId || !inspected || !componentsObj) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-[30px] flex-none items-center border-b border-border px-2.5">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="flex h-10 flex-none items-center border-b border-border px-3">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Inspector
           </span>
         </div>
@@ -166,8 +166,8 @@ export function InspectorPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-[30px] flex-none items-center border-b border-border px-2.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex h-10 flex-none items-center border-b border-border px-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Inspector
         </span>
       </div>
@@ -181,8 +181,8 @@ export function InspectorPanel() {
                 key={component}
                 className="overflow-hidden rounded-md border border-border bg-background"
               >
-                <header className="flex h-[26px] items-center justify-between border-b border-border bg-card pr-1 pl-2.5">
-                  <span className="text-[11px] font-semibold tracking-wide text-foreground">
+                <header className="flex h-8 items-center justify-between border-b border-border bg-muted/50 pr-1 pl-2.5">
+                  <span className="text-xs font-semibold tracking-wide text-foreground">
                     {component}
                   </span>
                   {removable ? (

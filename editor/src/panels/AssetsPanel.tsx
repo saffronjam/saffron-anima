@@ -113,13 +113,13 @@ export function AssetsPanel() {
       className="flex h-full min-h-0 flex-col"
       data-asset-panel="true"
     >
-      <div className="flex h-[30px] flex-none items-center justify-between border-b border-border px-2.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex h-10 flex-none items-center justify-between border-b border-border px-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Assets
         </span>
         <Button
           type="button"
-          size="xs"
+          size="sm"
           variant="ghost"
           className="gap-1 text-muted-foreground hover:text-foreground"
           onClick={() => void onImportClick()}
@@ -138,7 +138,7 @@ export function AssetsPanel() {
           }
         >
           {assets.length === 0 ? (
-            <p className="px-1 py-3 text-center text-[11px] italic text-muted-foreground">
+            <p className="px-1 py-3 text-center text-xs italic text-muted-foreground">
               No assets yet — import or drag-and-drop a model or texture.
             </p>
           ) : (
