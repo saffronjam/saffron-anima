@@ -178,6 +178,12 @@ export function ViewportPanel() {
         attachedRef.current = true;
         lastBoundsRef.current = bounds;
         setPhase("ready");
+        // Dev diagnostic: VITE_PARK_VIEWPORT keeps the engine running and feeding the UI
+        // but holds its native window off-screen, so the webview chrome is never composited
+        // over — a way to feel the populated editor without the reparented viewport on top.
+        if (import.meta.env.VITE_PARK_VIEWPORT) {
+          useEditorStore.getState().setViewportHidden(true);
+        }
       } catch (err) {
         if (cancelled) {
           return;
