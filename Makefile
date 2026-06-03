@@ -24,6 +24,19 @@ DOCS := $(REPO)docs
 TOOLBOX := saffron-build
 BUN_BIN := /var/home/saffronjam/.bun/bin
 
+# NVIDIA Vulkan ICD for interactive runs. The toolbox carries the NVIDIA GL/EGL userspace
+# (and a working nvidia-smi) but not the Vulkan ICD manifest, so the engine otherwise falls
+# back to llvmpipe and renders the whole PBR pipeline in software — pegging the CPU and
+# starving the editor's webview. Point the loader at the host manifest (it names
+# libGLX_nvidia.so.0, which IS present, and matches the loaded 580.x kernel module). Resolves
+# to the host copy inside the toolbox, the local copy on a bare host, and empty when neither
+# exists (no NVIDIA / other machine) — in which case runs keep their software behaviour.
+NVIDIA_ICD := $(firstword $(wildcard /run/host/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json /usr/share/vulkan/icd.d/nvidia_icd.x86_64.json))
+# VK_ADD_DRIVER_FILES *adds* the NVIDIA ICD to the default search rather than replacing it, so
+# llvmpipe stays available as a fallback — vk-bootstrap prefers the discrete GPU when it can
+# present (the real X11 session) and falls back to software if it can't (e.g. headless).
+GPU_ENV := $(if $(NVIDIA_ICD),VK_ADD_DRIVER_FILES=$(NVIDIA_ICD))
+
 # Recursive make, aliased so it is NOT force-run under `make -n` (a recipe line with the
 # literal $(MAKE) is always executed even in dry-run; via $(MK) it stays a real preview).
 MK := $(MAKE)
@@ -33,10 +46,10 @@ CPP_LS := git -C "$(REPO)" ls-files '*.cppm' '*.cpp' | grep -vE '^(cmake/|third_
 
 # Targets whose tools (clang, cargo, Vulkan, slang, the toolbox-linked engine binary)
 # live only in the toolbox. On the host these re-enter it; inside, they run directly.
-TOOLBOX_TARGETS := check engine editor schema e2e run run-engine format lint prepare-for-commit
+TOOLBOX_TARGETS := check engine editor schema e2e run run-engine run-software format lint prepare-for-commit
 
 .DEFAULT_GOAL := help
-.PHONY: help check engine editor schema e2e run run-engine run-docs format lint prepare-for-commit
+.PHONY: help check engine editor schema e2e run run-engine run-software run-docs format lint prepare-for-commit
 
 ## help: list the available targets (default; runs on the host, no toolbox)
 help:
@@ -53,7 +66,10 @@ help:
 	@echo 'Run:'
 	@echo '  make run                - start the Tauri editor (it spawns the engine host)'
 	@echo '  make run-engine         - start only the engine host (present-only, for debugging)'
+	@echo '  make run-software       - run the editor forcing the llvmpipe software GPU (control case)'
 	@echo '  make run-docs           - serve the Hugo docs site locally (http://localhost:1313/saffron-engine/)'
+	@echo
+	@echo 'run / run-engine use the real NVIDIA GPU when its Vulkan ICD is found; run-software forces llvmpipe.'
 	@echo
 	@echo 'Quality:'
 	@echo '  make format             - clang-format the C++ + oxfmt the editor TypeScript'
@@ -99,12 +115,16 @@ e2e:
 
 ## run: start the Tauri editor, which spawns build/debug/bin/SaffronEngine as a native child
 run:
+	cd "$(EDITOR)" && $(GPU_ENV) bun run tauri dev
+
+## run-software: run the editor on the llvmpipe software GPU (control case; ignores the NVIDIA ICD)
+run-software:
 	cd "$(EDITOR)" && bun run tauri dev
 
 ## run-engine: start only the present-only engine host (control plane + viewport, no editor)
 run-engine:
 	@test -x "$(ENGINE_BIN)" || { echo "engine not built — run 'make engine' first"; exit 1; }
-	"$(ENGINE_BIN)"
+	$(GPU_ENV) "$(ENGINE_BIN)"
 
 ## format: clang-format the C++ in place + oxfmt the editor TypeScript
 format:
