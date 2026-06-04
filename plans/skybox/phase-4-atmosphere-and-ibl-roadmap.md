@@ -15,15 +15,20 @@ This phase should not block the first usable skybox.
 > (`ibl_prefilter.slang`), BRDF integration LUT (`ibl_brdf.slang`), and PBR roughness/metalness
 > materials sampling them (`mesh.slang` set 3). The "Diffuse Irradiance", "Specular Reflections",
 > and most of "Cubemap Conversion" items below are therefore **DONE** — for the *procedural*
-> source. What remains genuinely future:
-> - **HDR `.hdr` import** — decode is sRGB RGBA8 only today (stb_image, `geometry.cppm:568-603`);
->   needs `stb_image`'s `stbi_loadf` float path + `uploadTextureFloat` + a float bindless slot.
-> - **User equirect→cubemap + IBL re-bake from a user panorama** — feed a loaded HDR equirect
->   into `bakeEnvironment` (an equirect→cube prepass) instead of the procedural skygen, then
->   re-run the existing irradiance/prefilter/BRDF passes. (Phase 3 already adds on-demand
->   re-bake for the procedural params; this extends the *source*.)
-> - **Reflection probes, procedural atmosphere LUTs, clouds, time-of-day** — all still future,
->   as below.
+> source. The two HDR items this note once listed as future have since shipped as their own
+> phases:
+> - **HDR `.hdr` import** — DONE, see `phase-4-hdr-textures.md` (COMPLETED): `decodeImageHdr`
+>   (`stbi_loadf`), `uploadTextureFloat` (rgba16f into the shared bindless array), and the
+>   catalog `AssetEntry.hdr` flag. The "HDR Texture Support" section below is satisfied except
+>   `.exr` (still deferred on dependency cost) and richer usage metadata (only the `hdr` bool
+>   exists; the `TextureUsage` design is sketched in that section below).
+> - **User equirect→cubemap + IBL re-bake from a user panorama** — DONE, see
+>   `phase-5-equirect-ibl-and-ddgi-sky.md` (COMPLETED): `ibl_equirect.slang` projects the
+>   panorama into the env cube via `EnvSource::Equirect` / `requestEnvBake`, then the existing
+>   irradiance/prefilter/BRDF chain runs; sky color routed into DDGI.
+>
+> What remains genuinely future: **reflection probes, procedural atmosphere LUTs, clouds,
+> time-of-day** (phases 6–8), plus the `.exr` / metadata leftovers noted above.
 
 ## HDR Texture Support
 
@@ -31,12 +36,62 @@ True HDR skies need float textures.
 
 Work items:
 
-- Add `.hdr` decode through `stb_image` float loading.
-- Consider `.exr` later if dependency cost is acceptable.
-- Add `uploadTextureFloat` or generalized upload path.
-- Use `vk::Format::eR16G16B16A16Sfloat` or `eR32G32B32A32Sfloat`.
-- Add asset metadata for color space and texture usage.
-- Avoid treating HDR sky textures as sRGB RGBA8.
+- Add `.hdr` decode through `stb_image` float loading. — DONE (phase-4-hdr-textures)
+- Consider `.exr` later if dependency cost is acceptable. — still deferred
+- Add `uploadTextureFloat` or generalized upload path. — DONE (phase-4-hdr-textures)
+- Use `vk::Format::eR16G16B16A16Sfloat` or `eR32G32B32A32Sfloat`. — DONE (rgba16f)
+- Add asset metadata for color space and texture usage. — partially done (`AssetEntry.hdr`
+  bool); the full design is sketched below.
+- Avoid treating HDR sky textures as sRGB RGBA8. — DONE
+
+### Texture usage metadata (design sketch, researched 2026-06)
+
+The `hdr` bool collapses color space and bit depth into one flag. That holds while the only
+textures are albedo (sRGB) and HDR panoramas (linear float), and breaks the moment normal or
+data maps arrive: a normal map is LDR *and* linear, so `hdr = false` would wrongly route it
+through the sRGB path and the sampler would de-gamma the vectors.
+
+Every major engine converges on the same shape — a per-texture *usage* classifier from which
+color space, format, and sampling derive, with usage auto-detected at import:
+
+- **Unreal:** `TextureCompressionSettings` (`TC_Default`/`TC_Normalmap`/`TC_Masks`/`TC_HDR`/…)
+  picks the format and constrains the separate `sRGB` flag (Masks/HDR/Alpha force it off);
+  usage auto-detected from filename suffixes (`_N` → Normalmap).
+- **Unity:** `TextureImporter.textureType` (`Default`/`NormalMap`/`Lightmap`/…) +
+  `sRGBTexture`, where the type drives the defaults and sRGB is only meaningful for
+  color-class textures.
+- **Godot 4:** infers usage (`Normal Map: Detect`, `Detect 3D`) and reimports accordingly.
+- **glTF 2.0:** stores *no* per-image color-space field at all — the material slot is the
+  usage (baseColor/emissive MUST be sRGB; normal/metallicRoughness/occlusion MUST be linear).
+
+Orthogonal `colorSpace` × `usage` fields create unrepresentable-nonsense combinations (sRGB
+float, sRGB normal map); no surveyed engine keeps them independent. The right shape here is a
+single enum replacing the bool:
+
+```cpp
+enum class TextureUsage { Color, Normal, Data, Hdr };
+// AssetEntry: replace `bool hdr` with `TextureUsage usage = TextureUsage::Color;`
+```
+
+| Usage | Decode | Upload format | Note |
+|-------|--------|---------------|------|
+| `Color` | `stbi_load` | `eR8G8B8A8Srgb` | today's albedo path |
+| `Normal` | `stbi_load` | `eR8G8B8A8Unorm` | linear — sRGB corrupts the vectors |
+| `Data` | `stbi_load` | `eR8G8B8A8Unorm` | roughness/metallic/AO |
+| `Hdr` | `stbi_loadf` | `eR16G16B16A16Sfloat` | today's `hdr = true` path, unchanged |
+
+- Serialize `"usage"` as a string with default `Color`; map a legacy `"hdr": true` to `Hdr` on
+  read — the same no-version-bump trick the bool itself used.
+- Detection: `.hdr` extension → `Hdr` (already in place); glTF material slot → usage when
+  material-texture import lands (the glTF way); optionally a `_n`/`_normal` filename sniff for
+  loose imports (the Unreal way).
+- No descriptor work: all four usages land in the same bindless array — the same reason the
+  bool was structurally free.
+- Out of scope until proven needed: block compression (BC5/BC7), platform overrides, and an
+  sRGB *override* flag (Godot's `HDR as sRGB` exists only because mislabeled files exist).
+
+This belongs to whichever plan first imports non-albedo textures (a material-textures plan),
+not to the skybox work — it is recorded here because the `hdr` bool is where it grafts on.
 
 ## Cubemap Conversion
 
@@ -152,14 +207,14 @@ This should be a scene system or editor tool, not baked into the renderer.
 
 ## Suggested Long-Term Order
 
-1. Visible skybox from LDR equirectangular texture.
-2. RGB ambient.
-3. HDR texture import.
-4. Equirectangular-to-cubemap conversion.
-5. Diffuse SH irradiance.
-6. PBR material model.
-7. Specular IBL.
-8. Reflection probes.
-9. Procedural atmosphere.
-10. Clouds and time of day.
+1. Visible skybox from LDR equirectangular texture. — DONE (phase 2)
+2. RGB ambient. — DONE (phase 3)
+3. HDR texture import. — DONE (phase-4-hdr-textures)
+4. Equirectangular-to-cubemap conversion. — DONE (phase 5, `ibl_equirect.slang`)
+5. Diffuse SH irradiance. — DONE as an irradiance cubemap instead (`ibl_irradiance.slang`)
+6. PBR material model. — DONE (lighting plan phase 1)
+7. Specular IBL. — DONE (lighting plan phase 2)
+8. Reflection probes. — future (phase 6)
+9. Procedural atmosphere. — future (phase 7)
+10. Clouds and time of day. — future (phase 8)
 
