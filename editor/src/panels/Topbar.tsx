@@ -8,6 +8,7 @@ import { useEditorStore } from "../state/store";
 import type { GizmoState } from "../protocol";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ProjectMenu } from "../app/ProjectMenu";
 
 type GizmoOp = GizmoState["op"];
 type GizmoSpace = GizmoState["space"];
@@ -16,7 +17,6 @@ export function Topbar() {
   const phase = useEditorStore((s) => s.engineStatus.phase);
   const gizmo = useEditorStore((s) => s.gizmo);
   const setGizmo = useEditorStore((s) => s.setGizmo);
-  const project = useEditorStore((s) => s.project);
 
   const ready = phase === "ready";
 
@@ -32,10 +32,7 @@ export function Topbar() {
   return (
     <header className="flex h-12 flex-none items-center justify-between border-b border-border bg-background px-4">
       <div className="flex min-w-0 items-baseline gap-2">
-        <span className="font-semibold tracking-tight">Saffron Editor</span>
-        {project ? (
-          <span className="truncate text-xs text-muted-foreground">{project.displayName}</span>
-        ) : null}
+        <ProjectMenu />
       </div>
       <div className="flex items-center gap-2.5">
         <div
