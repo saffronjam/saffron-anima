@@ -10,12 +10,8 @@ import { useEffect, useState } from "react";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
 import type { AssetEntry } from "../protocol";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 
 /// Preview render size (px), matching the C++ View re-render.
 const VIEW_SIZE = 512;
@@ -36,29 +32,42 @@ export interface AssetViewerProps {
 }
 
 export function AssetViewer({ entry, onClose }: AssetViewerProps) {
+  const open = entry !== null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle className="truncate font-mono text-sm">{entry?.name ?? "Asset"}</DialogTitle>
+        </DialogHeader>
+        {entry ? <AssetPreview entry={entry} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function AssetPreview({ entry, className }: { entry: AssetEntry; className?: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const setViewportHidden = useEditorStore((s) => s.setViewportHidden);
-  const open = entry !== null;
 
-  // Park the native viewport off-screen while the modal is open so the dialog is
-  // actually visible over the viewport rect; restore it on close/unmount.
+  // Park the native viewport off-screen while a webview preview occupies the main
+  // content area; restore it on unmount.
   useEffect(() => {
-    if (!open) {
-      return;
-    }
     setViewportHidden(true);
     return () => {
       setViewportHidden(false);
     };
-  }, [open, setViewportHidden]);
+  }, [setViewportHidden]);
 
   // Fetch the 512 preview when the asset changes; revoke the previous URL and the
   // final URL on close/unmount (no blob leak — this URL is NOT the shared cache).
   useEffect(() => {
-    if (!entry) {
-      setUrl(null);
-      return;
-    }
     let cancelled = false;
     let created: string | null = null;
     void client
@@ -83,33 +92,17 @@ export function AssetViewer({ entry, onClose }: AssetViewerProps) {
   }, [entry]);
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) {
-          onClose();
-        }
-      }}
+    <div
+      className={cn(
+        "flex aspect-square w-full items-center justify-center overflow-hidden rounded-md border border-border bg-muted",
+        className,
+      )}
     >
-      <DialogContent className="sm:max-w-[560px]">
-        <DialogHeader>
-          <DialogTitle className="truncate font-mono text-sm">
-            {entry?.name ?? "Asset"}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-md border border-border bg-muted">
-          {url ? (
-            <img
-              src={url}
-              alt={entry?.name ?? "preview"}
-              className="size-full object-contain"
-              draggable={false}
-            />
-          ) : (
-            <span className="text-xs italic text-muted-foreground">Rendering preview…</span>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+      {url ? (
+        <img src={url} alt={entry.name} className="size-full object-contain" draggable={false} />
+      ) : (
+        <span className="text-xs italic text-muted-foreground">Rendering preview...</span>
+      )}
+    </div>
   );
 }

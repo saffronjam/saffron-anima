@@ -4,12 +4,19 @@
 /// / `AssetDragPayload`). Double-click opens the View modal. Parity target:
 /// `assetCatalogPanel` (editor_panels.cpp:226-325) + the `thumbnailFor` fallbacks.
 import { useEffect, useRef, useState } from "react";
-import { Box, File, Image as ImageIcon } from "lucide-react";
+import { Box, Eye, File, Image as ImageIcon, Pencil, Trash } from "lucide-react";
 import { client } from "../control/client";
-import { getThumbnailUrl, useEditorStore } from "../state/store";
+import { getCachedThumbnailUrl, getThumbnailUrl, useEditorStore } from "../state/store";
 import type { AssetEntry } from "../protocol";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 /// The DnD payload written to `application/x-se-asset` (distinct from an OS file
 /// drop). `type` lets a drop target type-gate the accept (parity with the C++
@@ -52,14 +59,29 @@ function TypeIcon({ type }: { type: AssetEntry["type"] }) {
 export interface AssetTileProps {
   entry: AssetEntry;
   onView(entry: AssetEntry): void;
+  onDelete(entry: AssetEntry): void;
+  confirmingDelete?: boolean;
+  deleteBody?: string;
+  onConfirmDelete?(entry: AssetEntry): void;
+  onCancelDelete?(): void;
 }
 
 /// Render the grid thumbnail at 128 px (parity with editor_app.cppm:138) and
 /// display it at the 72-px tile size (parity with `tileSize`).
 const THUMBNAIL_FETCH_SIZE = 128;
 
-export function AssetTile({ entry, onView }: AssetTileProps) {
-  const [url, setUrl] = useState<string | null>(null);
+export function AssetTile({
+  entry,
+  onView,
+  onDelete,
+  confirmingDelete = false,
+  deleteBody,
+  onConfirmDelete,
+  onCancelDelete,
+}: AssetTileProps) {
+  const [url, setUrl] = useState<string | null>(() =>
+    getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE),
+  );
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.name);
   const refreshAssets = useEditorStore((s) => s.refreshAssets);
@@ -69,7 +91,7 @@ export function AssetTile({ entry, onView }: AssetTileProps) {
   // `*Icon.id` fallback in thumbnailFor).
   useEffect(() => {
     let cancelled = false;
-    setUrl(null);
+    setUrl(getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE));
     void getThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE)
       .then((resolved) => {
         if (!cancelled) {
@@ -108,58 +130,129 @@ export function AssetTile({ entry, onView }: AssetTileProps) {
   const onDragStart = (event: React.DragEvent<HTMLDivElement>): void => {
     const payload: AssetDragPayload = { id: entry.id, type: entry.type };
     event.dataTransfer.setData(ASSET_DND_MIME, JSON.stringify(payload));
-    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.effectAllowed = "copyMove";
+  };
+
+  const beginRename = (): void => {
+    setDraft(entry.name);
+    setEditing(true);
   };
 
   return (
-    <div
-      // Editing disables the drag so a tile-drag never starts while typing.
-      draggable={!editing}
-      onDragStart={onDragStart}
-      onDoubleClick={() => onView(entry)}
-      title={`${entry.name}\n${entry.path}`}
-      className={cn(
-        "group flex w-[72px] cursor-grab flex-col gap-1 rounded-md border border-border bg-background p-1",
-        "transition-colors hover:border-ring hover:bg-accent/40 active:cursor-grabbing",
-      )}
-    >
-      <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
-        {url ? (
-          <img
-            src={url}
-            alt={entry.name}
-            className="size-full object-contain"
-            draggable={false}
-          />
-        ) : (
-          <TypeIcon type={entry.type} />
-        )}
-      </div>
-      {editing ? (
-        <RenameInput
-          value={draft}
-          onChange={setDraft}
-          onCommit={commitRename}
-          onCancel={() => {
-            setEditing(false);
-            setDraft(entry.name);
-          }}
+    <div className="relative w-[72px]">
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            // Editing disables the drag so a tile-drag never starts while typing.
+            draggable={!editing}
+            onDragStart={onDragStart}
+            onDoubleClick={() => onView(entry)}
+            title={`${entry.name}\n${entry.path}`}
+            className={cn(
+              "group flex w-[72px] cursor-grab flex-col gap-1 rounded-md border border-border bg-background p-1",
+              "transition-colors hover:border-ring hover:bg-accent/40 active:cursor-grabbing",
+            )}
+          >
+            <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
+              {url ? (
+                <img
+                  src={url}
+                  alt={entry.name}
+                  className="size-full object-contain"
+                  draggable={false}
+                />
+              ) : (
+                <TypeIcon type={entry.type} />
+              )}
+            </div>
+            {editing ? (
+              <RenameInput
+                value={draft}
+                onChange={setDraft}
+                onCommit={commitRename}
+                onCancel={() => {
+                  setEditing(false);
+                  setDraft(entry.name);
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="truncate rounded-sm px-0.5 text-center text-[10px] leading-tight text-foreground hover:bg-accent"
+                title={entry.name}
+              >
+                {entry.name}
+              </button>
+            )}
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="min-w-32">
+          <ContextMenuItem onSelect={() => onView(entry)}>
+            <Eye />
+            View
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={beginRename}>
+            <Pencil />
+            Rename
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            variant="destructive"
+            className="bg-destructive/10 text-destructive focus:bg-destructive focus:text-destructive-foreground"
+            onSelect={() => onDelete(entry)}
+          >
+            <Trash />
+            Delete
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {confirmingDelete && onConfirmDelete && onCancelDelete ? (
+        <DeleteConfirm
+          title={`Delete ${entry.name}?`}
+          body={deleteBody ?? "This removes the catalog entry and imported file."}
+          onConfirm={() => onConfirmDelete(entry)}
+          onCancel={onCancelDelete}
         />
-      ) : (
+      ) : null}
+    </div>
+  );
+}
+
+export function DeleteConfirm({
+  title,
+  body,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body: string;
+  onConfirm(): void;
+  onCancel(): void;
+}) {
+  return (
+    <div
+      className="absolute left-0 top-full z-40 mt-1 w-56 rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <p className="text-xs font-medium">{title}</p>
+      <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{body}</p>
+      <div className="mt-2 flex justify-end gap-1">
         <button
           type="button"
-          className="truncate rounded-sm px-0.5 text-center text-[10px] leading-tight text-foreground hover:bg-accent"
-          title={entry.name}
-          onDoubleClick={(event) => {
-            // Don't bubble to the tile's View handler — a name double-click renames.
-            event.stopPropagation();
-            setDraft(entry.name);
-            setEditing(true);
-          }}
+          className="rounded-sm px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+          onClick={onCancel}
         >
-          {entry.name}
+          Cancel
         </button>
-      )}
+        <button
+          type="button"
+          className="rounded-sm bg-destructive px-2 py-1 text-[11px] text-destructive-foreground hover:bg-destructive/90"
+          onClick={onConfirm}
+        >
+          Delete
+        </button>
+      </div>
     </div>
   );
 }
