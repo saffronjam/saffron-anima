@@ -11,7 +11,7 @@
 #     tools/ci/check.sh
 #   '
 #
-# Gates: engine build (-j1), present-only host smoke, schema contract test, frontend build.
+# Gates: engine build (-j1), present-only host smoke, DTO contract test, frontend build.
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
@@ -19,6 +19,15 @@ fail=0
 step() { echo; echo "=== $* ==="; }
 
 step "engine build (toolbox, -j1)"
+(
+  bun run tools/gen-control-dto/gen.ts &&
+  git diff --exit-code -- \
+    engine/source/saffron/control/control_dto_serde.generated.cpp \
+    engine/source/saffron/scene/scene_component_serde.generated.cpp \
+    editor/src/protocol/se-types.ts \
+    schemas/control/openrpc.generated.json \
+    schemas/control/command-manifest.generated.json
+) || fail=1
 cmake --preset debug && cmake --build build/debug -j1 || fail=1
 
 step "engine present-only smoke (bounded, headless)"
@@ -28,7 +37,7 @@ step "engine present-only smoke (bounded, headless)"
   SAFFRON_EXIT_AFTER_FRAMES=5 SAFFRON_CONTROL_SOCK=/tmp/se-ci.sock "$REPO/build/debug/bin/SaffronEngine"
 ) || fail=1
 
-step "control schema contract test (live se output vs schemas/control)"
+step "control DTO contract test (live help/results vs generated manifest/OpenRPC)"
 ( cd "$REPO/tools/check-control-schema" && bun run check.ts ) || fail=1
 
 step "project startup and asset layout smoke"
