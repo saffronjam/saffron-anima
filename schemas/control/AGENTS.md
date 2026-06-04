@@ -21,7 +21,9 @@ they are the origin that downstream artifacts are generated from and validated a
 - Cross-schema references use `$ref` to the sibling file (e.g. `"uuid.schema.json"`); the
   codegen rewrites them to `#/$defs/<Title>`.
 - Prefer `additionalProperties: false` (strict) so drift is caught.
-- u64 IDs are represented as **strings** (`uuid.schema.json`) to preserve JS precision.
+- u64 IDs are represented as **decimal strings** (`uuid.schema.json`: `type: "string"`,
+  pattern `^[0-9]+$`). Ids span the full u64 range, past JS's 2^53, so a string is the only
+  form that survives `JSON.parse` without precision loss.
 - When you add or change an engine DTO, update its schema here in the same change, and make
   sure the matching `Saffron.Control` command (and `dump-schema`, where relevant) still
   produces conforming output.
