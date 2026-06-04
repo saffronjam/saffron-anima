@@ -332,11 +332,13 @@ export namespace se
         std::string name;
         AssetTypeDto type;
         std::string path;
+        std::optional<std::string> folder;
     };
 
     struct AssetList
     {
         std::vector<AssetEntryDto> assets;
+        std::vector<std::string> folders;
     };
 
     struct RenameAssetParams
@@ -349,6 +351,59 @@ export namespace se
     {
         WireUuid id;
         std::string name;
+        std::optional<std::string> folder;
+    };
+
+    struct CreateAssetFolderParams
+    {
+        std::string folder;
+    };
+
+    struct RenameAssetFolderParams
+    {
+        std::string folder;
+        std::string name;
+    };
+
+    struct DeleteAssetFolderParams
+    {
+        std::string folder;
+    };
+
+    struct MoveAssetParams
+    {
+        AssetSelector asset;
+        std::optional<std::string> folder;
+    };
+
+    struct AssetUsagesParams
+    {
+        AssetSelector asset;
+    };
+
+    struct AssetUsageDto
+    {
+        std::optional<WireUuid> entity;
+        std::optional<std::string> entityName;
+        std::string slot;
+    };
+
+    struct AssetUsagesResult
+    {
+        std::vector<AssetUsageDto> usages;
+    };
+
+    struct DeleteAssetParams
+    {
+        AssetSelector asset;
+    };
+
+    struct DeleteAssetResult
+    {
+        WireUuid id;
+        std::string name;
+        std::vector<AssetUsageDto> cleared;
+        bool fileDeleted;
     };
 
     struct AssignAssetParams
@@ -708,6 +763,9 @@ export namespace se
     auto dtoToJson(const AssetEntryDto& value) -> Json;
     auto dtoToJson(const AssetList& value) -> Json;
     auto dtoToJson(const AssetRef& value) -> Json;
+    auto dtoToJson(const AssetUsageDto& value) -> Json;
+    auto dtoToJson(const AssetUsagesResult& value) -> Json;
+    auto dtoToJson(const DeleteAssetResult& value) -> Json;
     auto dtoToJson(const AssignAssetResult& value) -> Json;
     auto dtoToJson(const PathResult& value) -> Json;
     auto dtoToJson(const ScreenshotResult& value) -> Json;
@@ -747,6 +805,12 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<PathParams>) -> Result<PathParams>;
     auto parseDto(const Json& params, DtoTag<OptionalPathParams>) -> Result<OptionalPathParams>;
     auto parseDto(const Json& params, DtoTag<RenameAssetParams>) -> Result<RenameAssetParams>;
+    auto parseDto(const Json& params, DtoTag<CreateAssetFolderParams>) -> Result<CreateAssetFolderParams>;
+    auto parseDto(const Json& params, DtoTag<RenameAssetFolderParams>) -> Result<RenameAssetFolderParams>;
+    auto parseDto(const Json& params, DtoTag<DeleteAssetFolderParams>) -> Result<DeleteAssetFolderParams>;
+    auto parseDto(const Json& params, DtoTag<MoveAssetParams>) -> Result<MoveAssetParams>;
+    auto parseDto(const Json& params, DtoTag<AssetUsagesParams>) -> Result<AssetUsagesParams>;
+    auto parseDto(const Json& params, DtoTag<DeleteAssetParams>) -> Result<DeleteAssetParams>;
     auto parseDto(const Json& params, DtoTag<AssignAssetParams>) -> Result<AssignAssetParams>;
     auto parseDto(const Json& params, DtoTag<ScreenshotParams>) -> Result<ScreenshotParams>;
     auto parseDto(const Json& params, DtoTag<ThumbnailParams>) -> Result<ThumbnailParams>;
