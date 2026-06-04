@@ -89,20 +89,18 @@ export const FIELD_HINTS: Record<string, FieldHint> = {
   // Degrees on BOTH sides — unit:"deg" is label/clamp only, NO conversion.
   "SpotLight.innerAngle": { kind: "number", min: 0, max: 89, step: 0.1, unit: "deg" },
   "SpotLight.outerAngle": { kind: "number", min: 0, max: 89, step: 0.1, unit: "deg" },
+
+  "ReflectionProbe.influenceRadius": { kind: "number", min: 0.1, max: 500, step: 0.1 },
+  "ReflectionProbe.intensity": { kind: "number", min: 0, max: 8, step: 0.01 },
+  "ReflectionProbe.boxProjection": { kind: "bool" },
+  "ReflectionProbe.boxExtent": { kind: "vec3", step: 0.1 },
 };
 
 const RAD_TO_DEG = 180 / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
 
 function isVec3(v: unknown): v is Record<string, number> {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    "x" in v &&
-    "y" in v &&
-    "z" in v &&
-    !("w" in v)
-  );
+  return typeof v === "object" && v !== null && "x" in v && "y" in v && "z" in v && !("w" in v);
 }
 
 function isVec4(v: unknown): v is Record<string, number> {
@@ -156,7 +154,8 @@ export function renderField(
   switch (hint.kind) {
     case "vec3":
     case "vec4": {
-      const axes = hint.kind === "vec4" ? (["x", "y", "z", "w"] as const) : (["x", "y", "z"] as const);
+      const axes =
+        hint.kind === "vec4" ? (["x", "y", "z", "w"] as const) : (["x", "y", "z"] as const);
       const wire = (value ?? {}) as Record<string, number>;
       // Display in degrees only for the converting hint (Transform.rotation).
       const display: Record<string, number> = hint.convertRadians
@@ -218,12 +217,7 @@ export function renderField(
       );
 
     case "bool":
-      return (
-        <Switch
-          checked={value === true}
-          onCheckedChange={(checked) => onChange(checked)}
-        />
-      );
+      return <Switch checked={value === true} onCheckedChange={(checked) => onChange(checked)} />;
 
     case "uuid":
       // A Uuid field → the thumbnail combo + drag-drop target. The asset catalog
