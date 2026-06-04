@@ -30,9 +30,15 @@ export namespace se
     /// is compact, >= 0 pretty-prints with that many spaces.
     auto dumpJson(const Json& value, int indent = -1) -> std::string;
 
+    /// Serialize a u64 id as a decimal JSON string. Ids span the full u64 range, which
+    /// exceeds JS's 2^53 safe integer; emitting them as strings keeps full precision once
+    /// a JS client runs them through JSON.parse. The matching reads (jsonU64) accept both
+    /// a string and a number, so older files written with bare numbers still load.
+    auto uuidToJson(u64 value) -> Json;
+
     /// Typed object-field reads. Each checks the value's type before extracting, so a
     /// missing key or a wrong type yields an error instead of aborting. jsonU64 also
-    /// accepts a numeric string (the se CLI passes bare numbers as strings).
+    /// accepts a decimal string (ids cross the wire as strings; older files store numbers).
     auto jsonU64(const Json& object, std::string_view key) -> Result<u64>;
     auto jsonString(const Json& object, std::string_view key) -> Result<std::string>;
     auto jsonF64(const Json& object, std::string_view key) -> Result<f64>;
@@ -61,6 +67,13 @@ namespace se
     auto dumpJson(const Json& value, int indent) -> std::string
     {
         return value.dump(indent, ' ', false, Json::error_handler_t::replace);
+    }
+
+    auto uuidToJson(u64 value) -> Json
+    {
+        // Assign (not brace-init): nlohmann treats `Json{ "s" }` as a one-element array.
+        Json out = std::to_string(value);
+        return out;
     }
 
     // Locate object[key]; null iterator semantics via end().
