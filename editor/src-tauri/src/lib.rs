@@ -348,6 +348,55 @@ fn auto_start(handle: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+const STDERR_NOISE: [&str; 2] = ["pci id for fd ", "libEGL warning:"];
+
+// Reroutes this process's stderr through a pipe and forwards every line except known
+// Mesa GPU-probe chatter, which the loader prints unconditionally (no env gate) when
+// WebKitGTK initializes EGL on an NVIDIA fd. The webview subprocesses and the engine
+// inherit the filtered fd, so their stderr is covered too; engine logs go to stdout
+// and are untouched. On any setup failure stderr is simply left as it was.
+fn install_stderr_noise_filter() {
+    use std::io::{BufRead, BufReader};
+    use std::os::fd::FromRawFd;
+
+    let mut fds = [0i32; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return;
+    }
+    let real = unsafe { libc::dup(libc::STDERR_FILENO) };
+    if real < 0 || unsafe { libc::dup2(fds[1], libc::STDERR_FILENO) } < 0 {
+        return;
+    }
+    unsafe { libc::close(fds[1]) };
+
+    let reader = unsafe { fs::File::from_raw_fd(fds[0]) };
+    let mut sink = unsafe { fs::File::from_raw_fd(real) };
+    thread::spawn(move || {
+        let mut buffered = BufReader::new(reader);
+        let mut line = Vec::new();
+        let mut dropped_previous = false;
+        loop {
+            line.clear();
+            match buffered.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            let text = String::from_utf8_lossy(&line);
+            let trimmed = text.trim();
+            let noise = STDERR_NOISE.iter().any(|prefix| trimmed.starts_with(prefix))
+                || (dropped_previous && trimmed.is_empty());
+            if noise {
+                dropped_previous = true;
+                continue;
+            }
+            dropped_previous = false;
+            if sink.write_all(&line).is_err() {
+                return;
+            }
+        }
+    });
+}
+
 pub fn run() {
     // The native viewport reparents the engine's X11 window into this GTK host, so the
     // host itself must be X11 — on a Wayland session GTK otherwise picks the Wayland
@@ -358,6 +407,16 @@ pub fn run() {
     if std::env::var_os("GDK_BACKEND").is_none() {
         unsafe { std::env::set_var("GDK_BACKEND", "x11") };
     }
+
+    // WebKitGTK's EGL init on NVIDIA prints Mesa GPU-probe chatter to stderr before
+    // falling back cleanly. EGL_LOG_LEVEL gates the "libEGL warning:" lines (respecting
+    // an explicit value); the bare Mesa loader lines ("pci id for fd …") have no env
+    // gate at all, so the stderr filter below drops them instead.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("EGL_LOG_LEVEL").is_none() {
+        unsafe { std::env::set_var("EGL_LOG_LEVEL", "fatal") };
+    }
+    install_stderr_noise_filter();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
