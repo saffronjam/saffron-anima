@@ -9,7 +9,7 @@
 /// The context menu and the inline rename input are Radix/native controls anchored
 /// on each row in the left column. Rejected control calls surface in an inline flash
 /// at the bottom of the panel (no silent failures).
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
 import { CreateMenu } from "../app/CreateMenu";
@@ -113,6 +113,11 @@ export function HierarchyPanel() {
                           : "text-foreground hover:bg-accent",
                       )}
                       onClick={() => onSelect(entity)}
+                      onMouseDown={() => {
+                        if (renamingId && renamingId !== entity.id) {
+                          setRenamingId(null);
+                        }
+                      }}
                       onDoubleClick={() => setRenamingId(entity.id)}
                     >
                       {entity.name}
@@ -159,9 +164,19 @@ function RenameRow({
 }) {
   const [value, setValue] = useState(initial);
   const settled = useRef(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
   return (
     <Input
-      autoFocus
+      ref={inputRef}
       value={value}
       className="h-7 px-2.5 py-1.5 text-sm"
       onChange={(e) => setValue(e.target.value)}
