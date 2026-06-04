@@ -332,7 +332,10 @@ namespace se
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, renderer.descriptors.bindlessSet, {});
         std::array<vk::DescriptorSet, 2> frameSets{ list.lightSet, list.instanceSet };
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 1, frameSets, {});
-        // Set 3 = IBL (irradiance + prefiltered + BRDF LUT); baked once, always valid.
+        // Set 3 = IBL (irradiance + prefiltered + BRDF LUT) plus the reflection probes at
+        // bindings 3-5 (prefiltered + irradiance cube arrays + meta SSBO). Baked once, always
+        // valid; every probe slot is seeded with the global IBL cubes. Probes are gated in-shader
+        // by the probe count (ambientColor.w == 0 -> pure global IBL fallback).
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 3, renderer.ibl.set, {});
         // Set 4 = screen-space maps (AO + contact + SSGI); each gated by its flag in the
         // shader, so the bind is always valid even when an effect is off.

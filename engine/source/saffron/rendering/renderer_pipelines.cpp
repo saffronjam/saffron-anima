@@ -123,9 +123,11 @@ namespace se
         pushConstant.offset = 0;
         pushConstant.size = sizeof(glm::mat4);  // viewProj
 
-        // Sets 0-5 are always present; set 6 (the RT TLAS) is appended only when RT is
-        // supported (its layout needs the AS extension). The mesh shader's set-6 binding is
-        // compiled in but unused unless the ray-query path is taken (gated by a UBO flag).
+        // Sets 0-5 are always present; the IBL set (set 3) also carries the reflection probes
+        // (bindings 3-5), so no separate probe set is bound. Sets 6/7 (RT TLAS + ReSTIR radiance)
+        // are appended only when RT is supported (their layouts need the AS extension). The mesh
+        // shader's RT bindings are compiled in but unused unless the ray-query path is taken
+        // (gated by a UBO flag).
         std::vector<vk::DescriptorSetLayout> setLayouts{
             renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout,
             renderer.descriptors.instanceSetLayout, renderer.ibl.setLayout,
