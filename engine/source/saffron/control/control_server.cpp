@@ -133,7 +133,7 @@ namespace se
 
     auto entityRef(Scene& scene, Entity entity) -> json
     {
-        return json{ { "id", getComponent<IdComponent>(scene, entity).id.value },
+        return json{ { "id", std::to_string(getComponent<IdComponent>(scene, entity).id.value) },
                      { "name", getComponent<NameComponent>(scene, entity).name } };
     }
 

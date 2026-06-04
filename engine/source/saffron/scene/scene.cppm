@@ -384,7 +384,7 @@ export namespace se
         return nlohmann::json{
             { "skyMode", skyModeName(env.skyMode) },
             { "clearColor", vec3ToJson(env.clearColor) },
-            { "skyTexture", env.skyTexture.value },
+            { "skyTexture", uuidToJson(env.skyTexture.value) },
             { "skyIntensity", env.skyIntensity },
             { "skyRotation", env.skyRotation },
             { "exposure", env.exposure },
@@ -561,7 +561,7 @@ export namespace se
         forEach<IdComponent>(scene, [&](Entity entity, IdComponent& id)
         {
             nlohmann::json entry;
-            entry["id"] = id.id.value;
+            entry["id"] = uuidToJson(id.id.value);
             entry["components"] = serializeEntity(reg, scene, entity);
             doc["entities"].push_back(std::move(entry));
         });

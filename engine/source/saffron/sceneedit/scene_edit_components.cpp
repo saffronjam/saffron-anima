@@ -45,7 +45,7 @@ namespace se
 
         registerComponent<MeshComponent>(reg, "Mesh",
             [](Scene&, Entity) {},
-            [](const MeshComponent& c) -> nlohmann::json { return nlohmann::json{ { "mesh", c.mesh.value } }; },
+            [](const MeshComponent& c) -> nlohmann::json { return nlohmann::json{ { "mesh", uuidToJson(c.mesh.value) } }; },
             [](MeshComponent& c, const nlohmann::json& j) -> Result<void>
             {
                 c.mesh = Uuid{ jsonU64Or(j, "mesh", 0) };
@@ -75,7 +75,7 @@ namespace se
             [](const MaterialComponent& c)
             -> nlohmann::json {
                 return nlohmann::json{ { "baseColor", vec4ToJson(c.baseColor) },
-                                       { "albedoTexture", c.albedoTexture.value },
+                                       { "albedoTexture", uuidToJson(c.albedoTexture.value) },
                                        { "metallic", c.metallic },
                                        { "roughness", c.roughness },
                                        { "emissive", vec3ToJson(c.emissive) },

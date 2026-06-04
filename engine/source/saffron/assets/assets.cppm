@@ -194,7 +194,7 @@ export namespace se
         nlohmann::json assets = nlohmann::json::array();
         for (const AssetEntry& entry : catalog.entries)
         {
-            assets.push_back(nlohmann::json{ { "id", entry.id.value },
+            assets.push_back(nlohmann::json{ { "id", uuidToJson(entry.id.value) },
                                              { "name", entry.name },
                                              { "type", assetTypeName(entry.type) },
                                              { "path", entry.path },
