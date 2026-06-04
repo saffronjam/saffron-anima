@@ -18,7 +18,7 @@ Every editor operation rides the JSON-over-unix-socket [control protocol](../too
 | `editor-camera` | the engine `EditorCamera`, kept and driven by `get-/set-camera`, rendered through present-only | `editor_camera.cpp` |
 | `gizmo` | the engine-rendered overlay gizmo, `gizmo-pointer`, the Topbar T/R/S + world/local | `Topbar.tsx` · `useGizmoShortcuts.ts` |
 | `hierarchy-panel` | the React entity list, optimistic select, Create presets, copy/delete | `HierarchyPanel.tsx` · `CreateMenu.tsx` |
-| `inspector` | the schema-driven inspector (fieldRenderer + FIELD_HINTS), RMW writes, add/remove guarded | `InspectorPanel.tsx` · `fieldRenderer.tsx` |
+| `inspector` | the DTO-typed component inspector (fieldRenderer + FIELD_HINTS), RMW writes, add/remove guarded | `InspectorPanel.tsx` · `fieldRenderer.tsx` |
 | `asset-pickers-and-drag-drop` | the AssetPicker uuid combo, type-gated HTML5 drag-drop | `AssetPicker.tsx` · `AssetTile.tsx` |
 | `assets-panel-and-thumbnails` | the React asset browser, `get-thumbnail` base64 PNG + blob-URL cache, import dialog, View modal | `AssetsPanel.tsx` · `AssetTile.tsx` · `AssetViewer.tsx` |
 | `selection` | select/get-selection/deselect, the version-stamped reconcile round-trip, optimistic select | `state/store.ts` · `ViewportPanel.tsx` |

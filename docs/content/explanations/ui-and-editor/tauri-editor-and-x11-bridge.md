@@ -62,4 +62,4 @@ The reconcile poll doubles as a liveness watchdog: each tick it calls `engineAli
 - [Control plane](../../tooling-and-control/control-plane-architecture/) — the socket every command rides on
 - [Viewport panel](../viewport-panel/) — the host div the native window is glued to
 - [Theme and fonts](../theme-and-fonts/) — the shadcn/Tailwind chrome around the viewport
-- [Shared types](../../tooling-and-control/shared-types/) — the schema-first wire contract the typed client consumes
+- [Shared types](../../tooling-and-control/shared-types/) — the DTO-first wire contract the typed client consumes

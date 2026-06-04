@@ -40,8 +40,6 @@ Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [
 | `get-gizmo` | — | the gizmo `{op, space}` |
 | `set-gizmo` | `{op?:translate\|rotate\|scale, space?:world\|local}` | set the gizmo op/space |
 | `gizmo-pointer` | `{phase:hover\|begin\|drag\|end, x, y}` | drive the native overlay gizmo from NDC `x,y∈[-1,1]`; returns `{hovered, dragging}` |
-| `dump-schema` | — | live component / environment / render-stats shapes (schema-codegen seam) |
-
 ## Render commands
 *(`control_commands_render.cpp`)*
 

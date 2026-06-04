@@ -5,50 +5,49 @@ weight = 7
 
 # Shared types
 
-Shared types are the data shapes carried over the control wire, defined once as a set of JSON Schemas. Every consumer of the protocol — the TypeScript client and the C++ engine — is derived from or checked against those schemas, so a field cannot mean one thing on the wire and another in a consumer. The schemas live in `schemas/control/*.schema.json` and are written to JSON Schema **draft 2020-12**.
+Shared types are the data shapes carried over the control wire. They are authored as C++ DTO structs in `Saffron.Control` and generated outward to TypeScript, OpenRPC schemas, and the command manifest. The generated artifacts are committed and checked for freshness, so a command cannot drift silently between the engine, editor, CLI tooling, and docs.
 
 ## How it works
 
 ```
-schemas/control/*.schema.json   (draft 2020-12 — the source of truth)
-        │
-        ├── json-schema-to-typescript ──▶ the TS protocol types   (phase 3)
-        │
-        └── tools/check-control-schema  ──▶ validates the C++ replies
+engine/source/saffron/control/control_dto.cppm   (DTO source of truth)
+        |
+        `-- tools/gen-control-dto/gen.ts
+              |-- control_dto_serde.generated.cpp
+              |-- editor/src/protocol/se-types.ts
+              |-- schemas/control/openrpc.generated.json
+              `-- schemas/control/command-manifest.generated.json
 ```
 
-The schema is authored first. From it, `json-schema-to-typescript` generates the TypeScript protocol the UI imports; the TS side is **generated**, never hand-maintained.
+Handlers use `registerCommand<Params, Result>`. The overload erases the typed handler down to the same `Result<json>(EngineContext&, const json&)` row the dispatcher already uses: generated serde parses `Params`, the handler returns a `Result` DTO, and generated `dtoToJson` writes the reply payload.
 
-The C++ side goes the other way: it is a **validated consumer**, not a generator. There are **no named C++ DTO structs**, and every command builds its response as inline `nlohmann::json`. A contract test, `tools/check-control-schema`, drives the running editor, captures real replies, and validates them against the schemas. If a reply drifts from its schema, the test fails. That keeps the inline JSON honest without a parallel hierarchy of C++ types to maintain.
-
-## Deferred forward seams
-
-`dump-schema` (see [Scene commands](../scene-commands/)) and [reflect-cpp](https://github.com/getml/reflect-cpp) are seams for generating the schemas from C++ types directly. That direction needs C++26 static reflection, which is not in stock Clang 21 + libc++ yet, so the schemas are hand-written and the contract test guards them. `dump-schema` already emits the live runtime shapes, so when reflection lands the generation direction can flip without changing the wire.
+The live contract test is now a manifest tripwire. It calls `help`, verifies the live registry and generated manifest contain the same command names, then exercises every non-skipped command with a manifest fixture and validates the result against `openrpc.generated.json`. The only remaining hand-authored schema is `schemas/control/envelope.schema.json`, because the `{ok,error,result,id}` wrapper is owned by dispatch rather than by a command DTO.
 
 ## Wire invariants
 
-These hold across the whole protocol, in both the schemas and every reply:
+These hold across the whole protocol:
 
-- **IDs are u64, carried as decimal strings.** Every `Uuid`/`id` is a 64-bit unsigned integer emitted as a decimal JSON **string** (`"id": "12884901889"`). An id can exceed 2^53, past what a JavaScript `number` holds exactly, so a string is the only form that survives `JSON.parse` losslessly. The `uuid` schema is `type: "string"` with pattern `^[0-9]+$`, so an id is typed `string` end-to-end. Reads accept a string or a number, but never round-trip an id through a plain JS `number`. The [id-encoding contract](../control-plane-architecture/#id-encoding-on-the-wire) covers this in full.
-- **camelCase on the wire.** Every key is camelCase (`baseColor`, `albedoTexture`, `emissiveStrength`), matching the scene-file encoding and the generated TS field names.
-- **`Transform.rotation` is Euler XYZ radians.** The wire value is radians; a UI that shows degrees converts at the edge. (This matches `set-transform`, which merges radians.)
-- **Spot-light angles are degrees.** `SpotLightComponent.innerAngle` / `outerAngle` are in **degrees** on the wire, unlike the transform rotation — they are authored as degrees and stay degrees.
-- **Camera uses `near`/`far`.** The camera near/far planes are the keys `near` and `far` (not `nearPlane`/`zNear`), for both ECS cameras and the editor fly-cam.
+- **IDs are u64, carried as decimal strings.** Every `WireUuid` result is emitted as a decimal JSON string, so JavaScript never rounds it through `number`. Reads still accept a string or a number for CLI convenience. The raw-byte contract test keeps the quoted-decimal invariant after `uuid.schema.json` was retired.
+- **camelCase on the wire.** DTO field names are the wire keys and the generated TypeScript field names.
+- **`Transform.rotation` is Euler XYZ radians.** UIs that show degrees convert at the edge.
+- **Spot-light angles are degrees.** `innerAngle` and `outerAngle` remain degrees on the wire.
+- **Camera uses `near`/`far`.** ECS cameras and the editor fly-camera use the same key names.
 
-The schema is where these are pinned: the `uuid` type's string form, the per-field units, and the key casing are all stated once and inherited by everything generated from or checked against it.
+Component bodies and the scene environment use generated scene serde as well. `inspect.components` is validated as a registry-keyed map of component DTOs, and the editor protocol exposes those component body types for reads while still accepting registry-shaped records for generic `set-component` writes.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Schemas (source of truth) | `schemas/control/*.schema.json` | the `uuid`, component, environment, and render-stats schemas |
-| TS generation | `json-schema-to-typescript` | the generated protocol types (phase 3) |
-| C++ contract test | `tools/check-control-schema` | drives the editor, validates replies against the schemas |
-| Live shapes | `control_commands_scene.cpp` | `dump-schema` |
-| Replies (no DTOs) | `control_commands_*.cpp` | inline `nlohmann::json` per command |
+| DTO source of truth | `engine/source/saffron/control/control_dto.cppm` | `WireUuid`, params DTOs, result DTOs |
+| Typed command registration | `engine/source/saffron/control/command.cppm` | `registerCommand<Params, Result>` |
+| Generated C++ serde | `engine/source/saffron/control/control_dto_serde.generated.cpp`, `engine/source/saffron/scene/scene_component_serde.generated.cpp` | `parseDto`, `dtoToJson`, component serde functions |
+| Generator | `tools/gen-control-dto/gen.ts` | DTO parser, TS/OpenRPC/manifest emitters |
+| Editor protocol types | `editor/src/protocol/se-types.ts`, `editor/src/protocol/index.ts` | `CommandParamsMap`, `CommandResultMap` |
+| Live contract test | `tools/check-control-schema/check.ts` | manifest completeness, OpenRPC validation, raw u64 check |
 
 ## Related
 - [se CLI](../se-cli-protocol/) — the request/response shape and token coercion these types describe
-- [Scene commands](../scene-commands/) — `dump-schema` and the camelCase component bodies
-- [Asset commands](../asset-commands/) — the base64-PNG thumbnail result shape
-- [Control plane](../control-plane-architecture/) — how a reply is built and dispatched
+- [Scene commands](../scene-commands/) — component editing and selection counters
+- [Asset commands](../asset-commands/) — project, catalog, and thumbnail commands
+- [Control plane](../control-plane-architecture/) — how typed handlers are registered and dispatched

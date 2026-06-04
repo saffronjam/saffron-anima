@@ -58,6 +58,20 @@ no central enum, no dispatch table to edit. This is the same struct-of-closures 
 components and layers use. The built-ins register render → scene → asset, and `help`/`list` iterate
 `reg.rows` in that order.
 
+Most commands use the typed overload:
+
+```cpp
+registerCommand<MyParams, MyResult>(reg, "my-command", "one-line help",
+    [](EngineContext& ctx, const MyParams& params) -> Result<MyResult>
+    {
+        return MyResult{ ... };
+    });
+```
+
+The overload is still one row in the same erased registry. Generated DTO serde parses
+`MyParams` from JSON, the handler returns `MyResult`, and generated `dtoToJson` serializes the
+result payload. Raw `Result<json>` handlers remain for reflective commands such as `help`.
+
 A handler reaches live engine state through an `EngineContext` of references. It is built fresh in
 `pollControl` each frame and never stored past it.
 
@@ -66,7 +80,7 @@ struct EngineContext
 {
     Window& window;
     Renderer& renderer;
-    EditorContext& editor;
+    SceneEditContext& sceneEdit;
     AssetServer& assets;
 };
 ```
@@ -106,8 +120,8 @@ The contract is symmetric and forgiving on input. An entity selector — the `en
 |---|---|---|
 | Id → wire string | `json.cppm` | `uuidToJson` |
 | String-or-number id read | `json.cppm` | `jsonU64` |
-| Entity / asset resolution | `control_commands_scene.cpp`, `command.cppm` | `resolveEntity`, `positionalOr` |
-| The id schema | `schemas/control/uuid.schema.json` | `Uuid` (string, `^[0-9]+$`) |
+| Entity / asset resolution | `control_commands_scene.cpp`, `command.cppm` | `resolveEntity`, `EntitySelector`, `AssetSelector` |
+| Raw id tripwire | `tools/check-control-schema/check.ts` | `assertRawU64` |
 
 ## What the editor polls: scene and selection versions
 
@@ -135,7 +149,7 @@ and unlinks the socket file.
 | Register, look up, dispatch | `control_server.cpp` | `registerCommand`, `findCommand`, `dispatch` |
 | Socket + per-frame drain | `control_server.cpp` | `startControlServer`, `drainControlServer`, `controlSocketPath` |
 | Context lifecycle | `control_server.cpp` | `newControlContext`, `destroyControlContext`, `pollControl` |
-| Where the drain runs | `editor_app.cppm` | `EditorLayer` `onUpdate` calling `pollControl` |
+| Where the drain runs | `host.cppm` | control layer `onUpdate` calling `pollControl` |
 | Poll counters | `scene_edit_context.cppm`, `scene_edit_context.cpp` | `sceneVersion`, `selectionVersion`, `setSelection` |
 
 > [!NOTE]

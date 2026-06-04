@@ -58,13 +58,12 @@ An unknown preset is an error, not a silent fall-through to `empty`.
 | `set-camera` | `{position?, yaw?, pitch?, fov?, near?, far?}` | Merges the given fields into the editor fly-cam. |
 | `get-gizmo` | — | Returns the shared gizmo state `{op, space}`. |
 | `set-gizmo` | `{op?, space?}` | Sets the gizmo `op` (`translate\|rotate\|scale`) and/or `space` (`world\|local`). |
-| `dump-schema` | — | Returns the live shapes of every component, the scene environment, and render-stats. |
 
 `get-camera`/`set-camera` drive the same editor [fly-camera](../../ui-and-editor/) the viewport uses — the scene-view eye, not an ECS `CameraComponent`. `set-camera` merges fields the same way the transform commands do.
 
 `get-gizmo`/`set-gizmo` read and write a single gizmo state. The in-viewport ImGuizmo path and the W/E/R shortcut both read it, and any future native manipulation path reads the same state, so the gizmo mode stays consistent regardless of who set it. `op` selects translate, rotate, or scale; `space` selects world or local.
 
-`dump-schema` returns the live runtime shapes: it serializes a default of each registered component, the `SceneEnvironment`, and the render-stats block, so a tool can discover the wire shape without parsing C++. It is the **codegen seam** — see [Shared types](../shared-types/) for where the schema-first pipeline takes over.
+Component and environment shapes are generated from the DTO catalog; see [Shared types](../shared-types/) for the DTO-first pipeline.
 
 ## Polling counters
 
@@ -72,7 +71,7 @@ An unknown preset is an error, not a silent fall-through to `empty`.
 
 | Counter | Bumped when |
 |---|---|
-| `sceneVersion` | every scene-mutating command: `create-entity`, `destroy-entity`, `add-component`, `remove-component`, `set-component`, `set-component-field`, `set-transform`, `set-material`, `set-light`, `set-environment`, `add-entity`, `copy-entity`, `rename-entity`, plus the [asset commands](../asset-commands/) that touch the scene (`import-model`, `assign-asset`, `load-scene`/`load-project`, `new-project`/`open-project`). |
+| `sceneVersion` | every scene-mutating command: `create-entity`, `destroy-entity`, `add-component`, `remove-component`, `set-component`, `set-component-field`, `set-transform`, `set-material`, `set-light`, `set-environment`, `set-atmosphere`, `add-entity`, `copy-entity`, `rename-entity`, plus the [asset commands](../asset-commands/) that touch the scene (`import-model`, `assign-asset`, `load-scene`/`load-project`, `new-project`/`open-project`). |
 | `selectionVersion` | every `setSelection` (including `select`, `deselect`, `pick`, the auto-select on `add-entity`/`copy-entity`/`import-model`, and an entity destroy or scene/project load that clears it). |
 
 A client reads a counter once, then re-fetches the entity list or the selection only when the number changes. The counters live on the context, not the wire, so any command that mutates the scene bumps the right one regardless of who invoked it.
@@ -95,12 +94,11 @@ A client reads a counter once, then re-fetches the entity list or the selection 
 | Presets + duplicate + rename | `control_commands_scene.cpp` | `add-entity`, `copy-entity`, `rename-entity` |
 | Selection + picking | `control_commands_scene.cpp` | `select`, `get-selection`, `deselect`, `pick`, `focus`; `pickEntity`, `editorCameraView` |
 | Editor camera + gizmo | `control_commands_scene.cpp` | `get-camera`/`set-camera`, `get-gizmo`/`set-gizmo` |
-| Schema dump | `control_commands_scene.cpp` | `dump-schema` |
 | Poll counters | `scene_edit_context.cppm` | `SceneEditContext.sceneVersion`, `SceneEditContext.selectionVersion`, `setSelection` |
-| The registry behind the edits | `editor.cppm` / `scene.cppm` | `ComponentTraits.serialize`/`deserialize`, `findByName` |
+| The registry behind the edits | `scene_edit_context.cppm` / `scene.cppm` | `ComponentTraits.serialize`/`deserialize`, `findByName` |
 
 ## Related
 - [Asset commands](../asset-commands/) — assigning meshes and textures to entities
-- [Shared types](../shared-types/) — the schema-first wire contract `dump-schema` feeds
+- [Shared types](../shared-types/) — the DTO-first wire contract these commands use
 - [Scene & ECS](../../scene-and-ecs/) — the component registry these commands drive
 - [Control plane](../control-plane-architecture/) — how a command is registered and dispatched
