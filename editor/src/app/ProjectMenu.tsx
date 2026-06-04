@@ -1,9 +1,9 @@
 /// Project-level file operations exposed from the topbar project selector.
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ChevronDown } from "lucide-react";
-import { useState } from "react";
 import { client, type ProjectInfo } from "../control/client";
 import { useEditorStore, withNativeDialog } from "../state/store";
+import { notify } from "../lib/flash";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -27,26 +27,18 @@ export function ProjectMenu() {
   const setProject = useEditorStore((s) => s.setProject);
   const project = useEditorStore((s) => s.project);
   const nativeDialogOpen = useEditorStore((s) => s.nativeDialogOpen);
-  const [status, setStatus] = useState<string | null>(null);
 
   const ready = phase === "ready";
   const label = project?.displayName ?? "No project";
-
-  const flash = (message: string): void => {
-    setStatus(message);
-    window.setTimeout(() => {
-      setStatus((current) => (current === message ? null : current));
-    }, 4000);
-  };
 
   const saveProject = async (): Promise<void> => {
     try {
       const res = await client.saveProject();
       setProject(res);
       await rememberProject(res);
-      flash(`Saved project: ${res.path}`);
+      notify(`Saved project: ${res.path}`);
     } catch (err) {
-      flash(`Save project failed: ${errorText(err)}`);
+      notify(`Save project failed: ${errorText(err)}`);
     }
   };
 
@@ -61,9 +53,9 @@ export function ProjectMenu() {
       const res = await client.saveProject(path);
       setProject(res);
       await rememberProject(res);
-      flash(`Saved project: ${res.path}`);
+      notify(`Saved project: ${res.path}`);
     } catch (err) {
-      flash(`Save project failed: ${errorText(err)}`);
+      notify(`Save project failed: ${errorText(err)}`);
     }
   };
 
@@ -77,9 +69,9 @@ export function ProjectMenu() {
       setProject(res);
       resetSceneState();
       await rememberProject(res);
-      flash(`Loaded project: ${res.path}`);
+      notify(`Loaded project: ${res.path}`);
     } catch (err) {
-      flash(`Load project failed: ${errorText(err)}`);
+      notify(`Load project failed: ${errorText(err)}`);
     }
   };
 
@@ -93,9 +85,9 @@ export function ProjectMenu() {
       setProject(res);
       resetSceneState();
       await rememberProject(res);
-      flash(`Loaded project: ${res.path}`);
+      notify(`Loaded project: ${res.path}`);
     } catch (err) {
-      flash(`Load project failed: ${errorText(err)}`);
+      notify(`Load project failed: ${errorText(err)}`);
     }
   };
 
@@ -108,9 +100,9 @@ export function ProjectMenu() {
     }
     try {
       const res = await client.saveScene(path);
-      flash(`Saved scene: ${res.path}`);
+      notify(`Saved scene: ${res.path}`);
     } catch (err) {
-      flash(`Save scene failed: ${errorText(err)}`);
+      notify(`Save scene failed: ${errorText(err)}`);
     }
   };
 
@@ -122,9 +114,9 @@ export function ProjectMenu() {
     try {
       const res = await client.loadScene(selection);
       resetSceneState();
-      flash(`Loaded scene: ${res.path}`);
+      notify(`Loaded scene: ${res.path}`);
     } catch (err) {
-      flash(`Load scene failed: ${errorText(err)}`);
+      notify(`Load scene failed: ${errorText(err)}`);
     }
   };
 
@@ -138,9 +130,9 @@ export function ProjectMenu() {
     try {
       await client.importModel(selection);
       await refreshAssets();
-      flash("Imported model");
+      notify("Imported model");
     } catch (err) {
-      flash(`Import model failed: ${errorText(err)}`);
+      notify(`Import model failed: ${errorText(err)}`);
     }
   };
 
@@ -154,9 +146,9 @@ export function ProjectMenu() {
     try {
       await client.importTexture(selection);
       await refreshAssets();
-      flash("Imported texture");
+      notify("Imported texture");
     } catch (err) {
-      flash(`Import texture failed: ${errorText(err)}`);
+      notify(`Import texture failed: ${errorText(err)}`);
     }
   };
 
@@ -169,9 +161,9 @@ export function ProjectMenu() {
     }
     try {
       const res = await client.screenshot("viewport", path);
-      flash(res.pending ? `Screenshot queued: ${res.path}` : `Saved screenshot: ${res.path}`);
+      notify(res.pending ? `Screenshot queued: ${res.path}` : `Saved screenshot: ${res.path}`);
     } catch (err) {
-      flash(`Screenshot failed: ${errorText(err)}`);
+      notify(`Screenshot failed: ${errorText(err)}`);
     }
   };
 
@@ -214,11 +206,6 @@ export function ProjectMenu() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {status ? (
-        <span className="truncate text-xs text-muted-foreground" title={status}>
-          {status}
-        </span>
-      ) : null}
     </div>
   );
 }

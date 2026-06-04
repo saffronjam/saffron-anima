@@ -9,6 +9,7 @@ import type { GizmoState } from "../protocol";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProjectMenu } from "../app/ProjectMenu";
+import { Notifications } from "../app/Notifications";
 
 type GizmoOp = GizmoState["op"];
 type GizmoSpace = GizmoState["space"];
@@ -30,8 +31,8 @@ export function Topbar() {
   };
 
   return (
-    <header className="flex h-12 flex-none items-center justify-between border-b border-border bg-background px-4">
-      <div className="flex min-w-0 items-baseline gap-2">
+    <header className="flex h-12 flex-none items-center gap-4 border-b border-border bg-background px-4">
+      <div className="flex min-w-0 flex-1 items-baseline gap-2">
         <ProjectMenu />
       </div>
       <div className="flex items-center gap-2.5">
@@ -115,7 +116,7 @@ export function Topbar() {
           </Button>
         </div>
       </div>
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">{phase}</div>
+      <Notifications />
     </header>
   );
 }
