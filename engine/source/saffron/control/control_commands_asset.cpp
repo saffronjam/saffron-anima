@@ -3,9 +3,11 @@ module;
 #include <nlohmann/json.hpp>
 #include <entt/entt.hpp>
 
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -105,6 +107,166 @@ namespace se
                 }
             }
             return Err(std::format("no asset '{}'", selector));
+        }
+
+        auto resolveAssetIndex(EngineContext& ctx, const AssetSelector& asset) -> Result<std::size_t>
+        {
+            const json& sel = asset.value;
+            const std::string selector = sel.is_string() ? sel.get<std::string>() : std::string{};
+            u64 byId = 0;
+            if (sel.is_number_unsigned())
+            {
+                byId = sel.get<u64>();
+            }
+            else if (sel.is_number_integer())
+            {
+                const i64 v = sel.get<i64>();
+                if (v >= 0)
+                {
+                    byId = static_cast<u64>(v);
+                }
+            }
+            else
+            {
+                byId = std::strtoull(selector.c_str(), nullptr, 10);
+            }
+            for (std::size_t i = 0; i < ctx.assets.catalog.entries.size(); i += 1)
+            {
+                const AssetEntry& entry = ctx.assets.catalog.entries[i];
+                if (entry.id.value == byId || entry.name == selector)
+                {
+                    return i;
+                }
+            }
+            return Err(std::format("no asset '{}'", selector));
+        }
+
+        void rebuildAssetIndex(AssetCatalog& catalog)
+        {
+            catalog.byId.clear();
+            for (std::size_t i = 0; i < catalog.entries.size(); i += 1)
+            {
+                catalog.byId[catalog.entries[i].id.value] = i;
+            }
+        }
+
+        auto assetDto(const AssetEntry& entry) -> AssetEntryDto
+        {
+            return AssetEntryDto{ WireUuid{ entry.id.value }, entry.name, assetTypeDto(entry.type), entry.path,
+                                  entry.folder.empty() ? std::optional<std::string>{}
+                                                       : std::optional<std::string>{ entry.folder } };
+        }
+
+        auto assetRef(const AssetEntry& entry) -> AssetRef
+        {
+            return AssetRef{ WireUuid{ entry.id.value }, entry.name,
+                             entry.folder.empty() ? std::optional<std::string>{}
+                                                  : std::optional<std::string>{ entry.folder } };
+        }
+
+        auto assetListDto(const AssetCatalog& catalog) -> AssetList
+        {
+            AssetList out;
+            for (const AssetEntry& entry : catalog.entries)
+            {
+                out.assets.push_back(assetDto(entry));
+            }
+            out.folders = catalog.folders;
+            return out;
+        }
+
+        auto validFolderName(const std::string& folder) -> bool
+        {
+            return !folder.empty() && folder.find('/') == std::string::npos && folder.find('\\') == std::string::npos;
+        }
+
+        auto hasFolder(const AssetCatalog& catalog, const std::string& folder) -> bool
+        {
+            for (const std::string& existing : catalog.folders)
+            {
+                if (existing == folder)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        auto entityName(Scene& scene, Entity entity) -> std::string
+        {
+            if (hasComponent<NameComponent>(scene, entity))
+            {
+                return getComponent<NameComponent>(scene, entity).name;
+            }
+            return std::string{};
+        }
+
+        auto entityId(Scene& scene, Entity entity) -> std::optional<WireUuid>
+        {
+            if (hasComponent<IdComponent>(scene, entity))
+            {
+                return WireUuid{ getComponent<IdComponent>(scene, entity).id.value };
+            }
+            return {};
+        }
+
+        auto collectAssetUsages(Scene& scene, Uuid asset) -> std::vector<AssetUsageDto>
+        {
+            std::vector<AssetUsageDto> usages;
+            forEach<MeshComponent>(
+                scene,
+                [&](Entity entity, MeshComponent& mesh)
+                {
+                    if (mesh.mesh.value == asset.value)
+                    {
+                        usages.push_back(AssetUsageDto{ entityId(scene, entity), entityName(scene, entity), "mesh" });
+                    }
+                });
+            forEach<MaterialComponent>(
+                scene,
+                [&](Entity entity, MaterialComponent& material)
+                {
+                    if (material.albedoTexture.value == asset.value)
+                    {
+                        usages.push_back(AssetUsageDto{ entityId(scene, entity), entityName(scene, entity), "albedo" });
+                    }
+                });
+            if (scene.environment.skyTexture.value == asset.value)
+            {
+                usages.push_back(AssetUsageDto{ {}, {}, "environment.skyTexture" });
+            }
+            return usages;
+        }
+
+        auto clearAssetUsages(Scene& scene, Uuid asset) -> std::vector<AssetUsageDto>
+        {
+            std::vector<AssetUsageDto> cleared;
+            forEach<MeshComponent>(
+                scene,
+                [&](Entity entity, MeshComponent& mesh)
+                {
+                    if (mesh.mesh.value == asset.value)
+                    {
+                        cleared.push_back(AssetUsageDto{ entityId(scene, entity), entityName(scene, entity), "mesh" });
+                        mesh.mesh = Uuid{};
+                    }
+                });
+            forEach<MaterialComponent>(scene,
+                                       [&](Entity entity, MaterialComponent& material)
+                                       {
+                                           if (material.albedoTexture.value == asset.value)
+                                           {
+                                               cleared.push_back(AssetUsageDto{ entityId(scene, entity),
+                                                                                entityName(scene, entity), "albedo" });
+                                               material.albedoTexture = Uuid{};
+                                           }
+                                       });
+            if (scene.environment.skyTexture.value == asset.value)
+            {
+                cleared.push_back(AssetUsageDto{ {}, {}, "environment.skyTexture" });
+                scene.environment.skyTexture = Uuid{};
+            }
+            return cleared;
         }
 
         // Resolves {asset:id|name, size?} to a base64 PNG preview (mesh = framed 3D render,
@@ -252,18 +414,9 @@ namespace se
                 return ImportTextureResult{ WireUuid{ id->value } };
             });
 
-        registerCommand<EmptyParams, AssetList>(
-            reg, "list-assets", "list the project asset catalog",
-            [](EngineContext& ctx, const EmptyParams&) -> Result<AssetList>
-            {
-                AssetList out;
-                for (const AssetEntry& entry : ctx.assets.catalog.entries)
-                {
-                    out.assets.push_back(
-                        AssetEntryDto{ WireUuid{ entry.id.value }, entry.name, assetTypeDto(entry.type), entry.path });
-                }
-                return out;
-            });
+        registerCommand<EmptyParams, AssetList>(reg, "list-assets", "list the project asset catalog",
+                                                [](EngineContext& ctx, const EmptyParams&) -> Result<AssetList>
+                                                { return assetListDto(ctx.assets.catalog); });
 
         registerCommand<RenameAssetParams, AssetRef>(
             reg, "rename-asset", "rename-asset {id|name, newName}",
@@ -281,10 +434,159 @@ namespace se
                     if (entry.id.value == byId || entry.name == selector)
                     {
                         entry.name = params.name;
-                        return AssetRef{ WireUuid{ entry.id.value }, entry.name };
+                        return assetRef(entry);
                     }
                 }
                 return Err(std::format("no asset '{}'", selector));
+            });
+
+        registerCommand<CreateAssetFolderParams, AssetList>(
+            reg, "create-asset-folder", "create-asset-folder {folder}",
+            [](EngineContext& ctx, const CreateAssetFolderParams& params) -> Result<AssetList>
+            {
+                if (!validFolderName(params.folder))
+                {
+                    return Err(std::string{ "folder must be a non-empty name without path separators" });
+                }
+                if (!hasFolder(ctx.assets.catalog, params.folder))
+                {
+                    ctx.assets.catalog.folders.push_back(params.folder);
+                    ctx.sceneEdit.sceneVersion += 1;
+                }
+                return assetListDto(ctx.assets.catalog);
+            });
+
+        registerCommand<RenameAssetFolderParams, AssetList>(
+            reg, "rename-asset-folder", "rename-asset-folder {folder, name}",
+            [](EngineContext& ctx, const RenameAssetFolderParams& params) -> Result<AssetList>
+            {
+                if (!validFolderName(params.name))
+                {
+                    return Err(std::string{ "folder name must be non-empty and cannot contain path separators" });
+                }
+                if (!hasFolder(ctx.assets.catalog, params.folder))
+                {
+                    return Err(std::format("no asset folder '{}'", params.folder));
+                }
+                if (params.folder == params.name)
+                {
+                    return assetListDto(ctx.assets.catalog);
+                }
+                if (hasFolder(ctx.assets.catalog, params.name))
+                {
+                    return Err(std::format("asset folder '{}' already exists", params.name));
+                }
+                for (std::string& folder : ctx.assets.catalog.folders)
+                {
+                    if (folder == params.folder)
+                    {
+                        folder = params.name;
+                        break;
+                    }
+                }
+                for (AssetEntry& entry : ctx.assets.catalog.entries)
+                {
+                    if (entry.folder == params.folder)
+                    {
+                        entry.folder = params.name;
+                    }
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return assetListDto(ctx.assets.catalog);
+            });
+
+        registerCommand<DeleteAssetFolderParams, AssetList>(
+            reg, "delete-asset-folder", "delete-asset-folder {folder}",
+            [](EngineContext& ctx, const DeleteAssetFolderParams& params) -> Result<AssetList>
+            {
+                bool removed = false;
+                std::vector<std::string> folders;
+                folders.reserve(ctx.assets.catalog.folders.size());
+                for (const std::string& folder : ctx.assets.catalog.folders)
+                {
+                    if (folder == params.folder)
+                    {
+                        removed = true;
+                    }
+                    else
+                    {
+                        folders.push_back(folder);
+                    }
+                }
+                if (!removed)
+                {
+                    return Err(std::format("no asset folder '{}'", params.folder));
+                }
+                ctx.assets.catalog.folders = std::move(folders);
+                for (AssetEntry& entry : ctx.assets.catalog.entries)
+                {
+                    if (entry.folder == params.folder)
+                    {
+                        entry.folder.clear();
+                    }
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return assetListDto(ctx.assets.catalog);
+            });
+
+        registerCommand<MoveAssetParams, AssetRef>(
+            reg, "move-asset", "move-asset {asset, folder?}",
+            [](EngineContext& ctx, const MoveAssetParams& params) -> Result<AssetRef>
+            {
+                auto index = resolveAssetIndex(ctx, params.asset);
+                if (!index)
+                {
+                    return Err(index.error());
+                }
+                std::string folder = params.folder.value_or("");
+                if (!folder.empty() && !hasFolder(ctx.assets.catalog, folder))
+                {
+                    return Err(std::format("no asset folder '{}'", folder));
+                }
+                AssetEntry& entry = ctx.assets.catalog.entries[*index];
+                entry.folder = std::move(folder);
+                ctx.sceneEdit.sceneVersion += 1;
+                return assetRef(entry);
+            });
+
+        registerCommand<AssetUsagesParams, AssetUsagesResult>(
+            reg, "asset-usages", "asset-usages {asset}",
+            [](EngineContext& ctx, const AssetUsagesParams& params) -> Result<AssetUsagesResult>
+            {
+                auto resolved = resolveAsset(ctx, params.asset);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                return AssetUsagesResult{ collectAssetUsages(ctx.sceneEdit.scene, (*resolved)->id) };
+            });
+
+        registerCommand<DeleteAssetParams, DeleteAssetResult>(
+            reg, "delete-asset", "delete-asset {asset}",
+            [](EngineContext& ctx, const DeleteAssetParams& params) -> Result<DeleteAssetResult>
+            {
+                auto index = resolveAssetIndex(ctx, params.asset);
+                if (!index)
+                {
+                    return Err(index.error());
+                }
+                AssetEntry entry = ctx.assets.catalog.entries[*index];
+                std::vector<AssetUsageDto> cleared = clearAssetUsages(ctx.sceneEdit.scene, entry.id);
+                ctx.assets.catalog.entries.erase(ctx.assets.catalog.entries.begin() +
+                                                 static_cast<std::ptrdiff_t>(*index));
+                rebuildAssetIndex(ctx.assets.catalog);
+                ctx.assets.meshRefByUuid.erase(entry.id.value);
+                ctx.assets.textureRefByUuid.erase(entry.id.value);
+
+                bool fileDeleted = false;
+                if (!entry.path.empty())
+                {
+                    const std::filesystem::path path = std::filesystem::path(ctx.assets.root) / entry.path;
+                    std::error_code ec;
+                    fileDeleted = std::filesystem::remove(path, ec);
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return DeleteAssetResult{ WireUuid{ entry.id.value }, entry.name, std::move(cleared), fileDeleted };
             });
 
         registerCommand<AssignAssetParams, AssignAssetResult>(
