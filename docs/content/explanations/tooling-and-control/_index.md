@@ -13,7 +13,7 @@ The control plane is a JSON-over-unix-socket protocol that drives a running edit
 |---|---|---|
 | `control-plane-architecture` | the socket, `registerCommand`, the command itable, per-frame drain | `control.cppm`; `control_server.cpp` |
 | `se-cli-protocol` | the JSON request/response shape, argument coercion, no engine dependency | `tools/se` |
-| `scene-commands` | list/create/destroy/select, add/copy entity, set component(-field), camera, gizmo, dump-schema, pick, focus, inspect | `control_commands_scene.cpp` |
+| `scene-commands` | list/create/destroy/select, add/copy/rename entity, set component(-field), camera, gizmo, dump-schema, pick, focus, inspect | `control_commands_scene.cpp` |
 | `render-commands` | set-aa / set-clustered / set-ibl / set-ssao / set-ssgi / set-shadows / set-gi / set-exposure / set-depth-prepass, render-stats | `control_commands_render.cpp` |
 | `asset-commands` | import-model/texture, list/rename/assign-asset, get-thumbnail/view-asset, save/load project | `control_commands_asset.cpp` |
 | `screenshots-and-capture` | viewport vs. window PNG, deferred swapchain capture | `control_commands_asset.cpp`; `renderer_capture.cpp` |

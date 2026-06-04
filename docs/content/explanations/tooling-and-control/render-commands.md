@@ -15,7 +15,7 @@ The render commands are control-plane commands that flip renderer feature switch
 | `help` | — | Lists every registered command with its one-line help (registry order). |
 | `render-stats` | — | Returns last frame's scene counters plus the state of every render feature. |
 
-`render-stats` is the broad read. It returns draw calls, batches, instances, and a flag for each toggleable feature: `clustered`, `depthPrepass`, `shadows`, `ibl`, `ssao`, `contactShadows`, `ssgi`, `ddgi`, `rtSupported`, `rtShadows`, `restir`, `blasCount`, `pipelines`, `hdr`, `exposureEv`, and `aa`.
+`render-stats` is the broad read. It returns draw calls, batches, instances, frame timing (`frameMs`, `fps`, `gpuMs`), and a flag for each toggleable feature: `clustered`, `depthPrepass`, `shadows`, `ibl`, `ssao`, `contactShadows`, `ssgi`, `ddgi`, `rtSupported`, `rtShadows`, `restir`, `blasCount`, `pipelines`, `hdr`, `exposureEv`, and `aa`. `frameMs`/`fps` smooth the CPU run-loop delta; `gpuMs` is the GPU frame time from a timestamp-query ring (0 when the queue exposes no valid timestamp bits).
 
 ## Feature toggles
 

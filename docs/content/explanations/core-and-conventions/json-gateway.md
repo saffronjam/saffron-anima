@@ -51,8 +51,18 @@ auto jsonString(const Json& object, std::string_view key) -> Result<std::string>
 ```
 
 `jsonU64` accepts the widest range of inputs: an unsigned number, a non-negative signed
-number, and a numeric string. The `se` CLI passes bare numbers across the socket as
-strings, and the gateway absorbs that conversion.
+number, and a decimal string. Ids cross the control wire as strings (see below), and older
+saves stored them as numbers, so accepting both is what lets a project load either way.
+
+## Ids as strings
+
+A u64 id spans the full 64-bit range, past the 2^53 a JavaScript number holds exactly.
+Emitted as a JSON number, an id larger than that is silently rounded the moment a JS client
+runs the response through `JSON.parse`. `uuidToJson` serializes every id as a decimal JSON
+string, which survives `JSON.parse` losslessly; the reads accept a string or a number, so a
+project saved before this convention still loads. Every id on the control wire and in a
+saved scene or project file — entity ids, asset ids, `Mesh.mesh`, `Material.albedoTexture`,
+`Environment.skyTexture` — goes through it.
 
 ## Value-or-default variant
 
@@ -69,6 +79,7 @@ components gain fields.
 |---|---|---|
 | Gateway rationale | `json.cppm` | module doc (`JSON_NOEXCEPTION` → abort) |
 | Parse / serialize | `json.cppm` | `parseJson`, `dumpJson` |
+| Id serialization | `json.cppm` | `uuidToJson` |
 | Checked typed reads | `json.cppm` | `jsonU64`, `jsonString`, `jsonF64`, `jsonBool` |
 | Value-or-default reads | `json.cppm` | `jsonU64Or`, `jsonStringOr`, `jsonF32Or`, `jsonBoolOr` |
 

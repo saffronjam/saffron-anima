@@ -96,6 +96,30 @@ JSON is the payload because the command params already mirror the scene-file sha
 `set-component` body is the same object a scene file stores — and because a line-delimited text
 protocol is trivial to speak from a tiny client with no engine dependency.
 
+## Id encoding on the wire
+
+Entity and asset ids are `u64`. The host emits every id as a **decimal JSON string** — `"id": "12884901889"`, never the bare number `12884901889`. A u64 id spans the full 64-bit range, past the `2^53` a JavaScript number holds exactly, so a bare number would be silently rounded the moment a JS client ran the reply through `JSON.parse`. A decimal string survives every JSON parser intact, so the editor and the `se` CLI both read the exact id back.
+
+The contract is symmetric and forgiving on input. An entity selector — the `entity` param on `select`, `inspect`, `set-transform`, and the rest — resolves through one helper that accepts a **string id**, a **number id**, or an **exact entity name**; it tries the id first because it is stable across reloads. Asset selectors take `id` or `name` the same way. So a script may pass `se select 42` (a bare number the CLI types as an integer) or `se select "42"` and both resolve, while the reply that comes back always carries the id as a string.
+
+| What | File | Symbols |
+|---|---|---|
+| Id → wire string | `json.cppm` | `uuidToJson` |
+| String-or-number id read | `json.cppm` | `jsonU64` |
+| Entity / asset resolution | `control_commands_scene.cpp`, `command.cppm` | `resolveEntity`, `positionalOr` |
+| The id schema | `schemas/control/uuid.schema.json` | `Uuid` (string, `^[0-9]+$`) |
+
+## What the editor polls: scene and selection versions
+
+The editor does not get pushed updates; it reconciles on a focus-gated poll keyed on two monotonic counters the host returns from `get-selection`. `sceneVersion` covers structural and component edits; `selectionVersion` covers which entity is selected. When a counter advances, the editor refetches the affected state; when neither moves, the poll is a no-op.
+
+| Counter | Bumped by |
+|---|---|
+| `sceneVersion` | every scene-mutating command: `create-entity`, `destroy-entity`, `add-component`, `remove-component`, `set-component`, `set-component-field`, `set-transform`, `set-material`, `set-light`, `set-environment`, `add-entity`, `copy-entity`, `rename-entity`; the asset/project commands that touch the scene: `import-model`, `assign-asset`, `load-scene`, `load-project`, `new-project`, `open-project` |
+| `selectionVersion` | every selection change: `select`, `deselect`, `pick`, and the commands that auto-select (`add-entity`, `copy-entity`, `import-model`) or auto-deselect (`destroy-entity` of the selected entity, and the project/scene loads that clear selection) |
+
+A command that loads a scene or project moves both: the scene contents change and the selection is cleared. The pairing is intentional, so a single poll round both rebuilds the hierarchy and clears the inspector.
+
 ## Lifecycle
 
 `newControlContext` heap-allocates the context (so the client TU holds only a pointer), registers
@@ -112,6 +136,7 @@ and unlinks the socket file.
 | Socket + per-frame drain | `control_server.cpp` | `startControlServer`, `drainControlServer`, `controlSocketPath` |
 | Context lifecycle | `control_server.cpp` | `newControlContext`, `destroyControlContext`, `pollControl` |
 | Where the drain runs | `editor_app.cppm` | `EditorLayer` `onUpdate` calling `pollControl` |
+| Poll counters | `scene_edit_context.cppm`, `scene_edit_context.cpp` | `sceneVersion`, `selectionVersion`, `setSelection` |
 
 > [!NOTE]
 > A handler runs synchronously inside the frame and shares the engine's single-threaded state, so it must never block or sleep. Long work belongs to a render-graph pass or a background import that the handler kicks off, not the handler body.

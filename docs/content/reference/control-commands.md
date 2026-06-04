@@ -8,6 +8,8 @@ math = false
 
 Every command registered in `Saffron.Control` and driven by the `se` CLI over the unix socket. Commands are grouped by registering file. Params are positional unless named, and `?` marks an optional param. Each command returns a JSON result.
 
+Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [the id-encoding contract](../../explanations/tooling-and-control/control-plane-architecture/#id-encoding-on-the-wire)). Entity selectors resolve a string id, a number, or an exact name. Every scene-mutating command bumps `sceneVersion`; selection changes bump `selectionVersion` — both are read back by `get-selection`.
+
 ## Scene commands
 *(`control_commands_scene.cpp`)*
 
@@ -31,6 +33,7 @@ Every command registered in `Saffron.Control` and driven by the `se` CLI over th
 | `deselect` | — | clear the editor selection |
 | `add-entity` | `{preset=empty\|cube\|model\|point-light\|spot-light\|directional-light\|camera}` | spawn a preset, select it |
 | `copy-entity` | `{entity}` | deep-duplicate it, select the copy |
+| `rename-entity` | `{entity, name}` | set its Name component, return its ref |
 | `set-component-field` | `{entity, component, field, value}` | merge one field (a uuid string is coerced to u64) |
 | `get-camera` | — | the editor fly-camera state |
 | `set-camera` | `{position?, yaw?, pitch?, fov?, near?, far?, moveSpeed?, lookSpeed?}` | merge editor-camera fields |
@@ -46,7 +49,7 @@ Every command registered in `Saffron.Control` and driven by the `se` CLI over th
 |---|---|---|
 | `ping` | — | liveness + engine name/version/pid |
 | `help` | — | list available commands |
-| `render-stats` | — | draw counters + every feature flag (clustered, shadows, ibl, ssao, contactShadows, ssgi, ddgi, rtSupported, rtShadows, restir, blasCount, pipelines, hdr, exposureEv, aa) |
+| `render-stats` | — | draw counters + frame timing (`frameMs`/`fps` CPU loop EMA, `gpuMs` from the timestamp ring, 0 when unsupported) + every feature flag (clustered, shadows, ibl, ssao, contactShadows, ssgi, ddgi, rtSupported, rtShadows, restir, blasCount, pipelines, hdr, exposureEv, aa) |
 | `set-aa` | `{off\|fxaa\|taa\|msaa2\|msaa4\|msaa8}` | anti-aliasing mode |
 | `set-clustered` | `{0\|1}` | toggle clustered light culling |
 | `set-ibl` | `{0\|1}` | image-based ambient vs flat |
@@ -59,12 +62,10 @@ Every command registered in `Saffron.Control` and driven by the `se` CLI over th
 | `set-shadows` | `{0\|1}` | directional shadow map |
 | `set-exposure` | `{ev}` | tonemap exposure in stops (`exp2(ev)`) |
 | `set-depth-prepass` | `{0\|1}` | depth pre-pass |
-| `viewport-native-info` | — | native-viewport bridge status `{platform, transport, status, controlSocket, width, height, message}` |
-| `attach-native-viewport` | `{parentXid, x?, y?, width?, height?}` | reparent the engine SDL/X11 window into the host XID; latches present-only. `parentXid` may be a string (u64) |
-| `resize-native-viewport` | `{x, y, width, height}` | move/resize the already-reparented child (no reparent, no flicker) |
+| `viewport-native-info` | — | viewport surface status `{platform, transport, status, controlSocket, width, height, message}`; `transport` is `shm` under the readback transport (frames stream into the editor webview canvas), else `swapchain` (standalone window) |
+| `viewport-frame-info` | — | viewport frame transport + geometry. Shm: `{transport:"shm", width, height, shmPath, strideBytes, format:"rgba8", planeCount:3, generation, seqno}` (seqno is a u64 string); swapchain: `{transport:"swapchain", width, height}` |
+| `set-viewport-size` | `{width, height}` | desired viewport size in pixels (clamped ≥ 1); under shm transport updates the window + renderer extent, under swapchain drives only the offscreen extent |
 
-> The three `*-native-viewport` commands require launching `SaffronEngine` with
-> `SAFFRON_EDITOR_NATIVE_VIEWPORT=1`, `SAFFRON_CONTROL_SOCK=<sock>`, and `SDL_VIDEODRIVER=x11`.
 > Under present-only mode `screenshot target=window` is disabled (the swapchain is never in a
 > capturable layout) — use `screenshot target=viewport` instead.
 

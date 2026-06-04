@@ -28,6 +28,7 @@ Most commands take an `{entity}` argument. `resolveEntity` accepts a UUID (numbe
 | `deselect` | — | Clears the editor selection. Returns `{id: null}`. |
 | `add-entity` | `{preset?}` | Creates an entity from a preset (default `empty`); selects it; returns `{id, name}`. |
 | `copy-entity` | `{entity}` | Deep-duplicates the entity (all components, new UUID); selects the copy; returns `{id, name}`. |
+| `rename-entity` | `{entity, name}` | Sets the entity's Name component; returns its `{id, name}`. |
 | `set-component-field` | `{entity, component, field, value}` | Merges a single field into a component (generic; adds the component if missing). |
 | `pick` | `{u=0.5, v=0.5}` | Ray-picks at a viewport UV (`0,0` = top-left) and selects the hit. Returns `{hit, id?, name?}`. |
 | `inspect` | `{entity}` | Dumps every present component as JSON under `components`. |
@@ -67,12 +68,12 @@ An unknown preset is an error, not a silent fall-through to `empty`.
 
 ## Polling counters
 
-`EditorContext` carries two monotonically increasing counters a UI can poll to diff cheaply instead of re-listing the whole scene each frame:
+`SceneEditContext` carries two monotonically increasing counters a UI can poll to diff cheaply instead of re-listing the whole scene each frame:
 
 | Counter | Bumped when |
 |---|---|
-| `sceneVersion` | `add-entity`, `copy-entity`, `destroy-entity`, and scene/project `load`. |
-| `selectionVersion` | every `setSelection` (including `select`, `deselect`, `pick`, and an entity destroy that clears it). |
+| `sceneVersion` | every scene-mutating command: `create-entity`, `destroy-entity`, `add-component`, `remove-component`, `set-component`, `set-component-field`, `set-transform`, `set-material`, `set-light`, `set-environment`, `add-entity`, `copy-entity`, `rename-entity`, plus the [asset commands](../asset-commands/) that touch the scene (`import-model`, `assign-asset`, `load-scene`/`load-project`, `new-project`/`open-project`). |
+| `selectionVersion` | every `setSelection` (including `select`, `deselect`, `pick`, the auto-select on `add-entity`/`copy-entity`/`import-model`, and an entity destroy or scene/project load that clears it). |
 
 A client reads a counter once, then re-fetches the entity list or the selection only when the number changes. The counters live on the context, not the wire, so any command that mutates the scene bumps the right one regardless of who invoked it.
 
@@ -91,11 +92,11 @@ A client reads a counter once, then re-fetches the entity list or the selection 
 | Registration | `control_commands_scene.cpp` | `registerSceneCommands` |
 | Entity resolution | `command.cppm` | `resolveEntity`, `entityRef` |
 | Component edits | `control_commands_scene.cpp` | `set-component`, `set-transform`, `set-material`, `set-light`, `set-component-field` |
-| Presets + duplicate | `control_commands_scene.cpp` | `add-entity`, `copy-entity` |
+| Presets + duplicate + rename | `control_commands_scene.cpp` | `add-entity`, `copy-entity`, `rename-entity` |
 | Selection + picking | `control_commands_scene.cpp` | `select`, `get-selection`, `deselect`, `pick`, `focus`; `pickEntity`, `editorCameraView` |
 | Editor camera + gizmo | `control_commands_scene.cpp` | `get-camera`/`set-camera`, `get-gizmo`/`set-gizmo` |
 | Schema dump | `control_commands_scene.cpp` | `dump-schema` |
-| Poll counters | `editor.cppm` | `EditorContext.sceneVersion`, `EditorContext.selectionVersion`, `setSelection` |
+| Poll counters | `scene_edit_context.cppm` | `SceneEditContext.sceneVersion`, `SceneEditContext.selectionVersion`, `setSelection` |
 | The registry behind the edits | `editor.cppm` / `scene.cppm` | `ComponentTraits.serialize`/`deserialize`, `findByName` |
 
 ## Related

@@ -29,13 +29,13 @@ The C++ side goes the other way: it is a **validated consumer**, not a generator
 
 These hold across the whole protocol, in both the schemas and every reply:
 
-- **IDs are u64 numbers on the wire, strings in TS.** Every `Uuid`/`id` is a 64-bit unsigned integer emitted as a JSON **number**, and it may exceed 2^53, so it is not safely a JavaScript `number`. The `uuid` schema carries a `tsType` of `string`, and the TS client parses with a string-preserving parser, so an id is typed `string` end-to-end on the TS side while staying a number on the wire. Never round-trip an id through a plain JS `number`.
+- **IDs are u64, carried as decimal strings.** Every `Uuid`/`id` is a 64-bit unsigned integer emitted as a decimal JSON **string** (`"id": "12884901889"`). An id can exceed 2^53, past what a JavaScript `number` holds exactly, so a string is the only form that survives `JSON.parse` losslessly. The `uuid` schema is `type: "string"` with pattern `^[0-9]+$`, so an id is typed `string` end-to-end. Reads accept a string or a number, but never round-trip an id through a plain JS `number`. The [id-encoding contract](../control-plane-architecture/#id-encoding-on-the-wire) covers this in full.
 - **camelCase on the wire.** Every key is camelCase (`baseColor`, `albedoTexture`, `emissiveStrength`), matching the scene-file encoding and the generated TS field names.
 - **`Transform.rotation` is Euler XYZ radians.** The wire value is radians; a UI that shows degrees converts at the edge. (This matches `set-transform`, which merges radians.)
 - **Spot-light angles are degrees.** `SpotLightComponent.innerAngle` / `outerAngle` are in **degrees** on the wire, unlike the transform rotation — they are authored as degrees and stay degrees.
 - **Camera uses `near`/`far`.** The camera near/far planes are the keys `near` and `far` (not `nearPlane`/`zNear`), for both ECS cameras and the editor fly-cam.
 
-The schema is where these are pinned: the `uuid` type's `tsType`, the per-field units, and the key casing are all stated once and inherited by everything generated from or checked against it.
+The schema is where these are pinned: the `uuid` type's string form, the per-field units, and the key casing are all stated once and inherited by everything generated from or checked against it.
 
 ## In the code
 
