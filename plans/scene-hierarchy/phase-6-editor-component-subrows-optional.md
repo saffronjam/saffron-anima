@@ -12,8 +12,8 @@ read-only leaf subrows under its tree row, sourced entirely from the already-fet
 entity selected and focuses the matching section in the Inspector. This is a pure
 navigation affordance: editing always happens in the Inspector, never in the tree.
 Full per-entity component subrows (Unreal SCS style) stay **out of scope** — they would
-require N `inspect` calls and an `(id, sceneVersion)` cache that fights the focus-gated
-poll (see phase-0 architecture decision "Do components show as tree children?").
+require N `inspect` calls and an `(id, sceneVersion)` cache that fights the version-gated
+poll (see phase-0 decision "Components stay in the Inspector (Unity model), not the tree").
 
 Depends on phase 5 (the tree view, `HierarchyTree.tsx`/`TreeRow`, expand-state, and the
 flat-list+`parentId` wire shape must already exist). This phase adds no engine, control,
@@ -22,25 +22,25 @@ fresh.
 
 ## Current state
 
-- `componentsBySelected: InspectResult | null` (`editor/src/state/store.ts:30`) holds the
+- `componentsBySelected: InspectResult | null` (`editor/src/state/store.ts:29`) holds the
   selected entity's `inspect` result; it is refreshed only for the selected entity by the
-  reconcile poll (`store.ts:262`, `setComponentsBySelected(inspected)`) and cleared when
-  nothing is selected (`store.ts:252`). `applyOptimisticComponent` (`store.ts:108`)
+  reconcile poll (`store.ts:305`, `setComponentsBySelected(inspected)`) and cleared when
+  nothing is selected (`store.ts:295`). `applyOptimisticComponent` (`store.ts:123`)
   overlays edits between polls. This is the zero-cost source for subrows.
-- `COMPONENT_ORDER` (`editor/src/panels/InspectorPanel.tsx:35`) is the canonical component
+- `COMPONENT_ORDER` (`editor/src/panels/InspectorPanel.tsx:36`) is the canonical component
   order (`Name`, `Transform`, `Mesh`, `Camera`, `Material`, `DirectionalLight`,
-  `PointLight`, `SpotLight`); `orderedComponentNames` (`InspectorPanel.tsx:54`) applies it
+  `PointLight`, `SpotLight`); `orderedComponentNames` (`InspectorPanel.tsx:56`) applies it
   to a present-component map, appending unknown components in insertion order. The
   Inspector is switch-free — every present component renders via `renderField`, so the
   engine-side `RelationshipComponent`/`WorldTransformComponent` from phases 1-4 surface
-  here automatically unless filtered (`NON_REMOVABLE`, `InspectorPanel.tsx:48`, is the
+  here automatically unless filtered (`NON_REMOVABLE`, `InspectorPanel.tsx:50`, is the
   existing filter-set precedent).
 - The tree row component is `TreeRow` in `editor/src/panels/HierarchyTree.tsx` (split out
-  from the flat `HierarchyPanel.tsx` in phase 5). `HierarchyPanel.tsx:72` is the flat
+  from the flat `HierarchyPanel.tsx` in phase 5). `HierarchyPanel.tsx:95` is the flat
   `entities.map` this plan's tree replaces; the selected-row `cn()` classes
-  (`HierarchyPanel.tsx:79-84`) and the Radix `ContextMenu` anchored to the sidebar
-  (`HierarchyPanel.tsx:8-11`, `:73-101`) are the patterns `TreeRow` reuses.
-- Selection is `selectedId` (`store.ts:27`) + optimistic `selectEntity` (`store.ts:53`),
+  (`HierarchyPanel.tsx:109-114`) and the Radix `ContextMenu` anchored to the sidebar
+  (`HierarchyPanel.tsx:20-26`, `:95-133`) are the patterns `TreeRow` reuses.
+- Selection is `selectedId` (`store.ts:26`) + optimistic `selectEntity` (`store.ts:119`),
   confirmed by `selectionVersion`/`get-selection`. Expand-state (`expandedIds` /
   `toggleExpanded`, added in phase 5) is plain UI state outside the version-gated poll.
 - The Inspector has no programmatic "focus a component section" path today; sections
@@ -50,7 +50,7 @@ fresh.
 
 ### 1. New store slice: a component-subrow toggle and a focus signal
 
-Add to `EditorState` (`editor/src/state/store.ts:25`, interface near the other UI flags
+Add to `EditorState` (`editor/src/state/store.ts:24`, interface near the other UI flags
 like `viewportHidden` at `store.ts:49`):
 
 - `showComponentSubrows: boolean` — the toggle, **default `false`** so the outliner stays
@@ -60,8 +60,8 @@ like `viewportHidden` at `store.ts:49`):
 - `focusComponent: string | null` — a transient "jump the Inspector to this component"
   signal (new field). `setFocusComponent(name: string | null): void` sets it.
 
-Implement in the store body (`store.ts:108` region for setters). On `resetSceneState`
-(`store.ts:138`) clear `focusComponent` (leave `showComponentSubrows` as a persisted UI
+Implement in the store body (`store.ts:123` region for setters). On `resetSceneState`
+(`store.ts:152`) clear `focusComponent` (leave `showComponentSubrows` as a persisted UI
 preference, not scene state). Keep `focusComponent` out of the poll entirely — it is a
 one-shot UI intent, consumed and cleared by the Inspector (subsection 4).
 
@@ -80,7 +80,7 @@ function subrowNames(components: Record<string, unknown>): string[] {
 ```
 
 Reuse the canonical order: import (or re-export) `COMPONENT_ORDER` /
-`orderedComponentNames` from `InspectorPanel.tsx:35,54` rather than duplicating the array
+`orderedComponentNames` from `InspectorPanel.tsx:36,56` rather than duplicating the array
 — export them from `InspectorPanel.tsx` if not already exported so the subrow labels and
 the Inspector sections stay in lockstep. The exact registered names to filter follow the
 engine registrations from phases 1-2 (`RelationshipComponent` in
@@ -89,8 +89,8 @@ engine registrations from phases 1-2 (`RelationshipComponent` in
 `inspect` payload during implementation; filter by the registered JSON key, not a guess.
 
 Subrows are read from `store.componentsBySelected.components` (the `InspectResult` shape,
-`store.ts:30`) **only for the selected entity**. No other entity ever triggers an
-`inspect`; the poll (`store.ts:262`) is unchanged.
+`store.ts:29`) **only for the selected entity**. No other entity ever triggers an
+`inspect`; the poll (`store.ts:305`) is unchanged.
 
 ### 3. Render subrows in `TreeRow` behind the toggle
 
@@ -105,14 +105,14 @@ conditionally render the component leaves:
   render nothing.
 - Each subrow is a non-`EntityRef` leaf: indent one level deeper than child entities
   (reuse the phase-5 depth-indent), no twistie, a muted/italic label distinct from entity
-  rows (a `cn()` variant of `HierarchyPanel.tsx:79-84`), `role="option"` but visually
+  rows (a `cn()` variant of `HierarchyPanel.tsx:109-114`), `role="option"` but visually
   marked read-only. Key it `` `${entity.id}:${name}` `` so it never collides with an
   `EntityRef` id.
 - Click handler: `selectEntity(entity.id)` (keeps the entity selected — it already is) +
   `setFocusComponent(name)`. Do **not** call any control command; selection is unchanged,
   so no `select`/`inspect` round-trip is needed.
 
-Place the toggle control in the Hierarchy panel header (`HierarchyPanel.tsx:59-64`, beside
+Place the toggle control in the Hierarchy panel header (`HierarchyPanel.tsx:84-89`, beside
 `CreateMenu`) as a small icon/checkbox bound to `toggleComponentSubrows`. Keep it
 sidebar-anchored — no portal or floating layer over the viewport rect (the X11 child
 paints on top; this is the same constraint phase-5 honors for drag visuals).
@@ -123,7 +123,7 @@ The `focusComponent` signal drives the Inspector. In `InspectorPanel.tsx`:
 
 - Subscribe to `focusComponent` (`useEditorStore((s) => s.focusComponent)`).
 - Give each rendered component section a stable ref/`id` keyed by component name (the
-  `names.map` render loop following `orderedComponentNames`, `InspectorPanel.tsx:75`).
+  `names.map` render loop following `orderedComponentNames`, `InspectorPanel.tsx:186`).
 - In an effect, when `focusComponent` is set and matches a present section, `scrollIntoView`
   that section (and optionally apply a brief highlight class), then call
   `setFocusComponent(null)` to consume the one-shot. If the component is absent (e.g. the
@@ -134,10 +134,12 @@ This is presentation-only: no new component is fetched, no command is issued, an
 
 ### 5. No engine / control / schema changes
 
-This phase adds nothing to `schemas/control/`, no `registerCommand`, no `se` formatter,
-and no `bun run gen:protocol` regeneration. The wire contract is exactly what phase 5
-shipped (`list-entities` with `parentId`, `inspect` for the selected entity). The
-`dump-schema` reflection, the `tools/check-control-schema/check.ts` contract test, and the
+This phase touches no DTO struct in `control_dto.cppm`, no `tools/gen-control-dto/gen.ts`
+catalog entry, no `registerCommand`, no `se` formatter, and no generator run (the editor's
+`bun run gen:protocol` is a shim over `gen.ts`; nothing here regenerates its five outputs).
+The wire contract is exactly what phase 5 shipped (`list-entities` with `parentId`,
+`inspect` for the selected entity). The generated `command-manifest.generated.json` /
+`openrpc.generated.json`, the `tools/check-control-schema/check.ts` contract test, and the
 `se` CLI therefore stay untouched and in sync by construction — call this out in the PR so
 a reviewer does not expect schema churn.
 
@@ -145,7 +147,7 @@ a reviewer does not expect schema churn.
 
 - [ ] With the toggle **on** and an entity selected and expanded, its components render as
       read-only leaf subrows beneath the entity row, ordered by `COMPONENT_ORDER`
-      (`InspectorPanel.tsx:35`).
+      (`InspectorPanel.tsx:36`).
 - [ ] Clicking a subrow leaves the entity selected (no `selectionVersion` change) and
       scrolls/focuses the matching section in the Inspector.
 - [ ] `RelationshipComponent` and `WorldTransform` never appear as subrows (filtered by
@@ -167,7 +169,7 @@ a reviewer does not expect schema churn.
 ## Risks / seams
 
 - **Must not regress to per-entity inspects.** The single load-bearing constraint: subrows
-  are selected-entity-only, sourced from `componentsBySelected` (`store.ts:30`). Any path
+  are selected-entity-only, sourced from `componentsBySelected` (`store.ts:29`). Any path
   that fetches `inspect` for a non-selected row reintroduces the N-inspect poll pressure
   phase-0 rejected. Guard the render so non-selected rows produce zero subrows and zero
   control traffic.

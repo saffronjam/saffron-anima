@@ -11,9 +11,9 @@ flat `entities` array plus the per-entity `parentId` that phase 4 added to `list
 render twisties + depth indentation, drag a row onto another to reparent via the `set-parent`
 command, pin a non-deletable virtual `Environment` sentinel node at the root, and keep
 expand/collapse state OUT of the `sceneVersion`-gated reconcile poll so a scene mutation never
-collapses the tree. This supersedes the phase-5 flat-list non-goal in
-`plans/typescript-ui-migration/phase-5-hierarchy-create-menu.md` ("Do not build a tree; a flat
-list is parity. Parenting/resolveRefs is an explicit migration non-goal").
+collapses the tree. This supersedes the editor's flat-list/no-parenting non-goal, documented at
+`docs/content/explanations/ui-and-editor/hierarchy-panel.md` (a flat list is parity;
+parenting/resolveRefs were an explicit non-goal).
 
 This is the editor half. The engine `RelationshipComponent` + world-transform machinery
 (phases 1-3), the `set-parent` command + `parentId` on the entity-list entry (phase 4), and the
@@ -22,55 +22,61 @@ settled upstream — see the scene-hierarchy `README.md` / phase-0. Do not re-li
 
 ## Current state
 
-- `entities: EntityRef[]` is a flat array in the store (`store.ts:26`, init `:83`), replaced
-  whole by `setEntities` (`store.ts:100`). It is filled only by the reconcile poll's heavy lane
-  on a `sceneVersion` diff, via `client.listEntities()` → `setEntities(list.entities)`
-  (`store.ts:241-247`), and the write is skipped while `dragActive` (`store.ts:245`).
-- `EntityRef` is `{ id, name }` (`schemas/control/entity-ref.schema.json:7-12`; generated
-  `editor/src/protocol/index.ts:227`). Phase 4 adds an optional `parentId` to the *list-entry*
-  type (the entity-list item), NOT to the shared `entity-ref` returned by ~12 commands — so the
-  outliner reads `parentId` off the same `entities` slice it already polls.
-- `EntityList` is `{ entities: EntityRef[] }` (`editor/src/protocol/index.ts:218`;
-  `schemas/control/entity-list.schema.json:8-11`).
-- `selectedId` (`store.ts:27`) + optimistic `selectEntity` (`store.ts:105`), confirmed by
-  `selectionVersion` / `get-selection`. `dragActive` (`store.ts:43`, setter `:164`) already
+- `entities: EntityRef[]` is a flat array in the store (`store.ts:25`, init `:92`), replaced
+  whole by `setEntities` (impl `store.ts:110`). It is filled only by the reconcile poll's
+  version-gated heavy lane (`refreshHeavyState`, `store.ts:251-317`) on a `sceneVersion` diff,
+  via `client.listEntities()` (`store.ts:284`) → `setEntities(list.entities)` (`store.ts:289`),
+  and the write is skipped while `dragActive` (`store.ts:288`).
+- `EntityRef` is `{ id, name }` (generated `editor/src/protocol/se-types.ts:107`, re-exported by
+  the hand-curated `editor/src/protocol/index.ts`). Phase 4 adds an optional `parentId` to a
+  dedicated list-entry DTO (`EntityListEntry`), NOT to the shared `EntityRef` returned by ~12
+  commands — so the outliner reads `parentId` off the same `entities` slice it already polls.
+- `EntityList` is `{ entities: EntityRef[] }` (generated `editor/src/protocol/se-types.ts:250-251`,
+  re-exported by `index.ts`).
+- `selectedId` (`store.ts:26`) + optimistic `selectEntity` (`store.ts:119`), confirmed by
+  `selectionVersion` / `get-selection`. `dragActive` (`store.ts:43`, setter impl `:177`) already
   exists and is honored across the poll to protect optimistic writes mid-scrub. There is no
   expand-state and no tree shape today.
-- `resetSceneState` (`store.ts:138-152`) clears `entities` + `selectedId` + `componentsBySelected`
+- `resetSceneState` (`store.ts:152`) clears `entities` + `selectedId` + `componentsBySelected`
   on a project/scene load and forces the version diff to re-fire.
-- `HierarchyPanel.tsx` maps `entities` to flat `<button>` rows (`HierarchyPanel.tsx:72-103`),
-  each wrapped in a Radix `ContextMenu` (Copy/Delete, `:90-100`); left-click → optimistic
-  `selectEntity` + `client.selectEntity` (`:33-36`). The file-comment (`:8-11`) banks on rows
+- `HierarchyPanel.tsx` maps `entities` to flat `<button>` rows (`HierarchyPanel.tsx:95-134`),
+  each wrapped in a Radix `ContextMenu` (Copy/Delete, `:122-132`); left-click → optimistic
+  `selectEntity` + `client.selectEntity` (`:40-43`). The file-comment (`:8-11`) banks on rows
   living in the left column so Radix anchors the menu over the sidebar, never over the X11
   viewport rect. No indentation, twisties, or drag.
 - `client.ts` scene wrappers sit near `selectEntity` (`client.ts:101`) / `destroyEntity`
-  (`client.ts:104`); `callRaw` is the passthrough for untyped mutations (`client.ts:86`).
+  (`client.ts:104`); the typed `call` passthrough (`client.ts:83-88`) carries untyped mutations
+  too (a not-yet-result-mapped command still goes through `call`, resolving as `unknown`).
 - `EnvironmentPanel.tsx` is a tab sibling of Inspector/Stats in `Layout.tsx` (`LeftBottomTabs`),
   keyed off `get-environment` / `set-environment` and `sceneVersion`. The env is panel-resident
-  today, not a hierarchy row. `Scene.environment` is global engine state, not an entity (settled
-  in the skybox plan and the phase-0 decision) — the env node is a client-side sentinel only.
-- `uuid.schema.json` is already `type: string` on the wire (`schemas/control/uuid.schema.json:6`),
-  so `parentId` is a string in JSON and in TS — never `Number()` it.
+  today, not a hierarchy row. `Scene.environment` is global engine state, not an entity (the
+  completed-and-removed skybox plan settled this, recorded in the scene.cppm:242-244 comment and
+  the docs under `docs/content/explanations/image-based-lighting/`; the phase-0 decision affirms
+  it) — the env node is a client-side sentinel only.
+- `WireUuid` is `type: string` on the wire (generated `editor/src/protocol/se-types.ts:7`,
+  from the `WireUuid` DTO in `control_dto.cppm:21-24`), so `parentId` is a string in JSON and in
+  TS — never `Number()` it.
 
 ## Implementation
 
 ### 1. Carry `parentId` and add expand-state to the store (`editor/src/state/store.ts`)
 
-- `entities: EntityRef[]` stays flat (`store.ts:26`); the entry type now carries the optional
-  `parentId` from the regenerated protocol — no store-type edit beyond the regenerated import.
-- Add expand-state to `EditorState` (interface near `store.ts:43-49`, impl near `store.ts:96-98`):
+- `entities` stays a flat array (`store.ts:25`); its element type switches from `EntityRef` to the
+  regenerated `EntityListEntry` (carrying the optional `parentId`), so the store edit is the type
+  annotation + import swap — `EntityRef` → `EntityListEntry` — plus the `setEntities` signature.
+- Add expand-state to `EditorState` (interface near `store.ts:43-49`, impl near `store.ts:105-108`):
   - `expandedIds: Set<string>` (init empty set).
   - `toggleExpanded(id: string): void` — flip membership.
   - `setExpanded(id: string, expanded: boolean): void` — explicit set/clear (used by the
     chevron and by "expand all ancestors on select").
   These are PLAIN UI state. Keep them OUT of the `sceneVersion`/`selectionVersion` keying — they
   must never be reset by the reconcile poll, or every scene mutation collapses the tree.
-- In `setEntities` (`store.ts:100`) prune `expandedIds`: drop any id no longer present in the new
-  `entities` (a vanished id can never have visible children). Keep all surviving ids. New parents
-  default collapsed (do not auto-expand on appearance). Do this as a small merge inside
-  `setEntities` so the reconcile path at `store.ts:246` reconciles expand-state in lockstep with
+- In `setEntities` (impl `store.ts:110`) prune `expandedIds`: drop any id no longer present in the
+  new `entities` (a vanished id can never have visible children). Keep all surviving ids. New
+  parents default collapsed (do not auto-expand on appearance). Do this as a small merge inside
+  `setEntities` so the reconcile path at `store.ts:289` reconciles expand-state in lockstep with
   the entity list.
-- `resetSceneState` (`store.ts:138`) clears `expandedIds` (new scene, no stale expansion) alongside
+- `resetSceneState` (`store.ts:152`) clears `expandedIds` (new scene, no stale expansion) alongside
   the `entities`/`selectedId` reset.
 - Persist `expandedIds` across reloads via `localStorage` keyed by project path (mirror how
   `viewportHidden` and friends are plain UI state). Serialize the set as a string array; rehydrate
@@ -79,8 +85,8 @@ settled upstream — see the scene-hierarchy `README.md` / phase-0. Do not re-li
 - Add a module-level (NOT Zustand) tree builder near the other module helpers (e.g. beside
   `getThumbnailUrl`):
   ```ts
-  export interface TreeNode { entity: EntityRef; children: TreeNode[]; }
-  export function buildTree(entities: EntityRef[]): TreeNode[];
+  export interface TreeNode { entity: EntityListEntry; children: TreeNode[]; }
+  export function buildTree(entities: EntityListEntry[]): TreeNode[];
   ```
   Group entities by `parentId` under a synthetic root (`parentId` null/absent/`"0"` → top level).
   An entry whose `parentId` references a missing or self id is treated as a root (defensive: the
@@ -91,7 +97,7 @@ settled upstream — see the scene-hierarchy `README.md` / phase-0. Do not re-li
     leave every other field (and `selectedId`) untouched. The relink MUST NOT clear `selectedId`
     or churn selection.
   - Call `client.setParent(id, parentId)`; set `dragActive` true for the duration (mirroring the
-    scrub/gizmo pattern) so the poll's `setEntities` at `store.ts:245-246` cannot clobber the
+    scrub/gizmo pattern) so the poll's `setEntities` at `store.ts:288-289` cannot clobber the
     optimistic relink mid-round-trip; clear `dragActive` in `finally`.
   - On reject, the next poll's authoritative `setEntities` restores the true tree — no manual
     rollback needed beyond clearing `dragActive`.
@@ -101,31 +107,32 @@ settled upstream — see the scene-hierarchy `README.md` / phase-0. Do not re-li
 - Add to the scene section near `selectEntity` (`client.ts:101`) / `destroyEntity` (`client.ts:104`):
   ```ts
   setParent(id: string, parentId: string | null): Promise<unknown> {
-    return callRaw("set-parent", { entity: id, parent: parentId ?? null });
+    return call("set-parent", { entity: id, parent: parentId ?? null });
   },
   ```
-  Use `callRaw` (`client.ts:86`) unless the `set-parent` result is added to `CommandResultMap`; if
-  phase 4 returns an `EntityRef` from `set-parent` and registers it in the result map, switch to the
-  typed `call` instead. `parentId` stays a `string | null` end-to-end — never `Number()` it
-  (`client.ts:8`). `null` (or `"0"`, matching the engine root sentinel) detaches to root.
+  The typed `call` passthrough (`client.ts:83-88`) carries an as-yet-unmapped command too,
+  resolving as `unknown`; if phase 4 returns an `EntityRef` from `set-parent` and registers it in
+  `CommandResultMap`, the wrapper's return type tightens to `Promise<EntityRef>` with no call-site
+  change. `parentId` stays a `string | null` end-to-end — never `Number()` it. `null` (or `"0"`,
+  matching the engine root sentinel) detaches to root.
 
 ### 3. Split out `HierarchyTree` + `TreeRow` (`editor/src/panels/HierarchyTree.tsx`, new)
 
 - Create `editor/src/panels/HierarchyTree.tsx` exporting `HierarchyTree` (renders `buildTree`
   output) and an internal recursive `TreeRow`. `HierarchyPanel.tsx` keeps the header + `CreateMenu`
-  (`HierarchyPanel.tsx:59-64`) and `ScrollArea` (`:65`), and replaces the flat `entities.map`
-  (`:72-103`) with `<HierarchyTree nodes={buildTree(entities)} />`.
+  (`HierarchyPanel.tsx:84-89`) and `ScrollArea` (`:90`), and replaces the flat `entities.map`
+  (`:95-134`) with `<HierarchyTree nodes={buildTree(entities)} />`.
 - `TreeRow` props: `node: TreeNode`, `depth: number`. Per row:
   - Indent by `depth` (left padding `depth * step`); render a twisty/chevron button when
     `node.children.length > 0`, calling `toggleExpanded(node.entity.id)`; render an inert spacer
     when it has no children so labels align.
   - Reuse the existing selected-row styling: the `cn(...)` classes and `aria-selected` from
-    `HierarchyPanel.tsx:79-84` (`bg-primary text-primary-foreground` when selected,
+    `HierarchyPanel.tsx:108-114` (`bg-primary text-primary-foreground` when selected,
     `hover:bg-accent` otherwise).
-  - Keep the select handler (`HierarchyPanel.tsx:33-36`): optimistic `selectEntity` +
+  - Keep the select handler (`HierarchyPanel.tsx:40-43`): optimistic `selectEntity` +
     `client.selectEntity`.
-  - Keep the Radix `ContextMenu` (`HierarchyPanel.tsx:73-101`) sidebar-anchored. Keep Copy/Delete
-    (`onCopy`/`onDelete`, `HierarchyPanel.tsx:40-55`) and ADD:
+  - Keep the Radix `ContextMenu` (`HierarchyPanel.tsx:96-133`) sidebar-anchored. Keep Copy/Delete
+    (`onCopy`/`onDelete`, `HierarchyPanel.tsx:52-67`) and ADD:
     - `Unparent` → `setParent(id, null)`.
     - `Parent to…` → a submenu listing valid targets (every entity that is not the row itself and
       not a descendant of it), each → `setParent(id, targetId)`.
@@ -165,13 +172,16 @@ settled upstream — see the scene-hierarchy `README.md` / phase-0. Do not re-li
 - Style the env row with the same selected-row `cn(...)` classes so it reads as part of the tree,
   but gate its highlight on the sentinel flag, not `selectedId`.
 
-### 5. Regenerated protocol (`editor/src/protocol/index.ts`)
+### 5. Regenerated protocol (`editor/src/protocol/se-types.ts`)
 
-- Never hand-edited. `parentId` lands on the entity-list item via phase 4's `schemas/control`
-  change; run `bun run gen:protocol` (`bun run check`) so `EntityRef` / `EntityList` regenerate
-  with the optional `parentId: string` (the `uuid` `$ref` → `string`). The store/client/tree
-  consume the regenerated type. If phase 4 introduced a distinct `entity-list-entry` schema rather
-  than widening `EntityRef`, point `buildTree`/`setEntities` at that generated item type instead.
+- The wire contract is DTO-first: `parentId` lands on phase 4's dedicated `EntityListEntry` DTO
+  (`{ id, name, parentId? }`) in `control_dto.cppm`, which switches `EntityList.entities` off the
+  shared `EntityRef`. `editor/src/protocol/se-types.ts` is generated by `tools/gen-control-dto/gen.ts`
+  (run via `bun run gen:protocol`, a shim spawning that generator; `bun run check`); the
+  hand-curated `editor/src/protocol/index.ts` re-exports from it. After regen, `EntityList.entities`
+  is `EntityListEntry[]` carrying the optional `parentId: WireUuid` (still a `string`). Point
+  `buildTree`/`setEntities` at the generated `EntityListEntry` item type, and the store/client/tree
+  consume it.
 
 ## Done when
 
@@ -206,7 +216,7 @@ settled upstream — see the scene-hierarchy `README.md` / phase-0. Do not re-li
   This is the same constraint that keeps the `ContextMenu` sidebar-anchored (`HierarchyPanel.tsx:8-11`).
 - Expand-state vs the version-gated poll: if `expandedIds` lived under `sceneVersion` keying, every
   scene mutation would collapse the tree. Keep it as plain UI state outside the poll and prune only
-  vanished ids in `setEntities` (`store.ts:100`/`:246`).
+  vanished ids in `setEntities` (impl `store.ts:110`, reconcile call `:289`).
 - Selection churn on reparent: the optimistic relink in `setParent` must not clear `selectedId`, and
   `set-parent` bumping `sceneVersion` (engine-side) must not silently change selection. Verify the
   React relink touches only the moved entity's `parentId`.

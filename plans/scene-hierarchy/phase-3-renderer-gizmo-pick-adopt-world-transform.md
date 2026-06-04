@@ -7,11 +7,11 @@
 
 Switch every transform *consumer* from the local `transformMatrix(transform)` to the cached world
 matrix from phase 1 (`updateWorldTransforms`/`worldMatrix`/`worldTranslation`/`worldRotation`), so
-parenting actually applies in rendering, picking, the play camera, the native gizmo, and the editor
-billboards. The migration lands in **one change**: the scene AABB, directional shadow fit, and DDGI
-volume fit accumulate inside the same mesh loop, so a half-migration erupts or shrinks the shadow
-frustum. Reads (draw, pick) and writes (gizmo drag) must adopt identical world↔local semantics or
-visuals diverge from picks.
+parenting actually applies in rendering, picking, the lights, reflection probes, the play camera, the
+native gizmo, and the editor billboards. The migration lands in **one change**: the scene AABB,
+directional shadow fit, and DDGI volume fit accumulate inside the same mesh loop, so a half-migration
+erupts or shrinks the shadow frustum. Reads (draw, pick) and writes (gizmo drag) must adopt identical
+world↔local semantics or visuals diverge from picks.
 
 Depends on phase 1 (the `RelationshipComponent` durable parent uuid, `relinkHierarchy`,
 `WorldTransformComponent`, `updateWorldTransforms(Scene&)`, and the `worldMatrix`/`worldTranslation`/
@@ -39,32 +39,39 @@ or `.translation`/`glm::quat(.rotation)` directly:
   `dir = normalize(light.direction)` (`assets.cppm:752`) — the direction is a *component field*, not
   derived from the transform rotation.
 - **Directional light** — no transform read (direction is a component field), `assets.cppm:705-717`.
-- **Picking (mesh)** — `pickEntity`, `forEach<TransformComponent, MeshComponent>` at `assets.cppm:1009`;
-  rebuilds the world AABB from `const glm::mat4 model = transformMatrix(transform)` at `assets.cppm:1019`
-  — a second, independent local-transform consumer that must stay in lockstep with the draw loop.
-- **Play camera** — `primaryCamera` at `scene.cppm:311`; builds `model = translate(translation) *
-  mat4_cast(quat(rotation))` then `result.view = inverse(model)` (`scene.cppm:321-323`) — ignores scale,
+- **Reflection probes** — `forEach<TransformComponent, ReflectionProbeComponent>` at `assets.cppm:916`;
+  `up.origin = transform.translation` (`assets.cppm:927`) places each probe by its Transform — a renderer
+  transform consumer that must adopt the world matrix alongside draw, pick, and lights.
+- **Picking (mesh)** — `pickEntity` (`assets.cppm:1026`), `forEach<TransformComponent, MeshComponent>` at
+  `assets.cppm:1051`; rebuilds the world AABB from `const glm::mat4 model = transformMatrix(transform)` at
+  `assets.cppm:1061` — a second, independent local-transform consumer that must stay in lockstep with the
+  draw loop.
+- **Play camera** — `primaryCamera` at `scene.cppm:345`; builds `model = translate(translation) *
+  mat4_cast(quat(rotation))` then `result.view = inverse(model)` (`scene.cppm:355-357`) — ignores scale,
   rebuilds inline (not via `transformMatrix`).
 - **Native gizmo** — `gizmoAxes(transform, space)` at `scene_edit_gizmo.cpp:153` (Local basis =
-  `glm::quat(transform.rotation)`, the *local* rotation); `hitNativeGizmo` projects
-  `transform.translation` at `scene_edit_gizmo.cpp:179`/`:184-235`; `applyNativeGizmoDrag` writes
-  `transform.translation`/`rotation`/`scale` directly in world space at `scene_edit_gizmo.cpp:246-314`
-  (translate branch `:291`).
-- **Host overlay billboards** — `buildSceneEditBillboards` at `host.cppm:359`; point glyph
-  `transform.translation` (`host.cppm:377`), spot glyph + forward `glm::quat(t.rotation) * vec3(0,0,-1)`
-  (`host.cppm:395-406`), camera glyph `transform.translation` (`host.cppm:420`).
-- **Host SDL drag-begin snapshot** — `host.cppm:474-479` snapshots `startTranslation`/`startRotation`/
-  `startScale` from the entity's own transform; mesh ray-pick call `host.cppm` `handleNativeGizmoPointer`
-  (`host.cppm:444`).
+  `glm::quat(transform.rotation)`, the *local* rotation, `:159-160`); `hitNativeGizmo` (`:171`) projects
+  `transform.translation` at `scene_edit_gizmo.cpp:179`/`:185`/`:191`/`:201`/`:224-235`;
+  `applyNativeGizmoDrag` (`:246`) writes `transform.translation`/`rotation`/`scale` directly in world
+  space (translate `:291`, rotate `:298-300`, scale `:304-313`).
+- **Host overlay billboards** — `buildSceneEditBillboards` at `host.cppm:191`; point glyph
+  `transform.translation` (`host.cppm:209`), spot glyph (`host.cppm:227-228`) + forward
+  `glm::quat(t.rotation) * vec3(0,0,-1)` (`host.cppm:237`), camera glyph `transform.translation`
+  (`host.cppm:252`); the gizmo overlay itself reads the local transform at `host.cppm:112`.
+- **Host SDL drag-begin snapshot** — inside `handleNativeGizmoPointer`, `host.cppm:307-311` snapshots
+  `startTranslation`/`startRotation`/`startScale` from the entity's own transform; the mesh ray-pick call
+  is `host.cppm:316` (the event sink that invokes `handleNativeGizmoPointer` is registered at
+  `host.cppm:444-451`).
 - **Control gizmo-pointer drag-begin snapshot** — `gizmo-pointer` "begin" phase at
-  `control_commands_scene.cpp:691`; snapshots `startTranslation`/`startRotation`/`startScale` from the
-  entity transform at `control_commands_scene.cpp:702-706`.
-- **Control billboard-pick** — `pickBillboard` projects `getComponent<TransformComponent>(...).translation`
-  at `control_commands_scene.cpp:35`.
-- **Control focus** — `focus` reads `transform.translation`, `control_commands_scene.cpp:403-414`.
+  `control_commands_scene.cpp:853`; snapshots `startTranslation`/`startRotation`/`startScale` from the
+  entity transform at `control_commands_scene.cpp:865-867`.
+- **Control billboard-pick** — `pickBillboard` (`control_commands_scene.cpp:74`) projects
+  `getComponent<TransformComponent>(...).translation` at `control_commands_scene.cpp:90`.
+- **Control focus** — `focus` (`control_commands_scene.cpp:469`) reads `transform.translation`,
+  `control_commands_scene.cpp:481`.
 
 The canonical `renderScene` lives in `Saffron.Assets` (`assets.cppm`), *not* `renderer.cppm` — a plan
-that edits "the renderer" misses it. `transformMatrix` (`scene.cppm:105`) stays the local builder,
+that edits "the renderer" misses it. `transformMatrix` (`scene.cppm:119`) stays the local builder,
 unchanged.
 
 ## Implementation
@@ -82,7 +89,7 @@ natural choke point: every per-frame consumer (mesh loop, lights, scene AABB) ru
   since the last flatten unless a drag wrote a local transform — and the drag rebases against the
   *parent* world, which a child drag never changes, so the cache stays valid for the dragged entity's
   own subtree until the next flatten).
-- `pickEntity` (`assets.cppm:984`) runs from the SDL pick path and the control `pick` command between
+- `pickEntity` (`assets.cppm:1026`) runs from the SDL pick path and the control `pick` command between
   renders; it must read the cache written by the last `renderScene`. Since `renderScene` runs every
   frame and the pick fires on a pointer event after a render, the cache is current. Do **not** add a
   second flatten inside `pickEntity` — one pass per frame is the v1 contract; a stale-cache fallback
@@ -130,17 +137,27 @@ at `assets.cppm:705-717` (it has a `TransformComponent` only if authored with on
 directional light). Skipping this leaves parented lights translating but never re-aiming — the deliberate
 choice is to re-aim. Position is unconditional; direction composition is the design call recorded here.
 
+### 3a. Reflection probes → world translation
+
+`renderScene` snapshots each `ReflectionProbeComponent` into the renderer in the
+`forEach<TransformComponent, ReflectionProbeComponent>` loop (`assets.cppm:916`), placing the probe by
+its Transform: `up.origin = transform.translation` (`assets.cppm:927`). Replace that read with
+`worldTranslation(scene, entity)` so a parented probe captures at its parent-composed world origin. The
+probe carries a position and an influence zone, not a rotation, so only the translation rebases — this is
+a translation consumer in lockstep with the lights, and a missed probe places its capture at the child's
+local origin while the mesh it should reflect renders at its world position.
+
 ### 4. Picking AABB → world matrix (lockstep with draw)
 
-In `pickEntity` (`assets.cppm:1009`), replace `const glm::mat4 model = transformMatrix(transform)` at
-`assets.cppm:1019` with `worldMatrix(scene, entity)`. This is the second independent consumer of the
+In `pickEntity` (`assets.cppm:1051`), replace `const glm::mat4 model = transformMatrix(transform)` at
+`assets.cppm:1061` with `worldMatrix(scene, entity)`. This is the second independent consumer of the
 same matrix; it **must** change in the same commit as step 2 or picks land at the child's local origin
 while the mesh renders at its world position. The slab test and corner loop are unchanged.
 
 ### 5. Play camera view → inverse(world)
 
-In `primaryCamera` (`scene.cppm:311`), build the view from the camera entity's world transform instead
-of the inline `translate * mat4_cast` at `scene.cppm:321-322`:
+In `primaryCamera` (`scene.cppm:345`), build the view from the camera entity's world transform instead
+of the inline `translate * mat4_cast` at `scene.cppm:355-356`:
 
 ```cpp
 result.view = glm::inverse(worldMatrix(scene, Entity{ /* the entity handle */ }));
@@ -195,40 +212,44 @@ the world rotation, and `unitsPerPixel`/`projectedAxis` already key off `gizmo.s
 
 6d. **Snapshot world at drag begin, in both paths, identically.** Both snapshot sites must capture the
 entity's **world** translation/rotation (and the frozen `startParentWorld`):
-  - Host SDL: `host.cppm:474-479` — set `gizmo.startTranslation = worldTranslation(editor.scene, target)`,
+  - Host SDL: `host.cppm:307-311` (inside `handleNativeGizmoPointer`) — set
+    `gizmo.startTranslation = worldTranslation(editor.scene, target)`,
     `gizmo.startRotation = eulerOf(worldRotation(...))`, `gizmo.startParentWorld = parentWorldOf(...)`.
-  - Control gizmo-pointer "begin": `control_commands_scene.cpp:702-706` — the same three assignments
+  - Control gizmo-pointer "begin": `control_commands_scene.cpp:865-867` — the same three assignments
     against `ctx.sceneEdit`. These two must stay byte-for-byte equivalent in semantics or a CLI/Tauri
     drag diverges from an SDL drag. `gizmo.startScale` stays the local scale in both (per 6c).
 
 ### 7. Host overlay billboards → world translation/rotation
 
-In `buildSceneEditBillboards` (`host.cppm:359`):
-- Point glyph (`host.cppm:377`): `worldTranslation(editor.scene, e)`.
-- Spot glyph + forward (`host.cppm:395-406`): anchor at `worldTranslation`; forward =
+In `buildSceneEditBillboards` (`host.cppm:191`):
+- Point glyph (`host.cppm:209`): `worldTranslation(editor.scene, e)`.
+- Spot glyph + forward (`host.cppm:227-228`, `:237`): anchor at `worldTranslation`; forward =
   `worldRotation(editor.scene, e) * glm::vec3{0,0,-1}` (replacing `glm::quat(t.rotation) *`).
-- Camera glyph (`host.cppm:420`): `worldTranslation(editor.scene, e)`.
+- Camera glyph (`host.cppm:252`): `worldTranslation(editor.scene, e)`.
 
 Else billboards detach from parented entities while the mesh/gizmo move.
 
 ### 8. Control billboard-pick + focus → world translation
 
-- `pickBillboard` (`control_commands_scene.cpp:35`): project `worldTranslation(editor.scene, e)` so
-  CLI/Tauri billboard picks match the viewport glyph positions.
-- `focus` (`control_commands_scene.cpp:403-414`): aim the editor camera at
-  `worldTranslation(ctx.sceneEdit.scene, *entity)`.
+- `pickBillboard` (`control_commands_scene.cpp:74`): project `worldTranslation(editor.scene, e)` at
+  `:90` so CLI/Tauri billboard picks match the viewport glyph positions.
+- `focus` (`control_commands_scene.cpp:469`): aim the editor camera at
+  `worldTranslation(ctx.sceneEdit.scene, *entity)` (the local read it replaces is at `:481`).
 
 These mirror steps 6–7 so every pick/focus path agrees with what is rendered.
 
 ### 9. No wire/schema change in this phase
 
-This phase adds no command, no schema, no `parentId` field — those belong to the reparent/tree phases.
-`dump-schema`, the `tools/check-control-schema` contract test, and `tools/se` are therefore **untouched
-here**; the schema-first obligation is satisfied by the phases that add `set-parent`/`parentId`. The
-verification for this phase is behavioral (renders/picks/round-trips), not contract-shape. If any
-edit in steps 6–8 *changes the JSON shape* of `pick`/`gizmo-pointer`/`focus` responses (it should not —
-these return existing `entityRef`/op-name payloads), then the contract test and `se` formatters must be
-updated in the same change; the intended outcome is no wire change.
+This phase adds no command, no DTO, no `parentId` field — those belong to the reparent/tree phases. The
+DTO source of truth (`control_dto.cppm`), the generator (`tools/gen-control-dto/gen.ts`) and its
+outputs (the C++ serde, `editor/src/protocol/se-types.ts`, `schemas/control/openrpc.generated.json` +
+`command-manifest.generated.json`), the `tools/check-control-schema` contract test, and `tools/se` are
+therefore **untouched here**; the DTO-first obligation is satisfied by the phases that add
+`set-parent`/`parentId`. The verification for this phase is behavioral (renders/picks/round-trips), not
+contract-shape. If any edit in steps 6–8 *changes the JSON shape* of `pick`/`gizmo-pointer`/`focus`
+responses (it should not — these return the existing `EntityRef`/op-name DTOs), then the DTO, the
+regenerated outputs, the contract test, and `se` formatters must be updated in the same change; the
+intended outcome is no wire change.
 
 ## Done when
 
@@ -261,10 +282,10 @@ updated in the same change; the intended outcome is no wire change.
   fit all accumulate from the mesh loop's `model` (`assets.cppm:842-848`). Every renderable must switch
   in the same commit (step 2 covers them via the single `model` source). Missing one renderable, or
   switching draw but not pick, makes the shadow frustum or picks diverge.
-- **Two drag-begin snapshots must stay in lockstep.** `host.cppm:474-479` (SDL) and
-  `control_commands_scene.cpp:702-706` (gizmo-pointer "begin") capture the same start state; both must
-  adopt the identical world-snapshot + frozen `startParentWorld` semantics or an SDL drag and a
-  CLI/Tauri drag produce different local TRS for the same gesture.
+- **Two drag-begin snapshots must stay in lockstep.** `host.cppm:307-311` (SDL, inside
+  `handleNativeGizmoPointer`) and `control_commands_scene.cpp:865-867` (gizmo-pointer "begin") capture
+  the same start state; both must adopt the identical world-snapshot + frozen `startParentWorld`
+  semantics or an SDL drag and a CLI/Tauri drag produce different local TRS for the same gesture.
 - **World→local inversion is numerically delicate.** `inverse(parentWorld)` is ill-conditioned under
   zero or near-zero parent scale and lossy under sheared/non-uniform parents when decomposing a world
   rotate/scale back to child Euler + vec3 scale. The TRS-only model (phase 0) accepts this: scale stays
