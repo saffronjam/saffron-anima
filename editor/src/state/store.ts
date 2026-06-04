@@ -17,7 +17,6 @@ export type EnginePhase = "idle" | "starting" | "attaching" | "ready" | "error";
 
 export interface EngineStatus {
   running: boolean;
-  attached: boolean;
   phase: EnginePhase;
   error?: string;
 }
@@ -33,8 +32,9 @@ export interface EditorState {
   renderStats: RenderStats | null;
   project: ProjectInfo | null;
   /// Client-side reconcile-poll rate (Hz), an EMA over the actual tick interval.
-  /// This is the WEBVIEW poll cadence, NOT the engine frame rate — there is no
-  /// frame timing on the control wire (the native viewport paints independently).
+  /// This is the WEBVIEW poll cadence, NOT the engine frame rate (the engine's own
+  /// fps/frameMs/gpuMs ride on `render-stats`; the native viewport paints
+  /// independently of this poll).
   pollRateHz: number;
   /// Webview repaint cadence measured with requestAnimationFrame.
   uiFrameRateHz: number;
@@ -43,12 +43,15 @@ export interface EditorState {
   dragActive: boolean;
   gizmo: GizmoState;
   /// When true, the native viewport window is parked off-screen so an overlay
-  /// (the asset View modal) can paint over the viewport rect — the reparented X11
+  /// (a modal dialog) can paint over the viewport rect — the reparented X11
   /// child always paints on top otherwise. The ViewportPanel reads this and skips
   /// gluing the native window to its div until it clears.
   viewportHidden: boolean;
 
   setEntities(entities: EntityRef[]): void;
+  /// Optimistically rename one entity's hierarchy row between polls (inline rename).
+  /// The reconcile poll's sceneVersion bump re-fetches the authoritative list.
+  applyOptimisticEntityName(id: string, name: string): void;
   setSelectedId(selectedId: string | null): void;
   selectEntity(id: string): void;
   setSceneVersion(sceneVersion: number): void;
@@ -92,12 +95,16 @@ export const useEditorStore = create<EditorState>((set) => ({
   pollRateHz: 0,
   uiFrameRateHz: 0,
   uiFrameMs: 0,
-  engineStatus: { running: false, attached: false, phase: "idle" },
+  engineStatus: { running: false, phase: "idle" },
   dragActive: false,
   gizmo: { op: "translate", space: "world" },
   viewportHidden: false,
 
   setEntities: (entities) => set({ entities }),
+  applyOptimisticEntityName: (id, name) =>
+    set((s) => ({
+      entities: s.entities.map((e) => (e.id === id ? { ...e, name } : e)),
+    })),
   setSelectedId: (selectedId) => set({ selectedId }),
   // Optimistic local selection: set immediately on a hierarchy click so the row
   // highlights without waiting a poll interval; the reconcile poll confirms via
@@ -158,7 +165,6 @@ export const useEditorStore = create<EditorState>((set) => ({
         phase,
         error: phase === "error" ? error : undefined,
         running: phase === "ready" || phase === "error" ? s.engineStatus.running : phase !== "idle",
-        attached: phase === "ready" ? true : phase === "idle" ? false : s.engineStatus.attached,
       },
     })),
   setDragActive: (dragActive) => set({ dragActive }),
@@ -206,6 +212,16 @@ export function startReconcile(client: Client): () => void {
     return store.engineStatus.phase === "ready" && document.hasFocus();
   };
 
+  /// The crash watchdog runs once the engine is live (socket bound) and stops once
+  /// it has died or never started. This includes the starting/attaching window —
+  /// the gap between socket-up and the viewport attach — so a child that binds its
+  /// socket and then exits before attaching is still caught (the ViewportPanel's
+  /// phase flip to ready never fires in that case).
+  const engineMayBeAlive = (): boolean => {
+    const phase = useEditorStore.getState().engineStatus.phase;
+    return phase !== "idle" && phase !== "error" && document.hasFocus();
+  };
+
   const refreshHeavyState = (request: {
     selectedId: string | null;
     sceneChanged: boolean;
@@ -213,7 +229,8 @@ export function startReconcile(client: Client): () => void {
     sceneVersion: number;
     previousSceneVersion: number;
   }): void => {
-    const { selectedId, sceneChanged, selectionChanged, sceneVersion, previousSceneVersion } = request;
+    const { selectedId, sceneChanged, selectionChanged, sceneVersion, previousSceneVersion } =
+      request;
     if (refreshInFlight || (!sceneChanged && !selectionChanged)) {
       if (refreshInFlight) {
         pendingRefresh = request;
@@ -274,7 +291,7 @@ export function startReconcile(client: Client): () => void {
   };
 
   const watchdog = (): void => {
-    if (stopped || watchdogInFlight || !readyForSync()) {
+    if (stopped || watchdogInFlight || !engineMayBeAlive()) {
       return;
     }
     watchdogInFlight = true;
