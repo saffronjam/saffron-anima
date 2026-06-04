@@ -35,7 +35,7 @@ Script and inspect a running editor with the `se` CLI over its unix socket.
 
 ## Verify
 
-- Read the frame's draw counters: `se render-stats` reports `drawCalls` / `batches` / `instances` plus feature flags.
+- Read the frame's draw counters: `se render-stats` reports `drawCalls` / `batches` / `instances`, frame timing (`frameMs` / `fps`; `gpuMs` is 0 until a GPU timestamp readback exists), plus feature flags.
 - Capture what's on screen:
   ```sh
   se screenshot viewport /tmp/view.png    # the offscreen scene image
