@@ -44,6 +44,14 @@ namespace se
         se::AssetServer assets;
     };
 
+    enum class BillboardKind
+    {
+        None,
+        PointLight,
+        SpotLight,
+        Camera,
+    };
+
     // The overlay-gizmo + billboard geometry builders + the SDL pointer handler. These
     // touch Rendering (OverlayVertex / submitOverlay / Renderer) + Assets (pickEntity) +
     // SDL, so they stay in this TU; the pure-math hit-test/drag live in Saffron.SceneEdit.
@@ -85,19 +93,94 @@ namespace se
         addTriangle(vertices, a, c, d, color);
     }
 
-    // Outline box (four edges) for camera/empty glyphs.
-    void addBoxOutline(std::vector<se::OverlayVertex>& vertices, glm::vec2 centerPx, se::f32 size, glm::vec4 color,
-                       se::u32 width, se::u32 height)
+    void addRectOutline(std::vector<se::OverlayVertex>& vertices, glm::vec2 centerPx, glm::vec2 sizePx, glm::vec4 color,
+                        se::u32 width, se::u32 height)
     {
-        const se::f32 h = size * 0.5f;
-        const glm::vec2 tl = centerPx + glm::vec2{ -h, -h };
-        const glm::vec2 tr = centerPx + glm::vec2{ h, -h };
-        const glm::vec2 br = centerPx + glm::vec2{ h, h };
-        const glm::vec2 bl = centerPx + glm::vec2{ -h, h };
+        const glm::vec2 h = sizePx * 0.5f;
+        const glm::vec2 tl = centerPx + glm::vec2{ -h.x, -h.y };
+        const glm::vec2 tr = centerPx + glm::vec2{ h.x, -h.y };
+        const glm::vec2 br = centerPx + glm::vec2{ h.x, h.y };
+        const glm::vec2 bl = centerPx + glm::vec2{ -h.x, h.y };
         addLine(vertices, tl, tr, 2.0f, color, width, height);
         addLine(vertices, tr, br, 2.0f, color, width, height);
         addLine(vertices, br, bl, 2.0f, color, width, height);
         addLine(vertices, bl, tl, 2.0f, color, width, height);
+    }
+
+    void addCircleFill(std::vector<se::OverlayVertex>& vertices, glm::vec2 centerPx, se::f32 radius, glm::vec4 color,
+                       se::u32 width, se::u32 height)
+    {
+        constexpr se::u32 segments = 24;
+        const glm::vec2 center = se::pixelToNdc(centerPx, width, height);
+        for (se::u32 i = 0; i < segments; i = i + 1)
+        {
+            const se::f32 a0 = static_cast<se::f32>(i) / static_cast<se::f32>(segments) * glm::two_pi<se::f32>();
+            const se::f32 a1 = static_cast<se::f32>(i + 1) / static_cast<se::f32>(segments) * glm::two_pi<se::f32>();
+            const glm::vec2 p0 =
+                se::pixelToNdc(centerPx + glm::vec2{ std::cos(a0), std::sin(a0) } * radius, width, height);
+            const glm::vec2 p1 =
+                se::pixelToNdc(centerPx + glm::vec2{ std::cos(a1), std::sin(a1) } * radius, width, height);
+            addTriangle(vertices, center, p0, p1, color);
+        }
+    }
+
+    void addCircleOutline(std::vector<se::OverlayVertex>& vertices, glm::vec2 centerPx, se::f32 radius, glm::vec4 color,
+                          se::u32 width, se::u32 height)
+    {
+        constexpr se::u32 segments = 32;
+        glm::vec2 prev = centerPx + glm::vec2{ radius, 0.0f };
+        for (se::u32 i = 1; i <= segments; i = i + 1)
+        {
+            const se::f32 a = static_cast<se::f32>(i) / static_cast<se::f32>(segments) * glm::two_pi<se::f32>();
+            const glm::vec2 cur = centerPx + glm::vec2{ std::cos(a), std::sin(a) } * radius;
+            addLine(vertices, prev, cur, 2.0f, color, width, height);
+            prev = cur;
+        }
+    }
+
+    void addBulbIcon(std::vector<se::OverlayVertex>& vertices, glm::vec2 centerPx, glm::vec4 color, se::u32 width,
+                     se::u32 height)
+    {
+        addCircleFill(vertices, centerPx + glm::vec2{ 0.0f, -3.0f }, 7.5f, color, width, height);
+        addLine(vertices, centerPx + glm::vec2{ -4.5f, 5.0f }, centerPx + glm::vec2{ 4.5f, 5.0f }, 3.0f, color, width,
+                height);
+        addLine(vertices, centerPx + glm::vec2{ -3.5f, 9.0f }, centerPx + glm::vec2{ 3.5f, 9.0f }, 3.0f, color, width,
+                height);
+    }
+
+    void addCameraIcon(std::vector<se::OverlayVertex>& vertices, glm::vec2 centerPx, glm::vec4 color, se::u32 width,
+                       se::u32 height)
+    {
+        addRectOutline(vertices, centerPx + glm::vec2{ -2.0f, 1.0f }, glm::vec2{ 20.0f, 14.0f }, color, width, height);
+        addCircleOutline(vertices, centerPx + glm::vec2{ -2.0f, 1.0f }, 4.0f, color, width, height);
+        const glm::vec2 a = centerPx + glm::vec2{ 8.0f, -4.0f };
+        const glm::vec2 b = centerPx + glm::vec2{ 14.0f, -8.0f };
+        const glm::vec2 c = centerPx + glm::vec2{ 14.0f, 6.0f };
+        const glm::vec2 d = centerPx + glm::vec2{ 8.0f, 2.0f };
+        addLine(vertices, a, b, 2.0f, color, width, height);
+        addLine(vertices, b, c, 2.0f, color, width, height);
+        addLine(vertices, c, d, 2.0f, color, width, height);
+    }
+
+    auto billboardKind(se::Scene& scene, se::Entity entity) -> BillboardKind
+    {
+        if (se::hasComponent<se::MeshComponent>(scene, entity))
+        {
+            return BillboardKind::None;
+        }
+        if (se::hasComponent<se::PointLightComponent>(scene, entity))
+        {
+            return BillboardKind::PointLight;
+        }
+        if (se::hasComponent<se::SpotLightComponent>(scene, entity))
+        {
+            return BillboardKind::SpotLight;
+        }
+        if (se::hasComponent<se::CameraComponent>(scene, entity))
+        {
+            return BillboardKind::Camera;
+        }
+        return BillboardKind::None;
     }
 
     // Builds the active-mode gizmo geometry for the selected entity into `vertices`.
@@ -185,9 +268,7 @@ namespace se
         }
     }
 
-    // Colored screen-space glyphs for light/camera/empty entities (the overlay vertex
-    // format has no UV/sampler, so the SVG billboards become solid glyphs): point = filled
-    // warm box, spot = box + a short cone line along its direction, camera = box outline.
+    // Colored screen-space glyphs for meshless light/camera entities.
     void buildSceneEditBillboards(se::SceneEditContext& editor, const se::CameraView& cam, se::u32 width,
                                   se::u32 height, std::vector<se::OverlayVertex>& vertices)
     {
@@ -196,69 +277,84 @@ namespace se
             return;
         }
         const glm::vec4 selectedColor{ 1.0f, 0.78f, 0.18f, 1.0f };
-        const se::f32 half = 12.0f;
 
-        se::forEach<se::PointLightComponent>(
+        se::forEach<se::TransformComponent>(
             editor.scene,
-            [&](se::Entity e, se::PointLightComponent&)
+            [&](se::Entity e, se::TransformComponent& transform)
             {
-                if (!se::hasComponent<se::TransformComponent>(editor.scene, e))
+                const BillboardKind kind = billboardKind(editor.scene, e);
+                if (kind == BillboardKind::None)
                 {
                     return;
                 }
-                const glm::vec3 pos = se::getComponent<se::TransformComponent>(editor.scene, e).translation;
-                const se::GizmoProjection p = se::viewportProject(cam, width, height, pos);
+                const se::GizmoProjection p = se::viewportProject(cam, width, height, transform.translation);
                 if (!p.visible)
                 {
                     return;
                 }
                 const bool sel = editor.selected.handle == e.handle;
-                addBox(vertices, p.pixel, half * 2.0f, sel ? selectedColor : glm::vec4{ 1.0f, 0.85f, 0.35f, 0.9f },
-                       width, height);
-            });
-        se::forEach<se::SpotLightComponent>(
-            editor.scene,
-            [&](se::Entity e, se::SpotLightComponent&)
-            {
-                if (!se::hasComponent<se::TransformComponent>(editor.scene, e))
+                if (kind == BillboardKind::PointLight)
                 {
+                    addBulbIcon(vertices, p.pixel, sel ? selectedColor : glm::vec4{ 1.0f, 0.84f, 0.34f, 0.95f }, width,
+                                height);
                     return;
                 }
-                const se::TransformComponent& t = se::getComponent<se::TransformComponent>(editor.scene, e);
-                const se::GizmoProjection p = se::viewportProject(cam, width, height, t.translation);
-                if (!p.visible)
+                if (kind == BillboardKind::SpotLight)
                 {
+                    const glm::vec4 color = sel ? selectedColor : glm::vec4{ 0.45f, 0.85f, 1.0f, 0.9f };
+                    addBulbIcon(vertices, p.pixel, color, width, height);
+                    const glm::vec3 forward = glm::quat(transform.rotation) * glm::vec3{ 0.0f, 0.0f, -1.0f };
+                    const se::GizmoProjection tip =
+                        se::viewportProject(cam, width, height, transform.translation + forward * 0.6f);
+                    if (tip.visible)
+                    {
+                        addLine(vertices, p.pixel, tip.pixel, 3.0f, color, width, height);
+                    }
                     return;
                 }
-                const bool sel = editor.selected.handle == e.handle;
-                const glm::vec4 color = sel ? selectedColor : glm::vec4{ 0.45f, 0.85f, 1.0f, 0.9f };
-                addBox(vertices, p.pixel, half * 2.0f, color, width, height);
-                // A short cone line along the spot's forward (-Z rotated by the transform).
-                const glm::vec3 forward = glm::quat(t.rotation) * glm::vec3{ 0.0f, 0.0f, -1.0f };
-                const se::GizmoProjection tip = se::viewportProject(cam, width, height, t.translation + forward * 0.6f);
-                if (tip.visible)
+                if (kind == BillboardKind::Camera)
                 {
-                    addLine(vertices, p.pixel, tip.pixel, 3.0f, color, width, height);
+                    addCameraIcon(vertices, p.pixel, sel ? selectedColor : glm::vec4{ 0.85f, 0.87f, 0.92f, 0.95f },
+                                  width, height);
                 }
             });
-        se::forEach<se::CameraComponent>(
-            editor.scene,
-            [&](se::Entity e, se::CameraComponent&)
-            {
-                if (!se::hasComponent<se::TransformComponent>(editor.scene, e))
-                {
-                    return;
-                }
-                const glm::vec3 pos = se::getComponent<se::TransformComponent>(editor.scene, e).translation;
-                const se::GizmoProjection p = se::viewportProject(cam, width, height, pos);
-                if (!p.visible)
-                {
-                    return;
-                }
-                const bool sel = editor.selected.handle == e.handle;
-                addBoxOutline(vertices, p.pixel, half * 2.2f,
-                              sel ? selectedColor : glm::vec4{ 0.85f, 0.85f, 0.9f, 0.9f }, width, height);
-            });
+    }
+
+    auto pickSceneEditBillboard(se::SceneEditContext& editor, const se::CameraView& cam, se::u32 width, se::u32 height,
+                                glm::vec2 mouse) -> se::Entity
+    {
+        if (width == 0 || height == 0)
+        {
+            return se::Entity{ entt::null };
+        }
+        constexpr se::f32 half = 14.0f;
+        se::Entity hit{ entt::null };
+        se::f32 best = half;
+        se::forEach<se::TransformComponent>(editor.scene,
+                                            [&](se::Entity e, se::TransformComponent& transform)
+                                            {
+                                                if (billboardKind(editor.scene, e) == BillboardKind::None)
+                                                {
+                                                    return;
+                                                }
+                                                const se::GizmoProjection p =
+                                                    se::viewportProject(cam, width, height, transform.translation);
+                                                if (!p.visible)
+                                                {
+                                                    return;
+                                                }
+                                                const glm::vec2 d = glm::abs(mouse - p.pixel);
+                                                if (d.x <= half && d.y <= half)
+                                                {
+                                                    const se::f32 dist = glm::length(mouse - p.pixel);
+                                                    if (dist <= best)
+                                                    {
+                                                        best = dist;
+                                                        hit = e;
+                                                    }
+                                                }
+                                            });
+        return hit;
     }
 
     // Builds the combined overlay (billboards first, gizmo on top) + submits it to the renderer.
@@ -311,6 +407,12 @@ namespace se
                 gizmo.startScale = transform.scale;
                 return true;
             }
+            const se::Entity billboard = pickSceneEditBillboard(editor, cam, width, height, mouse);
+            if (billboard.handle != entt::null)
+            {
+                se::setSelection(editor, billboard);
+                return true;
+            }
             const glm::vec2 ndc{ mouse.x / static_cast<se::f32>(width) * 2.0f - 1.0f,
                                  mouse.y / static_cast<se::f32>(height) * 2.0f - 1.0f };
             se::setSelection(editor, se::pickEntity(editor.scene, assets, renderer, cam, ndc));
@@ -359,6 +461,14 @@ export namespace se
             // The registry exists for its JSON serde (scene save/load + control plane); the
             // present-only host renders no inspector, so no draw lambdas / thumbnails.
             se::registerBuiltinComponents(state->editor->registry);
+
+            // Headless self-test entry point: pairs with SAFFRON_EXIT_AFTER_FRAMES for
+            // CI-style runs; results land in the log.
+            if (std::getenv("SAFFRON_SELFTEST") != nullptr)
+            {
+                se::runSceneSerializationSelfTest();
+                se::runSceneHierarchySelfTest();
+            }
 
             // Auto-load a selected project, then legacy root project.json; otherwise wait
             // for the Tauri project picker to create/open one.
