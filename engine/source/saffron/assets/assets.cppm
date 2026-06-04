@@ -909,6 +909,32 @@ export namespace se
             setDdgiScene(renderer, boxMins, boxMaxs, boxAlbedos, volMin, volExt, lightDir, lightColor, lightIntensity,
                          ddgiSky);
         }
+        // Reflection probes: snapshot each ReflectionProbeComponent (positioned by its Transform)
+        // into the renderer before the lighting upload, so setSceneLighting writes the right probe
+        // count and submitReflectionProbes can arm a capture for any dirty/moved slot.
+        std::vector<ReflectionProbeUpload> probeUploads;
+        forEach<TransformComponent, ReflectionProbeComponent>(
+            scene,
+            [&](Entity entity, TransformComponent& transform, ReflectionProbeComponent& probe)
+            {
+                if (probeUploads.size() >= MaxReflectionProbes)
+                {
+                    return;
+                }
+                ReflectionProbeUpload up;
+                up.entity =
+                    hasComponent<IdComponent>(scene, entity) ? getComponent<IdComponent>(scene, entity).id.value : 0;
+                up.origin = transform.translation;
+                up.influenceRadius = probe.influenceRadius;
+                up.intensity = probe.intensity;
+                up.boxProjection = probe.boxProjection;
+                up.boxExtent = probe.boxExtent;
+                up.dirty = probe.dirty;
+                probe.dirty = false;  // consumed; the renderer tracks capture state from here
+                probeUploads.push_back(up);
+            });
+        submitReflectionProbes(renderer, probeUploads);
+
         // Fallback ambient (used when IBL is off): the scene environment's ambient color when
         // useSkyForAmbient, else the directional light's legacy scalar ambient (grayscale).
         glm::vec3 ambient{ lightAmbient };
@@ -928,17 +954,33 @@ export namespace se
             skyBake.sunDir = -lightDir;
             skyBake.sunColor = lightColor;
             skyBake.sunIntensity = lightIntensity;
-            if (env.skyMode == SkyMode::Texture && env.skyTexture.value != 0)
+            // Mirror the scene atmosphere onto the renderer-side params so the bake carries it.
+            const AtmosphereSettings& at = env.atmosphere;
+            skyBake.atmosphere.enabled = at.enabled;
+            skyBake.atmosphere.planetRadius = at.planetRadius;
+            skyBake.atmosphere.atmosphereHeight = at.atmosphereHeight;
+            skyBake.atmosphere.rayleighScattering = at.rayleighScattering;
+            skyBake.atmosphere.rayleighScaleHeight = at.rayleighScaleHeight;
+            skyBake.atmosphere.mieScattering = at.mieScattering;
+            skyBake.atmosphere.mieScaleHeight = at.mieScaleHeight;
+            skyBake.atmosphere.mieAnisotropy = at.mieAnisotropy;
+            skyBake.atmosphere.ozoneAbsorption = at.ozoneAbsorption;
+            skyBake.atmosphere.sunDiskAngularRadius = at.sunDiskAngularRadius;
+            skyBake.atmosphere.sunDiskIntensity = at.sunDiskIntensity;
+            // Resolution order: a user equirect panorama wins, then the atmosphere, then the
+            // gradient. Only a valid loaded panorama claims Equirect.
+            const bool wantEquirect = env.skyMode == SkyMode::Texture && env.skyTexture.value != 0;
+            if (wantEquirect)
             {
                 skyPanorama = loadTextureAsset(assets, renderer, env.skyTexture);
-                if (skyPanorama)
-                {
-                    requestEnvBake(renderer, EnvSource::Equirect, skyPanorama, skyBake);
-                }
-                else
-                {
-                    requestEnvBake(renderer, EnvSource::Procedural, nullptr, skyBake);
-                }
+            }
+            if (skyPanorama)
+            {
+                requestEnvBake(renderer, EnvSource::Equirect, skyPanorama, skyBake);
+            }
+            else if (at.enabled)
+            {
+                requestEnvBake(renderer, EnvSource::Atmosphere, nullptr, skyBake);
             }
             else
             {
