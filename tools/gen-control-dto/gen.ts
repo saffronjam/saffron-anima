@@ -293,6 +293,32 @@ const commands: CommandDef[] = [
   { name: "import-texture", params: "PathParams", result: "ImportTextureResult", summary: "import-texture {path}" },
   { name: "list-assets", params: "EmptyParams", result: "AssetList", summary: "list project asset catalog" },
   { name: "rename-asset", params: "RenameAssetParams", result: "AssetRef", summary: "rename-asset {asset, name}" },
+  {
+    name: "create-asset-folder",
+    params: "CreateAssetFolderParams",
+    result: "AssetList",
+    summary: "create virtual asset folder",
+  },
+  {
+    name: "rename-asset-folder",
+    params: "RenameAssetFolderParams",
+    result: "AssetList",
+    summary: "rename virtual asset folder",
+  },
+  {
+    name: "delete-asset-folder",
+    params: "DeleteAssetFolderParams",
+    result: "AssetList",
+    summary: "delete virtual asset folder",
+  },
+  { name: "move-asset", params: "MoveAssetParams", result: "AssetRef", summary: "move asset to virtual folder" },
+  {
+    name: "asset-usages",
+    params: "AssetUsagesParams",
+    result: "AssetUsagesResult",
+    summary: "list scene usages of an asset",
+  },
+  { name: "delete-asset", params: "DeleteAssetParams", result: "DeleteAssetResult", summary: "delete asset" },
   { name: "assign-asset", params: "AssignAssetParams", result: "AssignAssetResult", summary: "assign asset to entity" },
   { name: "save-scene", params: "PathParams", result: "PathResult", summary: "save-scene {path}" },
   { name: "load-scene", params: "PathParams", result: "PathResult", summary: "load-scene {path}" },
@@ -356,6 +382,7 @@ const commandFixtures = new Map<string, string>([
   ["open-project", "project-name"],
   ["list-assets", "empty"],
   ["rename-asset", "mesh-asset-rename"],
+  ["asset-usages", "mesh-asset"],
   ["assign-asset", "cube-mesh-asset"],
   ["save-project", "empty"],
   ["load-project", "project-name"],
@@ -368,6 +395,11 @@ const commandSkips = new Map<string, string>([
   ["resize-native-viewport", "mutates the native viewport window"],
   ["import-model", "requires an external model fixture path"],
   ["import-texture", "requires an external texture fixture path"],
+  ["create-asset-folder", "mutates the project asset catalog"],
+  ["rename-asset-folder", "mutates the project asset catalog"],
+  ["delete-asset-folder", "mutates the project asset catalog"],
+  ["move-asset", "mutates the project asset catalog"],
+  ["delete-asset", "removes a project asset"],
   ["save-scene", "writes a scene file"],
   ["load-scene", "loads and replaces the scene from a file"],
   ["screenshot", "writes an image file and can be deferred"],
@@ -1074,6 +1106,10 @@ export interface ReflectionProbe {
   boxExtent: Vec3;
 }
 
+export interface Relationship {
+  parent: WireUuid;
+}
+
 export interface AtmosphereSettingsDto {
   enabled: boolean;
   planetRadius: number;
@@ -1098,6 +1134,7 @@ export interface Components {
   PointLight?: PointLight;
   SpotLight?: SpotLight;
   ReflectionProbe?: ReflectionProbe;
+  Relationship?: Relationship;
 }
 
 export type ComponentBody =
@@ -1110,6 +1147,7 @@ export type ComponentBody =
   | PointLight
   | SpotLight
   | ReflectionProbe
+  | Relationship
   | Record<string, unknown>;`;
   const paramsMap = commands.map((command) => `  ${JSON.stringify(command.name)}: ${command.params};`).join("\n");
   const resultMap = commands.map((command) => `  ${JSON.stringify(command.name)}: ${command.result};`).join("\n");
@@ -1210,6 +1248,7 @@ function componentSchemas(): Record<string, unknown> {
     "PointLight",
     "SpotLight",
     "ReflectionProbe",
+    "Relationship",
   ];
   const schemas: Record<string, unknown> = {
     Name: {
@@ -1285,6 +1324,12 @@ function componentSchemas(): Record<string, unknown> {
         boxExtent: vec3,
       },
       required: ["influenceRadius", "intensity", "boxProjection", "boxExtent"],
+    },
+    Relationship: {
+      type: "object",
+      additionalProperties: false,
+      properties: { parent: uuid },
+      required: ["parent"],
     },
     AtmosphereSettingsDto: {
       type: "object",
@@ -1630,6 +1675,17 @@ namespace se
         c.boxProjection = jsonBoolOr(j, "boxProjection", false);
         c.boxExtent = vec3FromJson(j.value("boxExtent", nlohmann::json::object()));
         c.dirty = true;
+        return {};
+    }
+
+    auto relationshipComponentToJson(const RelationshipComponent& c) -> nlohmann::json
+    {
+        return nlohmann::json{ { "parent", uuidToJson(c.parent.value) } };
+    }
+
+    auto relationshipComponentFromJson(RelationshipComponent& c, const nlohmann::json& j) -> Result<void>
+    {
+        c.parent = Uuid{ jsonU64Or(j, "parent", 0) };
         return {};
     }
 

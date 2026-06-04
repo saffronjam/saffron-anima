@@ -996,6 +996,114 @@
       }
     },
     {
+      "name": "create-asset-folder",
+      "summary": "create virtual asset folder",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CreateAssetFolderParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetList"
+        }
+      }
+    },
+    {
+      "name": "rename-asset-folder",
+      "summary": "rename virtual asset folder",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/RenameAssetFolderParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetList"
+        }
+      }
+    },
+    {
+      "name": "delete-asset-folder",
+      "summary": "delete virtual asset folder",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DeleteAssetFolderParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetList"
+        }
+      }
+    },
+    {
+      "name": "move-asset",
+      "summary": "move asset to virtual folder",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MoveAssetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetRef"
+        }
+      }
+    },
+    {
+      "name": "asset-usages",
+      "summary": "list scene usages of an asset",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AssetUsagesParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetUsagesResult"
+        }
+      }
+    },
+    {
+      "name": "delete-asset",
+      "summary": "delete asset",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DeleteAssetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DeleteAssetResult"
+        }
+      }
+    },
+    {
       "name": "assign-asset",
       "summary": "assign asset to entity",
       "params": [
@@ -1212,6 +1320,9 @@
           },
           "path": {
             "type": "string"
+          },
+          "folder": {
+            "type": "string"
           }
         },
         "required": [
@@ -1230,10 +1341,17 @@
             "items": {
               "$ref": "#/components/schemas/AssetEntryDto"
             }
+          },
+          "folders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
-          "assets"
+          "assets",
+          "folders"
         ]
       },
       "AssetRef": {
@@ -1244,6 +1362,9 @@
             "type": "string"
           },
           "name": {
+            "type": "string"
+          },
+          "folder": {
             "type": "string"
           }
         },
@@ -1260,6 +1381,58 @@
         },
         "required": [
           "value"
+        ]
+      },
+      "AssetUsageDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "type": "string"
+          },
+          "entityName": {
+            "type": "string"
+          },
+          "slot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot"
+        ]
+      },
+      "AssetUsagesParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "asset"
+        ]
+      },
+      "AssetUsagesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "usages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssetUsageDto"
+            }
+          }
+        },
+        "required": [
+          "usages"
         ]
       },
       "AssignAssetParams": {
@@ -1418,6 +1591,18 @@
           "component"
         ]
       },
+      "CreateAssetFolderParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "folder": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder"
+        ]
+      },
       "CreateEntityParams": {
         "type": "object",
         "additionalProperties": false,
@@ -1428,6 +1613,64 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "DeleteAssetFolderParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "folder": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder"
+        ]
+      },
+      "DeleteAssetParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "asset"
+        ]
+      },
+      "DeleteAssetResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "cleared": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssetUsageDto"
+            }
+          },
+          "fileDeleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "cleared",
+          "fileDeleted"
         ]
       },
       "DeselectResult": {
@@ -1705,6 +1948,28 @@
           "probes"
         ]
       },
+      "MoveAssetParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "folder": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset"
+        ]
+      },
       "NewProjectParams": {
         "type": "object",
         "additionalProperties": false,
@@ -1925,6 +2190,22 @@
         },
         "required": [
           "removed"
+        ]
+      },
+      "RenameAssetFolderParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "folder": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder",
+          "name"
         ]
       },
       "RenameAssetParams": {
@@ -3082,6 +3363,18 @@
           "boxExtent"
         ]
       },
+      "Relationship": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "parent": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "parent"
+        ]
+      },
       "AtmosphereSettingsDto": {
         "type": "object",
         "additionalProperties": false,
@@ -3164,6 +3457,9 @@
           },
           "ReflectionProbe": {
             "$ref": "#/components/schemas/ReflectionProbe"
+          },
+          "Relationship": {
+            "$ref": "#/components/schemas/Relationship"
           }
         }
       },
@@ -3195,6 +3491,9 @@
           },
           {
             "$ref": "#/components/schemas/ReflectionProbe"
+          },
+          {
+            "$ref": "#/components/schemas/Relationship"
           }
         ]
       },

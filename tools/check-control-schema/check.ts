@@ -131,7 +131,7 @@ function validate(schema: any, value: any, path: string, errors: string[]): void
 
 function assertRawU64(raw: string, label: string, errors: string[]): void {
   const result = raw.slice(raw.indexOf('"result"'));
-  for (const m of result.matchAll(/"(?:id|mesh|albedoTexture|skyTexture|texture|entity)"\s*:\s*([^,}\s]+)/g)) {
+  for (const m of result.matchAll(/"(?:id|mesh|albedoTexture|skyTexture|texture|entity|parent)"\s*:\s*([^,}\s]+)/g)) {
     const tok = m[1];
     if (tok === "null") {
       continue;

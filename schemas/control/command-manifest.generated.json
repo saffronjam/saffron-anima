@@ -387,6 +387,48 @@
       "fixture": "mesh-asset-rename"
     },
     {
+      "name": "create-asset-folder",
+      "params": "CreateAssetFolderParams",
+      "result": "AssetList",
+      "status": "typed",
+      "skip": "mutates the project asset catalog"
+    },
+    {
+      "name": "rename-asset-folder",
+      "params": "RenameAssetFolderParams",
+      "result": "AssetList",
+      "status": "typed",
+      "skip": "mutates the project asset catalog"
+    },
+    {
+      "name": "delete-asset-folder",
+      "params": "DeleteAssetFolderParams",
+      "result": "AssetList",
+      "status": "typed",
+      "skip": "mutates the project asset catalog"
+    },
+    {
+      "name": "move-asset",
+      "params": "MoveAssetParams",
+      "result": "AssetRef",
+      "status": "typed",
+      "skip": "mutates the project asset catalog"
+    },
+    {
+      "name": "asset-usages",
+      "params": "AssetUsagesParams",
+      "result": "AssetUsagesResult",
+      "status": "typed",
+      "fixture": "mesh-asset"
+    },
+    {
+      "name": "delete-asset",
+      "params": "DeleteAssetParams",
+      "result": "DeleteAssetResult",
+      "status": "typed",
+      "skip": "removes a project asset"
+    },
+    {
       "name": "assign-asset",
       "params": "AssignAssetParams",
       "result": "AssignAssetResult",
