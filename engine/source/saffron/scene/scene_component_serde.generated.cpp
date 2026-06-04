@@ -219,6 +219,17 @@ namespace se
         return {};
     }
 
+    auto relationshipComponentToJson(const RelationshipComponent& c) -> nlohmann::json
+    {
+        return nlohmann::json{ { "parent", uuidToJson(c.parent.value) } };
+    }
+
+    auto relationshipComponentFromJson(RelationshipComponent& c, const nlohmann::json& j) -> Result<void>
+    {
+        c.parent = Uuid{ jsonU64Or(j, "parent", 0) };
+        return {};
+    }
+
     auto environmentToJson(const SceneEnvironment& env) -> nlohmann::json
     {
         return nlohmann::json{

@@ -6,8 +6,11 @@ module;
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/euler_angles.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <expected>
 #include <format>
 #include <fstream>
@@ -40,6 +43,23 @@ export namespace se
         glm::vec3 translation{ 0.0f };
         glm::vec3 scale{ 1.0f };
         glm::vec3 rotation{ 0.0f };  // Euler XYZ radians; the editor edits these directly
+    };
+
+    // A node in the scene tree. parent (a Uuid; 0 == root) is the only durable field;
+    // parentHandle and children are runtime caches rebuilt by relinkHierarchy after any
+    // structural change — never serialized or copied (entt ids are not stable across load).
+    struct RelationshipComponent
+    {
+        Uuid parent;                              // 0 == root
+        entt::entity parentHandle = entt::null;   // resolved cache
+        std::vector<entt::entity> children;       // derived cache
+    };
+
+    // Cached world matrix, overwritten each frame by updateWorldTransforms. Stays
+    // unregistered (like IdComponent), so serializeEntity skips it.
+    struct WorldTransformComponent
+    {
+        glm::mat4 matrix{ 1.0f };
     };
 
     // References a mesh asset by stable id; the AssetServer resolves it to a GPU mesh.
@@ -135,12 +155,14 @@ export namespace se
         std::string name;
         AssetType type = AssetType::Mesh;
         std::string path;  // relative to the asset root
+        std::string folder;
         bool hdr = false;  // texture: decode as linear float (.hdr); else sRGB RGBA8
     };
 
     struct AssetCatalog
     {
         std::vector<AssetEntry> entries;
+        std::vector<std::string> folders;
         std::unordered_map<u64, std::size_t> byId;  // id -> index into entries
     };
 
@@ -309,12 +331,42 @@ export namespace se
         addComponent<IdComponent>(scene, entity, newUuid());
         addComponent<NameComponent>(scene, entity, std::move(name));
         addComponent<TransformComponent>(scene, entity);
+        addComponent<RelationshipComponent>(scene, entity);
         return entity;
     }
 
+    // Destroys the entity and its whole subtree. Descendants are gathered through the
+    // children caches before any destroy, since registry.destroy invalidates handles.
     void destroyEntity(Scene& scene, Entity entity)
     {
-        scene.registry.destroy(entity.handle);
+        std::vector<entt::entity> doomed;
+        auto gather = [&scene, &doomed](auto&& self, entt::entity handle) -> void
+        {
+            doomed.push_back(handle);
+            if (scene.registry.all_of<RelationshipComponent>(handle))
+            {
+                for (entt::entity child : scene.registry.get<RelationshipComponent>(handle).children)
+                {
+                    self(self, child);
+                }
+            }
+        };
+        gather(gather, entity.handle);
+
+        // Detach from the parent's children cache so it holds no dead handle.
+        if (scene.registry.all_of<RelationshipComponent>(entity.handle))
+        {
+            entt::entity parent = scene.registry.get<RelationshipComponent>(entity.handle).parentHandle;
+            if (parent != entt::null && scene.registry.all_of<RelationshipComponent>(parent))
+            {
+                std::erase(scene.registry.get<RelationshipComponent>(parent).children, entity.handle);
+            }
+        }
+
+        for (entt::entity handle : doomed)
+        {
+            scene.registry.destroy(handle);
+        }
     }
 
     // Iterate every entity carrying the given components.
@@ -327,6 +379,230 @@ export namespace se
         {
             fn(Entity{ handle }, view.template get<C>(handle)...);
         }
+    }
+
+    // Rebuilds the parentHandle/children caches from the durable parent uuids. Entities
+    // missing a RelationshipComponent (e.g. created by the raw loader path) get a default
+    // root one, so every entity stays hierarchy-addressable. Dangling parent uuids,
+    // self-parents, and parent cycles in the source data reset to root with a warning, so
+    // the caches always form a forest. O(N); call after any structural change (load,
+    // reparent, copy) before traversing the tree.
+    void relinkHierarchy(Scene& scene)
+    {
+        std::unordered_map<u64, entt::entity> uuidToHandle;
+        forEach<IdComponent>(scene, [&](Entity entity, IdComponent& id)
+        {
+            uuidToHandle.emplace(id.id.value, entity.handle);
+            if (!hasComponent<RelationshipComponent>(scene, entity))
+            {
+                addComponent<RelationshipComponent>(scene, entity);
+            }
+        });
+        forEach<RelationshipComponent>(scene, [](Entity, RelationshipComponent& rel)
+        {
+            rel.parentHandle = entt::null;
+            rel.children.clear();
+        });
+        forEach<RelationshipComponent>(scene, [&](Entity entity, RelationshipComponent& rel)
+        {
+            if (rel.parent.value == 0)
+            {
+                return;
+            }
+            auto it = uuidToHandle.find(rel.parent.value);
+            if (it == uuidToHandle.end() || it->second == entity.handle)
+            {
+                logWarn(std::format("relationship parent {} {}; treating as root", rel.parent.value,
+                                    it == uuidToHandle.end() ? "not found" : "is the entity itself"));
+                rel.parent = Uuid{ 0 };
+                return;
+            }
+            rel.parentHandle = it->second;
+        });
+        // Cut any parent cycle the source data carried (a hand-edited file can hold one;
+        // setParent refuses to create them). A walk longer than the entity count must be
+        // looping; resetting the current entity to root breaks that loop for all members.
+        const std::size_t entityCount = uuidToHandle.size();
+        forEach<RelationshipComponent>(scene, [&](Entity, RelationshipComponent& rel)
+        {
+            std::size_t steps = 0;
+            for (entt::entity ancestor = rel.parentHandle; ancestor != entt::null;
+                 ancestor = getComponent<RelationshipComponent>(scene, Entity{ ancestor }).parentHandle)
+            {
+                steps = steps + 1;
+                if (steps > entityCount)
+                {
+                    logWarn(std::format("relationship parent {} forms a cycle; treating as root",
+                                        rel.parent.value));
+                    rel.parent = Uuid{ 0 };
+                    rel.parentHandle = entt::null;
+                    return;
+                }
+            }
+        });
+        forEach<RelationshipComponent>(scene, [&](Entity entity, RelationshipComponent& rel)
+        {
+            if (rel.parentHandle != entt::null)
+            {
+                getComponent<RelationshipComponent>(scene, Entity{ rel.parentHandle }).children.push_back(entity.handle);
+            }
+        });
+    }
+
+    // Exact world matrix composed by walking the parent chain. Used where the cached
+    // per-frame matrix may lag a just-edited local transform (reparenting math).
+    auto composeWorldMatrix(Scene& scene, Entity entity) -> glm::mat4
+    {
+        glm::mat4 local{ 1.0f };
+        if (hasComponent<TransformComponent>(scene, entity))
+        {
+            local = transformMatrix(getComponent<TransformComponent>(scene, entity));
+        }
+        if (hasComponent<RelationshipComponent>(scene, entity))
+        {
+            entt::entity parent = getComponent<RelationshipComponent>(scene, entity).parentHandle;
+            if (parent != entt::null)
+            {
+                return composeWorldMatrix(scene, Entity{ parent }) * local;
+            }
+        }
+        return local;
+    }
+
+    // Cached world transform written by updateWorldTransforms; composes on a cache miss.
+    auto worldMatrix(Scene& scene, Entity entity) -> glm::mat4
+    {
+        if (hasComponent<WorldTransformComponent>(scene, entity))
+        {
+            return getComponent<WorldTransformComponent>(scene, entity).matrix;
+        }
+        return composeWorldMatrix(scene, entity);
+    }
+
+    auto worldTranslation(Scene& scene, Entity entity) -> glm::vec3
+    {
+        return glm::vec3(worldMatrix(scene, entity)[3]);
+    }
+
+    // World-space rotation with scale divided out (gizmo Local axes, spot/camera aim).
+    auto worldRotation(Scene& scene, Entity entity) -> glm::quat
+    {
+        const glm::mat4 world = worldMatrix(scene, entity);
+        glm::vec3 scale{ glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])),
+                         glm::length(glm::vec3(world[2])) };
+        scale = glm::max(scale, glm::vec3(1e-8f));
+        const glm::mat3 rotation{ glm::vec3(world[0]) / scale.x, glm::vec3(world[1]) / scale.y,
+                                  glm::vec3(world[2]) / scale.z };
+        return glm::quat_cast(rotation);
+    }
+
+    // Writes the cached WorldTransformComponent for every transformable entity, roots
+    // first then down the children caches (entt views are unordered, so ordering never
+    // comes from a view). Full mat4 composition preserves non-uniform parent scale, so
+    // normalMatrix = transpose(inverse(mat3(world))) stays correct downstream. Runs once
+    // per frame before render; relies on relinkHierarchy-fresh caches.
+    void updateWorldTransforms(Scene& scene)
+    {
+        auto writeSubtree = [&scene](auto&& self, Entity entity, const glm::mat4& parentWorld) -> void
+        {
+            glm::mat4 world = parentWorld;
+            if (hasComponent<TransformComponent>(scene, entity))
+            {
+                world = parentWorld * transformMatrix(getComponent<TransformComponent>(scene, entity));
+                if (!hasComponent<WorldTransformComponent>(scene, entity))
+                {
+                    addComponent<WorldTransformComponent>(scene, entity);
+                }
+                getComponent<WorldTransformComponent>(scene, entity).matrix = world;
+            }
+            if (hasComponent<RelationshipComponent>(scene, entity))
+            {
+                for (entt::entity child : getComponent<RelationshipComponent>(scene, entity).children)
+                {
+                    self(self, Entity{ child }, world);
+                }
+            }
+        };
+        forEach<RelationshipComponent>(scene, [&](Entity entity, RelationshipComponent& rel)
+        {
+            if (rel.parentHandle == entt::null)
+            {
+                writeSubtree(writeSubtree, entity, glm::mat4(1.0f));
+            }
+        });
+    }
+
+    // Engine-authoritative reparent. Refuses self-parenting and cycles (walks newParent's
+    // ancestry); with keepWorld (the editor convention) the child's local TRS is rebased
+    // so its world transform is unchanged. The rebase decompose is TRS-only — under a
+    // sheared parent the shear is lost (accepted: TransformComponent stores Euler + scale,
+    // no shear). A null-handle newParent detaches to root.
+    auto setParent(Scene& scene, Entity child, Entity newParent, bool keepWorld = true) -> Result<void>
+    {
+        if (!valid(scene, child))
+        {
+            return Err(std::string{ "invalid child entity" });
+        }
+        if (newParent.handle != entt::null)
+        {
+            if (!valid(scene, newParent))
+            {
+                return Err(std::string{ "invalid parent entity" });
+            }
+            if (newParent.handle == child.handle)
+            {
+                return Err(std::string{ "cannot parent an entity to itself" });
+            }
+            entt::entity ancestor = newParent.handle;
+            while (ancestor != entt::null)
+            {
+                if (ancestor == child.handle)
+                {
+                    return Err(std::string{ "reparent would create a cycle" });
+                }
+                if (!scene.registry.all_of<RelationshipComponent>(ancestor))
+                {
+                    break;
+                }
+                ancestor = scene.registry.get<RelationshipComponent>(ancestor).parentHandle;
+            }
+        }
+        if (!hasComponent<RelationshipComponent>(scene, child))
+        {
+            addComponent<RelationshipComponent>(scene, child);
+        }
+
+        const glm::mat4 childWorld = keepWorld ? composeWorldMatrix(scene, child) : glm::mat4{ 1.0f };
+
+        getComponent<RelationshipComponent>(scene, child).parent =
+            newParent.handle == entt::null ? Uuid{ 0 } : getComponent<IdComponent>(scene, newParent).id;
+
+        if (keepWorld && hasComponent<TransformComponent>(scene, child))
+        {
+            const glm::mat4 parentWorld =
+                newParent.handle == entt::null ? glm::mat4{ 1.0f } : composeWorldMatrix(scene, newParent);
+            const glm::mat4 local = glm::inverse(parentWorld) * childWorld;
+            glm::vec3 scale;
+            glm::quat orientation;
+            glm::vec3 translation;
+            glm::vec3 skew;
+            glm::vec4 perspective;
+            if (glm::decompose(local, scale, orientation, translation, skew, perspective))
+            {
+                // Euler XYZ via the stable ZYX matrix extraction: glm::quat(eulerXYZ)
+                // composes Rz*Ry*Rx, and glm::eulerAngles is numerically unstable at
+                // yaw +-90 degrees (its asin/atan2 split poisons pitch/roll there).
+                glm::vec3 euler;
+                glm::extractEulerAngleZYX(glm::mat4_cast(orientation), euler.z, euler.y, euler.x);
+                TransformComponent& transform = getComponent<TransformComponent>(scene, child);
+                transform.translation = translation;
+                transform.rotation = euler;
+                transform.scale = scale;
+            }
+        }
+
+        relinkHierarchy(scene);
+        return {};
     }
 
     // The resolved primary camera: its view matrix + projection parameters. valid is
@@ -411,15 +687,19 @@ export namespace se
     auto spotLightComponentFromJson(SpotLightComponent& c, const nlohmann::json& j) -> Result<void>;
     auto reflectionProbeComponentToJson(const ReflectionProbeComponent& c) -> nlohmann::json;
     auto reflectionProbeComponentFromJson(ReflectionProbeComponent& c, const nlohmann::json& j) -> Result<void>;
+    auto relationshipComponentToJson(const RelationshipComponent& c) -> nlohmann::json;
+    auto relationshipComponentFromJson(RelationshipComponent& c, const nlohmann::json& j) -> Result<void>;
     auto environmentToJson(const SceneEnvironment& env) -> nlohmann::json;
     auto environmentFromJson(const nlohmann::json& j) -> SceneEnvironment;
 
     // ComponentTraits is a struct of std::function fields (a Go-interface itable);
     // every cross-cutting feature dispatches through it instead of a switch.
     //
-    // Version history: 1 = entities only; 2 = adds the top-level "environment" block.
-    // sceneFromJson migrates a v1 document by defaulting the environment.
-    inline constexpr int SceneVersion = 2;
+    // Version history: 1 = entities only; 2 = adds the top-level "environment" block;
+    // 3 = adds the per-entity Relationship component (durable parent uuid).
+    // sceneFromJson migrates older documents: v1 defaults the environment, and a
+    // pre-v3 document has no Relationship, so every entity loads as a root.
+    inline constexpr int SceneVersion = 3;
 
     struct ComponentTraits
     {
@@ -586,7 +866,6 @@ export namespace se
         scene.environment = environmentFromJson(doc.contains("environment") ? doc["environment"] : nlohmann::json{});
 
         scene.registry.clear();
-        std::unordered_map<u64, entt::entity> uuidToHandle;
 
         // Create entities preserving uuids (NOT createEntity, which mints fresh ones)
         // and deserialize their components.
@@ -603,7 +882,6 @@ export namespace se
             }
             entt::entity handle = scene.registry.create();
             scene.registry.emplace<IdComponent>(handle, Uuid{ uuid });
-            uuidToHandle.emplace(uuid, handle);
 
             if (entry.contains("components") && entry["components"].is_object())
             {
@@ -616,9 +894,11 @@ export namespace se
             }
         }
 
-        // Resolve cross-entity references (uuid -> live handle). No reference-holding
-        // components exist yet; the hook is ready for them.
-        static_cast<void>(uuidToHandle);
+        // Resolve cross-entity references (uuid -> live handle). Parent uuids may point
+        // at entities created later in the array, so resolution runs only after the
+        // whole loop. relinkHierarchy also defaults a Relationship onto pre-v3 entities
+        // (root) and downgrades dangling parents to root with a warning.
+        relinkHierarchy(scene);
         return {};
     }
 
@@ -705,5 +985,227 @@ export namespace se
             });
         logInfo(std::format("scene round-trip: {} entities, cube at ({:.1f}, {:.1f}, {:.1f})",
                             count, cubePos.x, cubePos.y, cubePos.z));
+
+        // Hierarchy serialization: the durable parent uuid survives a round trip, the
+        // post-loop resolve pass rebuilds the caches regardless of entity order, and
+        // older or corrupt documents migrate clean.
+        registerComponent<RelationshipComponent>(reg, "Relationship",
+            [](Scene&, Entity) {},
+            relationshipComponentToJson,
+            relationshipComponentFromJson,
+            false);
+
+        u32 failures = 0;
+        auto expect = [&failures](bool condition, std::string_view what)
+        {
+            if (!condition)
+            {
+                failures = failures + 1;
+                logError(std::format("scene serde self-test failed: {}", what));
+            }
+        };
+        auto findByEntityName = [](Scene& s, std::string_view name) -> Entity
+        {
+            Entity found{ entt::null };
+            forEach<NameComponent>(s, [&](Entity e, NameComponent& n)
+            {
+                if (n.name == name)
+                {
+                    found = e;
+                }
+            });
+            return found;
+        };
+
+        Scene tree;
+        Entity root = createEntity(tree, "Root");
+        Entity leaf = createEntity(tree, "Leaf");
+        getComponent<TransformComponent>(tree, root).translation = glm::vec3(5.0f, 0.0f, 0.0f);
+        static_cast<void>(setParent(tree, leaf, root, false));
+
+        nlohmann::json doc = sceneToJson(reg, tree);
+
+        Scene loadedTree;
+        expect(sceneFromJson(reg, loadedTree, doc).has_value(), "hierarchy doc loads");
+        {
+            Entity loadedRoot = findByEntityName(loadedTree, "Root");
+            Entity loadedLeaf = findByEntityName(loadedTree, "Leaf");
+            expect(getComponent<RelationshipComponent>(loadedTree, loadedLeaf).parentHandle == loadedRoot.handle,
+                   "loaded leaf resolves its parent handle");
+            const std::vector<entt::entity>& kids =
+                getComponent<RelationshipComponent>(loadedTree, loadedRoot).children;
+            expect(std::find(kids.begin(), kids.end(), loadedLeaf.handle) != kids.end(),
+                   "loaded root lists the leaf as child");
+        }
+
+        // A child entry may precede its parent in the array; resolution is post-loop.
+        nlohmann::json reversed = doc;
+        std::reverse(reversed["entities"].begin(), reversed["entities"].end());
+        Scene reversedTree;
+        expect(sceneFromJson(reg, reversedTree, reversed).has_value(), "reversed hierarchy doc loads");
+        {
+            Entity loadedRoot = findByEntityName(reversedTree, "Root");
+            Entity loadedLeaf = findByEntityName(reversedTree, "Leaf");
+            expect(getComponent<RelationshipComponent>(reversedTree, loadedLeaf).parentHandle == loadedRoot.handle,
+                   "child-before-parent order still resolves");
+        }
+
+        // A v2 document has no Relationship key; every entity migrates to root.
+        nlohmann::json v2 = doc;
+        v2["version"] = 2;
+        for (nlohmann::json& entry : v2["entities"])
+        {
+            entry["components"].erase("Relationship");
+        }
+        Scene migrated;
+        expect(sceneFromJson(reg, migrated, v2).has_value(), "v2 doc loads");
+        {
+            u32 migratedRoots = 0;
+            u32 migratedTotal = 0;
+            forEach<RelationshipComponent>(migrated, [&](Entity, RelationshipComponent& rel)
+            {
+                migratedTotal = migratedTotal + 1;
+                if (rel.parent.value == 0 && rel.parentHandle == entt::null)
+                {
+                    migratedRoots = migratedRoots + 1;
+                }
+            });
+            expect(migratedTotal == 2 && migratedRoots == 2, "v2 entities migrate to roots");
+        }
+
+        // A dangling parent uuid downgrades to root (with a warning), never a crash.
+        nlohmann::json dangling = doc;
+        for (nlohmann::json& entry : dangling["entities"])
+        {
+            nlohmann::json& components = entry["components"];
+            if (components.contains("Relationship") &&
+                components["Relationship"]["parent"].get<std::string>() != "0")
+            {
+                components["Relationship"]["parent"] = "424242";
+            }
+        }
+        Scene orphaned;
+        expect(sceneFromJson(reg, orphaned, dangling).has_value(), "dangling-parent doc loads");
+        {
+            Entity loadedLeaf = findByEntityName(orphaned, "Leaf");
+            RelationshipComponent& rel = getComponent<RelationshipComponent>(orphaned, loadedLeaf);
+            expect(rel.parent.value == 0 && rel.parentHandle == entt::null, "dangling parent resolves to root");
+        }
+
+        if (failures == 0)
+        {
+            logInfo("scene hierarchy serde: round-trip, order, v2 migration, dangling parent all pass");
+        }
+    }
+
+    // Headless hierarchy check: parenting, world-transform propagation, the cycle and
+    // self-parent guards, world-preserving reparent, and recursive destroy.
+    void runSceneHierarchySelfTest()
+    {
+        u32 failures = 0;
+        auto expect = [&failures](bool condition, std::string_view what)
+        {
+            if (!condition)
+            {
+                failures = failures + 1;
+                logError(std::format("hierarchy self-test failed: {}", what));
+            }
+        };
+        auto nearEqual = [](const glm::mat4& a, const glm::mat4& b) -> bool
+        {
+            for (int col = 0; col < 4; col = col + 1)
+            {
+                for (int row = 0; row < 4; row = row + 1)
+                {
+                    if (glm::abs(a[col][row] - b[col][row]) > 1e-4f)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+
+        Scene scene;
+        Entity parent = createEntity(scene, "Parent");
+        Entity child = createEntity(scene, "Child");
+        Entity grandchild = createEntity(scene, "Grandchild");
+        getComponent<TransformComponent>(scene, parent).translation = glm::vec3(10.0f, 0.0f, 0.0f);
+
+        // Parent-before-child composition: locals set after parenting (keepWorld=false
+        // keeps them as authored), so the pass must compose parent * local.
+        expect(setParent(scene, child, parent, false).has_value(), "setParent child -> parent");
+        expect(setParent(scene, grandchild, child, false).has_value(), "setParent grandchild -> child");
+        getComponent<TransformComponent>(scene, child).translation = glm::vec3(0.0f, 2.0f, 0.0f);
+        getComponent<TransformComponent>(scene, grandchild).translation = glm::vec3(0.0f, 0.0f, 3.0f);
+        updateWorldTransforms(scene);
+        expect(nearEqual(worldMatrix(scene, child),
+                         worldMatrix(scene, parent) * transformMatrix(getComponent<TransformComponent>(scene, child))),
+               "child world == parent world * child local");
+        expect(glm::distance(worldTranslation(scene, grandchild), glm::vec3(10.0f, 2.0f, 3.0f)) < 1e-4f,
+               "grandchild world translation");
+
+        // Guards: parenting an ancestor under its descendant, or an entity under itself.
+        expect(!setParent(scene, parent, grandchild).has_value(), "cycle guard");
+        expect(!setParent(scene, child, child).has_value(), "self-parent guard");
+
+        // keepWorld rebase: move grandchild under a rotated, scaled mover; the world
+        // transform must not change while the local TRS does.
+        Entity mover = createEntity(scene, "Mover");
+        TransformComponent& moverLocal = getComponent<TransformComponent>(scene, mover);
+        moverLocal.translation = glm::vec3(-4.0f, 1.0f, 0.5f);
+        moverLocal.rotation = glm::vec3(0.0f, 1.5707963f, 0.0f);
+        moverLocal.scale = glm::vec3(2.0f);
+        const glm::mat4 before = composeWorldMatrix(scene, grandchild);
+        expect(setParent(scene, grandchild, mover).has_value(), "setParent grandchild -> mover");
+        expect(nearEqual(composeWorldMatrix(scene, grandchild), before), "keepWorld preserves world transform");
+        expect(glm::distance(getComponent<TransformComponent>(scene, grandchild).translation,
+                             glm::vec3(0.0f, 0.0f, 3.0f)) > 1e-3f,
+               "keepWorld rebases the local transform");
+
+        // Same rebase under a generic (non-axis-aligned) parent rotation.
+        Entity mover2 = createEntity(scene, "Mover2");
+        TransformComponent& mover2Local = getComponent<TransformComponent>(scene, mover2);
+        mover2Local.translation = glm::vec3(2.0f, -3.0f, 1.0f);
+        mover2Local.rotation = glm::vec3(0.4f, 0.9f, -0.3f);
+        mover2Local.scale = glm::vec3(1.5f);
+        const glm::mat4 beforeGeneric = composeWorldMatrix(scene, grandchild);
+        expect(setParent(scene, grandchild, mover2).has_value(), "setParent grandchild -> mover2");
+        expect(nearEqual(composeWorldMatrix(scene, grandchild), beforeGeneric),
+               "keepWorld preserves world transform under a generic rotation");
+
+        // Recursive destroy takes the subtree; the reparented grandchild survives.
+        destroyEntity(scene, parent);
+        expect(!valid(scene, parent) && !valid(scene, child), "destroy removes the subtree");
+        expect(valid(scene, grandchild), "reparented entity survives its old ancestor's destroy");
+        u32 dangling = 0;
+        forEach<RelationshipComponent>(scene, [&](Entity, RelationshipComponent& rel)
+        {
+            for (entt::entity c : rel.children)
+            {
+                if (!scene.registry.valid(c))
+                {
+                    dangling = dangling + 1;
+                }
+            }
+        });
+        expect(dangling == 0, "no children cache holds a destroyed handle");
+
+        u32 roots = 0;
+        u32 total = 0;
+        forEach<RelationshipComponent>(scene, [&](Entity, RelationshipComponent& rel)
+        {
+            total = total + 1;
+            if (rel.parent.value == 0 && rel.parentHandle == entt::null)
+            {
+                roots = roots + 1;
+            }
+        });
+        expect(total == 3 && roots == 2, "expected mover + mover2 + grandchild with two roots");
+
+        if (failures == 0)
+        {
+            logInfo("hierarchy self-test: all checks passed");
+        }
     }
 }

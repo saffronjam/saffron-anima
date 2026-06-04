@@ -69,5 +69,14 @@ namespace se
             reflectionProbeComponentToJson,
             reflectionProbeComponentFromJson,
             true);
+
+        // Non-removable: parenting is edited through set-parent / the tree, never as a
+        // raw uuid field. Serde carries only the durable parent uuid; the runtime caches
+        // are rebuilt by relinkHierarchy.
+        registerComponent<RelationshipComponent>(reg, "Relationship",
+            [](Scene&, Entity) {},
+            relationshipComponentToJson,
+            relationshipComponentFromJson,
+            false);
     }
 }
