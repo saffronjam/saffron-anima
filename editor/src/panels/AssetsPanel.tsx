@@ -9,7 +9,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Plus } from "lucide-react";
 import { client } from "../control/client";
-import { useEditorStore } from "../state/store";
+import { useEditorStore, withNativeDialog } from "../state/store";
 import { AssetTile } from "../components/AssetTile";
 import { AssetViewer } from "../components/AssetViewer";
 import type { AssetEntry } from "../protocol";
@@ -47,6 +47,7 @@ async function importPath(path: string, refreshAssets: () => Promise<void>): Pro
 export function AssetsPanel() {
   const assets = useEditorStore((s) => s.assets);
   const refreshAssets = useEditorStore((s) => s.refreshAssets);
+  const nativeDialogOpen = useEditorStore((s) => s.nativeDialogOpen);
   const [viewing, setViewing] = useState<AssetEntry | null>(null);
   const [dropActive, setDropActive] = useState(false);
 
@@ -94,14 +95,16 @@ export function AssetsPanel() {
   }, [importMany]);
 
   const onImportClick = useCallback(async (): Promise<void> => {
-    const selection = await open({
-      multiple: true,
-      filters: [
-        { name: "Models & Images", extensions: [...MODEL_EXTS, ...IMAGE_EXTS] },
-        { name: "Models", extensions: MODEL_EXTS },
-        { name: "Images", extensions: IMAGE_EXTS },
-      ],
-    });
+    const selection = await withNativeDialog(() =>
+      open({
+        multiple: true,
+        filters: [
+          { name: "Models & Images", extensions: [...MODEL_EXTS, ...IMAGE_EXTS] },
+          { name: "Models", extensions: MODEL_EXTS },
+          { name: "Images", extensions: IMAGE_EXTS },
+        ],
+      }),
+    );
     if (!selection) {
       return;
     }
@@ -109,10 +112,7 @@ export function AssetsPanel() {
   }, [importMany]);
 
   return (
-    <div
-      className="flex h-full min-h-0 flex-col"
-      data-asset-panel="true"
-    >
+    <div className="flex h-full min-h-0 flex-col" data-asset-panel="true">
       <div className="flex h-10 flex-none items-center justify-between border-b border-border px-3">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Assets
@@ -123,6 +123,7 @@ export function AssetsPanel() {
           variant="ghost"
           className="gap-1 text-muted-foreground hover:text-foreground"
           onClick={() => void onImportClick()}
+          disabled={nativeDialogOpen}
           title="Import a model or texture"
         >
           <Plus />
@@ -132,9 +133,7 @@ export function AssetsPanel() {
       <ScrollArea className="min-h-0 flex-1">
         <div
           className={
-            dropActive
-              ? "min-h-full rounded-sm p-2 ring-2 ring-inset ring-ring"
-              : "min-h-full p-2"
+            dropActive ? "min-h-full rounded-sm p-2 ring-2 ring-inset ring-ring" : "min-h-full p-2"
           }
         >
           {assets.length === 0 ? (
@@ -170,7 +169,5 @@ function isInsidePanel(position: { x: number; y: number }): boolean {
   const scale = window.devicePixelRatio || 1;
   const cssX = position.x / scale;
   const cssY = position.y / scale;
-  return (
-    cssX >= rect.left && cssX <= rect.right && cssY >= rect.top && cssY <= rect.bottom
-  );
+  return cssX >= rect.left && cssX <= rect.right && cssY >= rect.top && cssY <= rect.bottom;
 }

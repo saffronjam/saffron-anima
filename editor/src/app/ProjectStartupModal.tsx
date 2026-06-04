@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Plus, RefreshCcw } from "lucide-react";
 import { client, type AppDataInfo, type ProjectInfo, type RecentProject } from "../control/client";
-import { useEditorStore } from "../state/store";
+import { useEditorStore, withNativeDialog } from "../state/store";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -115,14 +115,16 @@ export function ProjectStartupModal({
   };
 
   const openProjectDirectory = async (): Promise<void> => {
-    const selection = await open({ directory: true, multiple: false });
+    const selection = await withNativeDialog(() => open({ directory: true, multiple: false }));
     if (typeof selection === "string") {
       await openProjectPath(selection);
     }
   };
 
   const openProjectFile = async (): Promise<void> => {
-    const selection = await open({ multiple: false, filters: PROJECT_JSON_FILTER });
+    const selection = await withNativeDialog(() =>
+      open({ multiple: false, filters: PROJECT_JSON_FILTER }),
+    );
     if (typeof selection === "string") {
       await openProjectPath(selection);
     }

@@ -3,7 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { client, type ProjectInfo } from "../control/client";
-import { useEditorStore } from "../state/store";
+import { useEditorStore, withNativeDialog } from "../state/store";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -26,6 +26,7 @@ export function ProjectMenu() {
   const resetSceneState = useEditorStore((s) => s.resetSceneState);
   const setProject = useEditorStore((s) => s.setProject);
   const project = useEditorStore((s) => s.project);
+  const nativeDialogOpen = useEditorStore((s) => s.nativeDialogOpen);
   const [status, setStatus] = useState<string | null>(null);
 
   const ready = phase === "ready";
@@ -50,7 +51,9 @@ export function ProjectMenu() {
   };
 
   const saveProjectAs = async (): Promise<void> => {
-    const path = await save({ defaultPath: project?.path ?? "project.json", filters: JSON_FILTER });
+    const path = await withNativeDialog(() =>
+      save({ defaultPath: project?.path ?? "project.json", filters: JSON_FILTER }),
+    );
     if (!path) {
       return;
     }
@@ -65,7 +68,7 @@ export function ProjectMenu() {
   };
 
   const loadProject = async (): Promise<void> => {
-    const selection = await open({ multiple: false, filters: JSON_FILTER });
+    const selection = await withNativeDialog(() => open({ multiple: false, filters: JSON_FILTER }));
     if (typeof selection !== "string") {
       return;
     }
@@ -81,7 +84,7 @@ export function ProjectMenu() {
   };
 
   const openProjectFolder = async (): Promise<void> => {
-    const selection = await open({ directory: true, multiple: false });
+    const selection = await withNativeDialog(() => open({ directory: true, multiple: false }));
     if (typeof selection !== "string") {
       return;
     }
@@ -97,7 +100,9 @@ export function ProjectMenu() {
   };
 
   const saveScene = async (): Promise<void> => {
-    const path = await save({ defaultPath: "scene.json", filters: JSON_FILTER });
+    const path = await withNativeDialog(() =>
+      save({ defaultPath: "scene.json", filters: JSON_FILTER }),
+    );
     if (!path) {
       return;
     }
@@ -110,7 +115,7 @@ export function ProjectMenu() {
   };
 
   const loadScene = async (): Promise<void> => {
-    const selection = await open({ multiple: false, filters: JSON_FILTER });
+    const selection = await withNativeDialog(() => open({ multiple: false, filters: JSON_FILTER }));
     if (typeof selection !== "string") {
       return;
     }
@@ -124,7 +129,9 @@ export function ProjectMenu() {
   };
 
   const importModel = async (): Promise<void> => {
-    const selection = await open({ multiple: false, filters: MODEL_FILTER });
+    const selection = await withNativeDialog(() =>
+      open({ multiple: false, filters: MODEL_FILTER }),
+    );
     if (typeof selection !== "string") {
       return;
     }
@@ -138,7 +145,9 @@ export function ProjectMenu() {
   };
 
   const importTexture = async (): Promise<void> => {
-    const selection = await open({ multiple: false, filters: TEXTURE_FILTER });
+    const selection = await withNativeDialog(() =>
+      open({ multiple: false, filters: TEXTURE_FILTER }),
+    );
     if (typeof selection !== "string") {
       return;
     }
@@ -152,7 +161,9 @@ export function ProjectMenu() {
   };
 
   const screenshotViewport = async (): Promise<void> => {
-    const path = await save({ defaultPath: "viewport.png", filters: PNG_FILTER });
+    const path = await withNativeDialog(() =>
+      save({ defaultPath: "viewport.png", filters: PNG_FILTER }),
+    );
     if (!path) {
       return;
     }
@@ -172,7 +183,7 @@ export function ProjectMenu() {
             type="button"
             size="xs"
             variant="ghost"
-            disabled={!ready}
+            disabled={!ready || nativeDialogOpen}
             className="max-w-48 justify-start px-1.5 text-muted-foreground"
             title={label}
           >
@@ -185,9 +196,7 @@ export function ProjectMenu() {
           <DropdownMenuItem onSelect={() => void saveProjectAs()}>
             Save Project As...
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void loadProject()}>
-            Open Project...
-          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void loadProject()}>Open Project...</DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void openProjectFolder()}>
             Open Project Folder...
           </DropdownMenuItem>

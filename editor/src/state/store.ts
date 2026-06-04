@@ -47,6 +47,11 @@ export interface EditorState {
   /// child always paints on top otherwise. The ViewportPanel reads this and skips
   /// gluing the native window to its div until it clears.
   viewportHidden: boolean;
+  /// True while a native OS file dialog (Tauri `open`/`save`) is showing. These
+  /// dialogs are not window-modal under the reparented-viewport setup, so the
+  /// webview stays live; this flag is the app-side lock that stops a second dialog
+  /// from being opened and greys the controls that would open one.
+  nativeDialogOpen: boolean;
 
   setEntities(entities: EntityRef[]): void;
   /// Optimistically rename one entity's hierarchy row between polls (inline rename).
@@ -80,6 +85,7 @@ export interface EditorState {
   setDragActive(dragActive: boolean): void;
   setGizmo(patch: Partial<GizmoState>): void;
   setViewportHidden(viewportHidden: boolean): void;
+  setNativeDialogOpen(nativeDialogOpen: boolean): void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -99,6 +105,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   dragActive: false,
   gizmo: { op: "translate", space: "world" },
   viewportHidden: false,
+  nativeDialogOpen: false,
 
   setEntities: (entities) => set({ entities }),
   applyOptimisticEntityName: (id, name) =>
@@ -170,7 +177,26 @@ export const useEditorStore = create<EditorState>((set) => ({
   setDragActive: (dragActive) => set({ dragActive }),
   setGizmo: (patch) => set((s) => ({ gizmo: { ...s.gizmo, ...patch } })),
   setViewportHidden: (viewportHidden) => set({ viewportHidden }),
+  setNativeDialogOpen: (nativeDialogOpen) => set({ nativeDialogOpen }),
 }));
+
+/// Run a native file-dialog thunk (`open`/`save`) under the app-side dialog lock:
+/// no-op if one is already open (the re-entry guard that stops stacked pickers),
+/// otherwise hold `nativeDialogOpen` for the dialog's lifetime so the controls that
+/// spawn dialogs grey out. The lock covers only the dialog, not the engine work that
+/// follows it. Returns the thunk's result, or null when skipped by the guard.
+export async function withNativeDialog<T>(fn: () => Promise<T>): Promise<T | null> {
+  const store = useEditorStore.getState();
+  if (store.nativeDialogOpen) {
+    return null;
+  }
+  store.setNativeDialogOpen(true);
+  try {
+    return await fn();
+  } finally {
+    useEditorStore.getState().setNativeDialogOpen(false);
+  }
+}
 
 const FAST_RECONCILE_INTERVAL_MS = 50; // cheap state lane, target ~20 Hz
 const WATCHDOG_INTERVAL_MS = 1000;
