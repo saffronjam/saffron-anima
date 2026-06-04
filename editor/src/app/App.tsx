@@ -1,6 +1,6 @@
 /// Top-level editor shell. Wires the Tauri lifecycle events to the store, starts
 /// the reconcile poll + the global W/E/R gizmo shortcuts, and composes the chrome
-/// (MenuBar + Topbar) above the resizable dock `Layout` and a status bar below.
+/// above the resizable dock `Layout` and a status bar below.
 /// The dock arrangement (Hierarchy + tabbed Inspector/Environment/Stats on the
 /// left, Assets bottom, Viewport center) lives in `Layout`; the embedded viewport's
 /// LoadingOverlay is a sibling inside ViewportPanel, never a panel the native window
@@ -10,9 +10,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { client } from "../control/client";
 import { startReconcile, useEditorStore } from "../state/store";
-import { MenuBar } from "./MenuBar";
 import { Topbar } from "../panels/Topbar";
 import { Layout } from "./Layout";
+import { WindowTitlebar } from "./WindowTitlebar";
 import { useGizmoShortcuts } from "./useGizmoShortcuts";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectStartupModal } from "./ProjectStartupModal";
@@ -160,7 +160,7 @@ export function App() {
         className="flex h-full min-w-[900px] flex-col overflow-hidden transition-opacity duration-300 ease-out"
         style={{ opacity: revealed ? 1 : 0 }}
       >
-        <MenuBar />
+        <WindowTitlebar />
         <Topbar />
         <Layout />
         <ProjectStartupModal open={projectModalOpen} onProjectLoaded={handleProjectLoaded} />
