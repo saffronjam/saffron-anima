@@ -157,7 +157,7 @@ export function App() {
   return (
     <TooltipProvider delayDuration={300}>
       <div
-        className="flex h-full flex-col overflow-hidden transition-opacity duration-300 ease-out"
+        className="flex h-full min-w-[900px] flex-col overflow-hidden transition-opacity duration-300 ease-out"
         style={{ opacity: revealed ? 1 : 0 }}
       >
         <MenuBar />

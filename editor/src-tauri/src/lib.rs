@@ -9,7 +9,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, RunEvent, State};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 struct Bounds {
@@ -23,6 +23,11 @@ struct EditorState {
     engine: Mutex<Option<Child>>,
     socket_path: String,
 }
+
+const MAIN_WINDOW_WIDTH: f64 = 1600.0;
+const MAIN_WINDOW_HEIGHT: f64 = 900.0;
+const MAIN_WINDOW_MIN_WIDTH: f64 = 1200.0;
+const MAIN_WINDOW_MIN_HEIGHT: f64 = 720.0;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,6 +123,15 @@ fn parent_xid(window: &tauri::WebviewWindow) -> Result<u64, String> {
         RawWindowHandle::Xlib(handle) => Ok(handle.window),
         other => Err(format!("unsupported editor window handle: {other:?}")),
     }
+}
+
+fn configure_main_window(window: &tauri::WebviewWindow) {
+    let _ = window.set_title("Saffron Editor");
+    let _ = window.set_min_size(Some(LogicalSize::new(
+        MAIN_WINDOW_MIN_WIDTH,
+        MAIN_WINDOW_MIN_HEIGHT,
+    )));
+    let _ = window.set_size(LogicalSize::new(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT));
 }
 
 // The one socket round-trip helper the whole bridge is built on. Newline-delimited JSON;
@@ -361,7 +375,7 @@ pub fn run() {
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_title("Saffron Editor");
+                configure_main_window(&window);
             }
             if let Err(err) = auto_start(app.handle()) {
                 let _ = app.handle().emit("viewport-error", err);

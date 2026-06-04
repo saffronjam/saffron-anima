@@ -15,8 +15,8 @@
         "title": "Saffron Editor",
         "width": 1600,
         "height": 900,
-        "minWidth": 900,
-        "minHeight": 620,
+        "minWidth": 1200,
+        "minHeight": 720,
         "visible": false
       }
     ],
