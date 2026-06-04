@@ -1,6 +1,6 @@
 # Phase 4 — Editor cutover
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 **Depends on:** phase 2, phase 3
 
@@ -12,6 +12,23 @@ manual `as` cast at the call sites. Needs phases 2 and 3 because deleting `callR
 every command the editor calls to have a typed params **and** result DTO.
 
 ## Steps
+
+### Implementation checkpoint
+
+- `editor/src/protocol/index.ts` is now a compatibility facade over the generated
+  `se-types.ts`, preserving the existing named protocol exports at the same module path.
+- `editor/src/control/client.ts` uses generated `CommandParamsMap` and `CommandResultMap`
+  for the generic control call, including typed params, and no longer exposes `callRaw` or
+  `client.raw`.
+- The viewport readiness probe now calls the typed `viewportNativeInfo()` wrapper.
+- `editor/scripts/gen-protocol.ts` delegates to the DTO generator so `bun run gen:protocol`
+  no longer regenerates the schema-derived `index.ts`.
+- The Rust bridge wire params were audited against the generated DTO field names for
+  `attach-native-viewport`, `resize-native-viewport`, `viewport-native-info`, and `quit`;
+  no Rust code change was needed.
+- `cd editor && bun run check`, `cd editor && bun run build`, and the full `tools/ci/check.sh`
+  gate passed in the `saffron-build` toolbox. Static grep found no `callRaw`, `.raw(`, or
+  `as Promise` references in `editor/src` or `editor/scripts`.
 
 ### Replace the protocol artifact
 

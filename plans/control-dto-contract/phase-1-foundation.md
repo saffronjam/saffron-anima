@@ -1,6 +1,6 @@
 # Phase 1 — Foundation
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS
 
 **Depends on:** phase 0
 

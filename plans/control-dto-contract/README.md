@@ -9,7 +9,7 @@ the C++ serde, the TypeScript protocol, and an OpenRPC document from those struc
 editor's `callRaw` escape hatch disappears so the typed `call<C>(cmd, params)` is the only
 way to reach the engine — what the DTO says is what both sides get.
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Why
 
@@ -60,7 +60,7 @@ of shape `(EngineContext&, const Params&) -> Result<ResultDto>` and **erases dow
 existing** `std::function<Result<json>(EngineContext&, const json&)>` row
 (`command.cppm:41`) — it generates a thunk that parses params from json into `Params`,
 calls the handler, and serializes `ResultDto` back to json. `CommandRegistry`, `dispatch`
-(`control_server.cpp:213`), and the 62 existing raw-json handlers are untouched and coexist;
+(`control_server.cpp:213`), and the 65 existing raw-json handlers are untouched and coexist;
 commands migrate one at a time.
 
 The params-parse and result-serialize functions are **generated** (one
@@ -115,7 +115,7 @@ Mark a phase `COMPLETED` when its work is done and validation-clean; delete a ph
   `registerCommand` (`control_server.cpp:32`) pushes a row and records its insertion index;
   `dispatch` (`control_server.cpp:213`) is non-generic and adds the `{ok,error,result,id}`
   envelope — handlers return only the bare payload. There is no templated overload anywhere.
-- 62 `registerCommand` calls across `control_commands_render.cpp` / `_scene.cpp` /
+- 65 `registerCommand` calls across `control_commands_render.cpp` / `_scene.cpp` /
   `_asset.cpp`, registered in render → scene → asset order
   (`registerBuiltinCommands`, `control_server.cpp:140`); insertion order is meaningful
   (help/list iterate it).
@@ -150,22 +150,15 @@ Mark a phase `COMPLETED` when its work is done and validation-clean; delete a ph
   (the generated parser preserves declaration-order positionals). The `se` CLI links only
   `nlohmann_json`, has no engine dependency, and stays manifest-free (its per-command text
   printers read ids as strings — phase 4/5 confirm no field renames break them silently).
-- **`docs/`:** the contract docs invert in phase 5. `shared-types.md`,
-  `schemas/control/AGENTS.md`, and `control/AGENTS.md`'s "Adding a command" section are
-  rewritten for the DTO-first / typed-handler flow in the same change that retires the
-  schemas. Stale `editor_components.cpp` / `EditorContext` references the docs still carry
-  get corrected in passing (phase 6 / 5 respectively).
+- **`docs/`:** the contract docs now describe the DTO-first / typed-handler flow, the
+  generated OpenRPC + manifest artifacts, and the generated scene component serde.
 
 ## Out of scope / deferred
 
-- **Component-body DTOs** (Mesh/Material/lights/Environment via the sceneedit registry) are
-  phase 6 — scoped but explicitly last. Early phases keep component blobs as opaque json
-  passthrough exactly as today (`set-component` feeds `params["json"]` straight to
-  `deserialize`).
 - **Asset-catalog / project-file serde** (`catalogToJson` / `saveProject` in `assets.cppm`)
   is not a control DTO; it is left hand-authored unless a later plan revisits it.
-- **Reflective/meta commands** (`help`, `dump-schema`) cannot be static DTOs and stay
-  dynamic — they get explicit skip-with-reason carve-outs in the manifest, not DTOs.
+- **Reflective/meta commands:** `help` stays dynamic and carries a skip reason in the
+  manifest. `dump-schema` was retired after generated scene component serde made it redundant.
 - **C++26 static reflection** is not available in Clang 21 + libc++; the generator parses
   the restricted DTO source textually rather than reflecting, so nothing here waits on it.
 

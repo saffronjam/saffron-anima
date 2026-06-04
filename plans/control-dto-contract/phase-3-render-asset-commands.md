@@ -1,6 +1,6 @@
 # Phase 3 — Render + asset/project commands
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 **Depends on:** phase 1
 
@@ -88,6 +88,22 @@ Registered third by `registerAssetCommands` (`command.cppm:68`):
   width, height}`. The `base64` blob is carried as a plain `std::string` — it is not
   field-validated like a value DTO, just transported.
 - **`quit`** → no params; result `{bool quitting}`.
+
+## Implementation checkpoint
+
+- Added render DTOs for stats, AA/GI modes, feature toggles, native viewport bridge commands, and
+  exposure.
+- Added asset/project DTOs for project info, project/scene path commands, imports, asset catalog
+  entries, asset selectors, assignment slots, screenshots, thumbnails, and quit.
+- Extended `tools/gen-control-dto` with the phase-3 enum vocabulary, asset selectors, transitive
+  TypeScript DTO emission, and named-only parser handling for native viewport geometry.
+- Converted all render handlers except reflective `help` and all asset/project handlers to
+  `registerCommand<Params, Result>`. The generated manifest now has 65 typed commands and skips only
+  `help` and `dump-schema`.
+- `bun run tools/gen-control-dto/gen.ts`, `cd editor && bun run check`, and `git diff --check` pass.
+- `tools/ci/check.sh` passed end to end in the `saffron-build` toolbox: engine build, headless
+  present-only smoke, live control-schema contract test, project startup/asset-layout smoke, and
+  frontend build.
 
 ## Steps
 

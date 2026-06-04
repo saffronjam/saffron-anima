@@ -1,6 +1,6 @@
 # Phase 5 — Completeness gate, contract-test refactor, schema retirement, docs
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 **Depends on:** phase 4
 
@@ -10,6 +10,21 @@ Prove parity is complete, shrink the live contract test to a tripwire that itera
 generated manifest, retire the hand-authored payload schemas, and rewrite the docs and AGENTS
 guidance for the DTO-first / typed-handler flow. After this phase the generated manifest is
 the contract of record and the schemas are gone except the envelope.
+
+## Implementation checkpoint
+
+- The DTO generator now emits manifest fixture and skip metadata for every typed command, and
+  fails generation if a command has neither.
+- `tools/check-control-schema/check.ts` is manifest-driven: it compares live `help` with
+  `command-manifest.generated.json`, validates non-skipped command results against
+  `openrpc.generated.json`, keeps the envelope negative case, and keeps the raw quoted-u64
+  tripwire.
+- Hand-authored payload schemas were retired from `schemas/control/`; only
+  `envelope.schema.json`, generated OpenRPC, generated command manifest, and local guidance remain.
+- The editor no longer depends on `json-schema-to-typescript`.
+- DTO-first guidance was updated in `schemas/control/AGENTS.md`,
+  `engine/source/saffron/control/AGENTS.md`, and the tooling/control docs.
+- `tools/ci/check.sh` and `make e2e` passed in the `saffron-build` toolbox.
 
 ## The completeness gate (both directions)
 

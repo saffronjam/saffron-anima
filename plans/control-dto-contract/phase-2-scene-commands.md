@@ -1,6 +1,6 @@
 # Phase 2 — Scene commands
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS
 
 **Depends on:** phase 1
 
@@ -20,6 +20,9 @@ The full set registered by `registerSceneCommands` (`command.cppm:67`, second in
 `set-environment`, `get-selection`, `deselect`, `add-entity`, `copy-entity`, `rename-entity`,
 `set-component-field`, `get-camera`, `set-camera`, `get-gizmo`, `set-gizmo`, `gizmo-pointer`,
 `dump-schema`.
+
+The current worktree also has reflection-probe scene commands (`set-probes`, `recapture-probes`,
+`list-probes`); phase 2 migrates those with the scene group so the live command surface stays typed.
 
 > **Conditional: `set-parent` (scene-hierarchy).** If `plans/scene-hierarchy/` has landed
 > its phase 4 first, the scene group also contains a `set-parent {entity, parent?}` command
@@ -46,6 +49,24 @@ The full set registered by `registerSceneCommands` (`command.cppm:67`, second in
 - **`list-components`** → no params; result `{std::vector<std::string> components}`.
 - **`add-component` / `remove-component`** → `EntitySelector entity` + positional
   `std::string component`; result `{bool added}` / `{bool removed}`.
+
+Implementation note: the live wire currently returns the component name string for
+`add-component`, `remove-component`, `set-component`, and `set-component-field` (`{"added":"Name"}`,
+`{"removed":"Name"}`, `{"set":"Name"}`). The DTOs preserve that shape so this phase does not change
+existing clients while moving parsing/result construction to typed code.
+
+## Implementation checkpoint
+
+- Added scene DTO declarations for entity/component, transform/material/light, environment, selection,
+  camera, gizmo, pick, and reflection-probe scene commands.
+- Extended `tools/gen-control-dto` beyond the phase-1 pilot: nested DTOs, vectors, optionals, enum
+  wire strings, opaque json pass-throughs, UUID coercion, and nullable selection output.
+- Converted all non-reflective scene handlers to `registerCommand<Params, Result>`; `dump-schema`
+  remains raw and is recorded as a manifest skip.
+- `bun run tools/gen-control-dto/gen.ts` and `cd editor && bun run check` pass.
+- Engine validation is still blocked before control compilation by the existing Clang 21 module crash
+  in rendering (`renderer_drawlist.cpp` / `renderer.cppm`). Keep this phase `IN PROGRESS` until a
+  validation-clean C++ build or equivalent control compile is available.
 
 ### Merge-over-current (README OQ #3 — `std::optional` per overlayable field)
 
