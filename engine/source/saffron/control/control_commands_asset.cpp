@@ -39,9 +39,9 @@ namespace se
             ctx.sceneEdit.scenePath = project.path;
         }
 
-        auto projectResult(const ProjectInfo& project) -> json
+        auto projectDto(const ProjectInfo& project) -> ProjectInfoDto
         {
-            return projectInfoJson(project);
+            return ProjectInfoDto{ project.loaded, project.root, project.path, project.name, project.displayName };
         }
 
         auto requireProjectLoaded(EngineContext& ctx) -> Result<void>
@@ -53,14 +53,33 @@ namespace se
             return {};
         }
 
-        // Resolves {asset:id|name, size?} to a base64 PNG preview (mesh = framed 3D render,
-        // texture = the image read back). Shared by get-thumbnail (128) + view-asset (512).
-        auto thumbnailResult(EngineContext& ctx, const json& params, u32 defaultSize) -> Result<json>
+        auto assetTypeDto(AssetType type) -> AssetTypeDto
         {
-            // The selector may arrive as a name (string), a numeric-string uuid, or — when
-            // the CLI coerces a bare numeric arg — a JSON number; accept all three.
-            const json sel = positionalOr(params, "asset", 0);
-            std::string selector = sel.is_string() ? sel.get<std::string>() : std::string{};
+            if (type == AssetType::Texture)
+            {
+                return AssetTypeDto::Texture;
+            }
+            if (type == AssetType::Other)
+            {
+                return AssetTypeDto::Other;
+            }
+            return AssetTypeDto::Mesh;
+        }
+
+        auto assetSlotName(AssetSlotDto slot) -> const char*
+        {
+            return slot == AssetSlotDto::Albedo ? "albedo" : "mesh";
+        }
+
+        auto screenshotTargetName(ScreenshotTargetDto target) -> const char*
+        {
+            return target == ScreenshotTargetDto::Window ? "window" : "viewport";
+        }
+
+        auto resolveAsset(EngineContext& ctx, const AssetSelector& asset) -> Result<const AssetEntry*>
+        {
+            const json& sel = asset.value;
+            const std::string selector = sel.is_string() ? sel.get<std::string>() : std::string{};
             u64 byId = 0;
             if (sel.is_number_unsigned())
             {
@@ -78,24 +97,28 @@ namespace se
             {
                 byId = std::strtoull(selector.c_str(), nullptr, 10);
             }
-            const AssetEntry* match = nullptr;
             for (const AssetEntry& entry : ctx.assets.catalog.entries)
             {
                 if (entry.id.value == byId || entry.name == selector)
                 {
-                    match = &entry;
+                    return &entry;
                 }
             }
-            if (match == nullptr)
+            return Err(std::format("no asset '{}'", selector));
+        }
+
+        // Resolves {asset:id|name, size?} to a base64 PNG preview (mesh = framed 3D render,
+        // texture = the image read back). Shared by get-thumbnail (128) + view-asset (512).
+        auto thumbnailResult(EngineContext& ctx, const ThumbnailParams& params, u32 defaultSize)
+            -> Result<ThumbnailResult>
+        {
+            auto resolved = resolveAsset(ctx, params.asset);
+            if (!resolved)
             {
-                return Err(std::format("no asset '{}'", selector));
+                return Err(resolved.error());
             }
-            u32 size = defaultSize;
-            const json sz = positionalOr(params, "size", 1);
-            if (sz.is_number())
-            {
-                size = static_cast<u32>(sz.get<double>());
-            }
+            const AssetEntry* match = *resolved;
+            const u32 size = static_cast<u32>(params.size.value_or(static_cast<i32>(defaultSize)));
 
             std::vector<u8> png;
             if (match->type == AssetType::Mesh)
@@ -130,323 +153,310 @@ namespace se
             {
                 return Err(std::string{ "asset has no thumbnail" });
             }
-            return json{ { "id", uuidToJson(match->id.value) },
-                         { "format", "png" },
-                         { "width", size },
-                         { "height", size },
-                         { "base64", base64Encode(png) } };
+            return ThumbnailResult{ WireUuid{ match->id.value }, "png", static_cast<i32>(size), static_cast<i32>(size),
+                                    base64Encode(png) };
         }
     }
 
     void registerAssetCommands(CommandRegistry& reg)
     {
-        registerCommand(reg, "get-project", "get-project — active project metadata",
-                        [](EngineContext& ctx, const json&) -> Result<json>
-                        { return projectResult(currentProjectInfo(ctx)); });
+        registerCommand<EmptyParams, ProjectInfoDto>(
+            reg, "get-project", "get-project — active project metadata",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<ProjectInfoDto>
+            { return projectDto(currentProjectInfo(ctx)); });
 
-        registerCommand(reg, "new-project", "new-project {name, displayName?, root?}",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            const std::string name = asString(positionalOr(params, "name", 0), "");
-                            const std::string displayName = asString(positionalOr(params, "displayName", 1), "");
-                            const std::string root = asString(positionalOr(params, "root", 2), "");
-                            ProjectInfo project;
-                            auto result = createProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry,
-                                                        ctx.sceneEdit.scene, project, name, displayName, root);
-                            if (!result)
-                            {
-                                return Err(result.error());
-                            }
-                            applyProjectInfo(ctx, project);
-                            ctx.sceneEdit.sceneVersion += 1;
-                            setSelection(ctx.sceneEdit, Entity{ entt::null });
-                            return projectResult(project);
-                        });
+        registerCommand<NewProjectParams, ProjectInfoDto>(
+            reg, "new-project", "new-project {name, displayName?, root?}",
+            [](EngineContext& ctx, const NewProjectParams& params) -> Result<ProjectInfoDto>
+            {
+                ProjectInfo project;
+                auto result =
+                    createProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene, project,
+                                  params.name.value_or(""), params.displayName.value_or(""), params.root.value_or(""));
+                if (!result)
+                {
+                    return Err(result.error());
+                }
+                applyProjectInfo(ctx, project);
+                ctx.sceneEdit.sceneVersion += 1;
+                setSelection(ctx.sceneEdit, Entity{ entt::null });
+                return projectDto(project);
+            });
 
-        registerCommand(reg, "open-project", "open-project {path}",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            const std::string path = asString(positionalOr(params, "path", 0), "");
-                            if (path.empty())
-                            {
-                                return Err(std::string{ "missing 'path'" });
-                            }
-                            ProjectInfo project;
-                            auto result = loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry,
-                                                      ctx.sceneEdit.scene, project, path);
-                            if (!result)
-                            {
-                                return Err(result.error());
-                            }
-                            applyProjectInfo(ctx, project);
-                            ctx.sceneEdit.sceneVersion += 1;
-                            setSelection(ctx.sceneEdit, Entity{ entt::null });
-                            return projectResult(project);
-                        });
+        registerCommand<PathParams, ProjectInfoDto>(
+            reg, "open-project", "open-project {path}",
+            [](EngineContext& ctx, const PathParams& params) -> Result<ProjectInfoDto>
+            {
+                if (params.path.empty())
+                {
+                    return Err(std::string{ "missing 'path'" });
+                }
+                ProjectInfo project;
+                auto result = loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
+                                          project, params.path);
+                if (!result)
+                {
+                    return Err(result.error());
+                }
+                applyProjectInfo(ctx, project);
+                ctx.sceneEdit.sceneVersion += 1;
+                setSelection(ctx.sceneEdit, Entity{ entt::null });
+                return projectDto(project);
+            });
 
         // Imports + bakes a model, then spawns an entity carrying it (selected).
-        registerCommand(reg, "import-model", "import-model {path}",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            const std::string path = asString(positionalOr(params, "path", 0), "");
-                            if (path.empty())
-                            {
-                                return Err(std::string{ "missing 'path'" });
-                            }
-                            if (auto ready = requireProjectLoaded(ctx); !ready)
-                            {
-                                return Err(ready.error());
-                            }
-                            auto imported = importModel(ctx.assets, ctx.renderer, path);
-                            if (!imported)
-                            {
-                                return Err(imported.error());
-                            }
-                            Entity entity = spawnModel(ctx.sceneEdit.scene, "Mesh", *imported);
-                            ctx.sceneEdit.sceneVersion += 1;
-                            setSelection(ctx.sceneEdit, entity);
-                            json result = entityRef(ctx.sceneEdit.scene, entity);
-                            result["mesh"] = uuidToJson(imported->mesh.value);
-                            result["albedoTexture"] = uuidToJson(imported->albedoTexture.value);
-                            return result;
-                        });
+        registerCommand<PathParams, ImportModelResult>(
+            reg, "import-model", "import-model {path}",
+            [](EngineContext& ctx, const PathParams& params) -> Result<ImportModelResult>
+            {
+                if (params.path.empty())
+                {
+                    return Err(std::string{ "missing 'path'" });
+                }
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                auto imported = importModel(ctx.assets, ctx.renderer, params.path);
+                if (!imported)
+                {
+                    return Err(imported.error());
+                }
+                Entity entity = spawnModel(ctx.sceneEdit.scene, "Mesh", *imported);
+                ctx.sceneEdit.sceneVersion += 1;
+                setSelection(ctx.sceneEdit, entity);
+                EntityRef ref = entityRefDto(ctx.sceneEdit.scene, entity);
+                return ImportModelResult{ ref.id, ref.name, WireUuid{ imported->mesh.value },
+                                          WireUuid{ imported->albedoTexture.value } };
+            });
 
         // Imports an external image into the asset dir; returns its texture id (assign
         // it with set-material --albedoTexture <id>).
-        registerCommand(reg, "import-texture", "import-texture {path}",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            const std::string path = asString(positionalOr(params, "path", 0), "");
-                            if (path.empty())
-                            {
-                                return Err(std::string{ "missing 'path'" });
-                            }
-                            if (auto ready = requireProjectLoaded(ctx); !ready)
-                            {
-                                return Err(ready.error());
-                            }
-                            auto id = importTexture(ctx.assets, ctx.renderer, path);
-                            if (!id)
-                            {
-                                return Err(id.error());
-                            }
-                            return json{ { "texture", uuidToJson(id->value) } };
-                        });
+        registerCommand<PathParams, ImportTextureResult>(
+            reg, "import-texture", "import-texture {path}",
+            [](EngineContext& ctx, const PathParams& params) -> Result<ImportTextureResult>
+            {
+                if (params.path.empty())
+                {
+                    return Err(std::string{ "missing 'path'" });
+                }
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                auto id = importTexture(ctx.assets, ctx.renderer, params.path);
+                if (!id)
+                {
+                    return Err(id.error());
+                }
+                return ImportTextureResult{ WireUuid{ id->value } };
+            });
 
-        registerCommand(reg, "list-assets", "list the project asset catalog",
-                        [](EngineContext& ctx, const json&) -> Result<json>
-                        {
-                            json out = json::array();
-                            for (const AssetEntry& entry : ctx.assets.catalog.entries)
-                            {
-                                out.push_back(json{ { "id", uuidToJson(entry.id.value) },
-                                                    { "name", entry.name },
-                                                    { "type", assetTypeName(entry.type) },
-                                                    { "path", entry.path } });
-                            }
-                            return json{ { "assets", std::move(out) } };
-                        });
+        registerCommand<EmptyParams, AssetList>(
+            reg, "list-assets", "list the project asset catalog",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<AssetList>
+            {
+                AssetList out;
+                for (const AssetEntry& entry : ctx.assets.catalog.entries)
+                {
+                    out.assets.push_back(
+                        AssetEntryDto{ WireUuid{ entry.id.value }, entry.name, assetTypeDto(entry.type), entry.path });
+                }
+                return out;
+            });
 
-        registerCommand(reg, "rename-asset", "rename-asset {id|name, newName}",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            const std::string selector = asString(positionalOr(params, "asset", 0), "");
-                            const std::string newName = asString(positionalOr(params, "name", 1), "");
-                            if (selector.empty() || newName.empty())
-                            {
-                                return Err(std::string{ "usage: rename-asset {id|name} {newName}" });
-                            }
-                            const u64 byId = std::strtoull(selector.c_str(), nullptr, 10);
-                            for (AssetEntry& entry : ctx.assets.catalog.entries)
-                            {
-                                if (entry.id.value == byId || entry.name == selector)
-                                {
-                                    entry.name = newName;
-                                    return json{ { "id", uuidToJson(entry.id.value) }, { "name", entry.name } };
-                                }
-                            }
-                            return Err(std::format("no asset '{}'", selector));
-                        });
+        registerCommand<RenameAssetParams, AssetRef>(
+            reg, "rename-asset", "rename-asset {id|name, newName}",
+            [](EngineContext& ctx, const RenameAssetParams& params) -> Result<AssetRef>
+            {
+                const std::string selector =
+                    params.asset.value.is_string() ? params.asset.value.get<std::string>() : std::string{};
+                if (selector.empty() || params.name.empty())
+                {
+                    return Err(std::string{ "usage: rename-asset {id|name} {newName}" });
+                }
+                const u64 byId = std::strtoull(selector.c_str(), nullptr, 10);
+                for (AssetEntry& entry : ctx.assets.catalog.entries)
+                {
+                    if (entry.id.value == byId || entry.name == selector)
+                    {
+                        entry.name = params.name;
+                        return AssetRef{ WireUuid{ entry.id.value }, entry.name };
+                    }
+                }
+                return Err(std::format("no asset '{}'", selector));
+            });
 
-        registerCommand(reg, "assign-asset", "assign-asset {entity, slot:mesh|albedo, id|name}",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            auto entity = resolveEntity(ctx, params);
-                            if (!entity)
-                            {
-                                return Err(entity.error());
-                            }
-                            const std::string slot = asString(positionalOr(params, "slot", 1), "");
-                            const std::string selector = asString(positionalOr(params, "asset", 2), "");
-                            const u64 byId = std::strtoull(selector.c_str(), nullptr, 10);
-                            const AssetEntry* match = nullptr;
-                            for (const AssetEntry& entry : ctx.assets.catalog.entries)
-                            {
-                                if (entry.id.value == byId || entry.name == selector)
-                                {
-                                    match = &entry;
-                                }
-                            }
-                            if (match == nullptr)
-                            {
-                                return Err(std::format("no asset '{}'", selector));
-                            }
-                            if (slot == "mesh")
-                            {
-                                if (!hasComponent<MeshComponent>(ctx.sceneEdit.scene, *entity))
-                                {
-                                    addComponent<MeshComponent>(ctx.sceneEdit.scene, *entity);
-                                }
-                                getComponent<MeshComponent>(ctx.sceneEdit.scene, *entity).mesh = match->id;
-                            }
-                            else if (slot == "albedo")
-                            {
-                                if (!hasComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity))
-                                {
-                                    addComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity);
-                                }
-                                getComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity).albedoTexture = match->id;
-                            }
-                            else
-                            {
-                                return Err(std::string{ "slot must be 'mesh' or 'albedo'" });
-                            }
-                            ctx.sceneEdit.sceneVersion += 1;
-                            return json{ { "id", uuidToJson(match->id.value) }, { "name", match->name }, { "slot", slot } };
-                        });
+        registerCommand<AssignAssetParams, AssignAssetResult>(
+            reg, "assign-asset", "assign-asset {entity, slot:mesh|albedo, id|name}",
+            [](EngineContext& ctx, const AssignAssetParams& params) -> Result<AssignAssetResult>
+            {
+                auto entity = resolveEntity(ctx, json{ { "entity", params.entity.value } });
+                if (!entity)
+                {
+                    return Err(entity.error());
+                }
+                auto resolved = resolveAsset(ctx, params.asset);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                const AssetEntry* match = *resolved;
+                if (params.slot == AssetSlotDto::Mesh)
+                {
+                    if (!hasComponent<MeshComponent>(ctx.sceneEdit.scene, *entity))
+                    {
+                        addComponent<MeshComponent>(ctx.sceneEdit.scene, *entity);
+                    }
+                    getComponent<MeshComponent>(ctx.sceneEdit.scene, *entity).mesh = match->id;
+                }
+                else if (params.slot == AssetSlotDto::Albedo)
+                {
+                    if (!hasComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity))
+                    {
+                        addComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity);
+                    }
+                    getComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity).albedoTexture = match->id;
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return AssignAssetResult{ WireUuid{ match->id.value }, match->name, params.slot };
+            });
 
-        registerCommand(reg, "save-scene", "save-scene {path}",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            const std::string path = asString(positionalOr(params, "path", 0), "");
-                            if (path.empty())
-                            {
-                                return Err(std::string{ "missing 'path'" });
-                            }
-                            auto result = writeScene(ctx.sceneEdit.registry, ctx.sceneEdit.scene, path);
-                            if (!result)
-                            {
-                                return Err(result.error());
-                            }
-                            ctx.sceneEdit.scenePath = path;
-                            return json{ { "path", path } };
-                        });
+        registerCommand<PathParams, PathResult>(reg, "save-scene", "save-scene {path}",
+                                                [](EngineContext& ctx, const PathParams& params) -> Result<PathResult>
+                                                {
+                                                    if (params.path.empty())
+                                                    {
+                                                        return Err(std::string{ "missing 'path'" });
+                                                    }
+                                                    auto result = writeScene(ctx.sceneEdit.registry,
+                                                                             ctx.sceneEdit.scene, params.path);
+                                                    if (!result)
+                                                    {
+                                                        return Err(result.error());
+                                                    }
+                                                    ctx.sceneEdit.scenePath = params.path;
+                                                    return PathResult{ params.path };
+                                                });
 
-        registerCommand(reg, "load-scene", "load-scene {path}",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            const std::string path = asString(positionalOr(params, "path", 0), "");
-                            if (path.empty())
-                            {
-                                return Err(std::string{ "missing 'path'" });
-                            }
-                            auto result = readScene(ctx.sceneEdit.registry, ctx.sceneEdit.scene, path);
-                            if (!result)
-                            {
-                                return Err(result.error());
-                            }
-                            ctx.sceneEdit.scenePath = path;
-                            ctx.sceneEdit.sceneVersion += 1;
-                            setSelection(ctx.sceneEdit, Entity{ entt::null });
-                            return json{ { "path", path } };
-                        });
+        registerCommand<PathParams, PathResult>(reg, "load-scene", "load-scene {path}",
+                                                [](EngineContext& ctx, const PathParams& params) -> Result<PathResult>
+                                                {
+                                                    if (params.path.empty())
+                                                    {
+                                                        return Err(std::string{ "missing 'path'" });
+                                                    }
+                                                    auto result = readScene(ctx.sceneEdit.registry, ctx.sceneEdit.scene,
+                                                                            params.path);
+                                                    if (!result)
+                                                    {
+                                                        return Err(result.error());
+                                                    }
+                                                    ctx.sceneEdit.scenePath = params.path;
+                                                    ctx.sceneEdit.sceneVersion += 1;
+                                                    setSelection(ctx.sceneEdit, Entity{ entt::null });
+                                                    return PathResult{ params.path };
+                                                });
 
-        registerCommand(reg, "save-project", "save-project {path} — assets catalog + scene in one file",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            std::string path = asString(positionalOr(params, "path", 0), "");
-                            ProjectInfo project = currentProjectInfo(ctx);
-                            if (path.empty())
-                            {
-                                path = project.path;
-                            }
-                            if (path.empty())
-                            {
-                                return Err(std::string{ "no active project path" });
-                            }
-                            if (!project.loaded)
-                            {
-                                const std::filesystem::path fsPath{ path };
-                                project.loaded = true;
-                                project.path = path;
-                                project.root = fsPath.parent_path().empty() ? "." : fsPath.parent_path().string();
-                                project.name = validProjectName(fsPath.parent_path().filename().string())
-                                                   ? fsPath.parent_path().filename().string()
-                                                   : "project";
-                                project.displayName = defaultDisplayName(project.name);
-                            }
-                            auto result =
-                                saveProject(ctx.assets, ctx.sceneEdit.registry, ctx.sceneEdit.scene, project, path);
-                            if (!result)
-                            {
-                                return Err(result.error());
-                            }
-                            project.path = path;
-                            applyProjectInfo(ctx, project);
-                            return projectResult(project);
-                        });
+        registerCommand<OptionalPathParams, ProjectInfoDto>(
+            reg, "save-project", "save-project {path} — assets catalog + scene in one file",
+            [](EngineContext& ctx, const OptionalPathParams& params) -> Result<ProjectInfoDto>
+            {
+                std::string path = params.path.value_or("");
+                ProjectInfo project = currentProjectInfo(ctx);
+                if (path.empty())
+                {
+                    path = project.path;
+                }
+                if (path.empty())
+                {
+                    return Err(std::string{ "no active project path" });
+                }
+                if (!project.loaded)
+                {
+                    const std::filesystem::path fsPath{ path };
+                    project.loaded = true;
+                    project.path = path;
+                    project.root = fsPath.parent_path().empty() ? "." : fsPath.parent_path().string();
+                    project.name = validProjectName(fsPath.parent_path().filename().string())
+                                       ? fsPath.parent_path().filename().string()
+                                       : "project";
+                    project.displayName = defaultDisplayName(project.name);
+                }
+                auto result = saveProject(ctx.assets, ctx.sceneEdit.registry, ctx.sceneEdit.scene, project, path);
+                if (!result)
+                {
+                    return Err(result.error());
+                }
+                project.path = path;
+                applyProjectInfo(ctx, project);
+                return projectDto(project);
+            });
 
-        registerCommand(reg, "load-project", "load-project {path} — assets catalog + scene",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            const std::string path = asString(positionalOr(params, "path", 0), "project.json");
-                            ProjectInfo project;
-                            Result<void> result = loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry,
-                                                              ctx.sceneEdit.scene, project, path);
-                            if (!result)
-                            {
-                                return Err(result.error());
-                            }
-                            applyProjectInfo(ctx, project);
-                            ctx.sceneEdit.sceneVersion += 1;
-                            setSelection(ctx.sceneEdit, Entity{ entt::null });
-                            return projectResult(project);
-                        });
+        registerCommand<OptionalPathParams, ProjectInfoDto>(
+            reg, "load-project", "load-project {path} — assets catalog + scene",
+            [](EngineContext& ctx, const OptionalPathParams& params) -> Result<ProjectInfoDto>
+            {
+                const std::string path = params.path.value_or("project.json");
+                ProjectInfo project;
+                Result<void> result =
+                    loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene, project, path);
+                if (!result)
+                {
+                    return Err(result.error());
+                }
+                applyProjectInfo(ctx, project);
+                ctx.sceneEdit.sceneVersion += 1;
+                setSelection(ctx.sceneEdit, Entity{ entt::null });
+                return projectDto(project);
+            });
 
-        registerCommand(reg, "screenshot", "screenshot {target:viewport|window, path}",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        {
-                            const std::string target = asString(positionalOr(params, "target", 0), "viewport");
-                            const std::string path = asString(positionalOr(params, "path", 1), "");
-                            if (path.empty())
-                            {
-                                return Err(std::string{ "missing 'path'" });
-                            }
-                            if (target == "viewport")
-                            {
-                                auto shot = captureViewport(ctx.renderer, path);
-                                if (!shot)
-                                {
-                                    return Err(shot.error());
-                                }
-                                return json{ { "target", target }, { "path", path }, { "pending", false } };
-                            }
-                            if (target == "window")
-                            {
-                                // Written at the end of the current frame.
-                                auto shot = requestWindowCapture(ctx.renderer, path);
-                                if (!shot)
-                                {
-                                    return Err(shot.error());
-                                }
-                                return json{ { "target", target }, { "path", path }, { "pending", true } };
-                            }
-                            return Err(std::format("unknown target '{}' (viewport|window)", target));
-                        });
+        registerCommand<ScreenshotParams, ScreenshotResult>(
+            reg, "screenshot", "screenshot {target:viewport|window, path}",
+            [](EngineContext& ctx, const ScreenshotParams& params) -> Result<ScreenshotResult>
+            {
+                const ScreenshotTargetDto target = params.target.value_or(ScreenshotTargetDto::Viewport);
+                if (params.path.empty())
+                {
+                    return Err(std::string{ "missing 'path'" });
+                }
+                if (target == ScreenshotTargetDto::Viewport)
+                {
+                    auto shot = captureViewport(ctx.renderer, params.path);
+                    if (!shot)
+                    {
+                        return Err(shot.error());
+                    }
+                    return ScreenshotResult{ target, params.path, false };
+                }
+                if (target == ScreenshotTargetDto::Window)
+                {
+                    // Written at the end of the current frame.
+                    auto shot = requestWindowCapture(ctx.renderer, params.path);
+                    if (!shot)
+                    {
+                        return Err(shot.error());
+                    }
+                    return ScreenshotResult{ target, params.path, true };
+                }
+                return Err(std::format("unknown target '{}' (viewport|window)", screenshotTargetName(target)));
+            });
 
-        registerCommand(reg, "get-thumbnail", "get-thumbnail {asset:id|name, size=128} — base64 PNG preview",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        { return thumbnailResult(ctx, params, 128); });
+        registerCommand<ThumbnailParams, ThumbnailResult>(
+            reg, "get-thumbnail", "get-thumbnail {asset:id|name, size=128} — base64 PNG preview",
+            [](EngineContext& ctx, const ThumbnailParams& params) -> Result<ThumbnailResult>
+            { return thumbnailResult(ctx, params, 128); });
 
-        registerCommand(reg, "view-asset", "view-asset {asset:id|name, size=512} — larger base64 PNG preview",
-                        [](EngineContext& ctx, const json& params) -> Result<json>
-                        { return thumbnailResult(ctx, params, 512); });
+        registerCommand<ThumbnailParams, ThumbnailResult>(
+            reg, "view-asset", "view-asset {asset:id|name, size=512} — larger base64 PNG preview",
+            [](EngineContext& ctx, const ThumbnailParams& params) -> Result<ThumbnailResult>
+            { return thumbnailResult(ctx, params, 512); });
 
-        registerCommand(reg, "quit", "close the running app",
-                        [](EngineContext& ctx, const json&) -> Result<json>
-                        {
-                            ctx.window.shouldClose = true;
-                            return json{ { "quitting", true } };
-                        });
+        registerCommand<EmptyParams, QuitResult>(reg, "quit", "close the running app",
+                                                 [](EngineContext& ctx, const EmptyParams&) -> Result<QuitResult>
+                                                 {
+                                                     ctx.window.shouldClose = true;
+                                                     return QuitResult{ true };
+                                                 });
     }
 }
