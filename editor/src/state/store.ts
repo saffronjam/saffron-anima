@@ -14,6 +14,16 @@ import type {
 } from "../protocol";
 
 export type EnginePhase = "idle" | "starting" | "attaching" | "ready" | "error";
+export type ViewTab =
+  | { id: "scene"; kind: "scene"; title: "Scene"; closable: false }
+  | {
+      id: string;
+      kind: "asset";
+      assetId: string;
+      title: string;
+      assetType: AssetEntry["type"];
+      closable: true;
+    };
 
 export interface EngineStatus {
   running: boolean;
@@ -28,6 +38,9 @@ export interface EditorState {
   selectionVersion: number;
   componentsBySelected: InspectResult | null;
   assets: AssetEntry[];
+  assetFolders: string[];
+  viewTabs: ViewTab[];
+  activeViewTabId: string;
   environment: Environment | null;
   renderStats: RenderStats | null;
   project: ProjectInfo | null;
@@ -66,10 +79,14 @@ export interface EditorState {
   /// (optimistic write). The reconcile poll is gated off mid-drag, so this is the
   /// UI's truth until the next poll; a new selectionVersion drops it (poll re-inspects).
   applyOptimisticComponent(component: string, dto: object): void;
-  setAssets(assets: AssetEntry[]): void;
+  setAssetList(assets: AssetEntry[], folders: string[]): void;
   /// Re-fetch the catalog from the engine into `assets`. Called by the reconcile
   /// poll on a sceneVersion change and eagerly after an import/rename.
   refreshAssets(): Promise<void>;
+  openAssetTab(asset: AssetEntry): void;
+  closeViewTab(id: string): void;
+  setActiveViewTab(id: string): void;
+  moveViewTab(id: string, index: number): void;
   setEnvironment(environment: Environment | null): void;
   setRenderStats(renderStats: RenderStats | null): void;
   setProject(project: ProjectInfo | null): void;
@@ -95,6 +112,9 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectionVersion: -1,
   componentsBySelected: null,
   assets: [],
+  assetFolders: [],
+  viewTabs: [{ id: "scene", kind: "scene", title: "Scene", closable: false }],
+  activeViewTabId: "scene",
   environment: null,
   renderStats: null,
   project: null,
@@ -135,15 +155,77 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       };
     }),
-  setAssets: (assets) => set({ assets }),
+  setAssetList: (assets, assetFolders) =>
+    set((s) => ({
+      assets,
+      assetFolders,
+      viewTabs: s.viewTabs.map((tab) => {
+        if (tab.kind !== "asset") {
+          return tab;
+        }
+        const asset = assets.find((entry) => entry.id === tab.assetId);
+        return asset ? { ...tab, title: asset.name, assetType: asset.type } : tab;
+      }),
+    })),
   refreshAssets: async () => {
     try {
       const list = await client.listAssets();
-      set({ assets: list.assets });
+      useEditorStore.getState().setAssetList(list.assets, list.folders);
     } catch {
       // Engine may be briefly busy; the next reconcile tick recovers.
     }
   },
+  openAssetTab: (asset) =>
+    set((s) => {
+      const id = `asset:${asset.id}`;
+      const existing = s.viewTabs.some((tab) => tab.id === id);
+      return {
+        activeViewTabId: id,
+        viewTabs: existing
+          ? s.viewTabs
+          : [
+              ...s.viewTabs,
+              {
+                id,
+                kind: "asset",
+                assetId: asset.id,
+                title: asset.name,
+                assetType: asset.type,
+                closable: true,
+              },
+            ],
+      };
+    }),
+  closeViewTab: (id) =>
+    set((s) => {
+      if (id === "scene") {
+        return {};
+      }
+      const index = s.viewTabs.findIndex((tab) => tab.id === id);
+      const viewTabs = s.viewTabs.filter((tab) => tab.id !== id);
+      const activeViewTabId =
+        s.activeViewTabId === id
+          ? (viewTabs[Math.max(0, index - 1)]?.id ?? "scene")
+          : s.activeViewTabId;
+      return { viewTabs, activeViewTabId };
+    }),
+  setActiveViewTab: (id) =>
+    set((s) => (s.viewTabs.some((tab) => tab.id === id) ? { activeViewTabId: id } : {})),
+  moveViewTab: (id, index) =>
+    set((s) => {
+      if (id === "scene") {
+        return {};
+      }
+      const moving = s.viewTabs.find((tab) => tab.id === id);
+      if (!moving) {
+        return {};
+      }
+      const without = s.viewTabs.filter((tab) => tab.id !== id);
+      const nextIndex = Math.min(Math.max(1, index), without.length);
+      return {
+        viewTabs: [...without.slice(0, nextIndex), moving, ...without.slice(nextIndex)],
+      };
+    }),
   setEnvironment: (environment) => set({ environment }),
   setRenderStats: (renderStats) => set({ renderStats }),
   setProject: (project) => set({ project }),
@@ -157,6 +239,9 @@ export const useEditorStore = create<EditorState>((set) => ({
       selectedId: null,
       componentsBySelected: null,
       assets: [],
+      assetFolders: [],
+      viewTabs: [{ id: "scene", kind: "scene", title: "Scene", closable: false }],
+      activeViewTabId: "scene",
       environment: null,
       // Force the reconcile poll's version diff to fire on the next tick so the
       // hierarchy/inspector/assets/env all re-fetch against the loaded scene.
@@ -455,14 +540,19 @@ function base64ToBlob(b64: string, mime = "image/png"): Blob {
   return new Blob([bytes], { type: mime });
 }
 
+export function getCachedThumbnailUrl(assetId: string, size: number): string | null {
+  const cached = thumbnailCache.get(assetId);
+  return cached && cached.size >= size ? cached.url : null;
+}
+
 /// Resolve a blob URL for an asset's thumbnail at (at least) `size` px. Cache hit
 /// (same or larger cached size) returns immediately; a miss fetches once over the
 /// socket, decodes the base64 PNG, and stores the object URL. Rejects to let the
 /// caller fall back to a type icon.
 export async function getThumbnailUrl(assetId: string, size: number): Promise<string> {
-  const cached = thumbnailCache.get(assetId);
-  if (cached && cached.size >= size) {
-    return cached.url;
+  const cached = getCachedThumbnailUrl(assetId, size);
+  if (cached) {
+    return cached;
   }
   const inflight = thumbnailInflight.get(assetId);
   if (inflight) {
