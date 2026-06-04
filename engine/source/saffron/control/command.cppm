@@ -6,11 +6,13 @@ module;
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
 export module Saffron.Control:Command;
 
+import :Dto;
 import Saffron.Core;
 import Saffron.Window;
 import Saffron.Rendering;
@@ -49,6 +51,26 @@ export namespace se
 
     void registerCommand(CommandRegistry& reg, std::string name, std::string help,
                          std::function<Result<json>(EngineContext&, const json&)> run);
+
+    template <typename Params, typename ResultDto, typename Handler>
+    void registerCommand(CommandRegistry& reg, std::string name, std::string help, Handler handler)
+    {
+        registerCommand(reg, std::move(name), std::move(help),
+            [handler = std::move(handler)](EngineContext& ctx, const json& params) -> Result<json>
+            {
+                auto parsed = parseDto(params, DtoTag<Params>{});
+                if (!parsed)
+                {
+                    return Err(std::move(parsed.error()));
+                }
+                auto result = handler(ctx, *parsed);
+                if (!result)
+                {
+                    return Err(std::move(result.error()));
+                }
+                return dtoToJson(*result);
+            });
+    }
     auto findCommand(const CommandRegistry& reg, const std::string& name) -> const CommandTraits*;
 
     // params[name] if present, else the index-th element of params["args"], else null.
@@ -56,9 +78,10 @@ export namespace se
     auto positionalOr(const json& params, const std::string& name, std::size_t index) -> json;
     auto asString(const json& value, std::string fallback) -> std::string;
     auto resolveEntity(EngineContext& ctx, const json& params) -> Result<Entity>;
+    auto entityRefDto(Scene& scene, Entity entity) -> EntityRef;
     auto entityRef(Scene& scene, Entity entity) -> json;
 
-    // Builds the render-stats DTO (shared by the render-stats command + dump-schema).
+    // Builds the render-stats DTO.
     auto renderStatsJson(Renderer& renderer) -> json;
 
     // The built-in commands, grouped by concern. Registered in render → scene → asset
