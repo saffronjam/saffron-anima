@@ -5,13 +5,15 @@ weight = 8
 
 # Assets panel & thumbnails
 
-The Assets panel is a tile grid over the project's [asset catalog](../../scene-and-ecs/asset-catalog-in-scene/). Each tile shows a thumbnail and an editable name, and acts as a drag source for the inspector's [pickers](../asset-pickers-and-drag-drop/).
+The Assets panel is a tile grid over the project's [asset catalog](../../scene-and-ecs/asset-catalog-in-scene/). Each tile shows a thumbnail and an editable name, and acts as a drag source for the inspector's [pickers](../asset-pickers-and-drag-drop/). Virtual folders group catalog entries without changing the imported files on disk.
 
 Thumbnails are PNGs fetched over the control socket and cached as blob URLs, because the engine and the webview share no GPU context. The panel itself is a React component reading `store.assets`.
 
 ## The tile grid
 
-`AssetsPanel` lays the catalog out with a CSS grid (`repeat(auto-fill, minmax(72px, 1fr))`), so tiles reflow to the panel width. Each `AssetTile` is a 72px tile: a square thumbnail on top, an in-place name button beneath. An empty catalog shows an import and drag-and-drop prompt instead. The list comes from the reconcile poll's `list-assets` refresh, re-fetched eagerly after an import or rename.
+`AssetsPanel` lays the current folder out with a CSS grid (`repeat(auto-fill, minmax(72px, 1fr))`), so tiles reflow to the panel width. Each `AssetTile` is a 72px tile: a square thumbnail on top, an in-place name button beneath. The root view also shows folder tiles. An empty catalog shows an import and drag-and-drop prompt instead. The list comes from the reconcile poll's `list-assets` refresh, re-fetched eagerly after imports, moves, renames, or deletes.
+
+Right-clicking the asset background opens commands for **New Folder** and **Import**. Right-clicking a folder opens **Rename** and **Delete**; Delete removes the virtual folder and moves its assets back to Root. Right-clicking an asset opens **View** and **Delete**; Delete asks the engine for `asset-usages` first, shows an in-place confirmation with affected slots, then calls `delete-asset`.
 
 ## Thumbnails over the socket
 
@@ -21,7 +23,7 @@ A thumbnail travels as data rather than a registered descriptor, since no GPU co
 - a **mesh** asset renders a [3D preview](../mesh-thumbnails/);
 - anything else, or a failed render, falls back to a Lucide type icon in the webview.
 
-Each `get-thumbnail` call is a GPU→CPU readback plus a PNG encode, so it must not run per frame or per tile. A module-scope cache keyed by asset id holds `{ blob URL, the px size it was fetched at }`, and concurrent requests for the same asset share one in-flight promise. A cached URL is reused whenever it is at least as large as the requested size, so a 128px grid tile and a 16px combo swatch share one fetch:
+Each `get-thumbnail` call is a GPU→CPU readback plus a PNG encode, so it must not run per frame or per tile. A module-scope frontend cache keyed by asset id holds `{ blob URL, the px size it was fetched at }`, and concurrent requests for the same asset share one in-flight promise. A cached URL is reused synchronously whenever it is at least as large as the requested size, so folder navigation does not ask the backend for thumbnails it already decoded in the current webview session:
 
 ```ts
 export async function getThumbnailUrl(assetId: string, size: number): Promise<string> {
@@ -47,21 +49,22 @@ void client.renameAsset(entry.id, next).then(() => refreshAssets());
 
 The **Import** button opens the Tauri file dialog (`tauri-plugin-dialog`); the panel is also an **OS file-drop** target via the webview drag-drop event. Both route by extension: images go to `import-texture` (catalog-only, no spawn), everything else to `import-model`, matching the engine's `importToCatalog`. The OS file-drop is hit-tested against the panel's rect, scaled by `devicePixelRatio` because the drop position is in physical pixels. Dropping a model on the *viewport* therefore does not trigger a catalog import here.
 
-Each tile is also an HTML5 drag *source* on a distinct channel, `application/x-se-asset`, separate from the OS file drop. It carries `{id, type}` so an inspector [picker](../asset-pickers-and-drag-drop/) can type-gate the drop.
+Each tile is also an HTML5 drag *source* on a distinct channel, `application/x-se-asset`, separate from the OS file drop. It carries `{id, type}` so an inspector [picker](../asset-pickers-and-drag-drop/) can type-gate the drop. Folder tiles and the current folder background accept the same payload and call `move-asset`.
 
-## The View modal
+## Asset tabs
 
-Double-clicking a tile opens a 512px preview in a shadcn `Dialog` (`view-asset`, the same readback path as `get-thumbnail`). The [viewport](../viewport-panel/) is a `<canvas>` the webview paints, so the dialog stacks over it by `z-index` like any other modal — there is no foreign window to occlude it and nothing to park.
+Double-clicking a tile opens a closeable titlebar tab for that asset (`view-asset`, the same readback path as `get-thumbnail`). The pinned `Scene` tab owns the native viewport and cannot be closed. Asset tabs show a type icon and can be reordered by drag-drop.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Tile grid + import + drop | `editor/src/panels/AssetsPanel.tsx` | `AssetsPanel`, `importPath`, `isInsidePanel` |
+| Tile grid + import + drop | `editor/src/panels/AssetsPanel.tsx` | `AssetsPanel`, `AssetPanelBody`, `FolderTile`, `FolderNameInput`, `importPath`, `isInsidePanel` |
 | Tile + rename + drag source | `editor/src/components/AssetTile.tsx` | `AssetTile`, `RenameInput`, `ASSET_DND_MIME` |
-| Thumbnail blob-URL cache | `editor/src/state/store.ts` | `getThumbnailUrl`, `invalidateThumbnails`, `thumbnailCache` |
-| The View modal | `editor/src/components/AssetViewer.tsx` | `AssetViewer`, `viewAsset` |
-| Readback (engine) | `control_commands_asset.cpp` | `get-thumbnail`, `view-asset`, `list-assets`, `rename-asset` |
+| Thumbnail blob-URL cache | `editor/src/state/store.ts` | `getCachedThumbnailUrl`, `getThumbnailUrl`, `invalidateThumbnails`, `thumbnailCache` |
+| Asset tabs | `editor/src/app/WindowTitlebar.tsx` | `TitlebarTab`, `ViewTab`, `openAssetTab` |
+| Preview content | `editor/src/components/AssetViewer.tsx` | `AssetPreview`, `viewAsset` |
+| Readback (engine) | `control_commands_asset.cpp` | `get-thumbnail`, `view-asset`, `list-assets`, `rename-asset`, `move-asset`, `delete-asset`, `delete-asset-folder` |
 
 ## Related
 
