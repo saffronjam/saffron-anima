@@ -46,10 +46,10 @@ CPP_LS := git -C "$(REPO)" ls-files '*.cppm' '*.cpp' | grep -vE '^(cmake/|third_
 
 # Targets whose tools (clang, cargo, Vulkan, slang, the toolbox-linked engine binary)
 # live only in the toolbox. On the host these re-enter it; inside, they run directly.
-TOOLBOX_TARGETS := check engine editor schema e2e run run-engine run-software format lint prepare-for-commit
+TOOLBOX_TARGETS := check engine editor schema e2e run run-engine run-software run-wl-debug format lint prepare-for-commit
 
 .DEFAULT_GOAL := help
-.PHONY: help check engine editor schema e2e run run-engine run-software run-docs format lint prepare-for-commit
+.PHONY: help check engine editor schema e2e run run-engine run-software run-wl-debug run-docs format lint prepare-for-commit
 
 ## help: list the available targets (default; runs on the host, no toolbox)
 help:
@@ -120,6 +120,19 @@ run:
 ## run-software: run the editor on the llvmpipe software GPU (control case; ignores the NVIDIA ICD)
 run-software:
 	cd "$(EDITOR)" && bun run tauri dev
+
+## run-wl-debug: run the editor with Wayland protocol tracing; writes full log to /tmp/wl-debug.log
+## then prints the 60 lines around the first protocol error. Ctrl-C after the crash appears.
+run-wl-debug:
+	cd "$(EDITOR)" && $(GPU_ENV) WAYLAND_DEBUG=1 bun run tauri dev > /tmp/wl-debug.log 2>&1 & \
+	  PID=$$! ; \
+	  tail -f /tmp/wl-debug.log & TAILPID=$$! ; \
+	  wait $$PID ; \
+	  kill $$TAILPID 2>/dev/null ; \
+	  echo '--- grep for error context ---' ; \
+	  grep -n "Error 71\|protocol error\|wl_display.*error\|GDK\|fatal" /tmp/wl-debug.log | head -20 ; \
+	  echo '--- 30 Wayland lines before first error ---' ; \
+	  grep -n "" /tmp/wl-debug.log | grep -B30 "Error 71\|protocol error" | head -40
 
 ## run-engine: start only the present-only engine host (control plane + viewport, no editor)
 run-engine:

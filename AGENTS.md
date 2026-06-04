@@ -24,6 +24,10 @@ everything DX11-specific and the heavy OOP.
 - **Memory:** do not write to Claude's `~/.claude/.../memory/` stores. Durable project knowledge goes in
   the repo — this file, `CONVENTIONS.md`, or a `plans/` file — so it is versioned and shared. Nothing
   here should reference an out-of-repo path for project knowledge.
+- **Concurrent edits:** changes may conflict with other agents working in the same tree. If that
+  happens, back off briefly with a small random delay, re-read the affected file, and reconcile the
+  edit. If the conflict reflects contradictory intent rather than a mechanical overlap, stop and ask the
+  user how to proceed.
 
 ## Build — always in the `saffron-build` toolbox
 
