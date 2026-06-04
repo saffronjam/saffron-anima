@@ -16,6 +16,7 @@ import { X } from "lucide-react";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
 import { makeCoalescer, type Coalescer } from "../control/coalesce";
+import { errorText, useFlash } from "../lib/flash";
 import { renderField, resolveHint } from "../components/fieldRenderer";
 import type { Material, Transform } from "../protocol";
 import { Button } from "@/components/ui/button";
@@ -63,6 +64,7 @@ export function InspectorPanel() {
   const inspected = useEditorStore((s) => s.componentsBySelected);
   const selectionVersion = useEditorStore((s) => s.selectionVersion);
   const applyOptimisticComponent = useEditorStore((s) => s.applyOptimisticComponent);
+  const { message, flash } = useFlash();
 
   // Per-(component,field) coalescers, rebuilt when the selection changes so a stale
   // closure never targets the wrong entity.
@@ -89,9 +91,14 @@ export function InspectorPanel() {
             Inspector
           </span>
         </div>
-        <div className="p-3.5 text-center italic text-muted-foreground">
+        <div className="min-h-0 flex-1 p-3.5 text-center italic text-muted-foreground">
           No entity selected
         </div>
+        {message ? (
+          <p className="flex-none border-t border-destructive/40 bg-destructive/10 px-2.5 py-1 text-[11px] text-destructive">
+            {message}
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -158,10 +165,12 @@ export function InspectorPanel() {
   const onDragEnd = (): void => setDragActive(false);
 
   const onRemove = (component: string): void => {
-    void client.removeComponent(selectedId, component).catch(() => {});
+    void client
+      .removeComponent(selectedId, component)
+      .catch((err: unknown) => flash(errorText(err)));
   };
   const onAdd = (component: string): void => {
-    void client.addComponent(selectedId, component).catch(() => {});
+    void client.addComponent(selectedId, component).catch((err: unknown) => flash(errorText(err)));
   };
 
   return (
@@ -200,10 +209,7 @@ export function InspectorPanel() {
                 </header>
                 <div className="flex flex-col gap-1.5 px-2 py-1.5">
                   {Object.entries(dto).map(([field, value]) => (
-                    <div
-                      key={field}
-                      className="grid grid-cols-[78px_1fr] items-center gap-1.5"
-                    >
+                    <div key={field} className="grid grid-cols-[78px_1fr] items-center gap-1.5">
                       <Label className="truncate text-[11px] font-normal text-muted-foreground">
                         {field}
                       </Label>
@@ -237,10 +243,7 @@ export function InspectorPanel() {
                 Add Component
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              className="w-(--radix-dropdown-menu-trigger-width)"
-            >
+            <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
               {missing.map((component) => (
                 <DropdownMenuItem key={component} onSelect={() => onAdd(component)}>
                   {component}
@@ -250,6 +253,11 @@ export function InspectorPanel() {
           </DropdownMenu>
         </div>
       </ScrollArea>
+      {message ? (
+        <p className="flex-none border-t border-destructive/40 bg-destructive/10 px-2.5 py-1 text-[11px] text-destructive">
+          {message}
+        </p>
+      ) : null}
     </div>
   );
 }
