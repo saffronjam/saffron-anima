@@ -9,7 +9,7 @@
 /// header) and anchor there.
 import { useState } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Box, Camera, CircleDashed, Flashlight, Lightbulb, Plus, Sun } from "lucide-react";
+import { Box, Camera, CircleDashed, Flashlight, Lightbulb, Orbit, Plus, Sun } from "lucide-react";
 import { client, type EntityPreset } from "../control/client";
 import { useEditorStore } from "../state/store";
 import { errorText, useFlash } from "../lib/flash";
@@ -37,6 +37,7 @@ export const CREATE_PRESETS: { label: string; preset: EntityPreset; icon: Lucide
   { label: "Spot Light", preset: "spot-light", icon: Flashlight },
   { label: "Directional Light", preset: "directional-light", icon: Sun },
   { label: "Camera", preset: "camera", icon: Camera },
+  { label: "Reflection Probe", preset: "reflection-probe", icon: Orbit },
 ];
 
 export function CreateMenu() {

@@ -42,6 +42,7 @@ const COMPONENT_ORDER = [
   "DirectionalLight",
   "PointLight",
   "SpotLight",
+  "ReflectionProbe",
 ] as const;
 
 /// Components that cannot be removed (parity with the C++ `removable=false` flag on
