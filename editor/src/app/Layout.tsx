@@ -1,12 +1,12 @@
 /// The resizable dock layout, reproducing the C++ editor's default DockBuilder
 /// arrangement (ui.cppm:568-577): Hierarchy + a tabbed Inspector/Environment/Stats
 /// column on the LEFT, Assets along the BOTTOM, Viewport in the CENTER. The split
-/// ratios mirror the DockBuilder splits — Left 0.20, Down 0.28 (Assets bottom),
-/// leftBottom 0.55 (so Hierarchy is the top 0.45 of the left column).
+/// ratios follow the DockBuilder shape — Assets bottom 0.28, leftBottom 0.55
+/// (so Hierarchy is the top 0.45 of the left column). The left sidebar uses a
+/// pixel width so it cannot collapse while the native viewport is attaching.
 ///
 /// Nested ResizablePanelGroups (react-resizable-panels via the shadcn wrapper):
 ///   outer vertical  : top region (~72) + Assets bottom (~28)
-///   top horizontal  : left column (~20) + Viewport center
 ///   left vertical   : Hierarchy (~45) + tabbed panel (~55)
 ///
 /// Every Radix popover/menu and every resize handle lives in a non-viewport region,
@@ -17,6 +17,7 @@
 /// `onLayoutChanged` (the stable, internally-debounced callback) pings the layout
 /// bus so the ViewportPanel commits an exact resize-end bounds for the native window
 /// once a split-drag settles.
+import { useEffect, useRef, useState } from "react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -31,7 +32,50 @@ import { AssetsPanel } from "../panels/AssetsPanel";
 import { ViewportPanel } from "../panels/ViewportPanel";
 import { emitLayoutSettled } from "./layoutBus";
 
+const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_MIN_WIDTH = 240;
+const SIDEBAR_MAX_WIDTH = 520;
+const VIEWPORT_MIN_WIDTH = 520;
+
 export function Layout() {
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent): void => {
+      const drag = dragRef.current;
+      if (!drag) {
+        return;
+      }
+      setSidebarWidth(clampSidebarWidth(drag.startWidth + event.clientX - drag.startX));
+    };
+    const onPointerUp = (): void => {
+      if (!dragRef.current) {
+        return;
+      }
+      dragRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      emitLayoutSettled();
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, []);
+
+  const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    dragRef.current = { startX: event.clientX, startWidth: sidebarWidth };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
   return (
     <ResizablePanelGroup
       orientation="vertical"
@@ -39,8 +83,11 @@ export function Layout() {
       onLayoutChanged={emitLayoutSettled}
     >
       <ResizablePanel defaultSize={72} minSize={30} className="min-h-0">
-        <ResizablePanelGroup orientation="horizontal" onLayoutChanged={emitLayoutSettled}>
-          <ResizablePanel defaultSize={20} minSize={12} className="min-w-0">
+        <div className="flex h-full min-w-0">
+          <aside
+            className="min-h-0 flex-none bg-background"
+            style={{ width: `${sidebarWidth}px` }}
+          >
             <ResizablePanelGroup orientation="vertical" onLayoutChanged={emitLayoutSettled}>
               <ResizablePanel defaultSize={45} minSize={15} className="min-h-0 bg-background">
                 <HierarchyPanel />
@@ -50,12 +97,18 @@ export function Layout() {
                 <LeftBottomTabs />
               </ResizablePanel>
             </ResizablePanelGroup>
-          </ResizablePanel>
-          <ResizableHandle />
-          <ResizablePanel minSize={30} className="min-w-0 overflow-hidden">
+          </aside>
+          <div
+            className="relative flex w-px flex-none cursor-col-resize items-center justify-center bg-border after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            onPointerDown={beginSidebarResize}
+          />
+          <main className="min-w-0 flex-1 overflow-hidden">
             <ViewportPanel />
-          </ResizablePanel>
-        </ResizablePanelGroup>
+          </main>
+        </div>
       </ResizablePanel>
       <ResizableHandle />
       <ResizablePanel defaultSize={28} minSize={12} className="min-h-0 bg-background">
@@ -63,6 +116,14 @@ export function Layout() {
       </ResizablePanel>
     </ResizablePanelGroup>
   );
+}
+
+function clampSidebarWidth(width: number): number {
+  const max = Math.max(
+    SIDEBAR_MIN_WIDTH,
+    Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth - VIEWPORT_MIN_WIDTH),
+  );
+  return Math.min(Math.max(width, SIDEBAR_MIN_WIDTH), max);
 }
 
 /// The left-bottom dock node: ImGui tabs Inspector + Environment into one node
