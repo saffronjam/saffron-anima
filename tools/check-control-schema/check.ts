@@ -5,8 +5,8 @@
 // There are no named C++ DTO structs (every engine response is an ad-hoc nlohmann::json
 // literal), so this test is the ONLY drift guard between the wire and the schemas the TS
 // protocol is generated from. It also asserts the u64-id invariant: ids are emitted as
-// raw JSON integer literals (lossless on the wire), never quoted/float — the TS side types
-// them `string` (uuid.schema.json tsType) and must string-preserve-parse.
+// quoted decimal strings (uuid.schema.json), so a JS client's plain JSON.parse keeps full
+// precision even when an id exceeds 2^53.
 //
 // Zero runtime dependencies (a compact embedded validator) so it runs in the saffron-build
 // toolbox without a network/`bun install`. The engine needs a display to open its swapchain;
@@ -73,13 +73,18 @@ function validate(schema: any, value: any, path: string, errors: string[]): void
 }
 
 // ---- u64-on-the-wire assertion (raw bytes, pre-parse) ------------------------
-// Confirms big ids are emitted as raw integer literals (never quoted/float), so the wire
-// loses no precision. JS JSON.parse silently truncates >2^53, so we scan the raw text.
+// Confirms every id in the result payload is emitted as a quoted decimal string, so a JS
+// client's JSON.parse keeps full precision even past 2^53. A bare numeric (or float) token
+// is a regression: JSON.parse would silently truncate it. Scans only the result portion so
+// the envelope's numeric request-id echo isn't mistaken for an entity id.
 function assertRawU64(raw: string, label: string, errors: string[]): void {
-  for (const m of raw.matchAll(/"(?:id|mesh|albedoTexture|skyTexture)"\s*:\s*([^,}\s]+)/g)) {
+  const result = raw.slice(raw.indexOf('"result"'))
+  for (const m of result.matchAll(/"(?:id|mesh|albedoTexture|skyTexture)"\s*:\s*([^,}\s]+)/g)) {
     const tok = m[1]
-    if (!/^\d+$/.test(tok)) { errors.push(`${label}: id token '${tok}' is not a bare non-negative integer literal (quoted/float ids lose u64 precision)`); continue }
-    if (BigInt(tok).toString() !== tok) errors.push(`${label}: id token '${tok}' did not round-trip as BigInt`)
+    const quoted = /^"(\d+)"$/.exec(tok)
+    if (!quoted) { errors.push(`${label}: id token '${tok}' is not a quoted decimal string (an unquoted u64 loses precision through JSON.parse)`); continue }
+    const digits = quoted[1]
+    if (BigInt(digits).toString() !== digits) errors.push(`${label}: id token '${tok}' did not round-trip as BigInt`)
   }
 }
 
@@ -101,11 +106,12 @@ function call(cmd: string, params: Record<string, unknown> = {}): Promise<{ enve
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// Extract the first id inside the result payload AS A STRING from the raw bytes — never via
-// JSON.parse (which truncates u64 > 2^53). This is precisely the discipline the TS client
-// must follow; passing the string id back round-trips losslessly through resolveEntity.
+// Extract the first id inside the result payload as a string. Ids are quoted decimal
+// strings now, so a plain JSON.parse would also be lossless; the raw-bytes match keeps the
+// extraction independent of envelope shape. Passing the string id back round-trips through
+// resolveEntity exactly as a JS client would.
 function firstResultId(raw: string): string | undefined {
-  return raw.match(/"result"\s*:\s*[[{][\s\S]*?"id"\s*:\s*(\d+)/)?.[1]
+  return raw.match(/"result"\s*:\s*[[{][\s\S]*?"id"\s*:\s*"(\d+)"/)?.[1]
 }
 
 // ---- run ---------------------------------------------------------------------
@@ -154,6 +160,7 @@ async function main(): Promise<number> {
     await expect('get-selection', {}, 'selection.schema.json')
     if (cubeId !== undefined) {
       await expect('inspect', { entity: cubeId }, 'inspect-result.schema.json')
+      await expect('rename-entity', { entity: cubeId, name: 'Renamed Cube' }, 'entity-ref.schema.json')
       await expect('copy-entity', { entity: cubeId }, 'entity-ref.schema.json')
     }
     await expect('get-gizmo', {}, 'gizmo-state.schema.json')
