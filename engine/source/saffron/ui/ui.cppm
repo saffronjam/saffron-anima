@@ -498,7 +498,7 @@ namespace se
         VkFormat colorFormat = static_cast<VkFormat>(renderer.swapchain.format);
 
         ImGui_ImplVulkan_InitInfo init{};
-        init.ApiVersion = VK_API_VERSION_1_3;
+        init.ApiVersion = VK_API_VERSION_1_4;
         init.Instance = renderer.context.instance;
         init.PhysicalDevice = renderer.context.physicalDevice;
         init.Device = renderer.context.device;
