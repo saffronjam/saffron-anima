@@ -69,8 +69,8 @@ namespace se
         return dtoToJson(value);
     }
 
-    // Server-side billboard hit-test: the nearest light/camera entity whose screen-space
-    // glyph contains `mouse` (viewport pixels). Mirrors the overlay's ~12px glyph half-size.
+    // Server-side billboard hit-test: the nearest meshless light/camera entity whose
+    // screen-space glyph contains `mouse` (viewport pixels).
     auto pickBillboard(SceneEditContext& editor, const CameraView& cam, u32 width, u32 height, glm::vec2 mouse)
         -> Entity
     {
@@ -83,7 +83,7 @@ namespace se
         f32 best = half;
         auto test = [&](Entity e)
         {
-            if (!hasComponent<TransformComponent>(editor.scene, e))
+            if (!hasComponent<TransformComponent>(editor.scene, e) || hasComponent<MeshComponent>(editor.scene, e))
             {
                 return;
             }
@@ -105,8 +105,23 @@ namespace se
             }
         };
         forEach<PointLightComponent>(editor.scene, [&](Entity e, PointLightComponent&) { test(e); });
-        forEach<SpotLightComponent>(editor.scene, [&](Entity e, SpotLightComponent&) { test(e); });
-        forEach<CameraComponent>(editor.scene, [&](Entity e, CameraComponent&) { test(e); });
+        forEach<SpotLightComponent>(editor.scene,
+                                    [&](Entity e, SpotLightComponent&)
+                                    {
+                                        if (!hasComponent<PointLightComponent>(editor.scene, e))
+                                        {
+                                            test(e);
+                                        }
+                                    });
+        forEach<CameraComponent>(editor.scene,
+                                 [&](Entity e, CameraComponent&)
+                                 {
+                                     if (!hasComponent<PointLightComponent>(editor.scene, e) &&
+                                         !hasComponent<SpotLightComponent>(editor.scene, e))
+                                     {
+                                         test(e);
+                                     }
+                                 });
         return hit;
     }
 
@@ -229,6 +244,12 @@ namespace se
                 if (!result)
                 {
                     return Err(result.error());
+                }
+                // A raw Relationship write changes the durable parent uuid; relink so the
+                // caches follow (a cyclic parent is cut back to root with a warning).
+                if (row->name == "Relationship")
+                {
+                    relinkHierarchy(ctx.sceneEdit.scene);
                 }
                 ctx.sceneEdit.sceneVersion += 1;
                 return SetComponentResult{ row->name };
@@ -691,6 +712,10 @@ namespace se
                     }
                 }
                 getComponent<NameComponent>(scene, fresh).name = copyName;
+                // The round-trip duplicated the source's parent uuid (the copy joins the
+                // source's parent as a sibling); relink so the copy lands in its parent's
+                // children cache.
+                relinkHierarchy(scene);
                 ctx.sceneEdit.sceneVersion += 1;
                 setSelection(ctx.sceneEdit, fresh);
                 return entityRefDto(scene, fresh);
@@ -757,6 +782,12 @@ namespace se
                 if (!result)
                 {
                     return Err(result.error());
+                }
+                // A raw Relationship write changes the durable parent uuid; relink so the
+                // caches follow (a cyclic parent is cut back to root with a warning).
+                if (row->name == "Relationship")
+                {
+                    relinkHierarchy(ctx.sceneEdit.scene);
                 }
                 ctx.sceneEdit.sceneVersion += 1;
                 return SetComponentFieldResult{ row->name, params.field };
