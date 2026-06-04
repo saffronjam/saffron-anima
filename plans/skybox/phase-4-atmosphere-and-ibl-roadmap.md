@@ -27,8 +27,14 @@ This phase should not block the first usable skybox.
 >   panorama into the env cube via `EnvSource::Equirect` / `requestEnvBake`, then the existing
 >   irradiance/prefilter/BRDF chain runs; sky color routed into DDGI.
 >
-> What remains genuinely future: **reflection probes, procedural atmosphere LUTs, clouds,
-> time-of-day** (phases 6–8), plus the `.exr` / metadata leftovers noted above.
+> Reflection probes (phase 6) have since shipped — see `phase-6-reflection-probes.md`
+> (COMPLETED): per-entity local cubemap capture, the shared irradiance/prefilter convolve,
+> and a mesh set-8 nearest-probe blend over the global IBL fallback. **Procedural atmosphere
+> LUTs (phase 7) have since shipped** — see `phase-7-procedural-atmosphere.md` (COMPLETED):
+> the Hillaire-2020 transmittance/multi-scatter/sky-view LUT chain fills the env cube through
+> `EnvSource::Atmosphere` and re-bakes with the sun, driven by `set-atmosphere`. What remains
+> genuinely future: **clouds, time-of-day** (phase 8), plus the `.exr` / metadata leftovers
+> noted above.
 
 ## HDR Texture Support
 
@@ -135,20 +141,11 @@ Work items:
 
 ## Reflection Probes
 
-Reflection probes are entities/components because they are spatial.
-
-Future components:
-
-```cpp
-struct ReflectionProbeComponent
-{
-    f32 influenceRadius = 10.0f;
-    f32 intensity = 1.0f;
-    bool boxProjection = false;
-};
-```
-
-Probe rendering should be separate from global sky. The global sky becomes the fallback probe.
+DONE — see `phase-6-reflection-probes.md` (COMPLETED). Reflection probes are
+entities/components because they are spatial; `ReflectionProbeComponent` carries
+`influenceRadius`/`intensity`/`boxProjection`/`boxExtent`. Probe capture is separate from
+the global sky, and the global IBL is the fallback probe for meshes outside every influence
+sphere.
 
 ## Procedural Atmosphere
 
@@ -214,7 +211,7 @@ This should be a scene system or editor tool, not baked into the renderer.
 5. Diffuse SH irradiance. — DONE as an irradiance cubemap instead (`ibl_irradiance.slang`)
 6. PBR material model. — DONE (lighting plan phase 1)
 7. Specular IBL. — DONE (lighting plan phase 2)
-8. Reflection probes. — future (phase 6)
-9. Procedural atmosphere. — future (phase 7)
+8. Reflection probes. — DONE (phase 6, `phase-6-reflection-probes.md`)
+9. Procedural atmosphere. — DONE (phase 7, `phase-7-procedural-atmosphere.md`)
 10. Clouds and time of day. — future (phase 8)
 

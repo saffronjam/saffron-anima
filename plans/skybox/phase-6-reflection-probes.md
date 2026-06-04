@@ -1,6 +1,16 @@
 # Phase 6: Reflection Probes
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
+
+Shipped per this plan (`d709c2f`): `ReflectionProbeComponent` registered through
+`registerComponent` (save/load + inspector for free), per-probe cube state in
+`ReflectionProbes`, on-demand 6-face `captureReflectionProbe` + the verbatim
+`ibl_irradiance`/`ibl_prefilter` convolve, the mesh set-8 nearest-probe blend with box
+projection, the `add-entity reflection-probe` preset, and `set-probes`/`recapture-probes`/
+`list-probes` control commands with their schemas + regenerated protocol. Verified: engine
+builds green in the toolbox (`cmake --build build/debug -j1`), the editor `bun run check`
+typechecks, and zero probes leaves the mesh ambient byte-identical to the global IBL
+fallback (the `ambientColor.w` probe-count gate).
 
 ## Goal
 

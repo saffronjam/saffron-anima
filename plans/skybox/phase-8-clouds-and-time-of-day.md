@@ -1,6 +1,11 @@
 # Phase 8: Clouds And Time Of Day
 
-**Status:** NOT STARTED
+**Status:** SKIPPED — deliberately deferred (2026-06-04) when phases 6–7 were implemented.
+Clouds are look-dev-bound: headless gates can prove they render, not that they look right, so
+building them before the atmosphere can be tuned live on a display risks a technically-green
+visual rework. Time-of-day is a thin scene/editor animator over the phase-7 atmosphere and is
+best designed after scrubbing its parameters interactively. Revisit once the atmosphere has
+had a live tuning pass; the plan below remains the starting point.
 
 ## Goal
 
@@ -24,9 +29,9 @@ deferred.
 
 ## Dependencies
 
-- **Phase 7 (procedural atmosphere)** is a hard prerequisite for cloud *lighting*: clouds read
-  the transmittance LUT (sun extinction toward the cloud) + sky-view LUT (ambient/scattered
-  sky color). Until phase 7 lands, a degraded cloud build can fall back to the procedural
+- **Phase 7 (procedural atmosphere)** — shipped (COMPLETED) — is a hard prerequisite for cloud
+  *lighting*: clouds read the transmittance LUT (sun extinction toward the cloud) + sky-view LUT
+  (ambient/scattered sky color). A degraded cloud build can still fall back to the procedural
   `SkygenParams` sun (`renderer_types.cppm:721-726`) — usable but not energy-coherent.
 - **Phase 3 (on-demand IBL re-bake)** — ToD reuses `requestSkyBake` (`renderer_lighting.cpp:189-200`)
   and its consumption in `beginFrameGraph` (`renderer.cppm:667-678`). Already shipped; ToD only
@@ -324,8 +329,8 @@ it writes, all into existing state:
    re-bake** (`renderer.cppm:667-678`) — ToD writes nothing renderer-side for the sky/IBL.
 3. **Sun color + intensity** from `time` (day/dusk/night gradient): write
    `DirectionalLightComponent.color` (`scene.cppm:79`) + `.intensity` (`scene.cppm:80`).
-4. **Atmosphere parameters** (when phase 7 lands): write the `AtmosphereSettings` that phase 7
-   adds to `SceneEnvironment` (sun-disk/turbidity vary with elevation) so the sky LUTs rebuild.
+4. **Atmosphere parameters** (phase 7, shipped): write the `AtmosphereSettings` that phase 7
+   added to `SceneEnvironment` (sun-disk/turbidity vary with elevation) so the sky LUTs rebuild.
 5. **Exposure**: drive `setExposure(renderer, ev)` (`renderer.cppm:1609`) from a ToD curve
    (brighter night EV). Reuse `SceneEnvironment.exposure` (`scene.cppm:218`, currently
    reserved) as the value ToD writes — i.e. ToD finally wires the reserved field by calling

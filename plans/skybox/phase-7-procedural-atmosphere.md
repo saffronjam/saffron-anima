@@ -1,6 +1,16 @@
 # Phase 7: Procedural Atmosphere
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
+
+Shipped the first-target Hillaire-2020 LUT chain — `atmos_transmittance`/`atmos_multiscatter`/
+`atmos_skyview`/`atmos_skygen` baked inside `bakeEnvironment` behind an `EnvSource` switch, fed by
+`AtmosphereSettings` (scene) → `AtmosphereParams` (renderer) and re-baked through the existing
+sun-following exact-compare gate, plus the `set-atmosphere` control command (schema in
+`environment.schema.json`) and the `Atmosphere` editor panel section. Verified green: `-j1` toolbox
+build, headless A/B screenshots (atmosphere differs substantially from the gradient and restores it
+bit-for-bit when disabled), `atmosphere` block round-trips through save/reload, and the engine log is
+validation-clean. Later increments (aerial perspective, sky.slang direct sky-view sampling, higher
+multi-scatter precision) remain scoped in the steps below.
 
 ## Goal
 

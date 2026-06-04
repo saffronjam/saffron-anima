@@ -52,7 +52,22 @@ work; phase 4 stays a roadmap.** Each phase file below has been updated in place
 > equirect→cube IBL re-bake, reflection probes, procedural-atmosphere LUTs, clouds, time-of-day);
 > routing the environment sky color into the off-by-default DDGI is also deferred there. Plan
 > files are kept until merged (this branch is unpushed); delete after merge per the convention
-> above.
+> above. (Procedural-atmosphere LUTs now shipped in phase 7 — see the phase-7 note below.)
+>
+> **PHASE 6 COMPLETED (reflection probes, `d709c2f`).** A spatial `ReflectionProbeComponent`
+> captures a *local* cubemap on demand, prefilters it with the shipped IBL convolution, and
+> blends its specular over the global IBL fallback at mesh set 8 (zero probes = byte-identical
+> output). Driven by `set-probes`/`recapture-probes`/`list-probes` + the `add-entity
+> reflection-probe` preset; documented at `docs/.../image-based-lighting/reflection-probes.md`.
+> See `phase-6-reflection-probes.md`.
+>
+> **PHASE 7 COMPLETED (procedural atmosphere).** The Hillaire-2020 LUT chain
+> (`atmos_transmittance`/`atmos_multiscatter`/`atmos_skyview`/`atmos_skygen`) fills the env cube
+> through an `EnvSource::Atmosphere` switch in `bakeEnvironment`, driven by `AtmosphereSettings`
+> and re-baked with the sun via the existing exact-compare gate; `set-atmosphere` + the editor
+> `Atmosphere` panel section drive it, documented at
+> `docs/.../image-based-lighting/procedural-atmosphere.md`. See `phase-7-procedural-atmosphere.md`.
+> Phase 8 (clouds, time-of-day) stays future in `phase-4-atmosphere-and-ibl-roadmap.md`.
 >
 > **Fixed a pre-existing teardown leak (commit `7243ca4`):** a VMA "allocations were not freed
 > before destruction" assertion was aborting the process at *exit* (SIGABRT). Root cause (from
@@ -136,5 +151,7 @@ Frostbite treats sky, atmosphere, and clouds as physically based lighting system
 - `phase-1-scene-environment.md`: scene data model, serialization, and editor-facing settings.
 - `phase-2-visible-skybox.md`: renderer API, shaders, pipeline, and render graph integration.
 - `phase-3-lighting-integration.md`: ambient color, sky-driven lighting, and first IBL steps.
-- `phase-4-atmosphere-and-ibl-roadmap.md`: longer-term physically based atmosphere, reflections, clouds, and probes.
+- `phase-4-atmosphere-and-ibl-roadmap.md`: longer-term roadmap — clouds and time-of-day remain future (reflection probes shipped in phase 6, procedural atmosphere in phase 7).
+- `phase-6-reflection-probes.md`: spatial reflection probes — local cubemap capture, prefilter, and nearest-probe blend over the global IBL fallback (COMPLETED).
+- `phase-7-procedural-atmosphere.md`: physically based atmosphere (Hillaire 2020) — a transmittance/multi-scatter/sky-view LUT chain that fills the env cube as a richer source than the gradient, re-baked with the sun (COMPLETED).
 
