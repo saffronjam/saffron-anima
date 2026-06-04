@@ -1,59 +1,58 @@
 # Saffron.Control
 
-The control plane: a JSON-over-unix-socket server that lets the Tauri editor (and the
-`se` CLI) drive and inspect the running host. Module `Saffron.Control`, partition
-`:Command`, namespace `se`. Uses classic `#include` in the global module fragment and
-does **not** `import std`.
+The control plane: a JSON-over-unix-socket server that lets the Tauri editor and the `se` CLI
+drive and inspect the running host. Module `Saffron.Control`, partitions `:Command` and `:Dto`,
+namespace `se`. Uses classic `#include` in the global module fragment and does **not** `import std`.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `command.cppm` | Partition `:Command`. The public types: `CommandTraits`, `CommandRegistry`, `EngineContext` (borrowed `{window, renderer, sceneEdit, assets}`), `ControlClient`, `ControlServer`, `ControlContext`, plus `registerCommand`. |
-| `control.cppm` | Outer module, re-exports `:Command`. |
+| `command.cppm` | Partition `:Command`: command registry, `EngineContext`, typed `registerCommand<Params, Result>`, selectors, control context handles. |
+| `control_dto.cppm` | Partition `:Dto`: DTO source of truth for command params/results and wire helper types. |
+| `control_dto_serde.generated.cpp` | Generated parse/serialize functions for DTOs. Do not edit by hand. |
+| `control.cppm` | Outer module, re-exports partitions. |
 | `control_server.cpp` | Socket setup, dispatch, the per-frame non-blocking drain. |
-| `control_commands_render.cpp` | Render stats, AA/clustering/GI toggles, `attach-native-viewport` / `resize-native-viewport` (the X11 reparent). |
-| `control_commands_scene.cpp` | Entity lifecycle, components, selection, picking, camera, gizmo, environment, `dump-schema`. |
-| `control_commands_asset.cpp` | Import, catalog, thumbnails, project/scene save & load. |
+| `control_commands_render.cpp` | Render stats, AA/clustering/GI toggles, native viewport bridge commands. |
+| `control_commands_scene.cpp` | Entity lifecycle, components, selection, picking, camera, gizmo, environment. |
+| `control_commands_asset.cpp` | Import, catalog, thumbnails, project/scene save and load. |
 
 ## Protocol
 
-Newline-delimited JSON over a unix socket. Path resolution: `SAFFRON_CONTROL_SOCK` if
-set, else `$XDG_RUNTIME_DIR/saffron-control.sock`, else `/tmp/saffron-control-<uid>.sock`
-(mode 0600).
+Newline-delimited JSON over a unix socket. Path resolution: `SAFFRON_CONTROL_SOCK` if set, else
+`$XDG_RUNTIME_DIR/saffron-control.sock`, else `/tmp/saffron-control-<uid>.sock` (mode 0600).
 
-```
-request:  { "id": <opt>, "cmd": "<name>", "params": { … } }\n
-response: { "id": <echoed>, "ok": true|false, "result": { … } | "error": "<msg>" }\n
+```json
+request:  { "id": <opt>, "cmd": "<name>", "params": { ... } }
+response: { "id": <echoed>, "ok": true|false, "result": { ... } | "error": "<msg>" }
 ```
 
-The envelope is defined by `schemas/control/envelope.schema.json`. The server is drained
-once per frame and **never blocks** (non-blocking accept/read/send).
+The envelope is defined by `schemas/control/envelope.schema.json`. Command params/results are
+defined by DTOs and generated outward to C++ serde, TypeScript, OpenRPC, and the manifest.
 
 ## Adding a command
 
+1. Declare params and result DTO structs in `control_dto.cppm`.
+2. Add the command to `tools/gen-control-dto/gen.ts`, including its fixture or skip reason for the
+   manifest-driven contract test.
+3. Register it with the typed overload:
+
 ```cpp
-registerCommand(registry, "my-command", "one-line help",
-  [](EngineContext& ctx, const json& params) -> Result<json>
-  {
-    // ctx.{window,renderer,sceneEdit,assets} are borrowed — valid only for this call.
-    return json{ {"ok-field", 1} };   // success payload
-    // return Err("why it failed");   // failure
-  });
+registerCommand<MyParams, MyResult>(registry, "my-command", "one-line help",
+    [](EngineContext& ctx, const MyParams& params) -> Result<MyResult>
+    {
+        return MyResult{ ... };
+    });
 ```
 
-Conventions to follow:
+4. Run `bun run tools/gen-control-dto/gen.ts` and commit the generated serde, TypeScript, OpenRPC,
+   and manifest outputs.
 
-- **Parameters accept named or positional form.** Use the `positionalOr(params, name,
-  index)` helper so `--flag value` and bare positional args both work (the latter arrive
-  in `params["args"]`).
-- **Entity selectors resolve a string id, a number, or an exact name** via `resolveEntity`
-  (id first — it is stable across reloads). IDs are u64; emit them on the wire as **decimal
-  strings** (`uuidToJson`) so a JS client keeps full precision past 2^53, and read them with
-  `jsonU64`, which accepts a string or a number.
-- **Schema-first contract.** Anything new in the wire format gets a hand-authored schema
-  in `schemas/control/` (see that directory's `AGENTS.md`). `dump-schema` must keep
-  reflecting the live component/environment/render-stats DTOs, and the contract test in
-  `tools/check-control-schema/` validates live output against the schemas.
-- **Keep the `se` CLI usable.** A command that adds drivable/inspectable state should also
-  be reachable from `tools/se` — that is part of "done" per the root `AGENTS.md`.
+Conventions:
+
+- DTO field declaration order is the positional CLI argument order.
+- Use `EntitySelector` / `AssetSelector` for id-or-name inputs.
+- IDs are `WireUuid` at the DTO boundary and are emitted as decimal JSON strings. The contract test
+  checks raw bytes so ids never regress to JSON numbers.
+- Keep the `se` CLI usable. A command that adds drivable or inspectable state should also be
+  reachable from `tools/se`.

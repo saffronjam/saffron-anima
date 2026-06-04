@@ -1,37 +1,24 @@
-# schemas/control — the wire contract
+# schemas/control
 
-These hand-authored JSON Schemas (draft 2020-12) are the **single source of truth** for the
-control-plane wire format between the engine and the editor. They are not documentation —
-they are the origin that downstream artifacts are generated from and validated against.
+This directory is no longer the source of truth for command payloads. The control wire contract is
+DTO-first:
 
-## What flows from here
+- source DTOs live in `engine/source/saffron/control/control_dto.cppm`;
+- `tools/gen-control-dto/gen.ts` emits the generated OpenRPC document and command manifest here;
+- `tools/check-control-schema/check.ts` validates live command results against the generated
+  OpenRPC schemas and compares live `help` with the generated manifest.
 
-- **Editor types:** `editor/scripts/gen-protocol.ts` bundles every `*.schema.json` into one
-  `$defs` map, rewrites cross-file `$ref`s to internal refs, and compiles to
-  `editor/src/protocol/index.ts` via `json-schema-to-typescript`. Run with
-  `bun run gen:protocol` (also part of `bun run check` / `bun run build`).
-- **Contract test:** `tools/check-control-schema/` spawns live `se` commands and validates
-  the engine's actual output against these schemas. It is a stage of the `tools/ci/check.sh`
-  gate, so a schema that drifts from the engine fails the build.
+## Hand-authored file
+
+Only `envelope.schema.json` is hand-authored here. It describes the dispatch wrapper:
+`{id?, ok, result? | error?}`. Command result payloads are generated from DTO structs, not
+authored as sibling schema files.
 
 ## Editing rules
 
-- **Edit the schema, then regenerate — never hand-edit `editor/src/protocol/index.ts`.**
-- `title` is the generated TypeScript type name; keep it PascalCase and stable.
-- Cross-schema references use `$ref` to the sibling file (e.g. `"uuid.schema.json"`); the
-  codegen rewrites them to `#/$defs/<Title>`.
-- Prefer `additionalProperties: false` (strict) so drift is caught.
-- u64 IDs are represented as **decimal strings** (`uuid.schema.json`: `type: "string"`,
-  pattern `^[0-9]+$`). Ids span the full u64 range, past JS's 2^53, so a string is the only
-  form that survives `JSON.parse` without precision loss.
-- When you add or change an engine DTO, update its schema here in the same change, and make
-  sure the matching `Saffron.Control` command (and `dump-schema`, where relevant) still
-  produces conforming output.
-
-## Files
-
-Shared types: `uuid`, `vec3`, `vec4`, `transform`, `entity-ref`, `envelope`.
-Components: `name`, `mesh`, `material`, `camera`, `directional-light`, `point-light`,
-`spot-light`, `environment`.
-Results: `entity-list`, `selection`, `inspect-result`, `components`, `asset-entry`,
-`asset-list`, `thumbnail`, `render-stats`, `gizmo-state`, `editor-camera`.
+- Do not add new hand-authored payload schemas here.
+- Add or change command params/results in `control_dto.cppm`, then run
+  `bun run tools/gen-control-dto/gen.ts`.
+- Commit regenerated `openrpc.generated.json` and `command-manifest.generated.json`.
+- If a command cannot be exercised by the live contract test, add its skip reason or fixture in the
+  generator manifest source, not in the test body.
