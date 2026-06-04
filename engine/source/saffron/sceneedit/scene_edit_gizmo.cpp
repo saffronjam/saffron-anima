@@ -40,13 +40,13 @@ namespace se
             return {};
         }
         const glm::vec3 ndc3 = glm::vec3(clip) / clip.w;
-        if (ndc3.z < -1.0f || ndc3.z > 1.0f)
+        if (ndc3.z < 0.0f || ndc3.z > 1.0f)
         {
             return {};
         }
         return GizmoProjection{
             .pixel = glm::vec2{ (ndc3.x * 0.5f + 0.5f) * static_cast<f32>(width),
-                                (ndc3.y * 0.5f + 0.5f) * static_cast<f32>(height) },
+                                (1.0f - (ndc3.y * 0.5f + 0.5f)) * static_cast<f32>(height) },
             .ndc = glm::vec2{ ndc3.x, ndc3.y },
             .visible = true
         };
@@ -74,6 +74,68 @@ namespace se
         }
         const f32 t = std::clamp(glm::dot(p - a, ab) / denom, 0.0f, 1.0f);
         return glm::length(p - (a + ab * t));
+    }
+
+    auto pointInConvexQuad(glm::vec2 p, const std::array<GizmoProjection, 4>& quad) -> bool
+    {
+        for (const GizmoProjection& q : quad)
+        {
+            if (!q.visible)
+            {
+                return false;
+            }
+        }
+        auto edge = [](glm::vec2 a, glm::vec2 b, glm::vec2 c) -> f32
+        {
+            const glm::vec2 ab = b - a;
+            const glm::vec2 ac = c - a;
+            return ab.x * ac.y - ab.y * ac.x;
+        };
+        bool hasNeg = false;
+        bool hasPos = false;
+        for (u32 i = 0; i < 4; i = i + 1)
+        {
+            const f32 e = edge(quad[i].pixel, quad[(i + 1) % 4].pixel, p);
+            hasNeg = hasNeg || e < 0.0f;
+            hasPos = hasPos || e > 0.0f;
+        }
+        return !(hasNeg && hasPos);
+    }
+
+    auto hitRotateRing(const CameraView& cam, u32 width, u32 height, glm::vec2 mouse, glm::vec3 origin,
+                       const std::array<glm::vec3, 3>& axes, f32 radius) -> NativeGizmoHandle
+    {
+        constexpr u32 segments = 96;
+        const std::array<NativeGizmoHandle, 3> handles{ NativeGizmoHandle::X, NativeGizmoHandle::Y, NativeGizmoHandle::Z };
+        NativeGizmoHandle hit = NativeGizmoHandle::None;
+        f32 best = 9.0f;
+        for (u32 axis = 0; axis < 3; axis = axis + 1)
+        {
+            const glm::vec3 n = axes[axis];
+            glm::vec3 a = glm::normalize(glm::cross(n, glm::vec3{ 0.0f, 1.0f, 0.0f }));
+            if (glm::length(a) < 0.001f)
+            {
+                a = glm::normalize(glm::cross(n, glm::vec3{ 1.0f, 0.0f, 0.0f }));
+            }
+            const glm::vec3 b = glm::normalize(glm::cross(n, a));
+            GizmoProjection prev{};
+            for (u32 i = 0; i <= segments; i = i + 1)
+            {
+                const f32 t = static_cast<f32>(i) / static_cast<f32>(segments) * glm::two_pi<f32>();
+                const GizmoProjection cur = viewportProject(cam, width, height, origin + (a * std::cos(t) + b * std::sin(t)) * radius);
+                if (i > 0 && prev.visible && cur.visible)
+                {
+                    const f32 d = pointSegmentDistance(mouse, prev.pixel, cur.pixel);
+                    if (d < best)
+                    {
+                        best = d;
+                        hit = handles[axis];
+                    }
+                }
+                prev = cur;
+            }
+        }
+        return hit;
     }
 
     auto axisColor(NativeGizmoHandle handle, const NativeGizmoState& gizmo) -> glm::vec4
@@ -124,6 +186,11 @@ namespace se
         const f32 axisLen = std::max(0.75f, distance * 0.22f);
         const std::array<NativeGizmoHandle, 3> handles{ NativeGizmoHandle::X, NativeGizmoHandle::Y, NativeGizmoHandle::Z };
 
+        if (editor.nativeGizmo.mode == NativeGizmoMode::Rotate)
+        {
+            return hitRotateRing(cam, width, height, mouse, transform.translation, axes, axisLen * 0.72f);
+        }
+
         if (editor.nativeGizmo.mode == NativeGizmoMode::Scale && glm::length(mouse - origin.pixel) < 12.0f)
         {
             return NativeGizmoHandle::Uniform;
@@ -144,18 +211,30 @@ namespace se
 
         if (editor.nativeGizmo.mode == NativeGizmoMode::Translate)
         {
-            const std::array<std::pair<NativeGizmoHandle, glm::vec2>, 3> planeCenters{
-                std::pair{ NativeGizmoHandle::XY, glm::vec2{ 0.24f, 0.24f } },
-                std::pair{ NativeGizmoHandle::YZ, glm::vec2{ 0.48f, 0.24f } },
-                std::pair{ NativeGizmoHandle::XZ, glm::vec2{ 0.24f, 0.48f } }
+            constexpr f32 quadMin = 0.5f;
+            constexpr f32 quadMax = 0.8f;
+            const std::array<std::pair<NativeGizmoHandle, std::pair<u32, u32>>, 3> planes{
+                std::pair{ NativeGizmoHandle::YZ, std::pair{ 1u, 2u } },
+                std::pair{ NativeGizmoHandle::XZ, std::pair{ 0u, 2u } },
+                std::pair{ NativeGizmoHandle::XY, std::pair{ 0u, 1u } }
             };
-            for (const auto& [handle, uv] : planeCenters)
+            for (const auto& [handle, axisPair] : planes)
             {
-                const glm::vec3 p = transform.translation +
-                                    axes[handle == NativeGizmoHandle::YZ ? 1 : 0] * axisLen * uv.x +
-                                    axes[handle == NativeGizmoHandle::XY ? 1 : 2] * axisLen * uv.y;
-                const GizmoProjection center = viewportProject(cam, width, height, p);
-                if (center.visible && glm::all(glm::lessThan(glm::abs(mouse - center.pixel), glm::vec2{ 12.0f })))
+                const std::array<GizmoProjection, 4> corners{
+                    viewportProject(cam, width, height,
+                                    transform.translation + axes[axisPair.first] * axisLen * quadMin +
+                                        axes[axisPair.second] * axisLen * quadMin),
+                    viewportProject(cam, width, height,
+                                    transform.translation + axes[axisPair.first] * axisLen * quadMin +
+                                        axes[axisPair.second] * axisLen * quadMax),
+                    viewportProject(cam, width, height,
+                                    transform.translation + axes[axisPair.first] * axisLen * quadMax +
+                                        axes[axisPair.second] * axisLen * quadMax),
+                    viewportProject(cam, width, height,
+                                    transform.translation + axes[axisPair.first] * axisLen * quadMax +
+                                        axes[axisPair.second] * axisLen * quadMin)
+                };
+                if (pointInConvexQuad(mouse, corners))
                 {
                     return handle;
                 }
