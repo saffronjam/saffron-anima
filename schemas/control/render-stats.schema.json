@@ -8,6 +8,9 @@
     "drawCalls": { "type": "integer" },
     "batches": { "type": "integer" },
     "instances": { "type": "integer" },
+    "frameMs": { "type": "number" },
+    "fps": { "type": "number" },
+    "gpuMs": { "type": "number" },
     "blasCount": { "type": "integer" },
     "pipelines": { "type": "integer" },
     "clustered": { "type": "boolean" },
@@ -25,6 +28,6 @@
     "exposureEv": { "type": "number" },
     "aa": { "enum": ["off", "fxaa", "taa", "msaa2", "msaa4", "msaa8"] }
   },
-  "required": ["drawCalls", "batches", "instances", "blasCount", "pipelines", "clustered", "depthPrepass", "shadows", "ibl", "ssao", "contactShadows", "ssgi", "ddgi", "rtSupported", "rtShadows", "restir", "hdr", "exposureEv", "aa"],
+  "required": ["drawCalls", "batches", "instances", "frameMs", "fps", "gpuMs", "blasCount", "pipelines", "clustered", "depthPrepass", "shadows", "ibl", "ssao", "contactShadows", "ssgi", "ddgi", "rtSupported", "rtShadows", "restir", "hdr", "exposureEv", "aa"],
   "additionalProperties": false
 }
