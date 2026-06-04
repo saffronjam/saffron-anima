@@ -66,6 +66,10 @@ export interface ReflectionProbe {
   boxExtent: Vec3;
 }
 
+export interface Relationship {
+  parent: WireUuid;
+}
+
 export interface AtmosphereSettingsDto {
   enabled: boolean;
   planetRadius: number;
@@ -90,6 +94,7 @@ export interface Components {
   PointLight?: PointLight;
   SpotLight?: SpotLight;
   ReflectionProbe?: ReflectionProbe;
+  Relationship?: Relationship;
 }
 
 export type ComponentBody =
@@ -102,6 +107,7 @@ export type ComponentBody =
   | PointLight
   | SpotLight
   | ReflectionProbe
+  | Relationship
   | Record<string, unknown>;
 
 export interface EntityRef {
@@ -532,6 +538,7 @@ export interface ImportTextureResult {
 
 export interface AssetList {
   assets: AssetEntryDto[];
+  folders: string[];
 }
 
 export interface AssetEntryDto {
@@ -539,6 +546,7 @@ export interface AssetEntryDto {
   name: string;
   type: "mesh" | "texture" | "other";
   path: string;
+  folder?: string;
 }
 
 export interface RenameAssetParams {
@@ -549,6 +557,50 @@ export interface RenameAssetParams {
 export interface AssetRef {
   id: WireUuid;
   name: string;
+  folder?: string;
+}
+
+export interface CreateAssetFolderParams {
+  folder: string;
+}
+
+export interface RenameAssetFolderParams {
+  folder: string;
+  name: string;
+}
+
+export interface DeleteAssetFolderParams {
+  folder: string;
+}
+
+export interface MoveAssetParams {
+  asset: WireUuid | string | number;
+  folder?: string;
+}
+
+export interface AssetUsagesParams {
+  asset: WireUuid | string | number;
+}
+
+export interface AssetUsagesResult {
+  usages: AssetUsageDto[];
+}
+
+export interface AssetUsageDto {
+  entity?: WireUuid;
+  entityName?: string;
+  slot: string;
+}
+
+export interface DeleteAssetParams {
+  asset: WireUuid | string | number;
+}
+
+export interface DeleteAssetResult {
+  id: WireUuid;
+  name: string;
+  cleared: AssetUsageDto[];
+  fileDeleted: boolean;
 }
 
 export interface AssignAssetParams {
@@ -655,6 +707,12 @@ export interface CommandParamsMap {
   "import-texture": PathParams;
   "list-assets": EmptyParams;
   "rename-asset": RenameAssetParams;
+  "create-asset-folder": CreateAssetFolderParams;
+  "rename-asset-folder": RenameAssetFolderParams;
+  "delete-asset-folder": DeleteAssetFolderParams;
+  "move-asset": MoveAssetParams;
+  "asset-usages": AssetUsagesParams;
+  "delete-asset": DeleteAssetParams;
   "assign-asset": AssignAssetParams;
   "save-scene": PathParams;
   "load-scene": PathParams;
@@ -722,6 +780,12 @@ export interface CommandResultMap {
   "import-texture": ImportTextureResult;
   "list-assets": AssetList;
   "rename-asset": AssetRef;
+  "create-asset-folder": AssetList;
+  "rename-asset-folder": AssetList;
+  "delete-asset-folder": AssetList;
+  "move-asset": AssetRef;
+  "asset-usages": AssetUsagesResult;
+  "delete-asset": DeleteAssetResult;
   "assign-asset": AssignAssetResult;
   "save-scene": PathResult;
   "load-scene": PathResult;
