@@ -102,6 +102,20 @@ export namespace se
         f32 outerAngle = 30.0f;  // zero past this half-angle
     };
 
+    // A reflection probe at the entity's Transform translation. Captures a local cubemap of
+    // the scene, prefilters it like the global IBL, and supplies specular ambient to meshes
+    // inside its influence sphere (influenceRadius). Outside every probe, meshes fall back to
+    // the global IBL. boxProjection re-projects the prefiltered reflection ray against the
+    // influence box for parallax-correct local reflections (off = infinite-distance cube).
+    struct ReflectionProbeComponent
+    {
+        f32 influenceRadius = 10.0f;   // sphere of effect around the probe origin
+        f32 intensity = 1.0f;          // probe specular multiplier
+        bool boxProjection = false;    // parallax-correct against the influence box
+        glm::vec3 boxExtent{ 10.0f };  // half-extents for box projection (used when boxProjection)
+        bool dirty = true;             // capture pending; set on add/edit, cleared after capture (runtime only)
+    };
+
     auto transformMatrix(const TransformComponent& transform) -> glm::mat4
     {
         glm::mat4 translation = glm::translate(glm::mat4(1.0f), transform.translation);

@@ -16,9 +16,11 @@ module;
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <expected>
 #include <format>
@@ -47,6 +49,68 @@ namespace se
     // Host-mapped vertex buffer for the editor overlay (grown per frame by the overlay pass).
     auto makeMappedVertexBuffer(Renderer& renderer, vk::DeviceSize bytes) -> Result<Ref<Buffer>>;
 
+    namespace
+    {
+        // Funnels loader + validation-layer messages into the engine log as one line:
+        // `[saffron:vulkan] <level>: [<kind>] <id>: <message>`. Two known-noise classes
+        // are dropped unless SAFFRON_VK_VERBOSE=1: general-only warnings (loader ICD
+        // probing, e.g. a skipped driver) and OutputNotConsumed performance warnings —
+        // depth-only and sky pipelines bind the full mesh vertex layout by design.
+        VKAPI_ATTR VkBool32 VKAPI_CALL onVulkanMessage(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                                                       VkDebugUtilsMessageTypeFlagsEXT type,
+                                                       const VkDebugUtilsMessengerCallbackDataEXT* data,
+                                                       void* /*userData*/)
+        {
+            static const bool verbose = std::getenv("SAFFRON_VK_VERBOSE") != nullptr;
+            std::string_view id;
+            if (data->pMessageIdName != nullptr)
+            {
+                id = data->pMessageIdName;
+            }
+            const bool loaderChatter = type == VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT &&
+                                       severity < VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+            if (!verbose && (loaderChatter || id.contains("OutputNotConsumed")))
+            {
+                return VK_FALSE;
+            }
+
+            LogLevel level = LogLevel::Info;
+            if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0)
+            {
+                level = LogLevel::Error;
+            }
+            else if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0)
+            {
+                level = LogLevel::Warn;
+            }
+
+            std::string_view kind = "general";
+            if ((type & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) != 0)
+            {
+                kind = "validation";
+            }
+            else if ((type & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT) != 0)
+            {
+                kind = "performance";
+            }
+
+            std::string_view message;
+            if (data->pMessage != nullptr)
+            {
+                message = data->pMessage;
+            }
+            if (id.empty())
+            {
+                log(level, "vulkan", std::format("[{}] {}", kind, message));
+            }
+            else
+            {
+                log(level, "vulkan", std::format("[{}] {}: {}", kind, id, message));
+            }
+            return VK_FALSE;
+        }
+    }
+
     auto newRenderer(Window& window) -> Result<Renderer>
     {
         Renderer renderer;
@@ -61,7 +125,7 @@ namespace se
             .set_engine_name("Saffron Engine")
             .require_api_version(1, 4, 0)
             .request_validation_layers(true)
-            .use_default_debug_messenger();
+            .set_debug_callback(onVulkanMessage);
         for (u32 i = 0; i < sdlExtensionCount; i = i + 1)
         {
             instanceBuilder.enable_extension(sdlExtensions[i]);
@@ -291,6 +355,9 @@ namespace se
         {
             return Err(baked.error());
         }
+        // Seed every reflection-probe slot (mesh set 8) with the global IBL cubes so the bind is
+        // valid before any probe is captured; real probes overwrite their slot on capture.
+        seedReflectionProbeSet(renderer);
         setDirectionalLight(renderer, glm::vec3(-0.5f, -1.0f, -0.3f), glm::vec3(1.0f), 1.0f, 0.15f);
 
         const std::array<u8, 4> white{ 255, 255, 255, 255 };
@@ -415,6 +482,40 @@ namespace se
         renderer.ibl.prefilteredCube.reset();
         renderer.ibl.brdfLut.reset();
         renderer.ibl.envPanorama.reset();
+        // Reflection probes: free each slot's cubes + per-face views, the metadata SSBO, and
+        // the sampler before the allocator/device (the lazily-allocated probe cubes are the
+        // easy-to-miss VMA-leak source — release them here, mirroring rt.frameMeshes).
+        for (ReflectionProbe& probe : renderer.reflection.probes)
+        {
+            for (vk::ImageView& face : probe.faceViews)
+            {
+                if (face)
+                {
+                    renderer.context.device.destroyImageView(face);
+                    face = nullptr;
+                }
+            }
+            probe.envCube.reset();
+            probe.envDepth.reset();
+            probe.irradianceCube.reset();
+            probe.prefilteredCube.reset();
+        }
+        renderer.reflection.metaBuffer.reset();
+        if (renderer.reflection.sampler)
+        {
+            renderer.context.device.destroySampler(renderer.reflection.sampler);
+            renderer.reflection.sampler = nullptr;
+        }
+        if (renderer.reflection.meshLayout)
+        {
+            renderer.context.device.destroyDescriptorSetLayout(renderer.reflection.meshLayout);
+            renderer.reflection.meshLayout = nullptr;
+        }
+        if (renderer.descriptors.emptyLayout)
+        {
+            renderer.context.device.destroyDescriptorSetLayout(renderer.descriptors.emptyLayout);
+            renderer.descriptors.emptyLayout = nullptr;
+        }
         renderer.targets.msaaColor.reset();
         renderer.targets.msaaDepth.reset();
         renderer.targets.scratch.reset();
@@ -695,6 +796,29 @@ namespace se
                 logError(r.error());
             }
             renderer.ibl.rebakePending = false;
+        }
+
+        // Capture any dirty reflection probes at this same GPU-idle point (on demand, never per
+        // frame). Each capture renders the scene 6x + convolves; gated on the cull PSO being
+        // ready (so the cached mesh draw list / pipelines exist).
+        if (renderer.reflection.capturePending && renderer.pipelines.cull)
+        {
+            for (u32 slot = 0; slot < renderer.reflection.count; slot = slot + 1)
+            {
+                ReflectionProbe& probe = renderer.reflection.probes[slot];
+                if (!probe.dirty) { continue; }
+                if (Result<void> r = captureReflectionProbe(renderer, probe, slot); r)
+                {
+                    logInfo(std::format("reflection probe captured — slot {}, origin ({:.1f}, {:.1f}, {:.1f}), radius {:.1f}",
+                                        slot, probe.origin.x, probe.origin.y, probe.origin.z, probe.influenceRadius));
+                }
+                else
+                {
+                    logError(r.error());
+                }
+                probe.dirty = false;
+            }
+            renderer.reflection.capturePending = false;
         }
 
         Image& offscreen = renderer.targets.offscreen;
@@ -1744,6 +1868,17 @@ namespace se
             renderer.captureNextSwapchainPath.reset();
         }
 
+        const u64 nowNs = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        if (renderer.lastFrameNs != 0)
+        {
+            const f32 deltaMs = static_cast<f32>(nowNs - renderer.lastFrameNs) / 1.0e6f;
+            renderer.frameMs =
+                renderer.frameMs == 0.0f ? deltaMs : renderer.frameMs * 0.9f + deltaMs * 0.1f;
+        }
+        renderer.lastFrameNs = nowNs;
+
         renderer.frame.index = (renderer.frame.index + 1) % MaxFramesInFlight;
     }
 
@@ -1766,7 +1901,10 @@ namespace se
 
     auto renderStats(const Renderer& renderer) -> RenderStats
     {
-        return renderer.stats;
+        RenderStats stats = renderer.stats;
+        stats.frameMs = renderer.frameMs;
+        stats.fps = renderer.frameMs > 0.0f ? 1000.0f / renderer.frameMs : 0.0f;
+        return stats;
     }
 
     void setExposure(Renderer& renderer, f32 ev)

@@ -11,6 +11,7 @@ module;
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -506,9 +507,12 @@ export namespace se
     // control plane so batching can be verified live.
     struct RenderStats
     {
-        u32 drawCalls = 0;  // drawIndexed calls (one per submesh per batch)
-        u32 batches = 0;    // distinct (mesh, texture) buckets
-        u32 instances = 0;  // total entities drawn
+        u32 drawCalls = 0;   // drawIndexed calls (one per submesh per batch)
+        u32 batches = 0;     // distinct (mesh, texture) buckets
+        u32 instances = 0;   // total entities drawn
+        f32 frameMs = 0.0f;  // smoothed frame-to-frame CPU time
+        f32 fps = 0.0f;      // derived from frameMs
+        f32 gpuMs = 0.0f;    // GPU pass time; 0 until a timestamp readback exists
     };
 
     // A single screen-space overlay vertex: NDC position + flat color. The editor
@@ -606,6 +610,7 @@ export namespace se
         vk::DescriptorSetLayout taaSetLayout;
         std::array<vk::DescriptorSet, 2> taaSets;
         vk::DescriptorSetLayout clusterSetLayout;    // compute set 0
+        vk::DescriptorSetLayout emptyLayout;         // zero-binding set; fills the 6/7 gap when RT is off
     };
 
     // Directional + punctual lights and the clustered-forward froxel apparatus.
@@ -627,6 +632,7 @@ export namespace se
         std::array<void*, MaxFramesInFlight> clusterParamMapped{};
         bool useClustered = true;        // false = fragment loops all lights (reference)
         u32 frameLightCount = 0;         // punctual lights uploaded this frame
+        u32 frameProbeCount = 0;         // reflection probes sampled this frame (set-8 count)
         bool clusterDispatchPending = false;
         // Directional shadow: the light-space transform written into the light UBO + the
         // shadow pass push constant. shadowPending arms the depth pass for the frame.
@@ -751,6 +757,20 @@ export namespace se
         glm::vec3 sunColor{ 1.0f };
     };
 
+    // A per-frame snapshot of one ReflectionProbeComponent, passed from renderScene into the
+    // renderer without the renderer depending on Saffron.Scene (the same decoupling Sky.mode
+    // uses). origin is the entity's world translation; dirty arms a (re)capture.
+    struct ReflectionProbeUpload
+    {
+        u64 entity = 0;
+        glm::vec3 origin{ 0.0f };
+        f32 influenceRadius = 10.0f;
+        f32 intensity = 1.0f;
+        bool boxProjection = false;
+        glm::vec3 boxExtent{ 10.0f };
+        bool dirty = false;
+    };
+
     // Image-based lighting: a procedural/HDR environment cubemap convolved into a diffuse
     // irradiance cube + a roughness-mipped prefiltered specular cube + a split-sum BRDF
     // LUT. Sampled as the mesh ambient (set 3). Baked at startup; re-baked on demand when the
@@ -773,6 +793,45 @@ export namespace se
         EnvSource source = EnvSource::Procedural;       // which shader fills envCube
         EnvSource bakedSource = EnvSource::Procedural;  // source the current envCube was baked with
         Ref<GpuTexture> envPanorama;                    // Equirect source (held alive across the bake)
+    };
+
+    inline constexpr u32 MaxReflectionProbes = 8;  // hard cap; excess probes ignored (logged once)
+
+    // One captured + prefiltered local reflection probe. Mirrors the Ibl cube layout but
+    // per-probe; baked on demand (the capture pass renders the scene into 6 faces, then the
+    // shared ibl_irradiance/ibl_prefilter convolve into these). Sampled at mesh set 8.
+    struct ReflectionProbe
+    {
+        Image envCube;                             // captured local environment (newColorCubeImage)
+        std::array<vk::ImageView, 6> faceViews{};  // per-face color attachment views
+        Image envDepth;                            // transient per-face depth scratch
+        Image irradianceCube;                      // diffuse irradiance convolution (per-probe)
+        Image prefilteredCube;                     // GGX-prefiltered specular (per-probe)
+        glm::vec3 origin{ 0.0f };
+        f32 influenceRadius = 10.0f;
+        f32 intensity = 1.0f;
+        bool boxProjection = false;
+        glm::vec3 boxExtent{ 10.0f };
+        u64 entity = 0;          // owning entity id (capture re-uses the slot when re-armed)
+        bool allocated = false;  // cubes created
+        bool valid = false;      // captured + written into meshSet at least once
+        bool dirty = false;      // (re)capture pending this frame
+    };
+
+    // The mesh-set-8 probe array + metadata SSBO, plus the per-frame capture state. Every
+    // array slot is seeded with the global IBL cubes so the bind is always valid (unused
+    // slots harmlessly resolve to the global env).
+    struct ReflectionProbes
+    {
+        std::array<ReflectionProbe, MaxReflectionProbes> probes;
+        u32 count = 0;                       // active probe slots (<= MaxReflectionProbes)
+        vk::DescriptorSetLayout meshLayout;  // set 8: prefiltered array + irradiance array + meta SSBO
+        vk::DescriptorSet meshSet;
+        vk::Sampler sampler;                 // linear, clamp, mipped — cube sampling in the mesh
+        Ref<Buffer> metaBuffer;              // MaxReflectionProbes ProbeMeta records (origin/radius/...)
+        bool useProbes = true;
+        bool capturePending = false;         // any probe dirty this frame -> capture in beginFrameGraph
+        bool warnedOverflow = false;         // logged once when probe count exceeds the cap
     };
 
     // Visible sky background, drawn by a fullscreen graphics pass before the scene pass.
@@ -993,6 +1052,7 @@ export namespace se
         Pipelines pipelines;
         Targets targets;
         Ibl ibl;
+        ReflectionProbes reflection;
         Sky sky;
         Ssao ssao;
         Ddgi ddgi;
@@ -1007,6 +1067,8 @@ export namespace se
         bool prevViewProjValid = false;  // false until the first frame stores one
         Ref<GpuTexture> defaultWhiteTexture;  // 1x1 white; bound when a material has no albedo
         RenderStats stats;                    // populated each frame by submitDrawList
+        f32 frameMs = 0.0f;                   // EMA-smoothed frame-to-frame CPU time, updated in endFrame
+        u64 lastFrameNs = 0;                  // steady_clock stamp of the previous endFrame; 0 until one lands
         OverlayState overlay;                 // editor gizmo + billboard geometry for the frame
         // Pending window screenshot, consumed in endFrame: the swapchain image is
         // only safely owned in-frame, so the copy is deferred there.
@@ -1169,6 +1231,13 @@ export namespace se
     // Image-based lighting: toggle split-sum IBL ambient vs the flat scalar fallback.
     void setIbl(Renderer& renderer, bool enabled);
     auto iblEnabled(const Renderer& renderer) -> bool;
+    // Reflection probes: sync the renderer's probe slots from the scene each frame (add/update/
+    // remove, allocate cubes on first sight, arm a capture for any dirty/moved slot, upload the
+    // metadata SSBO). Cheap to call every frame — capture itself runs only when capturePending.
+    void submitReflectionProbes(Renderer& renderer, std::span<const ReflectionProbeUpload> probes);
+    // Global probe-sampling toggle (set-probes 0|1); A/B identity gate.
+    void setReflectionProbes(Renderer& renderer, bool enabled);
+    auto reflectionProbesEnabled(const Renderer& renderer) -> bool;
     // Screen-space effects off the thin G-buffer. AO darkens indirect; contact shadows
     // darken the directional direct term; SSGI adds one-bounce indirect. Each toggleable.
     void setSsao(Renderer& renderer, bool enabled);

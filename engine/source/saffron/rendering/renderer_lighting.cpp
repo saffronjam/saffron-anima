@@ -14,9 +14,12 @@ module;
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <expected>
+#include <span>
 #include <format>
 #include <fstream>
 #include <functional>
@@ -111,7 +114,11 @@ namespace se
         // non-IBL fallback uses the RGB ambientColor below.
         ubo.directionAmbient = glm::vec4(glm::normalize(direction), (ambient.r + ambient.g + ambient.b) / 3.0f);
         ubo.colorIntensity = glm::vec4(color, intensity);
-        ubo.ambientColor = glm::vec4(ambient, 1.0f);
+        // ambientColor.w carries the reflection-probe count the mesh fragment iterates (set 8);
+        // 0 = no probes -> the fragment's specular IBL is byte-identical to the global fallback.
+        const bool probesOn = renderer.reflection.useProbes && renderer.ibl.ready;
+        const u32 probeCount = probesOn ? renderer.lighting.frameProbeCount : 0u;
+        ubo.ambientColor = glm::vec4(ambient, std::bit_cast<f32>(probeCount));
         // counts: x = punctual count, y = directional-shadow flag, z = IBL-ambient flag,
         // w = SSAO flag (the mesh multiplies the AO map into the ambient term). screenFlags
         // x = contact-shadow flag, y = SSGI flag. Driven off the same enable state
@@ -212,5 +219,82 @@ namespace se
     void requestSkyBake(Renderer& renderer, const SkygenParams& params)
     {
         requestEnvBake(renderer, EnvSource::Procedural, nullptr, params);
+    }
+
+    void submitReflectionProbes(Renderer& renderer, std::span<const ReflectionProbeUpload> probes)
+    {
+        ReflectionProbes& refl = renderer.reflection;
+        u32 count = static_cast<u32>(probes.size());
+        if (count > MaxReflectionProbes)
+        {
+            if (!refl.warnedOverflow)
+            {
+                logWarn(std::format("more than {} reflection probes — excess ignored", MaxReflectionProbes));
+                refl.warnedOverflow = true;
+            }
+            count = MaxReflectionProbes;
+        }
+
+        bool anyDirty = false;
+        for (u32 i = 0; i < count; i = i + 1)
+        {
+            const ReflectionProbeUpload& up = probes[i];
+            ReflectionProbe& probe = refl.probes[i];
+            // Exact-compare drift guard (mirrors requestEnvBake): a slot re-arms only on a real
+            // change — a new/moved/resized probe, or an explicit dirty flag from the component.
+            const bool slotChanged =
+                probe.entity != up.entity || probe.origin != up.origin || probe.influenceRadius != up.influenceRadius;
+            if (up.dirty || slotChanged || !probe.valid)
+            {
+                probe.dirty = true;
+                anyDirty = true;
+            }
+            probe.entity = up.entity;
+            probe.origin = up.origin;
+            probe.influenceRadius = up.influenceRadius;
+            probe.intensity = up.intensity;
+            probe.boxProjection = up.boxProjection;
+            probe.boxExtent = up.boxExtent;
+        }
+        // Slots beyond the active count drop their probe identity (a removed probe stops being
+        // sampled; its captured cubes free at teardown).
+        for (u32 i = count; i < MaxReflectionProbes; i = i + 1)
+        {
+            refl.probes[i].entity = 0;
+            refl.probes[i].valid = false;
+            refl.probes[i].dirty = false;
+        }
+        refl.count = count;
+        if (anyDirty)
+        {
+            refl.capturePending = true;
+        }
+
+        // Upload the metadata SSBO every frame (cheap; the shader reads only `count` records).
+        if (refl.metaBuffer && refl.metaBuffer->mapped != nullptr)
+        {
+            std::array<ProbeMetaGpu, MaxReflectionProbes> meta{};
+            const u32 sampleCount = refl.useProbes ? count : 0u;
+            for (u32 i = 0; i < sampleCount; i = i + 1)
+            {
+                const ReflectionProbe& probe = refl.probes[i];
+                meta[i].originRadius = glm::vec4(probe.origin, probe.influenceRadius);
+                meta[i].extentIntensity = glm::vec4(probe.boxExtent, probe.intensity);
+                meta[i].flags = glm::uvec4(probe.valid ? 1u : 0u, probe.boxProjection ? 1u : 0u, 0u, 0u);
+            }
+            std::memcpy(refl.metaBuffer->mapped, meta.data(), sizeof(meta));
+            vmaFlushAllocation(renderer.context.allocator, refl.metaBuffer->alloc, 0, sizeof(meta));
+            renderer.lighting.frameProbeCount = sampleCount;
+        }
+    }
+
+    void setReflectionProbes(Renderer& renderer, bool enabled)
+    {
+        renderer.reflection.useProbes = enabled;
+    }
+
+    auto reflectionProbesEnabled(const Renderer& renderer) -> bool
+    {
+        return renderer.reflection.useProbes;
     }
 }

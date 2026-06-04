@@ -149,5 +149,25 @@ namespace se
                 return {};
             },
             true);
+
+        registerComponent<ReflectionProbeComponent>(reg, "ReflectionProbe",
+            [](Scene&, Entity) {},
+            [](const ReflectionProbeComponent& c)
+            -> nlohmann::json {
+                return nlohmann::json{ { "influenceRadius", c.influenceRadius },
+                                       { "intensity", c.intensity },
+                                       { "boxProjection", c.boxProjection },
+                                       { "boxExtent", vec3ToJson(c.boxExtent) } };
+            },
+            [](ReflectionProbeComponent& c, const nlohmann::json& j) -> Result<void>
+            {
+                c.influenceRadius = jsonF32Or(j, "influenceRadius", 10.0f);
+                c.intensity = jsonF32Or(j, "intensity", 1.0f);
+                c.boxProjection = jsonBoolOr(j, "boxProjection", false);
+                c.boxExtent = vec3FromJson(j.value("boxExtent", nlohmann::json::object()));
+                c.dirty = true;  // loaded probes start dirty -> captured on the first frame
+                return {};
+            },
+            true);
     }
 }

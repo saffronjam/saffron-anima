@@ -13,6 +13,7 @@ module;
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <expected>
 #include <format>
 #include <fstream>
@@ -1120,6 +1121,15 @@ export namespace se
     inline constexpr u32 IblPrefilterSize = 128;
     inline constexpr u32 IblPrefilterMips = 5;  // mesh.slang's IblPrefilterMaxMip must be this - 1
     inline constexpr u32 IblLutSize = 256;
+
+    // One reflection-probe metadata record in the set-8 SSBO (std430). Mirrors the ProbeMeta
+    // struct in mesh.slang: origin + influence radius, box extents + intensity, a valid flag.
+    struct ProbeMetaGpu
+    {
+        glm::vec4 originRadius{ 0.0f };  // xyz = world origin, w = influence radius
+        glm::vec4 extentIntensity{ 0.0f };  // xyz = box half-extents, w = intensity
+        glm::uvec4 flags{ 0 };           // x = valid (1/0), y = boxProjection (1/0)
+    };
 
     // Froxel cluster grid (X x Y screen tiles, Z exponential view-space slices) and
     // the per-cluster light cap. Must match light_cull.slang + mesh.slang.
@@ -2837,6 +2847,62 @@ export namespace se
         }
         renderer.ibl.set = (*iblSet)[0];
 
+        // Reflection-probe set (set 8 in the mesh pipeline): a prefiltered-cube array + an
+        // irradiance-cube array (MaxReflectionProbes each) + the probe-metadata SSBO. The array
+        // slots are seeded with the global IBL cubes after the first bake so the bind is always
+        // valid; real probes overwrite their slot on capture. The sampler matches the IBL one.
+        vk::SamplerCreateInfo probeSamplerInfo{};
+        probeSamplerInfo.magFilter = vk::Filter::eLinear;
+        probeSamplerInfo.minFilter = vk::Filter::eLinear;
+        probeSamplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+        probeSamplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+        probeSamplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+        probeSamplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+        probeSamplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+        auto probeSampler = checked(renderer.context.device.createSampler(probeSamplerInfo), "createSampler (probe)");
+        if (!probeSampler) { return Err(probeSampler.error()); }
+        renderer.reflection.sampler = *probeSampler;
+
+        std::array<vk::DescriptorSetLayoutBinding, 3> probeBindings{};
+        probeBindings[0].binding = 0;
+        probeBindings[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        probeBindings[0].descriptorCount = MaxReflectionProbes;
+        probeBindings[0].stageFlags = vk::ShaderStageFlagBits::eFragment;
+        probeBindings[1].binding = 1;
+        probeBindings[1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        probeBindings[1].descriptorCount = MaxReflectionProbes;
+        probeBindings[1].stageFlags = vk::ShaderStageFlagBits::eFragment;
+        probeBindings[2].binding = 2;
+        probeBindings[2].descriptorType = vk::DescriptorType::eStorageBuffer;
+        probeBindings[2].descriptorCount = 1;
+        probeBindings[2].stageFlags = vk::ShaderStageFlagBits::eFragment;
+        vk::DescriptorSetLayoutCreateInfo probeLayoutInfo{};
+        probeLayoutInfo.setBindings(probeBindings);
+        auto probeLayout = checked(renderer.context.device.createDescriptorSetLayout(probeLayoutInfo), "probeSetLayout");
+        if (!probeLayout) { return Err(probeLayout.error()); }
+        renderer.reflection.meshLayout = *probeLayout;
+
+        vk::DescriptorSetAllocateInfo probeAlloc{};
+        probeAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+        probeAlloc.setSetLayouts(renderer.reflection.meshLayout);
+        auto probeSet = checked(renderer.context.device.allocateDescriptorSets(probeAlloc), "allocate probeSet");
+        if (!probeSet) { return Err(probeSet.error()); }
+        renderer.reflection.meshSet = (*probeSet)[0];
+
+        auto probeMeta = makeRtBuffer(renderer, sizeof(ProbeMetaGpu) * MaxReflectionProbes,
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+        if (!probeMeta) { return Err(probeMeta.error()); }
+        renderer.reflection.metaBuffer = *probeMeta;
+        std::memset(renderer.reflection.metaBuffer->mapped, 0, sizeof(ProbeMetaGpu) * MaxReflectionProbes);
+
+        // A zero-binding set layout. The mesh shader places probes at set 8, but sets 6/7 (RT
+        // TLAS + ReSTIR) exist only when RT is supported; this fills those slots in the mesh PSO
+        // layout otherwise, keeping set 8 contiguous (Vulkan layouts must have no gaps).
+        vk::DescriptorSetLayoutCreateInfo emptyLayoutInfo{};
+        auto emptyLayout = checked(renderer.context.device.createDescriptorSetLayout(emptyLayoutInfo), "emptySetLayout");
+        if (!emptyLayout) { return Err(emptyLayout.error()); }
+        renderer.descriptors.emptyLayout = *emptyLayout;
+
         // Sky set (set 1 in the sky pipeline): the procedural environment cube the visible-sky
         // pass samples. Layout + set created here so makeSkyPipeline can reference the layout;
         // bakeEnvironment writes the descriptor once the envCube is filled. The sky reuses the
@@ -3328,6 +3394,320 @@ export namespace se
             recreateRestirTargets(renderer);
         }
 
+        return {};
+    }
+
+    // Writes one probe slot's prefiltered + irradiance cube into the persistent mesh set 8
+    // (binding 0 = prefiltered array, binding 1 = irradiance array). Falls back to the global
+    // IBL cubes when the slot has no captured probe, so every array element is always valid.
+    void writeReflectionProbeSlot(Renderer& renderer, u32 slot)
+    {
+        ReflectionProbes& refl = renderer.reflection;
+        const bool valid = refl.probes[slot].valid && refl.probes[slot].allocated;
+        vk::ImageView pre = valid ? refl.probes[slot].prefilteredCube.view : renderer.ibl.prefilteredCube.view;
+        vk::ImageView irr = valid ? refl.probes[slot].irradianceCube.view : renderer.ibl.irradianceCube.view;
+        std::array<vk::DescriptorImageInfo, 2> infos{
+            vk::DescriptorImageInfo{ refl.sampler, pre, vk::ImageLayout::eShaderReadOnlyOptimal },
+            vk::DescriptorImageInfo{ refl.sampler, irr, vk::ImageLayout::eShaderReadOnlyOptimal } };
+        std::array<vk::WriteDescriptorSet, 2> writes{};
+        for (u32 b = 0; b < 2; b = b + 1)
+        {
+            writes[b].dstSet = refl.meshSet;
+            writes[b].dstBinding = b;
+            writes[b].dstArrayElement = slot;
+            writes[b].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            writes[b].setImageInfo(infos[b]);
+        }
+        renderer.context.device.updateDescriptorSets(writes, {});
+    }
+
+    // Seeds every set-8 array slot with the global IBL cubes (valid placeholders) and writes
+    // the metadata-SSBO binding. Called once after the first IBL bake so the mesh bind is
+    // valid even before any probe captures.
+    void seedReflectionProbeSet(Renderer& renderer)
+    {
+        for (u32 slot = 0; slot < MaxReflectionProbes; slot = slot + 1)
+        {
+            writeReflectionProbeSlot(renderer, slot);
+        }
+        vk::DescriptorBufferInfo bi{};
+        bi.buffer = renderer.reflection.metaBuffer->buffer;
+        bi.offset = 0;
+        bi.range = sizeof(ProbeMetaGpu) * MaxReflectionProbes;
+        vk::WriteDescriptorSet w{};
+        w.dstSet = renderer.reflection.meshSet;
+        w.dstBinding = 2;
+        w.descriptorType = vk::DescriptorType::eStorageBuffer;
+        w.setBufferInfo(bi);
+        renderer.context.device.updateDescriptorSets(w, {});
+    }
+
+    // Captures a local reflection probe: renders the scene into the probe's 6 cube faces
+    // (pointShadowFaceMatrices), then convolves the captured cube into the probe's irradiance +
+    // prefiltered cubes via the shared ibl_irradiance/ibl_prefilter shaders (same dispatch as
+    // bakeEnvironment), and writes the result into mesh set 8. Synchronous one-shot work +
+    // waitIdle, run only on a dirty probe at the GPU-idle top of beginFrameGraph.
+    auto captureReflectionProbe(Renderer& renderer, ReflectionProbe& probe, u32 slot) -> Result<void>
+    {
+        vk::Device device = renderer.context.device;
+        const u32 preMips = IblPrefilterMips;
+
+        // A single-sampled scene render is required (the cube faces are 1x). Skip when MSAA is
+        // on rather than fight a PSO sample-count mismatch — capture is editor-time, MSAA off.
+        if (renderer.targets.sampleCount != vk::SampleCountFlagBits::e1)
+        {
+            return Err(std::string{ "reflection probe capture needs MSAA off" });
+        }
+
+        if (!probe.allocated)
+        {
+            if (Result<void> r = newColorCubeImage(renderer, IblEnvSize, IblColorFormat,
+                                                   probe.envCube, probe.faceViews); !r)
+            {
+                return Err(r.error());
+            }
+            auto depth = newDepthImage(renderer, IblEnvSize, IblEnvSize);
+            if (!depth) { return Err(depth.error()); }
+            probe.envDepth = std::move(*depth);
+            auto irr = newCubeImage(renderer, IblIrradianceSize, 1, IblColorFormat);
+            if (!irr) { return Err(irr.error()); }
+            probe.irradianceCube = std::move(*irr);
+            auto pre = newCubeImage(renderer, IblPrefilterSize, preMips, IblColorFormat);
+            if (!pre) { return Err(pre.error()); }
+            probe.prefilteredCube = std::move(*pre);
+            probe.allocated = true;
+        }
+
+        static_cast<void>(device.waitIdle());
+
+        // The 6-face scene render reuses the cached scene draw list (built this frame) but pushes
+        // each face's view-proj in place of the camera's. recordSceneDrawList binds set 8, but the
+        // probe being captured is not yet `valid`, so its slot still resolves to the global env —
+        // no self-feedback (its envCube is the attachment, never sampled here).
+        const std::array<glm::mat4, 6> faces = pointShadowFaceMatrices(probe.origin, glm::max(probe.influenceRadius * 4.0f, 50.0f));
+        const glm::mat4 savedViewProj = renderer.frame.sceneDrawList.viewProj;
+
+        vk::CommandBufferAllocateInfo cmdAlloc{};
+        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
+        cmdAlloc.commandBufferCount = 1;
+        auto cmds = checked(device.allocateCommandBuffers(cmdAlloc), "probe capture cmd");
+        if (!cmds) { return Err(cmds.error()); }
+        vk::CommandBuffer cmd = (*cmds)[0];
+        vk::CommandBufferBeginInfo begin{};
+        begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+        static_cast<void>(cmd.begin(begin));
+
+        auto barrier = [&](vk::Image image, vk::ImageLayout oldL, vk::ImageLayout newL,
+                           vk::PipelineStageFlags2 srcS, vk::AccessFlags2 srcA,
+                           vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA,
+                           vk::ImageAspectFlags aspect, u32 baseMip, u32 mipCount, u32 baseLayer, u32 layerCount)
+        {
+            vk::ImageMemoryBarrier2 b{};
+            b.srcStageMask = srcS; b.srcAccessMask = srcA;
+            b.dstStageMask = dstS; b.dstAccessMask = dstA;
+            b.oldLayout = oldL; b.newLayout = newL;
+            b.image = image;
+            b.subresourceRange = vk::ImageSubresourceRange{ aspect, baseMip, mipCount, baseLayer, layerCount };
+            vk::DependencyInfo d{};
+            d.setImageMemoryBarriers(b);
+            cmd.pipelineBarrier2(d);
+        };
+
+        const vk::Extent2D faceExtent{ IblEnvSize, IblEnvSize };
+        for (u32 f = 0; f < 6; f = f + 1)
+        {
+            barrier(probe.envCube.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
+                    vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
+                    vk::ImageAspectFlagBits::eColor, 0, 1, f, 1);
+
+            vk::RenderingAttachmentInfo colorAtt{};
+            colorAtt.imageView = probe.faceViews[f];
+            colorAtt.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+            colorAtt.loadOp = vk::AttachmentLoadOp::eClear;
+            colorAtt.storeOp = vk::AttachmentStoreOp::eStore;
+            colorAtt.clearValue = vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } } };
+            vk::RenderingAttachmentInfo depthAtt{};
+            depthAtt.imageView = probe.envDepth.view;
+            depthAtt.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
+            depthAtt.loadOp = vk::AttachmentLoadOp::eClear;
+            depthAtt.storeOp = vk::AttachmentStoreOp::eDontCare;
+            depthAtt.clearValue = vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } };
+            barrier(probe.envDepth.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
+                    vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                    vk::PipelineStageFlagBits2::eEarlyFragmentTests, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+                    vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1);
+
+            vk::RenderingInfo ri{};
+            ri.renderArea = vk::Rect2D{ vk::Offset2D{ 0, 0 }, faceExtent };
+            ri.layerCount = 1;
+            ri.setColorAttachments(colorAtt);
+            ri.pDepthAttachment = &depthAtt;
+            cmd.beginRendering(ri);
+            vk::Viewport vp{ 0.0f, 0.0f, static_cast<f32>(IblEnvSize), static_cast<f32>(IblEnvSize), 0.0f, 1.0f };
+            cmd.setViewport(0, vp);
+            cmd.setScissor(0, vk::Rect2D{ vk::Offset2D{ 0, 0 }, faceExtent });
+            renderer.frame.sceneDrawList.viewProj = faces[f];
+            recordSceneDrawList(renderer, cmd);
+            cmd.endRendering();
+
+            barrier(probe.envCube.image, vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
+                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead,
+                    vk::ImageAspectFlagBits::eColor, 0, 1, f, 1);
+        }
+        renderer.frame.sceneDrawList.viewProj = savedViewProj;
+        probe.envCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+        // Convolve the captured cube into the probe's irradiance + prefiltered cubes. Transient
+        // pool/layouts/sets/pipelines + 2D-array storage views, exactly like bakeEnvironment.
+        std::array<vk::DescriptorPoolSize, 2> poolSizes{
+            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 16 },
+            vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 16 } };
+        vk::DescriptorPoolCreateInfo poolInfo{};
+        poolInfo.maxSets = 32;
+        poolInfo.setPoolSizes(poolSizes);
+        auto poolR = checked(device.createDescriptorPool(poolInfo), "probe convolve pool");
+        if (!poolR) { device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd); return Err(poolR.error()); }
+        vk::DescriptorPool pool = *poolR;
+
+        std::array<vk::DescriptorSetLayoutBinding, 2> bindB{};
+        bindB[0].binding = 0;
+        bindB[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        bindB[0].descriptorCount = 1;
+        bindB[0].stageFlags = vk::ShaderStageFlagBits::eCompute;
+        bindB[1].binding = 1;
+        bindB[1].descriptorType = vk::DescriptorType::eStorageImage;
+        bindB[1].descriptorCount = 1;
+        bindB[1].stageFlags = vk::ShaderStageFlagBits::eCompute;
+        vk::DescriptorSetLayoutCreateInfo layoutBInfo{};
+        layoutBInfo.setBindings(bindB);
+        auto layoutBR = checked(device.createDescriptorSetLayout(layoutBInfo), "probe layoutB");
+        if (!layoutBR)
+        {
+            device.destroyDescriptorPool(pool);
+            device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+            return Err(layoutBR.error());
+        }
+        vk::DescriptorSetLayout layoutB = *layoutBR;
+        auto cleanup = [&]()
+        {
+            device.destroyDescriptorSetLayout(layoutB);
+            device.destroyDescriptorPool(pool);
+        };
+
+        auto irrP = newComputePipeline(renderer, "shaders/ibl_irradiance.spv", layoutB);
+        if (!irrP) { cleanup(); device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd); return Err(irrP.error()); }
+        auto preP = newComputePipeline(renderer, "shaders/ibl_prefilter.spv", layoutB, static_cast<u32>(sizeof(f32)));
+        if (!preP) { cleanup(); device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd); return Err(preP.error()); }
+
+        std::vector<vk::ImageView> transientViews;
+        auto makeStorageView = [&](vk::Image image, u32 mip) -> vk::ImageView
+        {
+            vk::ImageViewCreateInfo v{};
+            v.image = image;
+            v.viewType = vk::ImageViewType::e2DArray;
+            v.format = IblColorFormat;
+            v.subresourceRange = vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, mip, 1, 0, 6 };
+            vk::ImageView view = device.createImageView(v).value;
+            transientViews.push_back(view);
+            return view;
+        };
+        vk::ImageView irrStore = makeStorageView(probe.irradianceCube.image, 0);
+        std::vector<vk::ImageView> preStore;
+        for (u32 m = 0; m < preMips; m = m + 1)
+        {
+            preStore.push_back(makeStorageView(probe.prefilteredCube.image, m));
+        }
+
+        auto allocSet = [&](vk::DescriptorSetLayout layout) -> vk::DescriptorSet
+        {
+            vk::DescriptorSetAllocateInfo ai{};
+            ai.descriptorPool = pool;
+            ai.setSetLayouts(layout);
+            return device.allocateDescriptorSets(ai).value[0];
+        };
+        auto writeSampler = [&](vk::DescriptorSet set, u32 binding, vk::ImageView view)
+        {
+            vk::DescriptorImageInfo ii{ renderer.ibl.sampler, view, vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::WriteDescriptorSet w{};
+            w.dstSet = set; w.dstBinding = binding;
+            w.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            w.setImageInfo(ii);
+            device.updateDescriptorSets(w, {});
+        };
+        auto writeStorage = [&](vk::DescriptorSet set, u32 binding, vk::ImageView view)
+        {
+            vk::DescriptorImageInfo ii{};
+            ii.imageView = view;
+            ii.imageLayout = vk::ImageLayout::eGeneral;
+            vk::WriteDescriptorSet w{};
+            w.dstSet = set; w.dstBinding = binding;
+            w.descriptorType = vk::DescriptorType::eStorageImage;
+            w.setImageInfo(ii);
+            device.updateDescriptorSets(w, {});
+        };
+        vk::DescriptorSet irrSet = allocSet(layoutB);
+        writeSampler(irrSet, 0, probe.envCube.view);
+        writeStorage(irrSet, 1, irrStore);
+        std::vector<vk::DescriptorSet> preSets;
+        for (u32 m = 0; m < preMips; m = m + 1)
+        {
+            preSets.push_back(allocSet(layoutB));
+            writeSampler(preSets[m], 0, probe.envCube.view);
+            writeStorage(preSets[m], 1, preStore[m]);
+        }
+
+        const auto group = [](u32 n) -> u32 { return (n + 7) / 8; };
+
+        barrier(probe.irradianceCube.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+                vk::ImageAspectFlagBits::eColor, 0, 1, 0, 6);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, irrP.value()->pipeline);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, irrP.value()->layout, 0, irrSet, {});
+        cmd.dispatch(group(IblIrradianceSize), group(IblIrradianceSize), 6);
+        barrier(probe.irradianceCube.image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
+                vk::ImageAspectFlagBits::eColor, 0, 1, 0, 6);
+
+        barrier(probe.prefilteredCube.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+                vk::ImageAspectFlagBits::eColor, 0, preMips, 0, 6);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, preP.value()->pipeline);
+        for (u32 m = 0; m < preMips; m = m + 1)
+        {
+            u32 mipSize = IblPrefilterSize >> m;
+            if (mipSize == 0) { mipSize = 1; }
+            f32 roughness = preMips > 1 ? static_cast<f32>(m) / static_cast<f32>(preMips - 1) : 0.0f;
+            cmd.pushConstants(preP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(f32), &roughness);
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, preP.value()->layout, 0, preSets[m], {});
+            cmd.dispatch(group(mipSize), group(mipSize), 6);
+        }
+        barrier(probe.prefilteredCube.image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
+                vk::ImageAspectFlagBits::eColor, 0, preMips, 0, 6);
+
+        static_cast<void>(cmd.end());
+        vk::CommandBufferSubmitInfo cmdInfo{};
+        cmdInfo.commandBuffer = cmd;
+        vk::SubmitInfo2 submitInfo{};
+        submitInfo.setCommandBufferInfos(cmdInfo);
+        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
+        static_cast<void>(device.waitIdle());
+        device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+
+        probe.irradianceCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        probe.prefilteredCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        for (vk::ImageView v : transientViews) { device.destroyImageView(v); }
+        cleanup();
+
+        probe.valid = true;
+        writeReflectionProbeSlot(renderer, slot);
         return {};
     }
 
