@@ -1,0 +1,459 @@
+{
+  "generatedBy": "tools/gen-control-dto/gen.ts",
+  "commands": [
+    {
+      "name": "ping",
+      "params": "PingParams",
+      "result": "PingResult",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "render-stats",
+      "params": "EmptyParams",
+      "result": "RenderStatsDto",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "set-aa",
+      "params": "SetAaParams",
+      "result": "SetAaResult",
+      "status": "typed",
+      "fixture": "aa"
+    },
+    {
+      "name": "set-clustered",
+      "params": "ToggleParams",
+      "result": "SetClusteredResult",
+      "status": "typed",
+      "fixture": "toggle-on"
+    },
+    {
+      "name": "set-ibl",
+      "params": "ToggleParams",
+      "result": "SetIblResult",
+      "status": "typed",
+      "fixture": "toggle-on"
+    },
+    {
+      "name": "set-ssao",
+      "params": "ToggleParams",
+      "result": "SetSsaoResult",
+      "status": "typed",
+      "fixture": "toggle-on"
+    },
+    {
+      "name": "set-contact-shadows",
+      "params": "ToggleParams",
+      "result": "SetContactShadowsResult",
+      "status": "typed",
+      "fixture": "toggle-on"
+    },
+    {
+      "name": "set-ssgi",
+      "params": "ToggleParams",
+      "result": "SetSsgiResult",
+      "status": "typed",
+      "fixture": "toggle-on"
+    },
+    {
+      "name": "set-rt-shadows",
+      "params": "ToggleParams",
+      "result": "SetRtShadowsResult",
+      "status": "typed",
+      "fixture": "toggle-off"
+    },
+    {
+      "name": "set-restir",
+      "params": "ToggleParams",
+      "result": "SetRestirResult",
+      "status": "typed",
+      "fixture": "toggle-off"
+    },
+    {
+      "name": "set-gi",
+      "params": "SetGiParams",
+      "result": "SetGiResult",
+      "status": "typed",
+      "fixture": "gi-off"
+    },
+    {
+      "name": "set-shadows",
+      "params": "ToggleParams",
+      "result": "SetShadowsResult",
+      "status": "typed",
+      "fixture": "toggle-on"
+    },
+    {
+      "name": "set-depth-prepass",
+      "params": "ToggleParams",
+      "result": "SetDepthPrepassResult",
+      "status": "typed",
+      "fixture": "toggle-on"
+    },
+    {
+      "name": "viewport-native-info",
+      "params": "EmptyParams",
+      "result": "ViewportNativeInfoResult",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "attach-native-viewport",
+      "params": "AttachNativeViewportParams",
+      "result": "AttachNativeViewportResult",
+      "status": "typed",
+      "skip": "requires a real parent native window handle"
+    },
+    {
+      "name": "resize-native-viewport",
+      "params": "ResizeNativeViewportParams",
+      "result": "ResizeNativeViewportResult",
+      "status": "typed",
+      "skip": "mutates the native viewport window"
+    },
+    {
+      "name": "list-entities",
+      "params": "EmptyParams",
+      "result": "EntityList",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "list-components",
+      "params": "EmptyParams",
+      "result": "ComponentList",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "create-entity",
+      "params": "CreateEntityParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "new-entity"
+    },
+    {
+      "name": "destroy-entity",
+      "params": "EntityParams",
+      "result": "DestroyEntityResult",
+      "status": "typed",
+      "fixture": "temp-entity"
+    },
+    {
+      "name": "add-component",
+      "params": "ComponentParams",
+      "result": "AddComponentResult",
+      "status": "typed",
+      "fixture": "temp-camera-entity"
+    },
+    {
+      "name": "remove-component",
+      "params": "ComponentParams",
+      "result": "RemoveComponentResult",
+      "status": "typed",
+      "fixture": "temp-camera-component"
+    },
+    {
+      "name": "set-component",
+      "params": "SetComponentParams",
+      "result": "SetComponentResult",
+      "status": "typed",
+      "fixture": "cube-name-component"
+    },
+    {
+      "name": "set-transform",
+      "params": "SetTransformParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "cube-transform"
+    },
+    {
+      "name": "set-material",
+      "params": "SetMaterialParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "cube-material"
+    },
+    {
+      "name": "set-light",
+      "params": "SetLightParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "temp-directional-light"
+    },
+    {
+      "name": "select",
+      "params": "EntityParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "cube-entity"
+    },
+    {
+      "name": "pick",
+      "params": "PickParams",
+      "result": "PickResult",
+      "status": "typed",
+      "fixture": "viewport-center"
+    },
+    {
+      "name": "inspect",
+      "params": "EntityParams",
+      "result": "InspectResult",
+      "status": "typed",
+      "fixture": "cube-entity"
+    },
+    {
+      "name": "focus",
+      "params": "EntityParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "cube-entity"
+    },
+    {
+      "name": "get-environment",
+      "params": "EmptyParams",
+      "result": "EnvironmentDto",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "set-environment",
+      "params": "SetEnvironmentParams",
+      "result": "EnvironmentDto",
+      "status": "typed",
+      "fixture": "environment-intensity"
+    },
+    {
+      "name": "set-atmosphere",
+      "params": "SetAtmosphereParams",
+      "result": "EnvironmentDto",
+      "status": "typed",
+      "fixture": "atmosphere-disabled"
+    },
+    {
+      "name": "get-selection",
+      "params": "EmptyParams",
+      "result": "SelectionResult",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "deselect",
+      "params": "EmptyParams",
+      "result": "DeselectResult",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "add-entity",
+      "params": "AddEntityParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "cube-preset"
+    },
+    {
+      "name": "copy-entity",
+      "params": "EntityParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "cube-entity"
+    },
+    {
+      "name": "rename-entity",
+      "params": "RenameEntityParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "cube-rename"
+    },
+    {
+      "name": "set-component-field",
+      "params": "SetComponentFieldParams",
+      "result": "SetComponentFieldResult",
+      "status": "typed",
+      "fixture": "cube-name-field"
+    },
+    {
+      "name": "get-camera",
+      "params": "EmptyParams",
+      "result": "EditorCamera",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "set-camera",
+      "params": "SetCameraParams",
+      "result": "EditorCamera",
+      "status": "typed",
+      "fixture": "camera-yaw"
+    },
+    {
+      "name": "get-gizmo",
+      "params": "EmptyParams",
+      "result": "GizmoState",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "set-gizmo",
+      "params": "SetGizmoParams",
+      "result": "GizmoState",
+      "status": "typed",
+      "fixture": "gizmo-rotate-local"
+    },
+    {
+      "name": "gizmo-pointer",
+      "params": "GizmoPointerParams",
+      "result": "GizmoPointerResult",
+      "status": "typed",
+      "fixture": "gizmo-hover"
+    },
+    {
+      "name": "set-probes",
+      "params": "SetProbesParams",
+      "result": "SetProbesResult",
+      "status": "typed",
+      "fixture": "toggle-on"
+    },
+    {
+      "name": "recapture-probes",
+      "params": "EmptyParams",
+      "result": "RecaptureProbesResult",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "list-probes",
+      "params": "EmptyParams",
+      "result": "ListProbesResult",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "set-exposure",
+      "params": "SetExposureParams",
+      "result": "SetExposureResult",
+      "status": "typed",
+      "fixture": "exposure-zero"
+    },
+    {
+      "name": "get-project",
+      "params": "EmptyParams",
+      "result": "ProjectInfoDto",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "new-project",
+      "params": "NewProjectParams",
+      "result": "ProjectInfoDto",
+      "status": "typed",
+      "fixture": "new-project"
+    },
+    {
+      "name": "open-project",
+      "params": "PathParams",
+      "result": "ProjectInfoDto",
+      "status": "typed",
+      "fixture": "project-name"
+    },
+    {
+      "name": "import-model",
+      "params": "PathParams",
+      "result": "ImportModelResult",
+      "status": "typed",
+      "skip": "requires an external model fixture path"
+    },
+    {
+      "name": "import-texture",
+      "params": "PathParams",
+      "result": "ImportTextureResult",
+      "status": "typed",
+      "skip": "requires an external texture fixture path"
+    },
+    {
+      "name": "list-assets",
+      "params": "EmptyParams",
+      "result": "AssetList",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "rename-asset",
+      "params": "RenameAssetParams",
+      "result": "AssetRef",
+      "status": "typed",
+      "fixture": "mesh-asset-rename"
+    },
+    {
+      "name": "assign-asset",
+      "params": "AssignAssetParams",
+      "result": "AssignAssetResult",
+      "status": "typed",
+      "fixture": "cube-mesh-asset"
+    },
+    {
+      "name": "save-scene",
+      "params": "PathParams",
+      "result": "PathResult",
+      "status": "typed",
+      "skip": "writes a scene file"
+    },
+    {
+      "name": "load-scene",
+      "params": "PathParams",
+      "result": "PathResult",
+      "status": "typed",
+      "skip": "loads and replaces the scene from a file"
+    },
+    {
+      "name": "save-project",
+      "params": "OptionalPathParams",
+      "result": "ProjectInfoDto",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "load-project",
+      "params": "OptionalPathParams",
+      "result": "ProjectInfoDto",
+      "status": "typed",
+      "fixture": "project-name"
+    },
+    {
+      "name": "screenshot",
+      "params": "ScreenshotParams",
+      "result": "ScreenshotResult",
+      "status": "typed",
+      "skip": "writes an image file and can be deferred"
+    },
+    {
+      "name": "get-thumbnail",
+      "params": "ThumbnailParams",
+      "result": "ThumbnailResult",
+      "status": "typed",
+      "fixture": "mesh-asset"
+    },
+    {
+      "name": "view-asset",
+      "params": "ThumbnailParams",
+      "result": "ThumbnailResult",
+      "status": "typed",
+      "fixture": "mesh-asset-view"
+    },
+    {
+      "name": "quit",
+      "params": "EmptyParams",
+      "result": "QuitResult",
+      "status": "typed",
+      "skip": "terminates the host process"
+    }
+  ],
+  "skips": [
+    {
+      "name": "help",
+      "reason": "reflective registry"
+    }
+  ]
+}

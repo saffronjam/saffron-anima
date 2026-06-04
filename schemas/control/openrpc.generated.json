@@ -1,0 +1,3260 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "Saffron control DTOs",
+    "version": "0.2.0"
+  },
+  "methods": [
+    {
+      "name": "ping",
+      "summary": "liveness + engine info",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PingParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PingResult"
+        }
+      }
+    },
+    {
+      "name": "render-stats",
+      "summary": "last frame draw counters",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/RenderStatsDto"
+        }
+      }
+    },
+    {
+      "name": "set-aa",
+      "summary": "set anti-aliasing mode",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetAaParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetAaResult"
+        }
+      }
+    },
+    {
+      "name": "set-clustered",
+      "summary": "toggle clustered lighting",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetClusteredResult"
+        }
+      }
+    },
+    {
+      "name": "set-ibl",
+      "summary": "toggle image-based lighting",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetIblResult"
+        }
+      }
+    },
+    {
+      "name": "set-ssao",
+      "summary": "toggle ambient occlusion",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetSsaoResult"
+        }
+      }
+    },
+    {
+      "name": "set-contact-shadows",
+      "summary": "toggle contact shadows",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetContactShadowsResult"
+        }
+      }
+    },
+    {
+      "name": "set-ssgi",
+      "summary": "toggle SSGI",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetSsgiResult"
+        }
+      }
+    },
+    {
+      "name": "set-rt-shadows",
+      "summary": "toggle ray-traced shadows",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetRtShadowsResult"
+        }
+      }
+    },
+    {
+      "name": "set-restir",
+      "summary": "toggle ReSTIR",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetRestirResult"
+        }
+      }
+    },
+    {
+      "name": "set-gi",
+      "summary": "set GI mode",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetGiParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetGiResult"
+        }
+      }
+    },
+    {
+      "name": "set-shadows",
+      "summary": "toggle shadows",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetShadowsResult"
+        }
+      }
+    },
+    {
+      "name": "set-depth-prepass",
+      "summary": "toggle depth prepass",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetDepthPrepassResult"
+        }
+      }
+    },
+    {
+      "name": "viewport-native-info",
+      "summary": "native viewport bridge status",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ViewportNativeInfoResult"
+        }
+      }
+    },
+    {
+      "name": "attach-native-viewport",
+      "summary": "attach native viewport",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AttachNativeViewportParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AttachNativeViewportResult"
+        }
+      }
+    },
+    {
+      "name": "resize-native-viewport",
+      "summary": "resize native viewport",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ResizeNativeViewportParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ResizeNativeViewportResult"
+        }
+      }
+    },
+    {
+      "name": "list-entities",
+      "summary": "list all entities",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityList"
+        }
+      }
+    },
+    {
+      "name": "list-components",
+      "summary": "list registered component types",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ComponentList"
+        }
+      }
+    },
+    {
+      "name": "create-entity",
+      "summary": "create-entity {name}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CreateEntityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
+      "name": "destroy-entity",
+      "summary": "destroy-entity {entity}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EntityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DestroyEntityResult"
+        }
+      }
+    },
+    {
+      "name": "add-component",
+      "summary": "add-component {entity, component}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ComponentParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AddComponentResult"
+        }
+      }
+    },
+    {
+      "name": "remove-component",
+      "summary": "remove-component {entity, component}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ComponentParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/RemoveComponentResult"
+        }
+      }
+    },
+    {
+      "name": "set-component",
+      "summary": "set-component {entity, component, json}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetComponentParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetComponentResult"
+        }
+      }
+    },
+    {
+      "name": "set-transform",
+      "summary": "set-transform {entity, translation?, rotation?, scale?}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetTransformParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
+      "name": "set-material",
+      "summary": "set-material {entity, material fields...}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetMaterialParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
+      "name": "set-light",
+      "summary": "set-light {entity?, direction?, color?, intensity?, ambient?}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetLightParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
+      "name": "select",
+      "summary": "select {entity}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EntityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
+      "name": "pick",
+      "summary": "pick {u=0.5, v=0.5}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PickParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PickResult"
+        }
+      }
+    },
+    {
+      "name": "inspect",
+      "summary": "inspect {entity}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EntityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/InspectResult"
+        }
+      }
+    },
+    {
+      "name": "focus",
+      "summary": "focus {entity}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EntityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
+      "name": "get-environment",
+      "summary": "get environment settings",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EnvironmentDto"
+        }
+      }
+    },
+    {
+      "name": "set-environment",
+      "summary": "set environment settings",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetEnvironmentParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EnvironmentDto"
+        }
+      }
+    },
+    {
+      "name": "set-atmosphere",
+      "summary": "set procedural-atmosphere settings",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetAtmosphereParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EnvironmentDto"
+        }
+      }
+    },
+    {
+      "name": "get-selection",
+      "summary": "get current selection",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SelectionResult"
+        }
+      }
+    },
+    {
+      "name": "deselect",
+      "summary": "clear selection",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DeselectResult"
+        }
+      }
+    },
+    {
+      "name": "add-entity",
+      "summary": "add-entity {preset}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AddEntityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
+      "name": "copy-entity",
+      "summary": "copy-entity {entity}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EntityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
+      "name": "rename-entity",
+      "summary": "rename-entity {entity, name}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/RenameEntityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
+      "name": "set-component-field",
+      "summary": "set-component-field {entity, component, field, value}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetComponentFieldParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetComponentFieldResult"
+        }
+      }
+    },
+    {
+      "name": "get-camera",
+      "summary": "get camera",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EditorCamera"
+        }
+      }
+    },
+    {
+      "name": "set-camera",
+      "summary": "set camera",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetCameraParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EditorCamera"
+        }
+      }
+    },
+    {
+      "name": "get-gizmo",
+      "summary": "get gizmo",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GizmoState"
+        }
+      }
+    },
+    {
+      "name": "set-gizmo",
+      "summary": "set gizmo",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetGizmoParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GizmoState"
+        }
+      }
+    },
+    {
+      "name": "gizmo-pointer",
+      "summary": "drive gizmo pointer",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/GizmoPointerParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GizmoPointerResult"
+        }
+      }
+    },
+    {
+      "name": "set-probes",
+      "summary": "toggle reflection-probe sampling",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetProbesParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetProbesResult"
+        }
+      }
+    },
+    {
+      "name": "recapture-probes",
+      "summary": "mark reflection probes dirty",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/RecaptureProbesResult"
+        }
+      }
+    },
+    {
+      "name": "list-probes",
+      "summary": "list captured reflection probes",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ListProbesResult"
+        }
+      }
+    },
+    {
+      "name": "set-exposure",
+      "summary": "set-exposure {ev}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetExposureParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetExposureResult"
+        }
+      }
+    },
+    {
+      "name": "get-project",
+      "summary": "active project metadata",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ProjectInfoDto"
+        }
+      }
+    },
+    {
+      "name": "new-project",
+      "summary": "new-project {name}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/NewProjectParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ProjectInfoDto"
+        }
+      }
+    },
+    {
+      "name": "open-project",
+      "summary": "open-project {path}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PathParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ProjectInfoDto"
+        }
+      }
+    },
+    {
+      "name": "import-model",
+      "summary": "import-model {path}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PathParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ImportModelResult"
+        }
+      }
+    },
+    {
+      "name": "import-texture",
+      "summary": "import-texture {path}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PathParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ImportTextureResult"
+        }
+      }
+    },
+    {
+      "name": "list-assets",
+      "summary": "list project asset catalog",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetList"
+        }
+      }
+    },
+    {
+      "name": "rename-asset",
+      "summary": "rename-asset {asset, name}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/RenameAssetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetRef"
+        }
+      }
+    },
+    {
+      "name": "assign-asset",
+      "summary": "assign asset to entity",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AssignAssetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssignAssetResult"
+        }
+      }
+    },
+    {
+      "name": "save-scene",
+      "summary": "save-scene {path}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PathParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PathResult"
+        }
+      }
+    },
+    {
+      "name": "load-scene",
+      "summary": "load-scene {path}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PathParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PathResult"
+        }
+      }
+    },
+    {
+      "name": "save-project",
+      "summary": "save active project",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/OptionalPathParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ProjectInfoDto"
+        }
+      }
+    },
+    {
+      "name": "load-project",
+      "summary": "load-project {path}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/OptionalPathParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ProjectInfoDto"
+        }
+      }
+    },
+    {
+      "name": "screenshot",
+      "summary": "capture screenshot",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ScreenshotParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ScreenshotResult"
+        }
+      }
+    },
+    {
+      "name": "get-thumbnail",
+      "summary": "get asset thumbnail",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ThumbnailParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ThumbnailResult"
+        }
+      }
+    },
+    {
+      "name": "view-asset",
+      "summary": "view asset thumbnail",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ThumbnailParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ThumbnailResult"
+        }
+      }
+    },
+    {
+      "name": "quit",
+      "summary": "close the running app",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/QuitResult"
+        }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "AddComponentResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "added": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "added"
+        ]
+      },
+      "AddEntityParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "preset": {
+            "type": "string",
+            "enum": [
+              "empty",
+              "cube",
+              "model",
+              "point-light",
+              "spot-light",
+              "directional-light",
+              "camera",
+              "reflection-probe"
+            ]
+          }
+        },
+        "required": []
+      },
+      "AssetEntryDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "mesh",
+              "texture",
+              "other"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "path"
+        ]
+      },
+      "AssetList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssetEntryDto"
+            }
+          }
+        },
+        "required": [
+          "assets"
+        ]
+      },
+      "AssetRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "AssetSelector": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "value": {}
+        },
+        "required": [
+          "value"
+        ]
+      },
+      "AssignAssetParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "slot": {
+            "type": "string",
+            "enum": [
+              "mesh",
+              "albedo"
+            ]
+          },
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entity",
+          "slot",
+          "asset"
+        ]
+      },
+      "AssignAssetResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slot": {
+            "type": "string",
+            "enum": [
+              "mesh",
+              "albedo"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slot"
+        ]
+      },
+      "AttachNativeViewportParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "parentXid": {
+            "type": "string"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "parentXid"
+        ]
+      },
+      "AttachNativeViewportResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "attached": {
+            "type": "boolean"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attached",
+          "transport",
+          "x",
+          "y",
+          "width",
+          "height"
+        ]
+      },
+      "ComponentList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "components"
+        ]
+      },
+      "ComponentParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "component": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity",
+          "component"
+        ]
+      },
+      "CreateEntityParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "DeselectResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "selectionVersion": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "selectionVersion"
+        ]
+      },
+      "DestroyEntityResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "destroyed": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "destroyed"
+        ]
+      },
+      "EditorCamera": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "position": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "yaw": {
+            "type": "number"
+          },
+          "pitch": {
+            "type": "number"
+          },
+          "fov": {
+            "type": "number"
+          },
+          "near": {
+            "type": "number"
+          },
+          "far": {
+            "type": "number"
+          },
+          "moveSpeed": {
+            "type": "number"
+          },
+          "lookSpeed": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "position",
+          "yaw",
+          "pitch",
+          "fov",
+          "near",
+          "far",
+          "moveSpeed",
+          "lookSpeed"
+        ]
+      },
+      "EmptyParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "EntityList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntityRef"
+            }
+          }
+        },
+        "required": [
+          "entities"
+        ]
+      },
+      "EntityParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      },
+      "EntityRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "EntitySelector": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "value": {}
+        },
+        "required": [
+          "value"
+        ]
+      },
+      "EnvironmentDto": {
+        "$ref": "#/components/schemas/Environment"
+      },
+      "GizmoPointerParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "phase": {
+            "type": "string",
+            "enum": [
+              "hover",
+              "begin",
+              "drag",
+              "end"
+            ]
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "GizmoPointerResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "hovered": {
+            "type": "string"
+          },
+          "dragging": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hovered",
+          "dragging"
+        ]
+      },
+      "GizmoState": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "rotate",
+              "scale"
+            ]
+          },
+          "space": {
+            "type": "string",
+            "enum": [
+              "world",
+              "local"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "space"
+        ]
+      },
+      "ImportModelResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mesh": {
+            "type": "string"
+          },
+          "albedoTexture": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "mesh",
+          "albedoTexture"
+        ]
+      },
+      "ImportTextureResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "texture": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "texture"
+        ]
+      },
+      "InspectResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "components": {
+            "$ref": "#/components/schemas/Components"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "components"
+        ]
+      },
+      "ListProbesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "probes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProbeRef"
+            }
+          }
+        },
+        "required": [
+          "enabled",
+          "count",
+          "probes"
+        ]
+      },
+      "NewProjectParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "OptionalPathParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "PathParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "PathResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "PickParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "u": {
+            "type": "number"
+          },
+          "v": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "PickResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "hit": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "billboard",
+              "mesh"
+            ]
+          }
+        },
+        "required": [
+          "hit"
+        ]
+      },
+      "PingParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "PingResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "pong": {
+            "type": "boolean"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pong",
+          "engine",
+          "version",
+          "pid"
+        ]
+      },
+      "ProbeRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "slot": {
+            "type": "integer"
+          },
+          "entity": {
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "influenceRadius": {
+            "type": "number"
+          },
+          "intensity": {
+            "type": "number"
+          },
+          "boxProjection": {
+            "type": "boolean"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "dirty": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "slot",
+          "entity",
+          "origin",
+          "influenceRadius",
+          "intensity",
+          "boxProjection",
+          "valid",
+          "dirty"
+        ]
+      },
+      "ProjectInfoDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "loaded": {
+            "type": "boolean"
+          },
+          "root": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "loaded",
+          "root",
+          "path",
+          "name",
+          "displayName"
+        ]
+      },
+      "QuitResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "quitting": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "quitting"
+        ]
+      },
+      "RecaptureProbesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "marked": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "marked"
+        ]
+      },
+      "RemoveComponentResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "removed": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "removed"
+        ]
+      },
+      "RenameAssetParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "name"
+        ]
+      },
+      "RenameEntityParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity",
+          "name"
+        ]
+      },
+      "RenderStatsDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "drawCalls": {
+            "type": "integer"
+          },
+          "batches": {
+            "type": "integer"
+          },
+          "instances": {
+            "type": "integer"
+          },
+          "frameMs": {
+            "type": "number"
+          },
+          "fps": {
+            "type": "number"
+          },
+          "gpuMs": {
+            "type": "number"
+          },
+          "clustered": {
+            "type": "boolean"
+          },
+          "depthPrepass": {
+            "type": "boolean"
+          },
+          "shadows": {
+            "type": "boolean"
+          },
+          "ibl": {
+            "type": "boolean"
+          },
+          "ssao": {
+            "type": "boolean"
+          },
+          "contactShadows": {
+            "type": "boolean"
+          },
+          "ssgi": {
+            "type": "boolean"
+          },
+          "ddgi": {
+            "type": "boolean"
+          },
+          "rtSupported": {
+            "type": "boolean"
+          },
+          "rtShadows": {
+            "type": "boolean"
+          },
+          "restir": {
+            "type": "boolean"
+          },
+          "blasCount": {
+            "type": "integer"
+          },
+          "pipelines": {
+            "type": "integer"
+          },
+          "hdr": {
+            "type": "boolean"
+          },
+          "exposureEv": {
+            "type": "number"
+          },
+          "aa": {
+            "type": "string",
+            "enum": [
+              "off",
+              "fxaa",
+              "taa",
+              "msaa2",
+              "msaa4",
+              "msaa8"
+            ]
+          }
+        },
+        "required": [
+          "drawCalls",
+          "batches",
+          "instances",
+          "frameMs",
+          "fps",
+          "gpuMs",
+          "clustered",
+          "depthPrepass",
+          "shadows",
+          "ibl",
+          "ssao",
+          "contactShadows",
+          "ssgi",
+          "ddgi",
+          "rtSupported",
+          "rtShadows",
+          "restir",
+          "blasCount",
+          "pipelines",
+          "hdr",
+          "exposureEv",
+          "aa"
+        ]
+      },
+      "ResizeNativeViewportParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          }
+        },
+        "required": []
+      },
+      "ResizeNativeViewportResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "resized": {
+            "type": "boolean"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "resized",
+          "x",
+          "y",
+          "width",
+          "height"
+        ]
+      },
+      "ScreenshotParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "type": "string",
+            "enum": [
+              "viewport",
+              "window"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "ScreenshotResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "type": "string",
+            "enum": [
+              "viewport",
+              "window"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "target",
+          "path",
+          "pending"
+        ]
+      },
+      "SelectionResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "selectionVersion": {
+            "type": "integer"
+          },
+          "sceneVersion": {
+            "type": "integer"
+          },
+          "entity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EntityRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "selectionVersion",
+          "sceneVersion"
+        ]
+      },
+      "SetAaParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "fxaa",
+              "taa",
+              "msaa2",
+              "msaa4",
+              "msaa8"
+            ]
+          }
+        },
+        "required": []
+      },
+      "SetAaResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "aa": {
+            "type": "string",
+            "enum": [
+              "off",
+              "fxaa",
+              "taa",
+              "msaa2",
+              "msaa4",
+              "msaa8"
+            ]
+          }
+        },
+        "required": [
+          "aa"
+        ]
+      },
+      "SetAtmosphereParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "json": {},
+          "enabled": {
+            "type": "boolean"
+          },
+          "planetRadius": {
+            "type": "number"
+          },
+          "atmosphereHeight": {
+            "type": "number"
+          },
+          "rayleighScattering": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "rayleighScaleHeight": {
+            "type": "number"
+          },
+          "mieScattering": {
+            "type": "number"
+          },
+          "mieScaleHeight": {
+            "type": "number"
+          },
+          "mieAnisotropy": {
+            "type": "number"
+          },
+          "ozoneAbsorption": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "sunDiskAngularRadius": {
+            "type": "number"
+          },
+          "sunDiskIntensity": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "SetCameraParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "position": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "yaw": {
+            "type": "number"
+          },
+          "pitch": {
+            "type": "number"
+          },
+          "fov": {
+            "type": "number"
+          },
+          "near": {
+            "type": "number"
+          },
+          "far": {
+            "type": "number"
+          },
+          "moveSpeed": {
+            "type": "number"
+          },
+          "lookSpeed": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "SetClusteredResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "clustered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "clustered"
+        ]
+      },
+      "SetComponentFieldParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "entity",
+          "component",
+          "field",
+          "value"
+        ]
+      },
+      "SetComponentFieldResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "set": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "set",
+          "field"
+        ]
+      },
+      "SetComponentParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "json": {
+            "$ref": "#/components/schemas/ComponentBody"
+          }
+        },
+        "required": [
+          "entity",
+          "component",
+          "json"
+        ]
+      },
+      "SetComponentResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "set": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "set"
+        ]
+      },
+      "SetContactShadowsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contactShadows": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "contactShadows"
+        ]
+      },
+      "SetDepthPrepassResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "depthPrepass": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "depthPrepass"
+        ]
+      },
+      "SetEnvironmentParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "json": {},
+          "skyMode": {
+            "type": "string"
+          },
+          "clearColor": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "skyTexture": {
+            "type": "string"
+          },
+          "skyIntensity": {
+            "type": "number"
+          },
+          "skyRotation": {
+            "type": "number"
+          },
+          "exposure": {
+            "type": "number"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "useSkyForAmbient": {
+            "type": "boolean"
+          },
+          "ambientColor": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "ambientIntensity": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "SetExposureParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ev": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "ev"
+        ]
+      },
+      "SetExposureResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "exposureEv": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "exposureEv"
+        ]
+      },
+      "SetGiParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "ddgi"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "SetGiResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ddgi": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ddgi"
+        ]
+      },
+      "SetGizmoParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "rotate",
+              "scale"
+            ]
+          },
+          "space": {
+            "type": "string",
+            "enum": [
+              "world",
+              "local"
+            ]
+          }
+        },
+        "required": []
+      },
+      "SetIblResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ibl": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ibl"
+        ]
+      },
+      "SetLightParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "color": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "intensity": {
+            "type": "number"
+          },
+          "ambient": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "SetMaterialParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "baseColor": {
+            "$ref": "#/components/schemas/Vec4"
+          },
+          "albedoTexture": {
+            "type": "string"
+          },
+          "metallic": {
+            "type": "number"
+          },
+          "roughness": {
+            "type": "number"
+          },
+          "emissive": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "emissiveStrength": {
+            "type": "number"
+          },
+          "unlit": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      },
+      "SetProbesParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": []
+      },
+      "SetProbesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "probes": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "probes"
+        ]
+      },
+      "SetRestirResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "restir": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "restir"
+        ]
+      },
+      "SetRtShadowsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rtShadows": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rtShadows"
+        ]
+      },
+      "SetShadowsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "shadows": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shadows"
+        ]
+      },
+      "SetSsaoResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ssao": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ssao"
+        ]
+      },
+      "SetSsgiResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ssgi": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ssgi"
+        ]
+      },
+      "SetTransformParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "translation": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "rotation": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "scale": {
+            "$ref": "#/components/schemas/Vec3"
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      },
+      "ThumbnailParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "asset"
+        ]
+      },
+      "ThumbnailResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "base64": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "format",
+          "width",
+          "height",
+          "base64"
+        ]
+      },
+      "ToggleParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": []
+      },
+      "Vec3": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "z": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "Vec4": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "z": {
+            "type": "number"
+          },
+          "w": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "z",
+          "w"
+        ]
+      },
+      "ViewportNativeInfoResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "platform": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "controlSocket": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform",
+          "transport",
+          "status",
+          "controlSocket",
+          "width",
+          "height",
+          "message"
+        ]
+      },
+      "WireUuid": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "$ref": "#/components/schemas/u64"
+          }
+        },
+        "required": [
+          "value"
+        ]
+      },
+      "Name": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "Transform": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "translation": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "scale": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "rotation": {
+            "$ref": "#/components/schemas/Vec3"
+          }
+        },
+        "required": [
+          "translation",
+          "scale",
+          "rotation"
+        ]
+      },
+      "Mesh": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mesh": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mesh"
+        ]
+      },
+      "Camera": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fov": {
+            "type": "number"
+          },
+          "near": {
+            "type": "number"
+          },
+          "far": {
+            "type": "number"
+          },
+          "primary": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "fov",
+          "near",
+          "far",
+          "primary"
+        ]
+      },
+      "Material": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseColor": {
+            "$ref": "#/components/schemas/Vec4"
+          },
+          "albedoTexture": {
+            "type": "string"
+          },
+          "metallic": {
+            "type": "number"
+          },
+          "roughness": {
+            "type": "number"
+          },
+          "emissive": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "emissiveStrength": {
+            "type": "number"
+          },
+          "unlit": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "baseColor",
+          "albedoTexture",
+          "metallic",
+          "roughness",
+          "emissive",
+          "emissiveStrength",
+          "unlit"
+        ]
+      },
+      "DirectionalLight": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "color": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "intensity": {
+            "type": "number"
+          },
+          "ambient": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "direction",
+          "color",
+          "intensity",
+          "ambient"
+        ]
+      },
+      "PointLight": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "color": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "intensity": {
+            "type": "number"
+          },
+          "range": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "color",
+          "intensity",
+          "range"
+        ]
+      },
+      "SpotLight": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "color": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "intensity": {
+            "type": "number"
+          },
+          "range": {
+            "type": "number"
+          },
+          "innerAngle": {
+            "type": "number"
+          },
+          "outerAngle": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "direction",
+          "color",
+          "intensity",
+          "range",
+          "innerAngle",
+          "outerAngle"
+        ]
+      },
+      "ReflectionProbe": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "influenceRadius": {
+            "type": "number"
+          },
+          "intensity": {
+            "type": "number"
+          },
+          "boxProjection": {
+            "type": "boolean"
+          },
+          "boxExtent": {
+            "$ref": "#/components/schemas/Vec3"
+          }
+        },
+        "required": [
+          "influenceRadius",
+          "intensity",
+          "boxProjection",
+          "boxExtent"
+        ]
+      },
+      "AtmosphereSettingsDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "planetRadius": {
+            "type": "number"
+          },
+          "atmosphereHeight": {
+            "type": "number"
+          },
+          "rayleighScattering": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "rayleighScaleHeight": {
+            "type": "number"
+          },
+          "mieScattering": {
+            "type": "number"
+          },
+          "mieScaleHeight": {
+            "type": "number"
+          },
+          "mieAnisotropy": {
+            "type": "number"
+          },
+          "ozoneAbsorption": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "sunDiskAngularRadius": {
+            "type": "number"
+          },
+          "sunDiskIntensity": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "enabled",
+          "planetRadius",
+          "atmosphereHeight",
+          "rayleighScattering",
+          "rayleighScaleHeight",
+          "mieScattering",
+          "mieScaleHeight",
+          "mieAnisotropy",
+          "ozoneAbsorption",
+          "sunDiskAngularRadius",
+          "sunDiskIntensity"
+        ]
+      },
+      "Components": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "Name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "Transform": {
+            "$ref": "#/components/schemas/Transform"
+          },
+          "Mesh": {
+            "$ref": "#/components/schemas/Mesh"
+          },
+          "Camera": {
+            "$ref": "#/components/schemas/Camera"
+          },
+          "Material": {
+            "$ref": "#/components/schemas/Material"
+          },
+          "DirectionalLight": {
+            "$ref": "#/components/schemas/DirectionalLight"
+          },
+          "PointLight": {
+            "$ref": "#/components/schemas/PointLight"
+          },
+          "SpotLight": {
+            "$ref": "#/components/schemas/SpotLight"
+          },
+          "ReflectionProbe": {
+            "$ref": "#/components/schemas/ReflectionProbe"
+          }
+        }
+      },
+      "ComponentBody": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Name"
+          },
+          {
+            "$ref": "#/components/schemas/Transform"
+          },
+          {
+            "$ref": "#/components/schemas/Mesh"
+          },
+          {
+            "$ref": "#/components/schemas/Camera"
+          },
+          {
+            "$ref": "#/components/schemas/Material"
+          },
+          {
+            "$ref": "#/components/schemas/DirectionalLight"
+          },
+          {
+            "$ref": "#/components/schemas/PointLight"
+          },
+          {
+            "$ref": "#/components/schemas/SpotLight"
+          },
+          {
+            "$ref": "#/components/schemas/ReflectionProbe"
+          }
+        ]
+      },
+      "Environment": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "skyMode": {
+            "type": "string",
+            "enum": [
+              "color",
+              "texture",
+              "procedural"
+            ]
+          },
+          "clearColor": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "skyTexture": {
+            "type": "string"
+          },
+          "skyIntensity": {
+            "type": "number"
+          },
+          "skyRotation": {
+            "type": "number"
+          },
+          "exposure": {
+            "type": "number"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "useSkyForAmbient": {
+            "type": "boolean"
+          },
+          "ambientColor": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "ambientIntensity": {
+            "type": "number"
+          },
+          "atmosphere": {
+            "$ref": "#/components/schemas/AtmosphereSettingsDto"
+          }
+        },
+        "required": [
+          "skyMode",
+          "clearColor",
+          "skyTexture",
+          "skyIntensity",
+          "skyRotation",
+          "exposure",
+          "visible",
+          "useSkyForAmbient",
+          "ambientColor",
+          "ambientIntensity",
+          "atmosphere"
+        ]
+      }
+    }
+  }
+}
