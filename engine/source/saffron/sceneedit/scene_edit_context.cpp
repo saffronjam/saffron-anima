@@ -26,17 +26,26 @@ namespace se
     {
         switch (op)
         {
-            case GizmoOp::Rotate: return "rotate";
-            case GizmoOp::Scale: return "scale";
-            case GizmoOp::Translate: break;
+        case GizmoOp::Rotate:
+            return "rotate";
+        case GizmoOp::Scale:
+            return "scale";
+        case GizmoOp::Translate:
+            break;
         }
         return "translate";
     }
 
     auto gizmoOpFromName(const std::string& name) -> GizmoOp
     {
-        if (name == "rotate") { return GizmoOp::Rotate; }
-        if (name == "scale") { return GizmoOp::Scale; }
+        if (name == "rotate")
+        {
+            return GizmoOp::Rotate;
+        }
+        if (name == "scale")
+        {
+            return GizmoOp::Scale;
+        }
         return GizmoOp::Translate;
     }
 

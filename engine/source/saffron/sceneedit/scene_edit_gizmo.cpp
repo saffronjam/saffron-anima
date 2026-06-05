@@ -21,11 +21,10 @@ namespace se
 {
     void syncNativeGizmo(SceneEditContext& ctx)
     {
-        ctx.nativeGizmo.mode = ctx.gizmoOp == GizmoOp::Rotate ? NativeGizmoMode::Rotate
-                             : ctx.gizmoOp == GizmoOp::Scale  ? NativeGizmoMode::Scale
-                                                              : NativeGizmoMode::Translate;
-        ctx.nativeGizmo.space = ctx.gizmoSpace == GizmoSpace::Local ? NativeGizmoSpace::Local
-                                                                    : NativeGizmoSpace::World;
+        ctx.nativeGizmo.mode = ctx.gizmoOp == GizmoOp::Rotate  ? NativeGizmoMode::Rotate
+                               : ctx.gizmoOp == GizmoOp::Scale ? NativeGizmoMode::Scale
+                                                               : NativeGizmoMode::Translate;
+        ctx.nativeGizmo.space = ctx.gizmoSpace == GizmoSpace::Local ? NativeGizmoSpace::Local : NativeGizmoSpace::World;
     }
 
     auto viewportProject(const CameraView& cam, u32 width, u32 height, glm::vec3 world) -> GizmoProjection
@@ -45,18 +44,15 @@ namespace se
         {
             return {};
         }
-        return GizmoProjection{
-            .pixel = glm::vec2{ (ndc3.x * 0.5f + 0.5f) * static_cast<f32>(width),
-                                (1.0f - (ndc3.y * 0.5f + 0.5f)) * static_cast<f32>(height) },
-            .ndc = glm::vec2{ ndc3.x, ndc3.y },
-            .visible = true
-        };
+        return GizmoProjection{ .pixel = glm::vec2{ (ndc3.x * 0.5f + 0.5f) * static_cast<f32>(width),
+                                                    (1.0f - (ndc3.y * 0.5f + 0.5f)) * static_cast<f32>(height) },
+                                .ndc = glm::vec2{ ndc3.x, ndc3.y },
+                                .visible = true };
     }
 
     auto pixelToNdc(glm::vec2 p, u32 width, u32 height) -> glm::vec2
     {
-        return glm::vec2{ p.x / static_cast<f32>(width) * 2.0f - 1.0f,
-                          p.y / static_cast<f32>(height) * 2.0f - 1.0f };
+        return glm::vec2{ p.x / static_cast<f32>(width) * 2.0f - 1.0f, p.y / static_cast<f32>(height) * 2.0f - 1.0f };
     }
 
     auto cameraPosition(const CameraView& cam) -> glm::vec3
@@ -107,7 +103,8 @@ namespace se
                        const std::array<glm::vec3, 3>& axes, f32 radius) -> NativeGizmoHandle
     {
         constexpr u32 segments = 96;
-        const std::array<NativeGizmoHandle, 3> handles{ NativeGizmoHandle::X, NativeGizmoHandle::Y, NativeGizmoHandle::Z };
+        const std::array<NativeGizmoHandle, 3> handles{ NativeGizmoHandle::X, NativeGizmoHandle::Y,
+                                                        NativeGizmoHandle::Z };
         NativeGizmoHandle hit = NativeGizmoHandle::None;
         f32 best = 9.0f;
         for (u32 axis = 0; axis < 3; axis = axis + 1)
@@ -123,7 +120,8 @@ namespace se
             for (u32 i = 0; i <= segments; i = i + 1)
             {
                 const f32 t = static_cast<f32>(i) / static_cast<f32>(segments) * glm::two_pi<f32>();
-                const GizmoProjection cur = viewportProject(cam, width, height, origin + (a * std::cos(t) + b * std::sin(t)) * radius);
+                const GizmoProjection cur =
+                    viewportProject(cam, width, height, origin + (a * std::cos(t) + b * std::sin(t)) * radius);
                 if (i > 0 && prev.visible && cur.visible)
                 {
                     const f32 d = pointSegmentDistance(mouse, prev.pixel, cur.pixel);
@@ -145,9 +143,18 @@ namespace se
         {
             return glm::vec4{ 1.0f, 0.82f, 0.18f, 1.0f };
         }
-        if (handle == NativeGizmoHandle::X) { return glm::vec4{ 0.93f, 0.18f, 0.20f, 1.0f }; }
-        if (handle == NativeGizmoHandle::Y) { return glm::vec4{ 0.20f, 0.82f, 0.25f, 1.0f }; }
-        if (handle == NativeGizmoHandle::Z) { return glm::vec4{ 0.22f, 0.42f, 0.98f, 1.0f }; }
+        if (handle == NativeGizmoHandle::X)
+        {
+            return glm::vec4{ 0.93f, 0.18f, 0.20f, 1.0f };
+        }
+        if (handle == NativeGizmoHandle::Y)
+        {
+            return glm::vec4{ 0.20f, 0.82f, 0.25f, 1.0f };
+        }
+        if (handle == NativeGizmoHandle::Z)
+        {
+            return glm::vec4{ 0.22f, 0.42f, 0.98f, 1.0f };
+        }
         return glm::vec4{ 0.93f, 0.93f, 0.95f, 0.75f };
     }
 
@@ -163,9 +170,18 @@ namespace se
 
     auto handleAxis(NativeGizmoHandle handle, const std::array<glm::vec3, 3>& axes) -> glm::vec3
     {
-        if (handle == NativeGizmoHandle::X) { return axes[0]; }
-        if (handle == NativeGizmoHandle::Y) { return axes[1]; }
-        if (handle == NativeGizmoHandle::Z) { return axes[2]; }
+        if (handle == NativeGizmoHandle::X)
+        {
+            return axes[0];
+        }
+        if (handle == NativeGizmoHandle::Y)
+        {
+            return axes[1];
+        }
+        if (handle == NativeGizmoHandle::Z)
+        {
+            return axes[2];
+        }
         return glm::vec3{ 0.0f };
     }
 
@@ -185,7 +201,8 @@ namespace se
         const auto axes = gizmoAxes(worldRotation(editor.scene, editor.selected), editor.nativeGizmo.space);
         const f32 distance = glm::length(cameraPosition(cam) - position);
         const f32 axisLen = std::max(0.75f, distance * 0.22f);
-        const std::array<NativeGizmoHandle, 3> handles{ NativeGizmoHandle::X, NativeGizmoHandle::Y, NativeGizmoHandle::Z };
+        const std::array<NativeGizmoHandle, 3> handles{ NativeGizmoHandle::X, NativeGizmoHandle::Y,
+                                                        NativeGizmoHandle::Z };
 
         if (editor.nativeGizmo.mode == NativeGizmoMode::Rotate)
         {
@@ -257,11 +274,9 @@ namespace se
 
         auto rotationOf(const glm::mat4& m) -> glm::quat
         {
-            glm::vec3 scale{ glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])),
-                             glm::length(glm::vec3(m[2])) };
+            glm::vec3 scale{ glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2])) };
             scale = glm::max(scale, glm::vec3(1e-8f));
-            const glm::mat3 rotation{ glm::vec3(m[0]) / scale.x, glm::vec3(m[1]) / scale.y,
-                                      glm::vec3(m[2]) / scale.z };
+            const glm::mat3 rotation{ glm::vec3(m[0]) / scale.x, glm::vec3(m[1]) / scale.y, glm::vec3(m[2]) / scale.z };
             return glm::quat_cast(rotation);
         }
     }
@@ -300,8 +315,8 @@ namespace se
         const auto axes = gizmoAxes(worldRotation(editor.scene, gizmo.target), gizmo.space);
         const glm::vec2 delta = mouse - gizmo.startMouse;
         const f32 distance = glm::length(cameraPosition(cam) - gizmo.startTranslation);
-        const f32 unitsPerPixel = std::max(0.001f,
-            2.0f * distance * std::tan(glm::radians(cam.fov) * 0.5f) / std::max(1.0f, static_cast<f32>(height)));
+        const f32 unitsPerPixel = std::max(0.001f, 2.0f * distance * std::tan(glm::radians(cam.fov) * 0.5f) /
+                                                       std::max(1.0f, static_cast<f32>(height)));
         auto projectedAxis = [&](glm::vec3 axis) -> glm::vec2
         {
             const GizmoProjection a = viewportProject(cam, width, height, gizmo.startTranslation);
@@ -324,9 +339,18 @@ namespace se
                 const bool useX = gizmo.active != NativeGizmoHandle::YZ;
                 const bool useY = gizmo.active != NativeGizmoHandle::XZ;
                 const bool useZ = gizmo.active != NativeGizmoHandle::XY;
-                if (useX) { move += axes[0] * glm::dot(delta, projectedAxis(axes[0])) * unitsPerPixel; }
-                if (useY) { move += axes[1] * glm::dot(delta, projectedAxis(axes[1])) * unitsPerPixel; }
-                if (useZ) { move += axes[2] * glm::dot(delta, projectedAxis(axes[2])) * unitsPerPixel; }
+                if (useX)
+                {
+                    move += axes[0] * glm::dot(delta, projectedAxis(axes[0])) * unitsPerPixel;
+                }
+                if (useY)
+                {
+                    move += axes[1] * glm::dot(delta, projectedAxis(axes[1])) * unitsPerPixel;
+                }
+                if (useZ)
+                {
+                    move += axes[2] * glm::dot(delta, projectedAxis(axes[2])) * unitsPerPixel;
+                }
             }
             else
             {
@@ -344,9 +368,18 @@ namespace se
         {
             const f32 radians = (delta.x + delta.y) * 0.01f;
             glm::vec3 worldEuler = gizmo.startRotation;
-            if (gizmo.active == NativeGizmoHandle::X) { worldEuler += glm::vec3{ radians, 0.0f, 0.0f }; }
-            if (gizmo.active == NativeGizmoHandle::Y) { worldEuler += glm::vec3{ 0.0f, radians, 0.0f }; }
-            if (gizmo.active == NativeGizmoHandle::Z) { worldEuler += glm::vec3{ 0.0f, 0.0f, radians }; }
+            if (gizmo.active == NativeGizmoHandle::X)
+            {
+                worldEuler += glm::vec3{ radians, 0.0f, 0.0f };
+            }
+            if (gizmo.active == NativeGizmoHandle::Y)
+            {
+                worldEuler += glm::vec3{ 0.0f, radians, 0.0f };
+            }
+            if (gizmo.active == NativeGizmoHandle::Z)
+            {
+                worldEuler += glm::vec3{ 0.0f, 0.0f, radians };
+            }
             const entt::entity parent = parentOf(editor.scene, gizmo.target);
             if (parent == entt::null)
             {
@@ -371,8 +404,17 @@ namespace se
             const f32 uniform = std::max(0.05f, 1.0f + (delta.x - delta.y) * 0.01f);
             transform.scale = gizmo.startScale * uniform;
         }
-        if (gizmo.active == NativeGizmoHandle::X) { transform.scale = gizmo.startScale * glm::vec3{ factor, 1.0f, 1.0f }; }
-        if (gizmo.active == NativeGizmoHandle::Y) { transform.scale = gizmo.startScale * glm::vec3{ 1.0f, factor, 1.0f }; }
-        if (gizmo.active == NativeGizmoHandle::Z) { transform.scale = gizmo.startScale * glm::vec3{ 1.0f, 1.0f, factor }; }
+        if (gizmo.active == NativeGizmoHandle::X)
+        {
+            transform.scale = gizmo.startScale * glm::vec3{ factor, 1.0f, 1.0f };
+        }
+        if (gizmo.active == NativeGizmoHandle::Y)
+        {
+            transform.scale = gizmo.startScale * glm::vec3{ 1.0f, factor, 1.0f };
+        }
+        if (gizmo.active == NativeGizmoHandle::Z)
+        {
+            transform.scale = gizmo.startScale * glm::vec3{ 1.0f, 1.0f, factor };
+        }
     }
 }
