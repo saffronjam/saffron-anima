@@ -175,9 +175,21 @@ namespace se
             return out;
         }
 
-        auto validFolderName(const std::string& folder) -> bool
+        auto validFolderPath(const std::string& folder) -> bool
         {
-            return !folder.empty() && folder.find('/') == std::string::npos && folder.find('\\') == std::string::npos;
+            if (folder.empty() || folder.front() == '/' || folder.back() == '/' ||
+                folder.find('\\') != std::string::npos)
+            {
+                return false;
+            }
+            for (std::size_t i = 0; i < folder.size(); i = i + 1)
+            {
+                if (folder[i] == '/' && i + 1 < folder.size() && folder[i + 1] == '/')
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         auto hasFolder(const AssetCatalog& catalog, const std::string& folder) -> bool
@@ -190,6 +202,25 @@ namespace se
                 }
             }
             return false;
+        }
+
+        auto isFolderDescendant(const std::string& candidate, const std::string& folder) -> bool
+        {
+            return candidate.size() > folder.size() && candidate.starts_with(folder) && candidate[folder.size()] == '/';
+        }
+
+        auto replaceFolderPrefix(const std::string& value, const std::string& from, const std::string& to)
+            -> std::string
+        {
+            if (value == from)
+            {
+                return to;
+            }
+            if (isFolderDescendant(value, from))
+            {
+                return to + value.substr(from.size());
+            }
+            return value;
         }
 
         auto entityName(Scene& scene, Entity entity) -> std::string
@@ -444,9 +475,9 @@ namespace se
             reg, "create-asset-folder", "create-asset-folder {folder}",
             [](EngineContext& ctx, const CreateAssetFolderParams& params) -> Result<AssetList>
             {
-                if (!validFolderName(params.folder))
+                if (!validFolderPath(params.folder))
                 {
-                    return Err(std::string{ "folder must be a non-empty name without path separators" });
+                    return Err(std::string{ "folder must be a non-empty path without empty segments" });
                 }
                 if (!hasFolder(ctx.assets.catalog, params.folder))
                 {
@@ -460,9 +491,9 @@ namespace se
             reg, "rename-asset-folder", "rename-asset-folder {folder, name}",
             [](EngineContext& ctx, const RenameAssetFolderParams& params) -> Result<AssetList>
             {
-                if (!validFolderName(params.name))
+                if (!validFolderPath(params.name))
                 {
-                    return Err(std::string{ "folder name must be non-empty and cannot contain path separators" });
+                    return Err(std::string{ "folder path must be non-empty and cannot contain empty segments" });
                 }
                 if (!hasFolder(ctx.assets.catalog, params.folder))
                 {
@@ -472,23 +503,26 @@ namespace se
                 {
                     return assetListDto(ctx.assets.catalog);
                 }
+                if (isFolderDescendant(params.name, params.folder))
+                {
+                    return Err(std::string{ "asset folder cannot be moved inside itself" });
+                }
                 if (hasFolder(ctx.assets.catalog, params.name))
                 {
                     return Err(std::format("asset folder '{}' already exists", params.name));
                 }
                 for (std::string& folder : ctx.assets.catalog.folders)
                 {
-                    if (folder == params.folder)
+                    if (folder == params.folder || isFolderDescendant(folder, params.folder))
                     {
-                        folder = params.name;
-                        break;
+                        folder = replaceFolderPrefix(folder, params.folder, params.name);
                     }
                 }
                 for (AssetEntry& entry : ctx.assets.catalog.entries)
                 {
-                    if (entry.folder == params.folder)
+                    if (entry.folder == params.folder || isFolderDescendant(entry.folder, params.folder))
                     {
-                        entry.folder = params.name;
+                        entry.folder = replaceFolderPrefix(entry.folder, params.folder, params.name);
                     }
                 }
                 ctx.sceneEdit.sceneVersion += 1;
@@ -504,7 +538,7 @@ namespace se
                 folders.reserve(ctx.assets.catalog.folders.size());
                 for (const std::string& folder : ctx.assets.catalog.folders)
                 {
-                    if (folder == params.folder)
+                    if (folder == params.folder || isFolderDescendant(folder, params.folder))
                     {
                         removed = true;
                     }
@@ -520,7 +554,7 @@ namespace se
                 ctx.assets.catalog.folders = std::move(folders);
                 for (AssetEntry& entry : ctx.assets.catalog.entries)
                 {
-                    if (entry.folder == params.folder)
+                    if (entry.folder == params.folder || isFolderDescendant(entry.folder, params.folder))
                     {
                         entry.folder.clear();
                     }
