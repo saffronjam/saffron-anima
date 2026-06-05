@@ -62,6 +62,28 @@ export namespace se
         glm::mat4 matrix{ 1.0f };
     };
 
+    // Tags a skeleton joint (set by the glTF skin import) so the outliner can filter
+    // bone rows. Serialized as an empty object; a bone is otherwise an ordinary entity.
+    struct BoneComponent
+    {
+        // entt elides storage for empty types (emplace/get return void there), which the
+        // generic addComponent/getComponent reflection cannot bind — keep one byte.
+        u8 tag = 0;
+    };
+
+    // A skinned renderable: the mesh asset plus the ordered joint list by uuid.
+    // bones[i] drives jointMatrices()[i] through inverseBind[i] — glTF joint order,
+    // defined solely by the import. boneHandles is a runtime cache rebuilt by
+    // relinkHierarchy; like the Relationship caches it is never serialized or copied.
+    struct SkinnedMeshComponent
+    {
+        Uuid mesh;
+        Uuid rootBone;
+        std::vector<Uuid> bones;
+        std::vector<glm::mat4> inverseBind;
+        std::vector<entt::entity> boneHandles;  // resolved cache
+    };
+
     // References a mesh asset by stable id; the AssetServer resolves it to a GPU mesh.
     struct MeshComponent
     {
@@ -447,6 +469,23 @@ export namespace se
                 getComponent<RelationshipComponent>(scene, Entity{ rel.parentHandle }).children.push_back(entity.handle);
             }
         });
+        // Resolve skinned-mesh joint uuids to live handles with the same map; an
+        // unresolved joint warns once here and deforms by identity in jointMatrices.
+        forEach<SkinnedMeshComponent>(scene, [&](Entity, SkinnedMeshComponent& skin)
+        {
+            skin.boneHandles.assign(skin.bones.size(), entt::null);
+            for (std::size_t i = 0; i < skin.bones.size(); i = i + 1)
+            {
+                auto it = uuidToHandle.find(skin.bones[i].value);
+                if (it == uuidToHandle.end())
+                {
+                    logWarn(std::format("skinned mesh joint {} not found; deforming with identity",
+                                        skin.bones[i].value));
+                    continue;
+                }
+                skin.boneHandles[i] = it->second;
+            }
+        });
     }
 
     // Exact world matrix composed by walking the parent chain. Used where the cached
@@ -530,6 +569,31 @@ export namespace se
                 writeSubtree(writeSubtree, entity, glm::mat4(1.0f));
             }
         });
+    }
+
+    // Fills `out` with worldMatrix(bones[i]) * inverseBind[i] per joint — the matrices
+    // the GPU skinning pass blends. Run after updateWorldTransforms so the cached bone
+    // world matrices are current; an unresolved joint (relinkHierarchy already warned)
+    // deforms by identity. The skinned node's own transform is deliberately absent:
+    // per glTF, joints place the vertices entirely.
+    void jointMatrices(Scene& scene, const SkinnedMeshComponent& skin, std::vector<glm::mat4>& out)
+    {
+        const std::size_t count = skin.bones.size();
+        out.assign(count, glm::mat4(1.0f));
+        for (std::size_t i = 0; i < count; i = i + 1)
+        {
+            if (i >= skin.boneHandles.size())
+            {
+                continue;
+            }
+            const entt::entity bone = skin.boneHandles[i];
+            if (bone == entt::null || !scene.registry.valid(bone))
+            {
+                continue;
+            }
+            const glm::mat4 inverseBind = i < skin.inverseBind.size() ? skin.inverseBind[i] : glm::mat4(1.0f);
+            out[i] = worldMatrix(scene, Entity{ bone }) * inverseBind;
+        }
     }
 
     // Engine-authoritative reparent. Refuses self-parenting and cycles (walks newParent's
@@ -622,15 +686,15 @@ export namespace se
     {
         CameraView result;
         forEach<TransformComponent, CameraComponent>(scene,
-            [&](Entity, TransformComponent& transform, CameraComponent& camera)
+            [&](Entity entity, TransformComponent&, CameraComponent& camera)
         {
                 if (result.valid || !camera.primary)
                 {
                     return;
                 }
-                const glm::mat4 model =
-                    glm::translate(glm::mat4(1.0f), transform.translation) * glm::mat4_cast(glm::quat(transform.rotation));
-                result.view = glm::inverse(model);
+                // The world matrix composes the parent chain, so a parented camera views
+                // from its world placement (and inherits parent scale into the view basis).
+                result.view = glm::inverse(worldMatrix(scene, entity));
                 result.fov = camera.fov;
                 result.nearPlane = camera.nearPlane;
                 result.farPlane = camera.farPlane;
@@ -689,6 +753,10 @@ export namespace se
     auto reflectionProbeComponentFromJson(ReflectionProbeComponent& c, const nlohmann::json& j) -> Result<void>;
     auto relationshipComponentToJson(const RelationshipComponent& c) -> nlohmann::json;
     auto relationshipComponentFromJson(RelationshipComponent& c, const nlohmann::json& j) -> Result<void>;
+    auto boneComponentToJson(const BoneComponent& c) -> nlohmann::json;
+    auto boneComponentFromJson(BoneComponent& c, const nlohmann::json& j) -> Result<void>;
+    auto skinnedMeshComponentToJson(const SkinnedMeshComponent& c) -> nlohmann::json;
+    auto skinnedMeshComponentFromJson(SkinnedMeshComponent& c, const nlohmann::json& j) -> Result<void>;
     auto environmentToJson(const SceneEnvironment& env) -> nlohmann::json;
     auto environmentFromJson(const nlohmann::json& j) -> SceneEnvironment;
 
@@ -1073,6 +1141,42 @@ export namespace se
             expect(migratedTotal == 2 && migratedRoots == 2, "v2 entities migrate to roots");
         }
 
+        // A skinned mesh round-trips by uuid: bones + inverseBind survive, and the
+        // resolve pass rebuilds boneHandles to the live joints.
+        registerComponent<SkinnedMeshComponent>(reg, "SkinnedMesh",
+            [](Scene&, Entity) {},
+            skinnedMeshComponentToJson,
+            skinnedMeshComponentFromJson,
+            true);
+        {
+            Scene rig;
+            Entity boneA = createEntity(rig, "BoneA");
+            Entity boneB = createEntity(rig, "BoneB");
+            static_cast<void>(setParent(rig, boneB, boneA, false));
+            Entity skinnedNode = createEntity(rig, "Skinned");
+            SkinnedMeshComponent& skin = addComponent<SkinnedMeshComponent>(rig, skinnedNode);
+            skin.mesh = Uuid{ 777 };
+            skin.rootBone = getComponent<IdComponent>(rig, boneA).id;
+            skin.bones = { getComponent<IdComponent>(rig, boneA).id, getComponent<IdComponent>(rig, boneB).id };
+            skin.inverseBind = { glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 0.0f, 0.0f)),
+                                 glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -2.0f, 0.0f)) };
+            relinkHierarchy(rig);
+
+            nlohmann::json rigDoc = sceneToJson(reg, rig);
+            Scene rigLoaded;
+            expect(sceneFromJson(reg, rigLoaded, rigDoc).has_value(), "skinned rig doc loads");
+            Entity loadedSkinned = findByEntityName(rigLoaded, "Skinned");
+            Entity loadedBoneB = findByEntityName(rigLoaded, "BoneB");
+            SkinnedMeshComponent& loadedSkin = getComponent<SkinnedMeshComponent>(rigLoaded, loadedSkinned);
+            expect(loadedSkin.mesh.value == 777 && loadedSkin.bones.size() == 2 &&
+                       loadedSkin.inverseBind.size() == 2,
+                   "skinned mesh uuids + inverse binds survive the round trip");
+            expect(glm::abs(loadedSkin.inverseBind[1][3][1] + 2.0f) < 1e-6f,
+                   "inverse bind matrix values survive the round trip");
+            expect(loadedSkin.boneHandles.size() == 2 && loadedSkin.boneHandles[1] == loadedBoneB.handle,
+                   "loaded skinned mesh resolves its joints to live handles");
+        }
+
         // A dangling parent uuid downgrades to root (with a warning), never a crash.
         nlohmann::json dangling = doc;
         for (nlohmann::json& entry : dangling["entities"])
@@ -1202,6 +1306,48 @@ export namespace se
             }
         });
         expect(total == 3 && roots == 2, "expected mover + mover2 + grandchild with two roots");
+
+        // A parented primary camera views from its world placement.
+        Entity camParent = createEntity(scene, "CamParent");
+        getComponent<TransformComponent>(scene, camParent).translation = glm::vec3(3.0f, 4.0f, 5.0f);
+        Entity cam = createEntity(scene, "Camera");
+        addComponent<CameraComponent>(scene, cam);
+        expect(setParent(scene, cam, camParent, false).has_value(), "setParent camera -> parent");
+        getComponent<TransformComponent>(scene, cam).translation = glm::vec3(1.0f, 0.0f, 0.0f);
+        updateWorldTransforms(scene);
+        const CameraView view = primaryCamera(scene);
+        expect(view.valid &&
+                   glm::distance(glm::vec3(glm::inverse(view.view)[3]), glm::vec3(4.0f, 4.0f, 5.0f)) < 1e-4f,
+               "parented camera views from its world position");
+
+        // Research gate (CPU half): jointMatrices() must produce worldBone * inverseBind
+        // in joint order, identity at bind pose, and never compose the skinned node's
+        // own transform.
+        Entity jointRoot = createEntity(scene, "JointRoot");
+        Entity jointTip = createEntity(scene, "JointTip");
+        getComponent<TransformComponent>(scene, jointRoot).translation = glm::vec3(1.0f, 0.0f, 0.0f);
+        expect(setParent(scene, jointTip, jointRoot, false).has_value(), "setParent jointTip -> jointRoot");
+        getComponent<TransformComponent>(scene, jointTip).translation = glm::vec3(0.0f, 3.0f, 0.0f);
+        Entity skinnedNode = createEntity(scene, "SkinnedNode");
+        getComponent<TransformComponent>(scene, skinnedNode).translation = glm::vec3(50.0f, 0.0f, 0.0f);
+        SkinnedMeshComponent& skin = addComponent<SkinnedMeshComponent>(scene, skinnedNode);
+        skin.bones = { getComponent<IdComponent>(scene, jointRoot).id,
+                       getComponent<IdComponent>(scene, jointTip).id };
+        skin.inverseBind = { glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 0.0f, 0.0f)),
+                             glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -3.0f, 0.0f)) };
+        relinkHierarchy(scene);
+        updateWorldTransforms(scene);
+        std::vector<glm::mat4> palette;
+        jointMatrices(scene, skin, palette);
+        expect(palette.size() == 2 && nearEqual(palette[0], glm::mat4(1.0f)) &&
+                   nearEqual(palette[1], glm::mat4(1.0f)),
+               "bind-pose joint matrices are identity");
+        getComponent<TransformComponent>(scene, jointTip).translation = glm::vec3(0.0f, 5.0f, 0.0f);
+        updateWorldTransforms(scene);
+        jointMatrices(scene, skin, palette);
+        const glm::vec4 movedVertex = palette[1] * glm::vec4(1.0f, 3.0f, 0.0f, 1.0f);
+        expect(glm::distance(glm::vec3(movedVertex), glm::vec3(1.0f, 5.0f, 0.0f)) < 1e-4f,
+               "a tip-bound vertex follows the moved joint");
 
         if (failures == 0)
         {

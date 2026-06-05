@@ -6,6 +6,7 @@ module;
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
+#include <cstdlib>
 #include <format>
 #include <string>
 
@@ -27,6 +28,27 @@ namespace se
                 case SkyMode::Procedural: return "procedural";
             }
             return "procedural";
+        }
+
+        // A bare json value as u64: unsigned numbers directly, decimal strings parsed
+        // (uuid arrays serialize as strings, like every id on the wire).
+        auto u64FromJson(const nlohmann::json& value) -> u64
+        {
+            if (value.is_number_unsigned())
+            {
+                return value.get<u64>();
+            }
+            if (value.is_string())
+            {
+                const std::string text = value.get<std::string>();
+                char* end = nullptr;
+                const unsigned long long parsed = std::strtoull(text.c_str(), &end, 10);
+                if (end != text.c_str() && *end == '\0')
+                {
+                    return parsed;
+                }
+            }
+            return 0;
         }
 
         auto skyModeFromName(const std::string& name) -> SkyMode
@@ -227,6 +249,76 @@ namespace se
     auto relationshipComponentFromJson(RelationshipComponent& c, const nlohmann::json& j) -> Result<void>
     {
         c.parent = Uuid{ jsonU64Or(j, "parent", 0) };
+        return {};
+    }
+
+    auto boneComponentToJson(const BoneComponent&) -> nlohmann::json
+    {
+        return nlohmann::json::object();
+    }
+
+    auto boneComponentFromJson(BoneComponent&, const nlohmann::json&) -> Result<void>
+    {
+        return {};
+    }
+
+    auto skinnedMeshComponentToJson(const SkinnedMeshComponent& c) -> nlohmann::json
+    {
+        nlohmann::json bones = nlohmann::json::array();
+        for (const Uuid& bone : c.bones)
+        {
+            bones.push_back(uuidToJson(bone.value));
+        }
+        nlohmann::json inverseBind = nlohmann::json::array();
+        for (const glm::mat4& m : c.inverseBind)
+        {
+            nlohmann::json mat = nlohmann::json::array();
+            const float* p = &m[0][0];
+            for (int i = 0; i < 16; i = i + 1)
+            {
+                mat.push_back(p[i]);
+            }
+            inverseBind.push_back(std::move(mat));
+        }
+        return nlohmann::json{ { "mesh", uuidToJson(c.mesh.value) },
+                               { "rootBone", uuidToJson(c.rootBone.value) },
+                               { "bones", std::move(bones) },
+                               { "inverseBind", std::move(inverseBind) } };
+    }
+
+    auto skinnedMeshComponentFromJson(SkinnedMeshComponent& c, const nlohmann::json& j) -> Result<void>
+    {
+        c.mesh = Uuid{ jsonU64Or(j, "mesh", 0) };
+        c.rootBone = Uuid{ jsonU64Or(j, "rootBone", 0) };
+        c.bones.clear();
+        if (j.contains("bones") && j["bones"].is_array())
+        {
+            for (const nlohmann::json& bone : j["bones"])
+            {
+                c.bones.push_back(Uuid{ u64FromJson(bone) });
+            }
+        }
+        c.inverseBind.clear();
+        if (j.contains("inverseBind") && j["inverseBind"].is_array())
+        {
+            for (const nlohmann::json& mat : j["inverseBind"])
+            {
+                glm::mat4 m{ 1.0f };
+                if (mat.is_array() && mat.size() == 16)
+                {
+                    float* p = &m[0][0];
+                    for (int i = 0; i < 16; i = i + 1)
+                    {
+                        if (mat[i].is_number())
+                        {
+                            p[i] = mat[i].get<float>();
+                        }
+                    }
+                }
+                c.inverseBind.push_back(m);
+            }
+        }
+        c.boneHandles.clear();  // resolved cache — relinkHierarchy rebuilds it
         return {};
     }
 
