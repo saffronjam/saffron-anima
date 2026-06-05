@@ -28,13 +28,7 @@ export type PickerAssetKind = "mesh" | "texture";
 
 /// A small thumbnail swatch fetched at 64 px and shown at the given CSS size; falls
 /// back to a lucide type icon while loading or on failure.
-function AssetSwatch({
-  asset,
-  size,
-}: {
-  asset: AssetEntry;
-  size: number;
-}) {
+function AssetSwatch({ asset, size }: { asset: AssetEntry; size: number }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -102,7 +96,7 @@ export function AssetPicker({ value, assetType, onChange }: AssetPickerProps) {
     event.preventDefault();
     setDropActive(false);
     const payload = readAssetPayload(event.dataTransfer);
-    if (payload && payload.type === assetType) {
+    if (payload?.id && payload.type === assetType) {
       onChange(payload.id);
     }
   };
@@ -131,9 +125,7 @@ export function AssetPicker({ value, assetType, onChange }: AssetPickerProps) {
             className="h-7 w-full justify-between gap-1.5 px-1.5 font-mono text-[11px]"
           >
             <span className="flex min-w-0 items-center gap-1.5">
-              {selected ? (
-                <AssetSwatch asset={selected} size={16} />
-              ) : null}
+              {selected ? <AssetSwatch asset={selected} size={16} /> : null}
               <span className="truncate" title={selected ? selected.name : "(none)"}>
                 {selected ? selected.name : "(none)"}
               </span>
@@ -141,17 +133,10 @@ export function AssetPicker({ value, assetType, onChange }: AssetPickerProps) {
             <ChevronsUpDown className="size-3 flex-none opacity-50" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent
-          align="start"
-          className="w-(--radix-popover-trigger-width) p-1"
-        >
+        <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-1">
           <ScrollArea className="max-h-56">
             <div className="flex flex-col gap-0.5">
-              <PickerRow
-                label="(none)"
-                active={isNone}
-                onSelect={() => pick(NONE_UUID)}
-              />
+              <PickerRow label="(none)" active={isNone} onSelect={() => pick(NONE_UUID)} />
               {options.map((asset) => (
                 <PickerRow
                   key={asset.id}

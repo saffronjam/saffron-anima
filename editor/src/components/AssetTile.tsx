@@ -24,8 +24,9 @@ import {
 export const ASSET_DND_MIME = "application/x-se-asset";
 
 export interface AssetDragPayload {
-  id: string;
-  type: AssetEntry["type"];
+  id?: string;
+  ids?: string[];
+  type?: AssetEntry["type"];
 }
 
 /// Try to read an asset drag payload off a DataTransfer; null if it is not one.
@@ -36,7 +37,10 @@ export function readAssetPayload(dt: DataTransfer): AssetDragPayload | null {
   }
   try {
     const parsed = JSON.parse(raw) as Partial<AssetDragPayload>;
-    if (typeof parsed.id === "string" && typeof parsed.type === "string") {
+    if (Array.isArray(parsed.ids) && parsed.ids.every((id) => typeof id === "string")) {
+      return { ids: parsed.ids };
+    }
+    if (typeof parsed.id === "string") {
       return { id: parsed.id, type: parsed.type };
     }
   } catch {
@@ -58,8 +62,11 @@ function TypeIcon({ type }: { type: AssetEntry["type"] }) {
 
 export interface AssetTileProps {
   entry: AssetEntry;
+  selected?: boolean;
   onView(entry: AssetEntry): void;
   onDelete(entry: AssetEntry): void;
+  onSelect(entry: AssetEntry, event: React.MouseEvent): void;
+  getDragAssetIds(entry: AssetEntry): string[];
   confirmingDelete?: boolean;
   deleteBody?: string;
   onConfirmDelete?(entry: AssetEntry): void;
@@ -72,8 +79,11 @@ const THUMBNAIL_FETCH_SIZE = 128;
 
 export function AssetTile({
   entry,
+  selected = false,
   onView,
   onDelete,
+  onSelect,
+  getDragAssetIds,
   confirmingDelete = false,
   deleteBody,
   onConfirmDelete,
@@ -128,7 +138,9 @@ export function AssetTile({
   };
 
   const onDragStart = (event: React.DragEvent<HTMLDivElement>): void => {
-    const payload: AssetDragPayload = { id: entry.id, type: entry.type };
+    const ids = getDragAssetIds(entry);
+    const payload: AssetDragPayload =
+      ids.length > 1 ? { ids } : { id: entry.id, ids: [entry.id], type: entry.type };
     event.dataTransfer.setData(ASSET_DND_MIME, JSON.stringify(payload));
     event.dataTransfer.effectAllowed = "copyMove";
   };
@@ -143,14 +155,18 @@ export function AssetTile({
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
+            data-asset-tile-id={entry.id}
+            data-asset-item="true"
             // Editing disables the drag so a tile-drag never starts while typing.
             draggable={!editing}
             onDragStart={onDragStart}
+            onClick={(event) => onSelect(entry, event)}
             onDoubleClick={() => onView(entry)}
             title={`${entry.name}\n${entry.path}`}
             className={cn(
               "group flex w-[72px] cursor-grab flex-col gap-1 rounded-md border border-border bg-background p-1",
               "transition-colors hover:border-ring hover:bg-accent/40 active:cursor-grabbing",
+              selected && "border-ring bg-accent/60 ring-1 ring-ring",
             )}
           >
             <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
@@ -178,7 +194,7 @@ export function AssetTile({
             ) : (
               <button
                 type="button"
-                className="truncate rounded-sm px-0.5 text-center text-[10px] leading-tight text-foreground hover:bg-accent"
+                className="truncate rounded-sm px-0.5 text-center text-[11px] leading-tight text-foreground hover:bg-accent"
                 title={entry.name}
               >
                 {entry.name}
@@ -287,7 +303,7 @@ function RenameInput({ value, onChange, onCommit, onCancel }: RenameInputProps) 
           onCancel();
         }
       }}
-      className="h-5 rounded-sm px-1 py-0 text-center font-mono text-[10px]"
+      className="h-5 rounded-sm px-1 py-0 text-center font-mono text-[11px]"
     />
   );
 }
