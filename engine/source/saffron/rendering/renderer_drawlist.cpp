@@ -42,8 +42,7 @@ namespace se
         return uploadMesh(renderer, mesh, std::vector<VertexSkin>{});
     }
 
-    auto uploadMesh(Renderer& renderer, const Mesh& mesh, const std::vector<VertexSkin>& skin)
-        -> Result<Ref<GpuMesh>>
+    auto uploadMesh(Renderer& renderer, const Mesh& mesh, const std::vector<VertexSkin>& skin) -> Result<Ref<GpuMesh>>
     {
         if (mesh.vertices.empty() || mesh.indices.empty())
         {
@@ -68,7 +67,8 @@ namespace se
         VkBuffer staging = VK_NULL_HANDLE;
         VmaAllocation stagingAllocation = nullptr;
         VmaAllocationInfo stagingMapped{};
-        if (vmaCreateBuffer(renderer.context.allocator, &stagingInfo, &stagingAlloc, &staging, &stagingAllocation, &stagingMapped) != VK_SUCCESS)
+        if (vmaCreateBuffer(renderer.context.allocator, &stagingInfo, &stagingAlloc, &staging, &stagingAllocation,
+                            &stagingMapped) != VK_SUCCESS)
         {
             return Err(std::string{ "uploadMesh: staging vmaCreateBuffer failed" });
         }
@@ -89,14 +89,16 @@ namespace se
             rtUsage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
         }
-        auto makeDeviceBuffer = [&](vk::DeviceSize size, VkBufferUsageFlags usage, VkBuffer& outBuffer, VmaAllocation& outAlloc) -> bool
+        auto makeDeviceBuffer = [&](vk::DeviceSize size, VkBufferUsageFlags usage, VkBuffer& outBuffer,
+                                    VmaAllocation& outAlloc) -> bool
         {
             VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
             info.size = size;
             info.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT | rtUsage;
             VmaAllocationCreateInfo alloc{};
             alloc.usage = VMA_MEMORY_USAGE_AUTO;
-            return vmaCreateBuffer(renderer.context.allocator, &info, &alloc, &outBuffer, &outAlloc, nullptr) == VK_SUCCESS;
+            return vmaCreateBuffer(renderer.context.allocator, &info, &alloc, &outBuffer, &outAlloc, nullptr) ==
+                   VK_SUCCESS;
         };
 
         GpuMesh gpu;
@@ -144,7 +146,8 @@ namespace se
         cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
-        auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "uploadMesh: allocateCommandBuffers");
+        auto cmds =
+            checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "uploadMesh: allocateCommandBuffers");
         if (!cmds)
         {
             vmaDestroyBuffer(renderer.context.allocator, staging, stagingAllocation);
@@ -187,8 +190,8 @@ namespace se
                 logWarn(std::format("BLAS build failed: {}", blas.error()));
             }
         }
-        logInfo(std::format("uploaded mesh: {} vertices, {} indices, {} submeshes",
-                            mesh.vertices.size(), mesh.indices.size(), mesh.submeshes.size()));
+        logInfo(std::format("uploaded mesh: {} vertices, {} indices, {} submeshes", mesh.vertices.size(),
+                            mesh.indices.size(), mesh.submeshes.size()));
         return meshRef;
     }
 
@@ -438,7 +441,7 @@ namespace se
         if (renderer.context.rtSupported && renderer.rt.meshSets[renderer.frame.index])
         {
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 6,
-                renderer.rt.meshSets[renderer.frame.index], {});
+                                   renderer.rt.meshSets[renderer.frame.index], {});
             if (renderer.restir.meshSet)
             {
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 7, renderer.restir.meshSet, {});
@@ -457,8 +460,8 @@ namespace se
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
             for (const Submesh& submesh : batch.mesh->submeshes)
             {
-                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex,
-                                submesh.vertexOffset, batch.baseInstance);
+                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex, submesh.vertexOffset,
+                                batch.baseInstance);
             }
         }
     }
@@ -479,12 +482,12 @@ namespace se
         struct SkyPush
         {
             glm::mat4 invViewProj;
-            glm::vec4 params;      // intensity, rotation, mode, textureIndex
+            glm::vec4 params;  // intensity, rotation, mode, textureIndex
             glm::vec4 clearColor;
         } push;
         push.invViewProj = glm::inverse(renderer.frame.sceneDrawList.viewProj);
-        push.params = glm::vec4(renderer.sky.intensity, renderer.sky.rotation,
-                                static_cast<f32>(renderer.sky.mode), static_cast<f32>(renderer.sky.textureIndex));
+        push.params = glm::vec4(renderer.sky.intensity, renderer.sky.rotation, static_cast<f32>(renderer.sky.mode),
+                                static_cast<f32>(renderer.sky.textureIndex));
         push.clearColor = glm::vec4(renderer.sky.clearColor, 1.0f);
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(push), &push);
         cmd.draw(3, 1, 0, 0);
@@ -513,8 +516,8 @@ namespace se
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
             for (const Submesh& submesh : batch.mesh->submeshes)
             {
-                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex,
-                                submesh.vertexOffset, batch.baseInstance);
+                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex, submesh.vertexOffset,
+                                batch.baseInstance);
             }
         }
     }
@@ -544,8 +547,8 @@ namespace se
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
             for (const Submesh& submesh : batch.mesh->submeshes)
             {
-                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex,
-                                submesh.vertexOffset, batch.baseInstance);
+                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex, submesh.vertexOffset,
+                                batch.baseInstance);
             }
         }
     }
@@ -579,8 +582,8 @@ namespace se
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
             for (const Submesh& submesh : batch.mesh->submeshes)
             {
-                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex,
-                                submesh.vertexOffset, batch.baseInstance);
+                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex, submesh.vertexOffset,
+                                batch.baseInstance);
             }
         }
     }
@@ -615,8 +618,8 @@ namespace se
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
             for (const Submesh& submesh : batch.mesh->submeshes)
             {
-                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex,
-                                submesh.vertexOffset, batch.baseInstance);
+                cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex, submesh.vertexOffset,
+                                batch.baseInstance);
             }
         }
     }
@@ -638,9 +641,8 @@ namespace se
         const vk::Extent2D extent = targets.pointShadowCube.extent;
 
         // All 6 cube layers: ShaderReadOnly (entry) -> ColorAttachment for rendering.
-        auto cubeBarrier = [&](vk::ImageLayout oldL, vk::ImageLayout newL,
-                               vk::PipelineStageFlags2 srcS, vk::AccessFlags2 srcA,
-                               vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA)
+        auto cubeBarrier = [&](vk::ImageLayout oldL, vk::ImageLayout newL, vk::PipelineStageFlags2 srcS,
+                               vk::AccessFlags2 srcA, vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA)
         {
             vk::ImageMemoryBarrier2 b{};
             b.srcStageMask = srcS;
@@ -656,18 +658,20 @@ namespace se
             cmd.pipelineBarrier2(d);
         };
         cubeBarrier(vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eColorAttachmentOptimal,
-            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite);
+                    vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite);
         // The shared depth scratch: Undefined -> DepthAttachment (cleared each face).
-        transitionImage(cmd, targets.pointShadowDepth.image,
-            vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
+        transitionImage(
+            cmd, targets.pointShadowDepth.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
             vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
             vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
             vk::AccessFlagBits2::eDepthStencilAttachmentWrite, vk::ImageAspectFlagBits::eDepth);
 
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, renderer.pipelines.pointShadow->pipeline);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 2, list.instanceSet, {});
-        vk::Viewport viewport{ 0.0f, 0.0f, static_cast<f32>(extent.width), static_cast<f32>(extent.height), 0.0f, 1.0f };
+        vk::Viewport viewport{
+            0.0f, 0.0f, static_cast<f32>(extent.width), static_cast<f32>(extent.height), 0.0f, 1.0f
+        };
         vk::Rect2D scissor{ vk::Offset2D{ 0, 0 }, extent };
 
         for (u32 face = 0; face < 6; face = face + 1)
@@ -678,7 +682,8 @@ namespace se
             colorAttach.loadOp = vk::AttachmentLoadOp::eClear;
             colorAttach.storeOp = vk::AttachmentStoreOp::eStore;
             // Clear to far distance so untouched texels read "no occluder".
-            colorAttach.clearValue = vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ farPlane * 2.0f, 0.0f, 0.0f, 0.0f } } };
+            colorAttach.clearValue =
+                vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ farPlane * 2.0f, 0.0f, 0.0f, 0.0f } } };
             vk::RenderingAttachmentInfo depthAttach{};
             depthAttach.imageView = targets.pointShadowDepth.view;
             depthAttach.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
@@ -694,11 +699,11 @@ namespace se
             // The depth scratch is reused across faces; barrier write->write between faces.
             if (face > 0)
             {
-                transitionImage(cmd, targets.pointShadowDepth.image,
-                    vk::ImageLayout::eDepthAttachmentOptimal, vk::ImageLayout::eDepthAttachmentOptimal,
-                    vk::PipelineStageFlagBits2::eLateFragmentTests, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-                    vk::PipelineStageFlagBits2::eEarlyFragmentTests, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-                    vk::ImageAspectFlagBits::eDepth);
+                transitionImage(
+                    cmd, targets.pointShadowDepth.image, vk::ImageLayout::eDepthAttachmentOptimal,
+                    vk::ImageLayout::eDepthAttachmentOptimal, vk::PipelineStageFlagBits2::eLateFragmentTests,
+                    vk::AccessFlagBits2::eDepthStencilAttachmentWrite, vk::PipelineStageFlagBits2::eEarlyFragmentTests,
+                    vk::AccessFlagBits2::eDepthStencilAttachmentWrite, vk::ImageAspectFlagBits::eDepth);
             }
             cmd.beginRendering(rendering);
             cmd.setViewport(0, viewport);
@@ -708,8 +713,8 @@ namespace se
                 glm::mat4 viewProj;
                 glm::vec4 lightPos;
             } push{ faces[face], glm::vec4(lightPos, farPlane) };
-            cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                              0, sizeof(push), &push);
+            cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
+                              sizeof(push), &push);
             for (const DrawBatch& batch : list.batches)
             {
                 if (batch.skinned)
@@ -721,8 +726,8 @@ namespace se
                 cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
                 for (const Submesh& submesh : batch.mesh->submeshes)
                 {
-                    cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex,
-                                    submesh.vertexOffset, batch.baseInstance);
+                    cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex, submesh.vertexOffset,
+                                    batch.baseInstance);
                 }
             }
             cmd.endRendering();
@@ -730,8 +735,8 @@ namespace se
 
         // All 6 layers back to ShaderReadOnly for the scene pass to sample.
         cubeBarrier(vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
-            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
+                    vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
         targets.pointShadowCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
     }
 }

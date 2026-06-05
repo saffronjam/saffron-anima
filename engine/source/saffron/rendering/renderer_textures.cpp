@@ -38,8 +38,8 @@ import :Detail;
 
 namespace se
 {
-    auto uploadSvgIcon(Renderer& renderer, const std::string& svgPath,
-                                                              u32 pixelSize, glm::vec4 tint) -> Result<Ref<GpuTexture>>
+    auto uploadSvgIcon(Renderer& renderer, const std::string& svgPath, u32 pixelSize, glm::vec4 tint)
+        -> Result<Ref<GpuTexture>>
     {
         std::ifstream in(svgPath);
         if (!in)
@@ -71,8 +71,8 @@ namespace se
         }
         const f32 scale = static_cast<f32>(pixelSize) / glm::max(image->width, image->height);
         std::vector<u8> rgba(static_cast<std::size_t>(pixelSize) * pixelSize * 4, 0);
-        nsvgRasterize(rasterizer, image, 0.0f, 0.0f, scale, rgba.data(),
-                      static_cast<int>(pixelSize), static_cast<int>(pixelSize), static_cast<int>(pixelSize) * 4);
+        nsvgRasterize(rasterizer, image, 0.0f, 0.0f, scale, rgba.data(), static_cast<int>(pixelSize),
+                      static_cast<int>(pixelSize), static_cast<int>(pixelSize) * 4);
         nsvgDeleteRasterizer(rasterizer);
         nsvgDelete(image);
 
@@ -102,7 +102,8 @@ namespace se
         VkBuffer staging = VK_NULL_HANDLE;
         VmaAllocation stagingAllocation = nullptr;
         VmaAllocationInfo stagingMapped{};
-        if (vmaCreateBuffer(renderer.context.allocator, &stagingInfo, &stagingAlloc, &staging, &stagingAllocation, &stagingMapped) != VK_SUCCESS)
+        if (vmaCreateBuffer(renderer.context.allocator, &stagingInfo, &stagingAlloc, &staging, &stagingAllocation,
+                            &stagingMapped) != VK_SUCCESS)
         {
             return Err(std::string{ "uploadTexture: staging vmaCreateBuffer failed" });
         }
@@ -125,7 +126,8 @@ namespace se
         imageAlloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         VkImage rawImage = VK_NULL_HANDLE;
         VmaAllocation imageAllocation = nullptr;
-        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &imageAlloc, &rawImage, &imageAllocation, nullptr) != VK_SUCCESS)
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &imageAlloc, &rawImage, &imageAllocation, nullptr) !=
+            VK_SUCCESS)
         {
             vmaDestroyBuffer(renderer.context.allocator, staging, stagingAllocation);
             return Err(std::string{ "uploadTexture: vmaCreateImage failed" });
@@ -135,7 +137,8 @@ namespace se
         cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
-        auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "uploadTexture: allocateCommandBuffers");
+        auto cmds =
+            checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "uploadTexture: allocateCommandBuffers");
         if (!cmds)
         {
             vmaDestroyImage(renderer.context.allocator, rawImage, imageAllocation);
@@ -146,18 +149,18 @@ namespace se
         vk::CommandBufferBeginInfo begin{};
         begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
         static_cast<void>(cmd.begin(begin));
-        transitionImage(cmd, vk::Image{ rawImage },
-            vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
+        transitionImage(cmd, vk::Image{ rawImage }, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+                        vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
         vk::BufferImageCopy region{};
         region.imageSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
         region.imageExtent = vk::Extent3D{ width, height, 1 };
-        cmd.copyBufferToImage(vk::Buffer{ staging }, vk::Image{ rawImage }, vk::ImageLayout::eTransferDstOptimal, region);
-        transitionImage(cmd, vk::Image{ rawImage },
-            vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
-            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+        cmd.copyBufferToImage(vk::Buffer{ staging }, vk::Image{ rawImage }, vk::ImageLayout::eTransferDstOptimal,
+                              region);
+        transitionImage(cmd, vk::Image{ rawImage }, vk::ImageLayout::eTransferDstOptimal,
+                        vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eCopy,
+                        vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eFragmentShader,
+                        vk::AccessFlagBits2::eShaderSampledRead);
         static_cast<void>(cmd.end());
         vk::CommandBufferSubmitInfo cmdInfo{};
         cmdInfo.commandBuffer = cmd;
@@ -260,7 +263,8 @@ namespace se
         VkBuffer staging = VK_NULL_HANDLE;
         VmaAllocation stagingAllocation = nullptr;
         VmaAllocationInfo stagingMapped{};
-        if (vmaCreateBuffer(renderer.context.allocator, &stagingInfo, &stagingAlloc, &staging, &stagingAllocation, &stagingMapped) != VK_SUCCESS)
+        if (vmaCreateBuffer(renderer.context.allocator, &stagingInfo, &stagingAlloc, &staging, &stagingAllocation,
+                            &stagingMapped) != VK_SUCCESS)
         {
             return Err(std::string{ "uploadTextureFloat: staging vmaCreateBuffer failed" });
         }
@@ -283,7 +287,8 @@ namespace se
         imageAlloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         VkImage rawImage = VK_NULL_HANDLE;
         VmaAllocation imageAllocation = nullptr;
-        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &imageAlloc, &rawImage, &imageAllocation, nullptr) != VK_SUCCESS)
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &imageAlloc, &rawImage, &imageAllocation, nullptr) !=
+            VK_SUCCESS)
         {
             vmaDestroyBuffer(renderer.context.allocator, staging, stagingAllocation);
             return Err(std::string{ "uploadTextureFloat: vmaCreateImage failed" });
@@ -293,7 +298,8 @@ namespace se
         cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
-        auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "uploadTextureFloat: allocateCommandBuffers");
+        auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc),
+                            "uploadTextureFloat: allocateCommandBuffers");
         if (!cmds)
         {
             vmaDestroyImage(renderer.context.allocator, rawImage, imageAllocation);
@@ -304,18 +310,18 @@ namespace se
         vk::CommandBufferBeginInfo begin{};
         begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
         static_cast<void>(cmd.begin(begin));
-        transitionImage(cmd, vk::Image{ rawImage },
-            vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
+        transitionImage(cmd, vk::Image{ rawImage }, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+                        vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
         vk::BufferImageCopy region{};
         region.imageSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
         region.imageExtent = vk::Extent3D{ width, height, 1 };
-        cmd.copyBufferToImage(vk::Buffer{ staging }, vk::Image{ rawImage }, vk::ImageLayout::eTransferDstOptimal, region);
-        transitionImage(cmd, vk::Image{ rawImage },
-            vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
-            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+        cmd.copyBufferToImage(vk::Buffer{ staging }, vk::Image{ rawImage }, vk::ImageLayout::eTransferDstOptimal,
+                              region);
+        transitionImage(cmd, vk::Image{ rawImage }, vk::ImageLayout::eTransferDstOptimal,
+                        vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eCopy,
+                        vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eFragmentShader,
+                        vk::AccessFlagBits2::eShaderSampledRead);
         static_cast<void>(cmd.end());
         vk::CommandBufferSubmitInfo cmdInfo{};
         cmdInfo.commandBuffer = cmd;

@@ -68,9 +68,18 @@ namespace se
     {
         // The three AA modes are mutually exclusive; MSAA wins if samples > 1 is requested.
         vk::SampleCountFlagBits count = vk::SampleCountFlagBits::e1;
-        if (msaaSamples >= 8) { count = vk::SampleCountFlagBits::e8; }
-        else if (msaaSamples >= 4) { count = vk::SampleCountFlagBits::e4; }
-        else if (msaaSamples >= 2) { count = vk::SampleCountFlagBits::e2; }
+        if (msaaSamples >= 8)
+        {
+            count = vk::SampleCountFlagBits::e8;
+        }
+        else if (msaaSamples >= 4)
+        {
+            count = vk::SampleCountFlagBits::e4;
+        }
+        else if (msaaSamples >= 2)
+        {
+            count = vk::SampleCountFlagBits::e2;
+        }
         count = clampSampleCount(renderer.targets.supportedSampleCounts, count);
 
         waitGpuIdle(renderer);
@@ -78,13 +87,12 @@ namespace se
         renderer.targets.fxaaEnabled = fxaa;
         renderer.targets.taaEnabled = taa;
         recreateMsaaTargets(renderer);
-        recreateFxaaTarget(renderer);   // owns the 1x scratch FXAA + TAA both render into
-        recreateTaaTargets(renderer);   // binds scratch into the TAA set, so run it after
+        recreateFxaaTarget(renderer);  // owns the 1x scratch FXAA + TAA both render into
+        recreateTaaTargets(renderer);  // binds scratch into the TAA set, so run it after
 
         // The mesh + depth-prepass PSOs bake the sample count — rebuild them.
         renderer.pipelines.cache.clear();
-        Result<Ref<Pipeline>> depthPrepass =
-            makeDepthPrepassPipeline(renderer, "shaders/mesh.spv");
+        Result<Ref<Pipeline>> depthPrepass = makeDepthPrepassPipeline(renderer, "shaders/mesh.spv");
         if (depthPrepass)
         {
             renderer.pipelines.depthPrepass = *depthPrepass;

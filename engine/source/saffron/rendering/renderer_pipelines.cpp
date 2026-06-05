@@ -84,8 +84,8 @@ namespace se
             vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
             vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) },
             vk::VertexInputAttributeDescription{ 3, 1, vk::Format::eR16G16B16A16Uint, offsetof(VertexSkin, joints) },
-            vk::VertexInputAttributeDescription{ 4, 1, vk::Format::eR32G32B32A32Sfloat,
-                                                 offsetof(VertexSkin, weights) } };
+            vk::VertexInputAttributeDescription{ 4, 1, vk::Format::eR32G32B32A32Sfloat, offsetof(VertexSkin, weights) }
+        };
 
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.vertexBindingDescriptionCount = skinned ? 2 : 1;
@@ -139,19 +139,22 @@ namespace se
         // are appended only when RT is supported (their layouts need the AS extension). The mesh
         // shader's RT bindings are compiled in but unused unless the ray-query path is taken
         // (gated by a UBO flag).
-        std::vector<vk::DescriptorSetLayout> setLayouts{
-            renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout,
-            renderer.descriptors.instanceSetLayout, renderer.ibl.setLayout,
-            renderer.ssao.meshSetLayout, renderer.ddgi.meshLayout };
+        std::vector<vk::DescriptorSetLayout> setLayouts{ renderer.descriptors.bindlessSetLayout,
+                                                         renderer.descriptors.lightSetLayout,
+                                                         renderer.descriptors.instanceSetLayout,
+                                                         renderer.ibl.setLayout,
+                                                         renderer.ssao.meshSetLayout,
+                                                         renderer.ddgi.meshLayout };
         if (renderer.context.rtSupported && renderer.rt.meshLayout)
         {
-            setLayouts.push_back(renderer.rt.meshLayout);       // set 6: TLAS
-            setLayouts.push_back(renderer.restir.meshLayout);   // set 7: ReSTIR radiance
+            setLayouts.push_back(renderer.rt.meshLayout);      // set 6: TLAS
+            setLayouts.push_back(renderer.restir.meshLayout);  // set 7: ReSTIR radiance
         }
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (mesh)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (mesh)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);
@@ -245,7 +248,8 @@ namespace se
         binding.inputRate = vk::VertexInputRate::eVertex;
         std::array<vk::VertexInputAttributeDescription, 2> attributes{
             vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32Sfloat, offsetof(OverlayVertex, position) },
-            vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(OverlayVertex, color) } };
+            vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(OverlayVertex, color) }
+        };
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.setVertexBindingDescriptions(binding);
         vertexInput.setVertexAttributeDescriptions(attributes);
@@ -283,7 +287,8 @@ namespace se
         vk::PipelineRenderingCreateInfo renderingInfo{};
         renderingInfo.setColorAttachmentFormats(OffscreenColorFormat);
         vk::PipelineLayoutCreateInfo layoutInfo{};
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (overlay)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (overlay)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);

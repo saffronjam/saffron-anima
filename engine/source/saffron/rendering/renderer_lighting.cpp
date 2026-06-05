@@ -86,8 +86,8 @@ namespace se
         setSceneLighting(renderer, direction, color, intensity, glm::vec3(ambient), glm::vec3(0.0f), {});
     }
 
-    void setSceneLighting(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity,
-                          glm::vec3 ambient, glm::vec3 eyePosition, const std::vector<GpuLight>& lights)
+    void setSceneLighting(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity, glm::vec3 ambient,
+                          glm::vec3 eyePosition, const std::vector<GpuLight>& lights)
     {
         // Write the current frame's copies; beginFrame already waited on its fence, so
         // no in-flight frame is reading them.
@@ -132,7 +132,8 @@ namespace se
         ubo.counts = glm::uvec4(count, renderer.lighting.shadowPending ? 1u : 0u, iblFlag, ssaoFlag);
         // screenFlags.w = ReSTIR direct-lighting flag: the mesh replaces its punctual loop
         // with the resolved ReSTIR radiance buffer.
-        const u32 restirFlag = (renderer.restir.useRestir && renderer.restir.ready && renderer.context.rtSupported) ? 1u : 0u;
+        const u32 restirFlag =
+            (renderer.restir.useRestir && renderer.restir.ready && renderer.context.rtSupported) ? 1u : 0u;
         ubo.screenFlags = glm::uvec4(contactFlag, ssgiFlag, ddgiFlag, restirFlag);
         ubo.ddgiVolumeMin = glm::vec4(renderer.ddgi.volumeMin, 0.0f);
         ubo.ddgiVolumeExtent = glm::vec4(renderer.ddgi.volumeExtent, 0.0f);
@@ -140,8 +141,8 @@ namespace se
         ubo.eyePosition = glm::vec4(eyePosition, 0.0f);
         ubo.shadowViewProj = renderer.lighting.shadowViewProj;
         ubo.spotShadowViewProj = renderer.lighting.spotShadowViewProj;
-        ubo.spotShadow = glm::uvec4(renderer.lighting.spotShadowLightIndex,
-                                    renderer.lighting.spotShadowPending ? 1u : 0u, 0, 0);
+        ubo.spotShadow =
+            glm::uvec4(renderer.lighting.spotShadowLightIndex, renderer.lighting.spotShadowPending ? 1u : 0u, 0, 0);
         ubo.pointShadow = glm::vec4(renderer.lighting.pointShadowPos, renderer.lighting.pointShadowFar);
         // pointShadowMeta.z = RT-shadow flag (the mesh traces a ray-query shadow per light
         // instead of / in addition to the shadow maps). Requires rtSupported + a built TLAS.
@@ -153,8 +154,7 @@ namespace se
         renderer.lighting.frameLightCount = count;
     }
 
-    void setClusterCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj,
-                          f32 nearPlane, f32 farPlane)
+    void setClusterCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj, f32 nearPlane, f32 farPlane)
     {
         const u32 frame = renderer.frame.index;
         if (renderer.lighting.clusterParamMapped[frame] == nullptr)
@@ -165,12 +165,13 @@ namespace se
         params.view = view;
         params.inverseProjection = glm::inverse(proj);
         params.gridSize = glm::uvec4(ClusterGridX, ClusterGridY, ClusterGridZ, renderer.lighting.frameLightCount);
-        params.screenSize = glm::uvec4(viewportWidth(renderer), viewportHeight(renderer),
-                                       renderer.lighting.useClustered ? 1u : 0u, 0u);
+        params.screenSize =
+            glm::uvec4(viewportWidth(renderer), viewportHeight(renderer), renderer.lighting.useClustered ? 1u : 0u, 0u);
         params.zPlanes = glm::vec4(nearPlane, farPlane, 0.0f, 0.0f);
         std::memcpy(renderer.lighting.clusterParamMapped[frame], &params, sizeof(params));
         vmaFlushAllocation(renderer.context.allocator, renderer.lighting.clusterParamAllocs[frame], 0, sizeof(params));
-        renderer.lighting.clusterDispatchPending = renderer.lighting.useClustered && renderer.lighting.frameLightCount > 0;
+        renderer.lighting.clusterDispatchPending =
+            renderer.lighting.useClustered && renderer.lighting.frameLightCount > 0;
     }
 
     void setClustered(Renderer& renderer, bool enabled)
@@ -193,16 +194,14 @@ namespace se
         renderer.sky.textureIndex = settings.textureIndex;
     }
 
-    void requestEnvBake(Renderer& renderer, EnvSource source, Ref<GpuTexture> panorama,
-                        const SkygenParams& params)
+    void requestEnvBake(Renderer& renderer, EnvSource source, Ref<GpuTexture> panorama, const SkygenParams& params)
     {
         // Values are copied verbatim from stable component/environment data each frame, so an
         // exact compare flags only real user changes (no per-frame float drift -> no churn).
         Ibl& ibl = renderer.ibl;
         const bool panoChanged =
-            source == EnvSource::Equirect &&
-            (ibl.envPanorama == nullptr || panorama == nullptr ||
-             ibl.envPanorama->bindlessIndex != panorama->bindlessIndex);
+            source == EnvSource::Equirect && (ibl.envPanorama == nullptr || panorama == nullptr ||
+                                              ibl.envPanorama->bindlessIndex != panorama->bindlessIndex);
         const bool sourceChanged = source != ibl.bakedSource;
         const SkygenParams& baked = ibl.bakedParams;
         const bool skyChanged = params.sunDir != baked.sunDir || params.sunColor != baked.sunColor ||
@@ -210,12 +209,11 @@ namespace se
         const AtmosphereParams& a = params.atmosphere;
         const AtmosphereParams& ba = baked.atmosphere;
         const bool atmosChanged =
-            a.enabled != ba.enabled || a.planetRadius != ba.planetRadius ||
-            a.atmosphereHeight != ba.atmosphereHeight || a.rayleighScattering != ba.rayleighScattering ||
-            a.rayleighScaleHeight != ba.rayleighScaleHeight || a.mieScattering != ba.mieScattering ||
-            a.mieScaleHeight != ba.mieScaleHeight || a.mieAnisotropy != ba.mieAnisotropy ||
-            a.ozoneAbsorption != ba.ozoneAbsorption || a.sunDiskAngularRadius != ba.sunDiskAngularRadius ||
-            a.sunDiskIntensity != ba.sunDiskIntensity;
+            a.enabled != ba.enabled || a.planetRadius != ba.planetRadius || a.atmosphereHeight != ba.atmosphereHeight ||
+            a.rayleighScattering != ba.rayleighScattering || a.rayleighScaleHeight != ba.rayleighScaleHeight ||
+            a.mieScattering != ba.mieScattering || a.mieScaleHeight != ba.mieScaleHeight ||
+            a.mieAnisotropy != ba.mieAnisotropy || a.ozoneAbsorption != ba.ozoneAbsorption ||
+            a.sunDiskAngularRadius != ba.sunDiskAngularRadius || a.sunDiskIntensity != ba.sunDiskIntensity;
         if (sourceChanged || panoChanged || (source == EnvSource::Procedural && skyChanged) ||
             (source == EnvSource::Atmosphere && (skyChanged || atmosChanged)))
         {

@@ -40,8 +40,7 @@ namespace se
         Image& img = renderer.targets.offscreen;
         const u32 width = img.extent.width;
         const u32 height = img.extent.height;
-        const vk::DeviceSize byteSize =
-            static_cast<vk::DeviceSize>(width) * height * formatPixelBytes(img.format);
+        const vk::DeviceSize byteSize = static_cast<vk::DeviceSize>(width) * height * formatPixelBytes(img.format);
 
         // The offscreen image may still be sampled by an in-flight frame; idle so
         // the capture's layout transition cannot race that read.
@@ -50,7 +49,8 @@ namespace se
         VkBuffer rawBuffer = VK_NULL_HANDLE;
         VmaAllocation bufferAllocation = nullptr;
         VmaAllocationInfo bufferAllocInfo{};
-        if (auto created = newHostCaptureBuffer(renderer, byteSize, rawBuffer, bufferAllocation, bufferAllocInfo); !created)
+        if (auto created = newHostCaptureBuffer(renderer, byteSize, rawBuffer, bufferAllocation, bufferAllocInfo);
+            !created)
         {
             return Err(created.error());
         }
@@ -59,7 +59,8 @@ namespace se
         allocInfo.commandPool = renderer.frame.frames[0].commandPool;
         allocInfo.level = vk::CommandBufferLevel::ePrimary;
         allocInfo.commandBufferCount = 1;
-        auto cmds = checked(renderer.context.device.allocateCommandBuffers(allocInfo), "capture: allocateCommandBuffers");
+        auto cmds =
+            checked(renderer.context.device.allocateCommandBuffers(allocInfo), "capture: allocateCommandBuffers");
         if (!cmds)
         {
             vmaDestroyBuffer(renderer.context.allocator, rawBuffer, bufferAllocation);
@@ -79,12 +80,9 @@ namespace se
             fromStage = vk::PipelineStageFlagBits2::eTopOfPipe;
             fromAccess = vk::AccessFlagBits2::eNone;
         }
-        captureImageToBuffer(
-            cmd, img.image, img.extent,
-            img.layout, fromStage, fromAccess,
-            vk::ImageLayout::eShaderReadOnlyOptimal,
-            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
-            vk::Buffer{ rawBuffer });
+        captureImageToBuffer(cmd, img.image, img.extent, img.layout, fromStage, fromAccess,
+                             vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eFragmentShader,
+                             vk::AccessFlagBits2::eShaderSampledRead, vk::Buffer{ rawBuffer });
         img.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
         static_cast<void>(cmd.end());
@@ -98,8 +96,8 @@ namespace se
         renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
         vmaInvalidateAllocation(renderer.context.allocator, bufferAllocation, 0, VK_WHOLE_SIZE);
 
-        auto wrote = writeBufferToPng(
-            static_cast<const unsigned char*>(bufferAllocInfo.pMappedData), width, height, img.format, path);
+        auto wrote = writeBufferToPng(static_cast<const unsigned char*>(bufferAllocInfo.pMappedData), width, height,
+                                      img.format, path);
         vmaDestroyBuffer(renderer.context.allocator, rawBuffer, bufferAllocation);
         if (!wrote)
         {

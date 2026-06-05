@@ -63,7 +63,8 @@ namespace se
         std::array<vk::VertexInputAttributeDescription, 3> attributes{
             vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
             vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
-            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) }
+        };
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.setVertexBindingDescriptions(binding);
         vertexInput.setVertexAttributeDescriptions(attributes);
@@ -104,7 +105,8 @@ namespace se
 
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setPushConstantRanges(pushConstant);
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (thumbnail)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (thumbnail)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);
@@ -178,7 +180,8 @@ namespace se
         const f32 distance = radius / glm::tan(fovy * 0.5f) * 1.3f;
         const glm::vec3 eye = center + glm::normalize(glm::vec3(1.0f, 0.7f, 1.0f)) * distance;
         const glm::mat4 view = glm::lookAt(eye, center, glm::vec3(0.0f, 1.0f, 0.0f));
-        glm::mat4 proj = glm::perspective(fovy, 1.0f, glm::max(0.01f, distance - radius * 2.0f), distance + radius * 2.0f);
+        glm::mat4 proj =
+            glm::perspective(fovy, 1.0f, glm::max(0.01f, distance - radius * 2.0f), distance + radius * 2.0f);
         proj[1][1] *= -1.0f;  // Vulkan clip; matches the viewport so the thumbnail is upright
         struct ThumbnailPush
         {
@@ -190,7 +193,8 @@ namespace se
         cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
-        auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "renderMeshThumbnail: allocateCommandBuffers");
+        auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc),
+                            "renderMeshThumbnail: allocateCommandBuffers");
         if (!cmds)
         {
             return Err(cmds.error());
@@ -205,7 +209,8 @@ namespace se
                         vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite);
         transitionImage(cmd, depth.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
                         vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+                        vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                            vk::PipelineStageFlagBits2::eLateFragmentTests,
                         vk::AccessFlagBits2::eDepthStencilAttachmentWrite, vk::ImageAspectFlagBits::eDepth);
 
         vk::RenderingAttachmentInfo colorAttach{};
@@ -213,7 +218,8 @@ namespace se
         colorAttach.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
         colorAttach.loadOp = vk::AttachmentLoadOp::eClear;
         colorAttach.storeOp = vk::AttachmentStoreOp::eStore;
-        colorAttach.clearValue = vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.12f, 0.12f, 0.14f, 1.0f } } };
+        colorAttach.clearValue =
+            vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.12f, 0.12f, 0.14f, 1.0f } } };
         vk::RenderingAttachmentInfo depthAttach{};
         depthAttach.imageView = depth.view;
         depthAttach.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
@@ -231,7 +237,8 @@ namespace se
         cmd.setViewport(0, viewport);
         cmd.setScissor(0, vk::Rect2D{ vk::Offset2D{ 0, 0 }, vk::Extent2D{ size, size } });
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, renderer.pipelines.thumbnail->pipeline);
-        cmd.pushConstants(renderer.pipelines.thumbnail->layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(push), &push);
+        cmd.pushConstants(renderer.pipelines.thumbnail->layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(push),
+                          &push);
         vk::DeviceSize offset = 0;
         cmd.bindVertexBuffers(0, mesh->vertexBuffer, offset);
         cmd.bindIndexBuffer(mesh->indexBuffer, 0, vk::IndexType::eUint32);
@@ -241,9 +248,10 @@ namespace se
         }
         cmd.endRendering();
 
-        transitionImage(cmd, color.image, vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-                        vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
-                        vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+        transitionImage(cmd, color.image, vk::ImageLayout::eColorAttachmentOptimal,
+                        vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                        vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
+                        vk::AccessFlagBits2::eShaderSampledRead);
         static_cast<void>(cmd.end());
 
         vk::CommandBufferSubmitInfo cmdInfo{};
@@ -254,9 +262,9 @@ namespace se
         static_cast<void>(renderer.context.device.waitIdle());
         renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
 
-        // Take ownership of the color image as a sampled GpuTexture (no material set;
-        // ImGui samples it via uiRegisterTexture). Null the Image's handles so it does
-        // not free them on scope exit.
+        // Take ownership of the color image as a sampled GpuTexture (no material set; the
+        // editor reads thumbnails over the control plane). Null the Image's handles so it
+        // does not free them on scope exit.
         GpuTexture texture;
         texture.device = renderer.context.device;
         texture.allocator = renderer.context.allocator;
@@ -281,8 +289,7 @@ namespace se
         }
         const u32 width = texture->extent.width;
         const u32 height = texture->extent.height;
-        const vk::DeviceSize bytes =
-            static_cast<vk::DeviceSize>(width) * height * formatPixelBytes(texture->format);
+        const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(width) * height * formatPixelBytes(texture->format);
 
         static_cast<void>(renderer.context.device.waitIdle());
 
@@ -311,13 +318,10 @@ namespace se
         static_cast<void>(cmd.begin(begin));
         // Bindless + thumbnail textures live in eShaderReadOnlyOptimal; read back and restore
         // that layout so the bindless array stays valid.
-        captureImageToBuffer(
-            cmd, texture->image, texture->extent,
-            vk::ImageLayout::eShaderReadOnlyOptimal,
-            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
-            vk::ImageLayout::eShaderReadOnlyOptimal,
-            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
-            vk::Buffer{ rawBuffer });
+        captureImageToBuffer(cmd, texture->image, texture->extent, vk::ImageLayout::eShaderReadOnlyOptimal,
+                             vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
+                             vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eFragmentShader,
+                             vk::AccessFlagBits2::eShaderSampledRead, vk::Buffer{ rawBuffer });
         static_cast<void>(cmd.end());
 
         vk::CommandBufferSubmitInfo cmdInfo{};
@@ -329,8 +333,8 @@ namespace se
         renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
         vmaInvalidateAllocation(renderer.context.allocator, alloc, 0, VK_WHOLE_SIZE);
 
-        auto png = encodeBufferToPng(
-            static_cast<const unsigned char*>(info.pMappedData), width, height, texture->format);
+        auto png =
+            encodeBufferToPng(static_cast<const unsigned char*>(info.pMappedData), width, height, texture->format);
         vmaDestroyBuffer(renderer.context.allocator, rawBuffer, alloc);
         if (!png)
         {
@@ -339,8 +343,7 @@ namespace se
         return png;
     }
 
-    auto encodeAssetThumbnailPng(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size)
-        -> Result<std::vector<u8>>
+    auto encodeAssetThumbnailPng(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<std::vector<u8>>
     {
         // Render the framed mesh to a size×size texture, then read that texture back.
         auto tex = renderMeshThumbnail(renderer, mesh, size);
