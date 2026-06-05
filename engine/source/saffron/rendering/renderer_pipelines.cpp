@@ -37,7 +37,8 @@ import :Detail;
 
 namespace se
 {
-    auto newMeshPipeline(Renderer& renderer, std::string_view shaderName, bool unlit) -> Result<Ref<Pipeline>>
+    auto newMeshPipeline(Renderer& renderer, std::string_view shaderName, bool unlit, bool skinned)
+        -> Result<Ref<Pipeline>>
     {
         std::string path = assetPath(shaderName);
         auto moduleResult = loadShaderModule(renderer.context.device, path);
@@ -62,25 +63,35 @@ namespace se
         std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
         stages[0].stage = vk::ShaderStageFlagBits::eVertex;
         stages[0].module = shaderModule;
-        stages[0].pName = "vertexMain";
+        stages[0].pName = skinned ? "vertexMainSkinned" : "vertexMain";
         stages[1].stage = vk::ShaderStageFlagBits::eFragment;
         stages[1].module = shaderModule;
         stages[1].pName = "fragmentMain";
         stages[1].pSpecializationInfo = &specInfo;
 
-        vk::VertexInputBindingDescription binding{};
-        binding.binding = 0;
-        binding.stride = sizeof(Vertex);
-        binding.inputRate = vk::VertexInputRate::eVertex;
+        // The skinned variant adds a second vertex stream (VertexSkin: joints + weights)
+        // on binding 1; the base layout stays untouched so unskinned PSOs are unchanged.
+        std::array<vk::VertexInputBindingDescription, 2> bindings{};
+        bindings[0].binding = 0;
+        bindings[0].stride = sizeof(Vertex);
+        bindings[0].inputRate = vk::VertexInputRate::eVertex;
+        bindings[1].binding = 1;
+        bindings[1].stride = sizeof(VertexSkin);
+        bindings[1].inputRate = vk::VertexInputRate::eVertex;
 
-        std::array<vk::VertexInputAttributeDescription, 3> attributes{
+        std::array<vk::VertexInputAttributeDescription, 5> attributes{
             vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
             vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
-            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) },
+            vk::VertexInputAttributeDescription{ 3, 1, vk::Format::eR16G16B16A16Uint, offsetof(VertexSkin, joints) },
+            vk::VertexInputAttributeDescription{ 4, 1, vk::Format::eR32G32B32A32Sfloat,
+                                                 offsetof(VertexSkin, weights) } };
 
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
-        vertexInput.setVertexBindingDescriptions(binding);
-        vertexInput.setVertexAttributeDescriptions(attributes);
+        vertexInput.vertexBindingDescriptionCount = skinned ? 2 : 1;
+        vertexInput.pVertexBindingDescriptions = bindings.data();
+        vertexInput.vertexAttributeDescriptionCount = skinned ? 5 : 3;
+        vertexInput.pVertexAttributeDescriptions = attributes.data();
 
         vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
@@ -175,19 +186,23 @@ namespace se
         return std::make_shared<Pipeline>(std::move(pipeline));
     }
 
-    auto requestMeshPipeline(Renderer& renderer, const Material& material) -> Ref<Pipeline>
+    auto requestMeshPipeline(Renderer& renderer, const Material& material, bool skinned) -> Ref<Pipeline>
     {
         std::string key = material.shader;
         if (material.unlit)
         {
             key = key + "|unlit";
         }
+        if (skinned)
+        {
+            key = key + "|skinned";
+        }
         auto found = renderer.pipelines.cache.find(key);
         if (found != renderer.pipelines.cache.end())
         {
             return found->second;
         }
-        auto built = newMeshPipeline(renderer, material.shader, material.unlit);
+        auto built = newMeshPipeline(renderer, material.shader, material.unlit, skinned);
         if (!built)
         {
             logError(built.error());
@@ -195,6 +210,11 @@ namespace se
         }
         renderer.pipelines.cache.emplace(key, *built);
         return *built;
+    }
+
+    auto requestMeshPipeline(Renderer& renderer, const Material& material) -> Ref<Pipeline>
+    {
+        return requestMeshPipeline(renderer, material, false);
     }
 
     auto pipelineCount(const Renderer& renderer) -> u32

@@ -17,6 +17,18 @@ struct VertexInput
     [[vk::location(2)]] float2 uv0;
 };
 
+// The skinned vertex layout: the base stream plus a second binding carrying the joint
+// indices + blend weights (the skinned PSO's vertexMainSkinned consumes it; the base
+// VertexInput and unskinned PSOs are untouched).
+struct SkinnedVertexInput
+{
+    [[vk::location(0)]] float3 position;
+    [[vk::location(1)]] float3 normal;
+    [[vk::location(2)]] float2 uv0;
+    [[vk::location(3)]] uint4 joints;
+    [[vk::location(4)]] float4 weights;
+};
+
 struct VertexOutput
 {
     float4 position : SV_Position;
@@ -135,6 +147,9 @@ struct Instance
     float4 emissive;  // rgb = emissive radiance (strength baked in)
 };
 [[vk::binding(0, 2)]] StructuredBuffer<Instance> instances;
+// The frame's joint palette (worldBone * inverseBind per joint); a skinned instance
+// indexes it at texture.y + vertex joint index.
+[[vk::binding(1, 2)]] StructuredBuffer<float4x4> jointMatrices;
 
 // Set 3: image-based lighting — diffuse irradiance cube, prefiltered specular cube, and
 // the split-sum BRDF LUT. Sampled for the ambient term when globals.counts.z != 0.
@@ -297,6 +312,34 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_VulkanInstanc
     output.worldPos = worldPos.xyz;
     output.position = mul(camera.viewProj, worldPos);
     output.worldNormal = mul((float3x3)inst.normalMatrix, input.normal);
+    output.uv0 = input.uv0;
+    output.baseColor = inst.baseColor;
+    output.textureIndex = inst.texture.x;
+    output.mr = inst.pbr.xy;
+    output.emissive = inst.emissive.rgb;
+    return output;
+}
+
+// GPU skinning: blend the joint palette (worldBone * inverseBind, world-space) per
+// vertex, then apply inst.model — identity for skinned draws, since per glTF the
+// joints place the vertices entirely and the node transform is ignored.
+[shader("vertex")]
+VertexOutput vertexMainSkinned(SkinnedVertexInput input, uint instanceIndex : SV_VulkanInstanceID)
+{
+    Instance inst = instances[instanceIndex];
+    uint base = inst.texture.y;  // this instance's offset into the frame's joint palette
+    float4x4 skinMatrix = input.weights.x * jointMatrices[base + input.joints.x]
+                        + input.weights.y * jointMatrices[base + input.joints.y]
+                        + input.weights.z * jointMatrices[base + input.joints.z]
+                        + input.weights.w * jointMatrices[base + input.joints.w];
+    float4 skinnedPos = mul(skinMatrix, float4(input.position, 1.0));
+    float3 skinnedNormal = mul((float3x3)skinMatrix, input.normal);
+
+    VertexOutput output;
+    float4 worldPos = mul(inst.model, skinnedPos);
+    output.worldPos = worldPos.xyz;
+    output.position = mul(camera.viewProj, worldPos);
+    output.worldNormal = normalize(mul((float3x3)inst.normalMatrix, skinnedNormal));
     output.uv0 = input.uv0;
     output.baseColor = inst.baseColor;
     output.textureIndex = inst.texture.x;

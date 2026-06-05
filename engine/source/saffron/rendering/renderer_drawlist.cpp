@@ -39,17 +39,28 @@ namespace se
 {
     auto uploadMesh(Renderer& renderer, const Mesh& mesh) -> Result<Ref<GpuMesh>>
     {
+        return uploadMesh(renderer, mesh, std::vector<VertexSkin>{});
+    }
+
+    auto uploadMesh(Renderer& renderer, const Mesh& mesh, const std::vector<VertexSkin>& skin)
+        -> Result<Ref<GpuMesh>>
+    {
         if (mesh.vertices.empty() || mesh.indices.empty())
         {
             return Err(std::string{ "uploadMesh: empty mesh" });
         }
+        if (!skin.empty() && skin.size() != mesh.vertices.size())
+        {
+            return Err(std::string{ "uploadMesh: skin stream does not parallel the vertices" });
+        }
         const vk::DeviceSize vertexBytes = mesh.vertices.size() * sizeof(Vertex);
         const vk::DeviceSize indexBytes = mesh.indices.size() * sizeof(u32);
+        const vk::DeviceSize skinBytes = skin.size() * sizeof(VertexSkin);
 
-        // One staging buffer holds [vertices | indices]; two copies fan it out to
-        // device-local vertex + index buffers.
+        // One staging buffer holds [vertices | indices | skin]; copies fan it out to
+        // device-local vertex + index (+ skin) buffers.
         VkBufferCreateInfo stagingInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-        stagingInfo.size = vertexBytes + indexBytes;
+        stagingInfo.size = vertexBytes + indexBytes + skinBytes;
         stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         VmaAllocationCreateInfo stagingAlloc{};
         stagingAlloc.usage = VMA_MEMORY_USAGE_AUTO;
@@ -63,6 +74,11 @@ namespace se
         }
         std::memcpy(stagingMapped.pMappedData, mesh.vertices.data(), vertexBytes);
         std::memcpy(static_cast<char*>(stagingMapped.pMappedData) + vertexBytes, mesh.indices.data(), indexBytes);
+        if (!skin.empty())
+        {
+            std::memcpy(static_cast<char*>(stagingMapped.pMappedData) + vertexBytes + indexBytes, skin.data(),
+                        skinBytes);
+        }
         vmaFlushAllocation(renderer.context.allocator, stagingAllocation, 0, VK_WHOLE_SIZE);
 
         // When RT is on, the vertex/index buffers also feed BLAS builds: they need shader
@@ -98,14 +114,21 @@ namespace se
 
         VkBuffer vertexBuffer = VK_NULL_HANDLE;
         VkBuffer indexBuffer = VK_NULL_HANDLE;
+        VkBuffer skinBuffer = VK_NULL_HANDLE;
         VmaAllocation vertexAlloc = nullptr;
         VmaAllocation indexAlloc = nullptr;
+        VmaAllocation skinAlloc = nullptr;
         if (!makeDeviceBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertexBuffer, vertexAlloc) ||
-            !makeDeviceBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indexBuffer, indexAlloc))
+            !makeDeviceBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indexBuffer, indexAlloc) ||
+            (!skin.empty() && !makeDeviceBuffer(skinBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, skinBuffer, skinAlloc)))
         {
             if (vertexBuffer != VK_NULL_HANDLE)
             {
                 vmaDestroyBuffer(renderer.context.allocator, vertexBuffer, vertexAlloc);
+            }
+            if (indexBuffer != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(renderer.context.allocator, indexBuffer, indexAlloc);
             }
             vmaDestroyBuffer(renderer.context.allocator, staging, stagingAllocation);
             return Err(std::string{ "uploadMesh: device vmaCreateBuffer failed" });
@@ -114,6 +137,8 @@ namespace se
         gpu.vertexAlloc = vertexAlloc;
         gpu.indexBuffer = vk::Buffer{ indexBuffer };
         gpu.indexAlloc = indexAlloc;
+        gpu.skinBuffer = vk::Buffer{ skinBuffer };
+        gpu.skinAlloc = skinAlloc;
 
         vk::CommandBufferAllocateInfo cmdAlloc{};
         cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
@@ -132,6 +157,11 @@ namespace se
         static_cast<void>(cmd.begin(begin));
         cmd.copyBuffer(vk::Buffer{ staging }, gpu.vertexBuffer, vk::BufferCopy{ 0, 0, vertexBytes });
         cmd.copyBuffer(vk::Buffer{ staging }, gpu.indexBuffer, vk::BufferCopy{ vertexBytes, 0, indexBytes });
+        if (gpu.skinBuffer)
+        {
+            cmd.copyBuffer(vk::Buffer{ staging }, gpu.skinBuffer,
+                           vk::BufferCopy{ vertexBytes + indexBytes, 0, skinBytes });
+        }
         static_cast<void>(cmd.end());
 
         vk::CommandBufferSubmitInfo cmdInfo{};
@@ -200,7 +230,49 @@ namespace se
         renderer.context.device.updateDescriptorSets(write, {});
         return {};
     }
+    // Ensures the current frame's joint palette holds at least `count` matrices and is
+    // written to set 2 binding 1; same grow-only policy as the instance buffer.
+    auto ensureJointCapacity(Renderer& renderer, u32 frame, u32 count) -> Result<void>
+    {
+        if (renderer.instancing.jointBuffers[frame] && renderer.instancing.jointCapacity[frame] >= count)
+        {
+            return {};
+        }
+        u32 capacity = renderer.instancing.jointCapacity[frame];
+        if (capacity == 0)
+        {
+            capacity = 128;
+        }
+        while (capacity < count)
+        {
+            capacity = capacity * 2;
+        }
+        Result<Ref<Buffer>> buffer =
+            makeMappedStorageBuffer(renderer, static_cast<vk::DeviceSize>(capacity) * sizeof(glm::mat4));
+        if (!buffer)
+        {
+            return Err(buffer.error());
+        }
+        renderer.instancing.jointBuffers[frame] = *buffer;
+        renderer.instancing.jointCapacity[frame] = capacity;
+
+        vk::DescriptorBufferInfo bufferInfo{ (*buffer)->buffer, 0, (*buffer)->size };
+        vk::WriteDescriptorSet write{};
+        write.dstSet = renderer.instancing.sets[frame];
+        write.dstBinding = 1;
+        write.descriptorType = vk::DescriptorType::eStorageBuffer;
+        write.setBufferInfo(bufferInfo);
+        renderer.context.device.updateDescriptorSets(write, {});
+        return {};
+    }
+
     void submitDrawList(Renderer& renderer, const glm::mat4& viewProj, const std::vector<DrawItem>& items)
+    {
+        submitDrawList(renderer, viewProj, items, std::vector<glm::mat4>{});
+    }
+
+    void submitDrawList(Renderer& renderer, const glm::mat4& viewProj, const std::vector<DrawItem>& items,
+                        const std::vector<glm::mat4>& joints)
     {
         renderer.stats = RenderStats{};
         renderer.frame.sceneDrawList = SceneDrawList{};
@@ -216,6 +288,7 @@ namespace se
         {
             Ref<Pipeline> pipeline;
             Ref<GpuMesh> mesh;
+            bool skinned = false;
             std::vector<InstanceData> instances;
         };
         std::vector<Bucket> buckets;
@@ -226,7 +299,11 @@ namespace se
             {
                 continue;
             }
-            auto pipeline = requestMeshPipeline(renderer, item.material);
+            if (item.skinned && !item.mesh->skinBuffer)
+            {
+                continue;  // a skinned draw needs the mesh's VertexSkin stream
+            }
+            auto pipeline = requestMeshPipeline(renderer, item.material, item.skinned);
             if (!pipeline)
             {
                 continue;
@@ -253,14 +330,15 @@ namespace se
             }
             if (bucket == nullptr)
             {
-                buckets.push_back(Bucket{ pipeline, item.mesh, {} });
+                buckets.push_back(Bucket{ pipeline, item.mesh, item.skinned, {} });
                 bucket = &buckets.back();
             }
             InstanceData instance;
             instance.model = item.model;
             instance.normalMatrix = item.normalMatrix;
             instance.baseColor = item.baseColor;
-            instance.texture = glm::uvec4{ textureIndex, 0, 0, 0 };
+            // texture.y carries the joint-palette offset for skinned instances.
+            instance.texture = glm::uvec4{ textureIndex, item.jointOffset, 0, 0 };
             instance.pbr = glm::vec4{ item.metallic, item.roughness, 0.0f, 0.0f };
             instance.emissive = glm::vec4{ item.emissive * item.emissiveStrength, 0.0f };
             bucket->instances.push_back(instance);
@@ -275,6 +353,7 @@ namespace se
             DrawBatch batch;
             batch.pipeline = bucket.pipeline;
             batch.mesh = bucket.mesh;
+            batch.skinned = bucket.skinned;
             batch.baseInstance = static_cast<u32>(instances.size());
             batch.instanceCount = static_cast<u32>(bucket.instances.size());
             instances.insert(instances.end(), bucket.instances.begin(), bucket.instances.end());
@@ -294,6 +373,18 @@ namespace se
         const vk::DeviceSize bytes = instances.size() * sizeof(InstanceData);
         std::memcpy(renderer.instancing.buffers[frame]->mapped, instances.data(), bytes);
         vmaFlushAllocation(renderer.context.allocator, renderer.instancing.buffers[frame]->alloc, 0, bytes);
+        if (!joints.empty())
+        {
+            if (Result<void> ok = ensureJointCapacity(renderer, frame, static_cast<u32>(joints.size())); !ok)
+            {
+                logError(ok.error());
+                return;
+            }
+            const vk::DeviceSize jointBytes = joints.size() * sizeof(glm::mat4);
+            std::memcpy(renderer.instancing.jointBuffers[frame]->mapped, joints.data(), jointBytes);
+            vmaFlushAllocation(renderer.context.allocator, renderer.instancing.jointBuffers[frame]->alloc, 0,
+                               jointBytes);
+        }
 
         u32 drawCalls = 0;
         u32 drawnInstances = 0;
@@ -359,6 +450,10 @@ namespace se
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, batch.pipeline->pipeline);
             vk::DeviceSize offset = 0;
             cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
+            if (batch.skinned)
+            {
+                cmd.bindVertexBuffers(1, batch.mesh->skinBuffer, offset);
+            }
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
             for (const Submesh& submesh : batch.mesh->submeshes)
             {
@@ -409,6 +504,10 @@ namespace se
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &list.viewProj);
         for (const DrawBatch& batch : list.batches)
         {
+            if (batch.skinned)
+            {
+                continue;  // skinned draws render in the scene pass only (v1)
+            }
             vk::DeviceSize offset = 0;
             cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
@@ -436,6 +535,10 @@ namespace se
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &lightViewProj);
         for (const DrawBatch& batch : list.batches)
         {
+            if (batch.skinned)
+            {
+                continue;  // skinned draws render in the scene pass only (v1)
+            }
             vk::DeviceSize offset = 0;
             cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
@@ -467,6 +570,10 @@ namespace se
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(push), &push);
         for (const DrawBatch& batch : list.batches)
         {
+            if (batch.skinned)
+            {
+                continue;  // skinned draws render in the scene pass only (v1)
+            }
             vk::DeviceSize offset = 0;
             cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
@@ -499,6 +606,10 @@ namespace se
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(push), &push);
         for (const DrawBatch& batch : list.batches)
         {
+            if (batch.skinned)
+            {
+                continue;  // skinned draws render in the scene pass only (v1)
+            }
             vk::DeviceSize offset = 0;
             cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
@@ -601,6 +712,10 @@ namespace se
                               0, sizeof(push), &push);
             for (const DrawBatch& batch : list.batches)
             {
+                if (batch.skinned)
+                {
+                    continue;  // skinned draws render in the scene pass only (v1)
+                }
                 vk::DeviceSize offset = 0;
                 cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
                 cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);

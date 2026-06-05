@@ -196,6 +196,8 @@ export namespace se
         VmaAllocation vertexAlloc = nullptr;
         vk::Buffer indexBuffer;
         VmaAllocation indexAlloc = nullptr;
+        vk::Buffer skinBuffer;  // second vertex stream (VertexSkin); null for unskinned meshes
+        VmaAllocation skinAlloc = nullptr;
         u32 indexCount = 0;
         u32 vertexCount = 0;
         std::vector<Submesh> submeshes;
@@ -209,7 +211,8 @@ export namespace se
 
         GpuMesh(GpuMesh&& other) noexcept
             : allocator(other.allocator), vertexBuffer(other.vertexBuffer), vertexAlloc(other.vertexAlloc),
-              indexBuffer(other.indexBuffer), indexAlloc(other.indexAlloc), indexCount(other.indexCount),
+              indexBuffer(other.indexBuffer), indexAlloc(other.indexAlloc), skinBuffer(other.skinBuffer),
+              skinAlloc(other.skinAlloc), indexCount(other.indexCount),
               submeshes(std::move(other.submeshes)), boundsMin(other.boundsMin), boundsMax(other.boundsMax)
         {
             other.allocator = nullptr;
@@ -217,6 +220,8 @@ export namespace se
             other.vertexAlloc = nullptr;
             other.indexBuffer = nullptr;
             other.indexAlloc = nullptr;
+            other.skinBuffer = nullptr;
+            other.skinAlloc = nullptr;
         }
 
         auto operator=(GpuMesh&& other) noexcept -> GpuMesh&
@@ -229,6 +234,8 @@ export namespace se
                 vertexAlloc = other.vertexAlloc;
                 indexBuffer = other.indexBuffer;
                 indexAlloc = other.indexAlloc;
+                skinBuffer = other.skinBuffer;
+                skinAlloc = other.skinAlloc;
                 indexCount = other.indexCount;
                 submeshes = std::move(other.submeshes);
                 boundsMin = other.boundsMin;
@@ -238,6 +245,8 @@ export namespace se
                 other.vertexAlloc = nullptr;
                 other.indexBuffer = nullptr;
                 other.indexAlloc = nullptr;
+                other.skinBuffer = nullptr;
+                other.skinAlloc = nullptr;
             }
             return *this;
         }
@@ -259,11 +268,17 @@ export namespace se
                 {
                     vmaDestroyBuffer(allocator, static_cast<VkBuffer>(indexBuffer), indexAlloc);
                 }
+                if (skinBuffer)
+                {
+                    vmaDestroyBuffer(allocator, static_cast<VkBuffer>(skinBuffer), skinAlloc);
+                }
             }
             vertexBuffer = nullptr;
             indexBuffer = nullptr;
+            skinBuffer = nullptr;
             vertexAlloc = nullptr;
             indexAlloc = nullptr;
+            skinAlloc = nullptr;
         }
     };
 
@@ -477,6 +492,10 @@ export namespace se
         glm::vec3 emissive{ 0.0f };
         f32 emissiveStrength = 1.0f;
         Material material;
+        // GPU skinning: the item blends the frame's joint palette starting at
+        // jointOffset; model stays identity (joints place the vertices entirely).
+        bool skinned = false;
+        u32 jointOffset = 0;
     };
 
     // A batch of instances sharing a pipeline + mesh, drawn as one instanced drawIndexed.
@@ -489,6 +508,9 @@ export namespace se
         Ref<GpuMesh> mesh;
         u32 baseInstance = 0;
         u32 instanceCount = 0;
+        // Skinned batches bind the mesh's VertexSkin stream + the joint palette and
+        // draw only in the scene pass (no prepass/shadow/gbuffer/motion in v1).
+        bool skinned = false;
     };
 
     // The scene's structured draw list for the frame: built by submitDrawList from the
@@ -652,12 +674,15 @@ export namespace se
     };
 
     // Per-frame instance storage buffer + set. Grown on demand (never shrunk);
-    // capacity is in InstanceData elements.
+    // capacity is in InstanceData elements. The joint palette (set 2, binding 1) is
+    // the skinning matrices for the frame's skinned draws; created only when one exists.
     struct Instancing
     {
         std::array<Ref<Buffer>, MaxFramesInFlight> buffers;
         std::array<vk::DescriptorSet, MaxFramesInFlight> sets;
         std::array<u32, MaxFramesInFlight> capacity{};
+        std::array<Ref<Buffer>, MaxFramesInFlight> jointBuffers;
+        std::array<u32, MaxFramesInFlight> jointCapacity{};
     };
 
     // Renderer-owned pipelines + the mesh PSO cache (built on demand, keyed by variant;
@@ -1082,6 +1107,7 @@ export namespace se
         FrameGraphState graph;
 
         bool useDepthPrepass = false;
+        bool useSkinning = true;  // gate for the GPU skinning path; off = skinned items never gather
         bool presentViewportOnly = false;  // native-viewport host: blit offscreen->swapchain, skip the ui pass
         f32 exposureEv = 0.0f;  // tonemap exposure in stops; the tonemap pass applies exp2(this)
         glm::mat4 prevViewProj{ 1.0f };  // last frame's camera viewProj, for TAA motion vectors
@@ -1155,9 +1181,15 @@ export namespace se
     // The PSO cache front door: returns the mesh pipeline for a material variant, building
     // + caching it on first request. The renderer owns it; the client never creates PSOs.
     auto requestMeshPipeline(Renderer& renderer, const Material& material) -> Ref<Pipeline>;
+    // The skinned permutation: vertexMainSkinned + the VertexSkin stream on binding 1.
+    auto requestMeshPipeline(Renderer& renderer, const Material& material, bool skinned) -> Ref<Pipeline>;
     // Number of distinct mesh PSOs the cache holds (inspectable to verify übershader reuse).
     auto pipelineCount(const Renderer& renderer) -> u32;
     auto uploadMesh(Renderer& renderer, const Mesh& mesh) -> Result<Ref<GpuMesh>>;
+    // As above, plus the VertexSkin stream (must parallel mesh.vertices) uploaded as the
+    // second vertex buffer the skinned PSO binds.
+    auto uploadMesh(Renderer& renderer, const Mesh& mesh, const std::vector<VertexSkin>& skin)
+        -> Result<Ref<GpuMesh>>;
     auto uploadTexture(Renderer& renderer, const u8* rgba, u32 width, u32 height, bool srgb) -> Result<Ref<GpuTexture>>;
     /// Uploads tightly-packed linear float RGBA (width*height*4 floats) as a half-float
     /// (eR16G16B16A16Sfloat) sampled texture in the bindless array. For HDR panoramas /
@@ -1183,6 +1215,10 @@ export namespace se
     // uploads the frame's instance buffer, and stores the structured draw list on the
     // renderer for the scene + depth passes to consume.
     void submitDrawList(Renderer& renderer, const glm::mat4& viewProj, const std::vector<DrawItem>& items);
+    // As above, plus the frame's joint palette: skinned items index it via jointOffset
+    // (uploaded to set 2, binding 1). The three-arg form passes an empty palette.
+    void submitDrawList(Renderer& renderer, const glm::mat4& viewProj, const std::vector<DrawItem>& items,
+                        const std::vector<glm::mat4>& joints);
     // Record the frame's scene geometry into the active pass (the scene-pass body).
     void recordSceneDrawList(Renderer& renderer, vk::CommandBuffer cmd);
     // Record depth-only draws of the frame's geometry (the depth-pre-pass body).
@@ -1316,6 +1352,10 @@ export namespace se
     void recordPointShadow(Renderer& renderer, vk::CommandBuffer cmd, glm::vec3 lightPos, f32 farPlane);
     void setDepthPrepass(Renderer& renderer, bool enabled);
     auto depthPrepassEnabled(const Renderer& renderer) -> bool;
+    // GPU skinning gate: off makes renderScene skip the skinned gather entirely, so a
+    // scene renders exactly as it would without the skinned path.
+    void setSkinning(Renderer& renderer, bool enabled);
+    auto skinningEnabled(const Renderer& renderer) -> bool;
     // Anti-aliasing: msaaSamples is 1 (off) / 2 / 4 / 8 (clamped to the device cap); fxaa
     // and taa toggle their post-process passes. The three modes are mutually exclusive.
     // Recreates the MSAA/TAA targets + rebuilds scene PSOs.

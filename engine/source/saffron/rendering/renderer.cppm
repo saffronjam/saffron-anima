@@ -2128,6 +2128,16 @@ namespace se
         return renderer.lighting.useShadows;
     }
 
+    void setSkinning(Renderer& renderer, bool enabled)
+    {
+        renderer.useSkinning = enabled;
+    }
+
+    auto skinningEnabled(const Renderer& renderer) -> bool
+    {
+        return renderer.useSkinning;
+    }
+
     void setDirectionalShadow(Renderer& renderer, const glm::mat4& lightViewProj, bool casting)
     {
         renderer.lighting.shadowViewProj = lightViewProj;

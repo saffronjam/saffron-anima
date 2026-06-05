@@ -2485,13 +2485,20 @@ export namespace se
         }
         renderer.descriptors.clusterSetLayout = *clusterLayout;
 
-        vk::DescriptorSetLayoutBinding instanceBinding{};
-        instanceBinding.binding = 0;
-        instanceBinding.descriptorType = vk::DescriptorType::eStorageBuffer;
-        instanceBinding.descriptorCount = 1;
-        instanceBinding.stageFlags = vk::ShaderStageFlagBits::eVertex;
+        // Binding 0 is the per-instance array; binding 1 the frame's joint palette for
+        // skinned draws. Unskinned shaders never statically use binding 1, so it may
+        // stay unwritten until the first skinned draw uploads it.
+        std::array<vk::DescriptorSetLayoutBinding, 2> instanceBindings{};
+        instanceBindings[0].binding = 0;
+        instanceBindings[0].descriptorType = vk::DescriptorType::eStorageBuffer;
+        instanceBindings[0].descriptorCount = 1;
+        instanceBindings[0].stageFlags = vk::ShaderStageFlagBits::eVertex;
+        instanceBindings[1].binding = 1;
+        instanceBindings[1].descriptorType = vk::DescriptorType::eStorageBuffer;
+        instanceBindings[1].descriptorCount = 1;
+        instanceBindings[1].stageFlags = vk::ShaderStageFlagBits::eVertex;
         vk::DescriptorSetLayoutCreateInfo instanceLayoutInfo{};
-        instanceLayoutInfo.setBindings(instanceBinding);
+        instanceLayoutInfo.setBindings(instanceBindings);
         auto instanceLayout = checked(renderer.context.device.createDescriptorSetLayout(instanceLayoutInfo), "instanceSetLayout");
         if (!instanceLayout)
         {
