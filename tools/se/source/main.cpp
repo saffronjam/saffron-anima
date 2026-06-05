@@ -138,9 +138,10 @@ namespace
         {
             for (const auto& e : result["entities"])
             {
-                std::printf("  %-24s  %s\n",
+                std::printf("  %-24s  %-24s  %s\n",
                     e.value("id", std::string{}).c_str(),
-                    e.value("name", "").c_str());
+                    e.value("name", "").c_str(),
+                    e.value("parentId", std::string{}).c_str());
             }
             return;
         }

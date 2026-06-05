@@ -222,6 +222,24 @@
       }
     },
     {
+      "name": "set-skinning",
+      "summary": "toggle GPU skinning",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetSkinningResult"
+        }
+      }
+    },
+    {
       "name": "set-depth-prepass",
       "summary": "toggle depth prepass",
       "params": [
@@ -362,6 +380,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/DestroyEntityResult"
+        }
+      }
+    },
+    {
+      "name": "set-parent",
+      "summary": "set-parent {entity, parent?} — reparent (absent/0 parent detaches to root)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetParentParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
         }
       }
     },
@@ -1750,12 +1786,34 @@
           "entities": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/EntityRef"
+              "$ref": "#/components/schemas/EntityListEntry"
             }
           }
         },
         "required": [
           "entities"
+        ]
+      },
+      "EntityListEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parentId": {
+            "type": "string"
+          },
+          "bone": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name"
         ]
       },
       "EntityParams": {
@@ -2897,6 +2955,35 @@
           "entity"
         ]
       },
+      "SetParentParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "parent": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      },
       "SetProbesParams": {
         "type": "object",
         "additionalProperties": false,
@@ -2953,6 +3040,18 @@
         },
         "required": [
           "shadows"
+        ]
+      },
+      "SetSkinningResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "skinning": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "skinning"
         ]
       },
       "SetSsaoResult": {
@@ -3375,6 +3474,46 @@
           "parent"
         ]
       },
+      "SkinnedMesh": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mesh": {
+            "type": "string"
+          },
+          "rootBone": {
+            "type": "string"
+          },
+          "bones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "inverseBind": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 16,
+              "maxItems": 16
+            }
+          }
+        },
+        "required": [
+          "mesh",
+          "rootBone",
+          "bones",
+          "inverseBind"
+        ]
+      },
+      "Bone": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
       "AtmosphereSettingsDto": {
         "type": "object",
         "additionalProperties": false,
@@ -3460,6 +3599,12 @@
           },
           "Relationship": {
             "$ref": "#/components/schemas/Relationship"
+          },
+          "SkinnedMesh": {
+            "$ref": "#/components/schemas/SkinnedMesh"
+          },
+          "Bone": {
+            "$ref": "#/components/schemas/Bone"
           }
         }
       },
@@ -3494,6 +3639,12 @@
           },
           {
             "$ref": "#/components/schemas/Relationship"
+          },
+          {
+            "$ref": "#/components/schemas/SkinnedMesh"
+          },
+          {
+            "$ref": "#/components/schemas/Bone"
           }
         ]
       },

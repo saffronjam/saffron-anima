@@ -105,6 +105,7 @@ const commands: CommandDef[] = [
   { name: "set-restir", params: "ToggleParams", result: "SetRestirResult", summary: "toggle ReSTIR" },
   { name: "set-gi", params: "SetGiParams", result: "SetGiResult", summary: "set GI mode" },
   { name: "set-shadows", params: "ToggleParams", result: "SetShadowsResult", summary: "toggle shadows" },
+  { name: "set-skinning", params: "ToggleParams", result: "SetSkinningResult", summary: "toggle GPU skinning" },
   {
     name: "set-depth-prepass",
     params: "ToggleParams",
@@ -147,6 +148,12 @@ const commands: CommandDef[] = [
     params: "EntityParams",
     result: "DestroyEntityResult",
     summary: "destroy-entity {entity}",
+  },
+  {
+    name: "set-parent",
+    params: "SetParentParams",
+    result: "EntityRef",
+    summary: "set-parent {entity, parent?} — reparent (absent/0 parent detaches to root)",
   },
   {
     name: "add-component",
@@ -343,12 +350,14 @@ const commandFixtures = new Map<string, string>([
   ["set-restir", "toggle-off"],
   ["set-gi", "gi-off"],
   ["set-shadows", "toggle-on"],
+  ["set-skinning", "toggle-on"],
   ["set-depth-prepass", "toggle-on"],
   ["viewport-native-info", "empty"],
   ["list-entities", "empty"],
   ["list-components", "empty"],
   ["create-entity", "new-entity"],
   ["destroy-entity", "temp-entity"],
+  ["set-parent", "temp-child-under-cube"],
   ["add-component", "temp-camera-entity"],
   ["remove-component", "temp-camera-component"],
   ["set-component", "cube-name-component"],
@@ -1110,6 +1119,15 @@ export interface Relationship {
   parent: WireUuid;
 }
 
+export interface SkinnedMesh {
+  mesh: WireUuid;
+  rootBone: WireUuid;
+  bones: WireUuid[];
+  inverseBind: number[][];
+}
+
+export interface Bone {}
+
 export interface AtmosphereSettingsDto {
   enabled: boolean;
   planetRadius: number;
@@ -1135,6 +1153,8 @@ export interface Components {
   SpotLight?: SpotLight;
   ReflectionProbe?: ReflectionProbe;
   Relationship?: Relationship;
+  SkinnedMesh?: SkinnedMesh;
+  Bone?: Bone;
 }
 
 export type ComponentBody =
@@ -1148,6 +1168,8 @@ export type ComponentBody =
   | SpotLight
   | ReflectionProbe
   | Relationship
+  | SkinnedMesh
+  | Bone
   | Record<string, unknown>;`;
   const paramsMap = commands.map((command) => `  ${JSON.stringify(command.name)}: ${command.params};`).join("\n");
   const resultMap = commands.map((command) => `  ${JSON.stringify(command.name)}: ${command.result};`).join("\n");
@@ -1249,6 +1271,8 @@ function componentSchemas(): Record<string, unknown> {
     "SpotLight",
     "ReflectionProbe",
     "Relationship",
+    "SkinnedMesh",
+    "Bone",
   ];
   const schemas: Record<string, unknown> = {
     Name: {
@@ -1330,6 +1354,25 @@ function componentSchemas(): Record<string, unknown> {
       additionalProperties: false,
       properties: { parent: uuid },
       required: ["parent"],
+    },
+    SkinnedMesh: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        mesh: uuid,
+        rootBone: uuid,
+        bones: { type: "array", items: uuid },
+        inverseBind: {
+          type: "array",
+          items: { type: "array", items: { type: "number" }, minItems: 16, maxItems: 16 },
+        },
+      },
+      required: ["mesh", "rootBone", "bones", "inverseBind"],
+    },
+    Bone: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
     },
     AtmosphereSettingsDto: {
       type: "object",
@@ -1465,6 +1508,7 @@ module;
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
+#include <cstdlib>
 #include <format>
 #include <string>
 
@@ -1486,6 +1530,27 @@ namespace se
                 case SkyMode::Procedural: return "procedural";
             }
             return "procedural";
+        }
+
+        // A bare json value as u64: unsigned numbers directly, decimal strings parsed
+        // (uuid arrays serialize as strings, like every id on the wire).
+        auto u64FromJson(const nlohmann::json& value) -> u64
+        {
+            if (value.is_number_unsigned())
+            {
+                return value.get<u64>();
+            }
+            if (value.is_string())
+            {
+                const std::string text = value.get<std::string>();
+                char* end = nullptr;
+                const unsigned long long parsed = std::strtoull(text.c_str(), &end, 10);
+                if (end != text.c_str() && *end == '\\0')
+                {
+                    return parsed;
+                }
+            }
+            return 0;
         }
 
         auto skyModeFromName(const std::string& name) -> SkyMode
@@ -1686,6 +1751,76 @@ namespace se
     auto relationshipComponentFromJson(RelationshipComponent& c, const nlohmann::json& j) -> Result<void>
     {
         c.parent = Uuid{ jsonU64Or(j, "parent", 0) };
+        return {};
+    }
+
+    auto boneComponentToJson(const BoneComponent&) -> nlohmann::json
+    {
+        return nlohmann::json::object();
+    }
+
+    auto boneComponentFromJson(BoneComponent&, const nlohmann::json&) -> Result<void>
+    {
+        return {};
+    }
+
+    auto skinnedMeshComponentToJson(const SkinnedMeshComponent& c) -> nlohmann::json
+    {
+        nlohmann::json bones = nlohmann::json::array();
+        for (const Uuid& bone : c.bones)
+        {
+            bones.push_back(uuidToJson(bone.value));
+        }
+        nlohmann::json inverseBind = nlohmann::json::array();
+        for (const glm::mat4& m : c.inverseBind)
+        {
+            nlohmann::json mat = nlohmann::json::array();
+            const float* p = &m[0][0];
+            for (int i = 0; i < 16; i = i + 1)
+            {
+                mat.push_back(p[i]);
+            }
+            inverseBind.push_back(std::move(mat));
+        }
+        return nlohmann::json{ { "mesh", uuidToJson(c.mesh.value) },
+                               { "rootBone", uuidToJson(c.rootBone.value) },
+                               { "bones", std::move(bones) },
+                               { "inverseBind", std::move(inverseBind) } };
+    }
+
+    auto skinnedMeshComponentFromJson(SkinnedMeshComponent& c, const nlohmann::json& j) -> Result<void>
+    {
+        c.mesh = Uuid{ jsonU64Or(j, "mesh", 0) };
+        c.rootBone = Uuid{ jsonU64Or(j, "rootBone", 0) };
+        c.bones.clear();
+        if (j.contains("bones") && j["bones"].is_array())
+        {
+            for (const nlohmann::json& bone : j["bones"])
+            {
+                c.bones.push_back(Uuid{ u64FromJson(bone) });
+            }
+        }
+        c.inverseBind.clear();
+        if (j.contains("inverseBind") && j["inverseBind"].is_array())
+        {
+            for (const nlohmann::json& mat : j["inverseBind"])
+            {
+                glm::mat4 m{ 1.0f };
+                if (mat.is_array() && mat.size() == 16)
+                {
+                    float* p = &m[0][0];
+                    for (int i = 0; i < 16; i = i + 1)
+                    {
+                        if (mat[i].is_number())
+                        {
+                            p[i] = mat[i].get<float>();
+                        }
+                    }
+                }
+                c.inverseBind.push_back(m);
+            }
+        }
+        c.boneHandles.clear();  // resolved cache — relinkHierarchy rebuilds it
         return {};
     }
 

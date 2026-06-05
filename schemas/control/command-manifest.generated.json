@@ -86,6 +86,13 @@
       "fixture": "toggle-on"
     },
     {
+      "name": "set-skinning",
+      "params": "ToggleParams",
+      "result": "SetSkinningResult",
+      "status": "typed",
+      "fixture": "toggle-on"
+    },
+    {
       "name": "set-depth-prepass",
       "params": "ToggleParams",
       "result": "SetDepthPrepassResult",
@@ -140,6 +147,13 @@
       "result": "DestroyEntityResult",
       "status": "typed",
       "fixture": "temp-entity"
+    },
+    {
+      "name": "set-parent",
+      "params": "SetParentParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "fixture": "temp-child-under-cube"
     },
     {
       "name": "add-component",

@@ -131,7 +131,9 @@ function validate(schema: any, value: any, path: string, errors: string[]): void
 
 function assertRawU64(raw: string, label: string, errors: string[]): void {
   const result = raw.slice(raw.indexOf('"result"'));
-  for (const m of result.matchAll(/"(?:id|mesh|albedoTexture|skyTexture|texture|entity|parent)"\s*:\s*([^,}\s]+)/g)) {
+  for (const m of result.matchAll(
+    /"(?:id|mesh|albedoTexture|skyTexture|texture|entity|parent|parentId|rootBone)"\s*:\s*([^,}\s]+)/g,
+  )) {
     const tok = m[1];
     if (tok === "null") {
       continue;
@@ -238,6 +240,8 @@ async function paramsForFixture(fixture: string, state: { cubeId: string }): Pro
       return { name: `Contract Created ${process.pid}` };
     case "temp-entity":
       return { entity: await entityId(`Contract Destroy ${process.pid}`) };
+    case "temp-child-under-cube":
+      return { entity: await entityId(`Contract Reparent ${process.pid}`), parent: state.cubeId };
     case "temp-camera-entity":
       return { entity: await entityId(`Contract Add Camera ${process.pid}`), component: "Camera" };
     case "temp-camera-component": {
@@ -394,6 +398,46 @@ async function main(): Promise<number> {
       validate(schemaForResult(command.result), envelope.result, command.name, errors);
       assertRawU64(raw, command.name, errors);
       checked.push(`${command.name} -> ${command.result}`);
+    }
+
+    // Hierarchy round-trip: reparent a fresh entity under a fresh parent (the loop's
+    // project commands may have replaced the seeded scene), see parentId on the list,
+    // refuse a cycle, then detach back to root.
+    {
+      const hierParentId = await entityId(`Contract Hierarchy Parent ${process.pid}`);
+      const childId = await entityId(`Contract Hierarchy Child ${process.pid}`);
+      const reparent = await call("set-parent", { entity: childId, parent: hierParentId });
+      if (reparent.envelope.ok !== true) {
+        errors.push(`hierarchy set-parent: ${reparent.envelope.error}`);
+      }
+      const listed = await call("list-entities");
+      validate(schemaForResult("EntityList"), listed.envelope.result, "hierarchy list-entities", errors);
+      assertRawU64(listed.raw, "hierarchy list-entities", errors);
+      const entry = (listed.envelope.result as any)?.entities?.find((e: any) => e.id === childId);
+      if (!entry || entry.parentId !== hierParentId) {
+        errors.push(`hierarchy: child ${childId} should list parentId ${hierParentId}, got ${entry?.parentId}`);
+      } else {
+        checked.push("set-parent -> list-entities parentId round-trip");
+      }
+
+      const cycle = await call("set-parent", { entity: hierParentId, parent: childId });
+      if (cycle.envelope.ok !== false || typeof cycle.envelope.error !== "string" || cycle.envelope.error.length === 0) {
+        errors.push("hierarchy: parenting an entity under its own child must fail (cycle)");
+      } else {
+        checked.push("set-parent cycle -> envelope (ok:false)");
+      }
+
+      const detach = await call("set-parent", { entity: childId, parent: "0" });
+      if (detach.envelope.ok !== true) {
+        errors.push(`hierarchy detach: ${detach.envelope.error}`);
+      }
+      const relisted = await call("list-entities");
+      const detached = (relisted.envelope.result as any)?.entities?.find((e: any) => e.id === childId);
+      if (!detached || "parentId" in detached) {
+        errors.push("hierarchy: detached child must carry no parentId");
+      } else {
+        checked.push("set-parent detach -> root (no parentId)");
+      }
     }
 
     const bad = await call("definitely-not-a-command");
