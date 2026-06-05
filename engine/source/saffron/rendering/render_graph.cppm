@@ -22,12 +22,12 @@ export namespace se
     /// layout-transition derivation — a pass declares usage, never writes a barrier.
     enum class RgUsage
     {
-        ColorWrite,           ///< color attachment write
-        DepthWrite,           ///< depth attachment write
-        SampledRead,          ///< sampled in a fragment shader
-        StorageWriteCompute,  ///< storage buffer written by a compute shader
-        StorageReadCompute,   ///< storage buffer read by a compute shader
-        StorageReadFragment,  ///< storage buffer read by a fragment shader
+        ColorWrite,             ///< color attachment write
+        DepthWrite,             ///< depth attachment write
+        SampledRead,            ///< sampled in a fragment shader
+        StorageWriteCompute,    ///< storage buffer written by a compute shader
+        StorageReadCompute,     ///< storage buffer read by a compute shader
+        StorageReadFragment,    ///< storage buffer read by a fragment shader
         StorageImageRWCompute,  ///< image read+written in place by a compute shader (GENERAL)
         SampledReadCompute,     ///< image sampled in a compute shader (SHADER_READ_ONLY)
     };
@@ -107,14 +107,13 @@ export namespace se
     /// Import an external image (offscreen/swapchain target). When externalLayout is
     /// set it seeds the entry layout and receives the resolved layout after execute,
     /// so an image's layout carries across frames.
-    auto importImage(RenderGraph& graph, vk::Image image, vk::ImageView view,
-                           vk::ImageAspectFlags aspect, vk::ImageLayout initialLayout,
-                           vk::ImageLayout* externalLayout) -> RgResource;
+    auto importImage(RenderGraph& graph, vk::Image image, vk::ImageView view, vk::ImageAspectFlags aspect,
+                     vk::ImageLayout initialLayout, vk::ImageLayout* externalLayout) -> RgResource;
 
     /// Import an external 3D image (e.g. the DDGI voxel proxy). Only used for compute
     /// storage barriers — the graph tracks its layout exactly like a 2D image.
-    auto importImage3D(RenderGraph& graph, vk::Image image, vk::ImageView view,
-                             vk::ImageLayout initialLayout, vk::ImageLayout* externalLayout) -> RgResource;
+    auto importImage3D(RenderGraph& graph, vk::Image image, vk::ImageView view, vk::ImageLayout initialLayout,
+                       vk::ImageLayout* externalLayout) -> RgResource;
 
     /// Import an external buffer produced and/or consumed within the frame.
     auto importBuffer(RenderGraph& graph, vk::Buffer buffer) -> RgResource;
@@ -141,40 +140,34 @@ namespace se
         switch (usage)
         {
         case RgUsage::ColorWrite:
-            return { vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                     vk::AccessFlagBits2::eColorAttachmentWrite,
+            return { vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
                      vk::ImageLayout::eColorAttachmentOptimal, true };
         case RgUsage::DepthWrite:
             return { vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-                     vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-                     vk::ImageLayout::eDepthAttachmentOptimal, true };
+                     vk::AccessFlagBits2::eDepthStencilAttachmentWrite, vk::ImageLayout::eDepthAttachmentOptimal,
+                     true };
         case RgUsage::SampledRead:
-            return { vk::PipelineStageFlagBits2::eFragmentShader,
-                     vk::AccessFlagBits2::eShaderSampledRead,
+            return { vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
                      vk::ImageLayout::eShaderReadOnlyOptimal, false };
         case RgUsage::StorageWriteCompute:
-            return { vk::PipelineStageFlagBits2::eComputeShader,
-                     vk::AccessFlagBits2::eShaderStorageWrite,
+            return { vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
                      vk::ImageLayout::eUndefined, true };
         case RgUsage::StorageReadCompute:
-            return { vk::PipelineStageFlagBits2::eComputeShader,
-                     vk::AccessFlagBits2::eShaderStorageRead,
+            return { vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageRead,
                      vk::ImageLayout::eUndefined, false };
         case RgUsage::StorageReadFragment:
-            return { vk::PipelineStageFlagBits2::eFragmentShader,
-                     vk::AccessFlagBits2::eShaderStorageRead,
+            return { vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderStorageRead,
                      vk::ImageLayout::eUndefined, false };
         case RgUsage::StorageImageRWCompute:
             return { vk::PipelineStageFlagBits2::eComputeShader,
                      vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
                      vk::ImageLayout::eGeneral, true };
         case RgUsage::SampledReadCompute:
-            return { vk::PipelineStageFlagBits2::eComputeShader,
-                     vk::AccessFlagBits2::eShaderSampledRead,
+            return { vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead,
                      vk::ImageLayout::eShaderReadOnlyOptimal, false };
         }
-        return { vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                 vk::ImageLayout::eUndefined, false };
+        return { vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone, vk::ImageLayout::eUndefined,
+                 false };
     }
 
     // The src scope a freshly-imported image presents, given its entry layout: a
@@ -197,15 +190,13 @@ namespace se
     // Derive a barrier for one (resource, usage), append it, and advance the resource
     // state. Images barrier on a layout change or a hazard; buffers on a hazard only
     // (read-after-write, or a write after any prior use).
-    void applyAccess(RgResourceState& r, RgUsageInfo target,
-                     std::vector<vk::ImageMemoryBarrier2>& imageBarriers,
+    void applyAccess(RgResourceState& r, RgUsageInfo target, std::vector<vk::ImageMemoryBarrier2>& imageBarriers,
                      std::vector<vk::MemoryBarrier2>& memoryBarriers)
     {
         const bool hazard = (target.isWrite && r.touched) || (!target.isWrite && r.lastWasWrite);
         if (r.isImage)
         {
-            const bool layoutChange =
-                target.layout != vk::ImageLayout::eUndefined && r.layout != target.layout;
+            const bool layoutChange = target.layout != vk::ImageLayout::eUndefined && r.layout != target.layout;
             if (layoutChange || hazard)
             {
                 vk::ImageMemoryBarrier2 barrier{};
@@ -249,9 +240,8 @@ namespace se
         return RenderGraph{};
     }
 
-    auto importImage(RenderGraph& graph, vk::Image image, vk::ImageView view,
-                           vk::ImageAspectFlags aspect, vk::ImageLayout initialLayout,
-                           vk::ImageLayout* externalLayout) -> RgResource
+    auto importImage(RenderGraph& graph, vk::Image image, vk::ImageView view, vk::ImageAspectFlags aspect,
+                     vk::ImageLayout initialLayout, vk::ImageLayout* externalLayout) -> RgResource
     {
         RgResourceState r;
         r.isImage = true;
@@ -269,8 +259,8 @@ namespace se
         return RgResource{ static_cast<u32>(graph.resources.size() - 1) };
     }
 
-    auto importImage3D(RenderGraph& graph, vk::Image image, vk::ImageView view,
-                             vk::ImageLayout initialLayout, vk::ImageLayout* externalLayout) -> RgResource
+    auto importImage3D(RenderGraph& graph, vk::Image image, vk::ImageView view, vk::ImageLayout initialLayout,
+                       vk::ImageLayout* externalLayout) -> RgResource
     {
         // A 3D image is tracked identically to a 2D one for barrier purposes (the barrier
         // transitions the whole image; dimensionality is irrelevant here).
@@ -300,24 +290,24 @@ namespace se
 
             for (RgAccess& access : pass.accesses)
             {
-                applyAccess(graph.resources[access.resource.index], usageInfo(access.usage),
-                            imageBarriers, memoryBarriers);
+                applyAccess(graph.resources[access.resource.index], usageInfo(access.usage), imageBarriers,
+                            memoryBarriers);
             }
             for (const RgAttachment& att : pass.colors)
             {
-                applyAccess(graph.resources[att.resource.index], usageInfo(RgUsage::ColorWrite),
-                            imageBarriers, memoryBarriers);
+                applyAccess(graph.resources[att.resource.index], usageInfo(RgUsage::ColorWrite), imageBarriers,
+                            memoryBarriers);
                 if (att.resolve)
                 {
                     // The resolve target is written at end-of-pass — a second color write.
-                    applyAccess(graph.resources[att.resolve->index], usageInfo(RgUsage::ColorWrite),
-                                imageBarriers, memoryBarriers);
+                    applyAccess(graph.resources[att.resolve->index], usageInfo(RgUsage::ColorWrite), imageBarriers,
+                                memoryBarriers);
                 }
             }
             if (pass.depth)
             {
-                applyAccess(graph.resources[pass.depth->resource.index], usageInfo(RgUsage::DepthWrite),
-                            imageBarriers, memoryBarriers);
+                applyAccess(graph.resources[pass.depth->resource.index], usageInfo(RgUsage::DepthWrite), imageBarriers,
+                            memoryBarriers);
             }
 
             if (!imageBarriers.empty() || !memoryBarriers.empty())
@@ -368,9 +358,10 @@ namespace se
                 }
                 cmd.beginRendering(rendering);
 
-                vk::Viewport viewport{ 0.0f, 0.0f,
-                                       static_cast<f32>(pass.renderArea.width),
-                                       static_cast<f32>(pass.renderArea.height), 0.0f, 1.0f };
+                vk::Viewport viewport{
+                    0.0f, 0.0f, static_cast<f32>(pass.renderArea.width), static_cast<f32>(pass.renderArea.height),
+                    0.0f, 1.0f
+                };
                 vk::Rect2D scissor{ vk::Offset2D{ 0, 0 }, pass.renderArea };
                 cmd.setViewport(0, viewport);
                 cmd.setScissor(0, scissor);

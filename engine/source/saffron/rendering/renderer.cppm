@@ -120,8 +120,7 @@ namespace se
         const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
 
         vkb::InstanceBuilder instanceBuilder;
-        instanceBuilder
-            .set_app_name("Saffron Editor")
+        instanceBuilder.set_app_name("Saffron Editor")
             .set_engine_name("Saffron Engine")
             .require_api_version(1, 4, 0)
             .request_validation_layers(true)
@@ -164,8 +163,7 @@ namespace se
         features12.bufferDeviceAddress = VK_TRUE;  // required by KHR acceleration structures
 
         vkb::PhysicalDeviceSelector selector{ renderer.context.vkbInstance };
-        auto physicalResult = selector
-                                  .set_minimum_version(1, 4)
+        auto physicalResult = selector.set_minimum_version(1, 4)
                                   .set_required_features_11(features11)
                                   .set_required_features_12(features12)
                                   .set_required_features_13(features13)
@@ -181,13 +179,16 @@ namespace se
         // extensions only if the selected device has them (enable_extension_if_present does
         // not fail otherwise). RT support = both core extensions present AND their feature
         // bits set; we only chain the RT feature structs + enable RT then.
-        const bool hasAsExt = physicalResult.value().enable_extension_if_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        const bool hasAsExt =
+            physicalResult.value().enable_extension_if_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
         const bool hasRqExt = physicalResult.value().enable_extension_if_present(VK_KHR_RAY_QUERY_EXTENSION_NAME);
         physicalResult.value().enable_extension_if_present(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
         bool rtSupported = false;
         if (hasAsExt && hasRqExt)
         {
-            VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
+            VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR
+            };
             VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
             asFeat.pNext = &rqFeat;
             VkPhysicalDeviceFeatures2 feat2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
@@ -198,7 +199,9 @@ namespace se
 
         vkb::DeviceBuilder deviceBuilder{ physicalResult.value() };
         // Chain the RT feature structs into device creation only when supported.
-        VkPhysicalDeviceAccelerationStructureFeaturesKHR asEnable{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR asEnable{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR
+        };
         VkPhysicalDeviceRayQueryFeaturesKHR rqEnable{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
         if (rtSupported)
         {
@@ -222,7 +225,8 @@ namespace se
             return Err(std::format("no graphics queue: {}", queueResult.error().message()));
         }
         renderer.context.graphicsQueue = vk::Queue{ queueResult.value() };
-        renderer.context.graphicsQueueFamily = renderer.context.vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
+        renderer.context.graphicsQueueFamily =
+            renderer.context.vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
         // Resolve the KHR acceleration-structure / ray-query device entry points (not
         // statically exported by the loader; the engine otherwise uses static dispatch).
@@ -231,11 +235,16 @@ namespace se
         {
             VkDevice dev = renderer.context.vkbDevice.device;
             auto load = [dev](const char* n) { return vkGetDeviceProcAddr(dev, n); };
-            renderer.context.rt.getBuildSizes = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(load("vkGetAccelerationStructureBuildSizesKHR"));
-            renderer.context.rt.createAccel = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(load("vkCreateAccelerationStructureKHR"));
-            renderer.context.rt.destroyAccel = reinterpret_cast<PFN_vkDestroyAccelerationStructureKHR>(load("vkDestroyAccelerationStructureKHR"));
-            renderer.context.rt.cmdBuild = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(load("vkCmdBuildAccelerationStructuresKHR"));
-            renderer.context.rt.getAccelAddress = reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(load("vkGetAccelerationStructureDeviceAddressKHR"));
+            renderer.context.rt.getBuildSizes = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(
+                load("vkGetAccelerationStructureBuildSizesKHR"));
+            renderer.context.rt.createAccel =
+                reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(load("vkCreateAccelerationStructureKHR"));
+            renderer.context.rt.destroyAccel =
+                reinterpret_cast<PFN_vkDestroyAccelerationStructureKHR>(load("vkDestroyAccelerationStructureKHR"));
+            renderer.context.rt.cmdBuild =
+                reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(load("vkCmdBuildAccelerationStructuresKHR"));
+            renderer.context.rt.getAccelAddress = reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(
+                load("vkGetAccelerationStructureDeviceAddressKHR"));
             if (renderer.context.rt.getBuildSizes == nullptr || renderer.context.rt.createAccel == nullptr ||
                 renderer.context.rt.destroyAccel == nullptr || renderer.context.rt.cmdBuild == nullptr ||
                 renderer.context.rt.getAccelAddress == nullptr)
@@ -252,18 +261,36 @@ namespace se
         // Sample counts valid for the MSAA targets: the framebuffer limits intersected with each
         // target format's own imageCreateSampleCounts. The generic limits are not enough — llvmpipe,
         // e.g., accepts 2x as a framebuffer count yet rejects it for R16G16B16A16_SFLOAT / D32_SFLOAT.
-        vk::SampleCountFlags sampleCounts = renderer.context.physicalDevice.getProperties().limits.framebufferColorSampleCounts &
-                                            renderer.context.physicalDevice.getProperties().limits.framebufferDepthSampleCounts;
+        vk::SampleCountFlags sampleCounts =
+            renderer.context.physicalDevice.getProperties().limits.framebufferColorSampleCounts &
+            renderer.context.physicalDevice.getProperties().limits.framebufferDepthSampleCounts;
         auto colorFmt = renderer.context.physicalDevice.getImageFormatProperties(
-            OffscreenColorFormat, vk::ImageType::e2D, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eColorAttachment, {});
-        if (colorFmt.result == vk::Result::eSuccess) { sampleCounts = sampleCounts & colorFmt.value.sampleCounts; }
+            OffscreenColorFormat, vk::ImageType::e2D, vk::ImageTiling::eOptimal,
+            vk::ImageUsageFlagBits::eColorAttachment, {});
+        if (colorFmt.result == vk::Result::eSuccess)
+        {
+            sampleCounts = sampleCounts & colorFmt.value.sampleCounts;
+        }
         auto depthFmt = renderer.context.physicalDevice.getImageFormatProperties(
-            DepthFormat, vk::ImageType::e2D, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment, {});
-        if (depthFmt.result == vk::Result::eSuccess) { sampleCounts = sampleCounts & depthFmt.value.sampleCounts; }
+            DepthFormat, vk::ImageType::e2D, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment,
+            {});
+        if (depthFmt.result == vk::Result::eSuccess)
+        {
+            sampleCounts = sampleCounts & depthFmt.value.sampleCounts;
+        }
         renderer.targets.supportedSampleCounts = sampleCounts;
-        if (sampleCounts & vk::SampleCountFlagBits::e8) { renderer.targets.maxSampleCount = vk::SampleCountFlagBits::e8; }
-        else if (sampleCounts & vk::SampleCountFlagBits::e4) { renderer.targets.maxSampleCount = vk::SampleCountFlagBits::e4; }
-        else if (sampleCounts & vk::SampleCountFlagBits::e2) { renderer.targets.maxSampleCount = vk::SampleCountFlagBits::e2; }
+        if (sampleCounts & vk::SampleCountFlagBits::e8)
+        {
+            renderer.targets.maxSampleCount = vk::SampleCountFlagBits::e8;
+        }
+        else if (sampleCounts & vk::SampleCountFlagBits::e4)
+        {
+            renderer.targets.maxSampleCount = vk::SampleCountFlagBits::e4;
+        }
+        else if (sampleCounts & vk::SampleCountFlagBits::e2)
+        {
+            renderer.targets.maxSampleCount = vk::SampleCountFlagBits::e2;
+        }
 
         VmaAllocatorCreateInfo allocatorInfo{};
         allocatorInfo.instance = renderer.context.vkbInstance.instance;
@@ -328,7 +355,8 @@ namespace se
             }
             frame.commandBuffer = (*buffers)[0];
 
-            auto imageAvailable = checked(renderer.context.device.createSemaphore(vk::SemaphoreCreateInfo{}), "createSemaphore");
+            auto imageAvailable =
+                checked(renderer.context.device.createSemaphore(vk::SemaphoreCreateInfo{}), "createSemaphore");
             if (!imageAvailable)
             {
                 return Err(imageAvailable.error());
@@ -372,9 +400,9 @@ namespace se
         // some drivers (llvmpipe) fault sampling a partially-bound array even on slots a
         // shader never reads. Real uploads overwrite their slot afterwards.
         {
-            std::vector<vk::DescriptorImageInfo> infos(MaxBindlessTextures,
-                vk::DescriptorImageInfo{ renderer.descriptors.linearSampler, (*whiteTexture)->view,
-                                         vk::ImageLayout::eShaderReadOnlyOptimal });
+            std::vector<vk::DescriptorImageInfo> infos(
+                MaxBindlessTextures, vk::DescriptorImageInfo{ renderer.descriptors.linearSampler, (*whiteTexture)->view,
+                                                              vk::ImageLayout::eShaderReadOnlyOptimal });
             vk::WriteDescriptorSet fill{};
             fill.dstSet = renderer.descriptors.bindlessSet;
             fill.dstBinding = 0;
@@ -385,8 +413,7 @@ namespace se
         }
 
         logInfo(std::format("vulkan ready — gpu '{}', {} swapchain images",
-                            renderer.context.vkbDevice.physical_device.name,
-                            renderer.swapchain.images.size()));
+                            renderer.context.vkbDevice.physical_device.name, renderer.swapchain.images.size()));
         return renderer;
     }
 
@@ -401,12 +428,12 @@ namespace se
         // (which may capture Refs), before the descriptor pool / allocator / device
         // are torn down — a GpuTexture frees its material set from the pool.
         renderer.frame.sceneDrawList = SceneDrawList{};  // drops mesh/texture/pipeline Refs
-        renderer.pipelines.cache.clear();            // drops the cached mesh PSOs
+        renderer.pipelines.cache.clear();                // drops the cached mesh PSOs
         renderer.frame.sceneSubmissions.clear();
         renderer.frame.uiSubmissions.clear();
         renderer.defaultWhiteTexture.reset();
-        renderer.pipelines.cull.reset();        // RAII frees the compute pipeline + layout
-        renderer.pipelines.overlay.reset();     // editor gizmo + billboard PSO
+        renderer.pipelines.cull.reset();     // RAII frees the compute pipeline + layout
+        renderer.pipelines.overlay.reset();  // editor gizmo + billboard PSO
         renderer.pipelines.thumbnail.reset();
         renderer.pipelines.tonemap.reset();
         renderer.pipelines.fxaa.reset();
@@ -429,7 +456,7 @@ namespace se
         renderer.pipelines.restirInitial.reset();
         renderer.pipelines.restirReuse.reset();
         renderer.pipelines.restirResolve.reset();
-        renderer.sky.pipeline.reset();          // fullscreen sky PSO
+        renderer.sky.pipeline.reset();  // fullscreen sky PSO
         renderer.restir.radiance.reset();
         renderer.restir.initial.reset();
         renderer.restir.combined.reset();
@@ -520,12 +547,14 @@ namespace se
             renderer.lighting.clusterBuffers[i].reset();
             if (renderer.lighting.lightBuffers[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyBuffer(renderer.context.allocator, renderer.lighting.lightBuffers[i], renderer.lighting.lightAllocs[i]);
+                vmaDestroyBuffer(renderer.context.allocator, renderer.lighting.lightBuffers[i],
+                                 renderer.lighting.lightAllocs[i]);
                 renderer.lighting.lightBuffers[i] = VK_NULL_HANDLE;
             }
             if (renderer.lighting.clusterParamBuffers[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyBuffer(renderer.context.allocator, renderer.lighting.clusterParamBuffers[i], renderer.lighting.clusterParamAllocs[i]);
+                vmaDestroyBuffer(renderer.context.allocator, renderer.lighting.clusterParamBuffers[i],
+                                 renderer.lighting.clusterParamAllocs[i]);
                 renderer.lighting.clusterParamBuffers[i] = VK_NULL_HANDLE;
             }
         }
@@ -601,11 +630,14 @@ namespace se
         {
             renderer.context.device.destroyDescriptorSetLayout(renderer.descriptors.taaSetLayout);
         }
-        for (vk::DescriptorSetLayout l : { renderer.ddgi.voxelLayout, renderer.ddgi.traceLayout,
-                                           renderer.ddgi.blendIrrLayout, renderer.ddgi.blendDistLayout,
-                                           renderer.ddgi.borderLayout, renderer.ddgi.meshLayout })
+        for (vk::DescriptorSetLayout l :
+             { renderer.ddgi.voxelLayout, renderer.ddgi.traceLayout, renderer.ddgi.blendIrrLayout,
+               renderer.ddgi.blendDistLayout, renderer.ddgi.borderLayout, renderer.ddgi.meshLayout })
         {
-            if (l) { renderer.context.device.destroyDescriptorSetLayout(l); }
+            if (l)
+            {
+                renderer.context.device.destroyDescriptorSetLayout(l);
+            }
         }
         if (renderer.ddgi.sampler)
         {
@@ -618,7 +650,10 @@ namespace se
         for (vk::DescriptorSetLayout l : { renderer.restir.initialLayout, renderer.restir.reuseLayout,
                                            renderer.restir.resolveLayout, renderer.restir.meshLayout })
         {
-            if (l) { renderer.context.device.destroyDescriptorSetLayout(l); }
+            if (l)
+            {
+                renderer.context.device.destroyDescriptorSetLayout(l);
+            }
         }
         if (renderer.restir.sampler)
         {
@@ -681,7 +716,8 @@ namespace se
         // reuse the image's renderFinished semaphore.
         if (renderer.swapchain.imagesInFlight[renderer.frame.imageIndex])
         {
-            static_cast<void>(renderer.context.device.waitForFences(renderer.swapchain.imagesInFlight[renderer.frame.imageIndex], VK_TRUE, UINT64_MAX));
+            static_cast<void>(renderer.context.device.waitForFences(
+                renderer.swapchain.imagesInFlight[renderer.frame.imageIndex], VK_TRUE, UINT64_MAX));
         }
         renderer.swapchain.imagesInFlight[renderer.frame.imageIndex] = frame.inFlight;
 
@@ -692,14 +728,15 @@ namespace se
              renderer.targets.desiredHeight != renderer.targets.offscreen.extent.height))
         {
             static_cast<void>(renderer.context.device.waitIdle());
-            auto resized = newColorImage(renderer, renderer.targets.desiredWidth,
-                                         renderer.targets.desiredHeight, OffscreenColorFormat, true);
+            auto resized = newColorImage(renderer, renderer.targets.desiredWidth, renderer.targets.desiredHeight,
+                                         OffscreenColorFormat, true);
             if (resized)
             {
                 renderer.targets.offscreen = std::move(*resized);
                 renderer.targets.generation = renderer.targets.generation + 1;
                 updateTonemapSet(renderer);  // the storage-image binding follows the new view
-                auto resizedDepth = newDepthImage(renderer, renderer.targets.desiredWidth, renderer.targets.desiredHeight);
+                auto resizedDepth =
+                    newDepthImage(renderer, renderer.targets.desiredWidth, renderer.targets.desiredHeight);
                 if (resizedDepth)
                 {
                     renderer.targets.depth = std::move(*resizedDepth);
@@ -712,7 +749,10 @@ namespace se
                 recreateFxaaTarget(renderer);   // and the FXAA/TAA scratch target
                 recreateSsaoTargets(renderer);  // and the SSAO G-buffer + AO map
                 recreateTaaTargets(renderer);   // and the TAA motion + history (after scratch)
-                if (renderer.context.rtSupported) { recreateRestirTargets(renderer); }  // ReSTIR reservoirs
+                if (renderer.context.rtSupported)
+                {
+                    recreateRestirTargets(renderer);
+                }  // ReSTIR reservoirs
             }
             else
             {
@@ -799,11 +839,15 @@ namespace se
             for (u32 slot = 0; slot < renderer.reflection.count; slot = slot + 1)
             {
                 ReflectionProbe& probe = renderer.reflection.probes[slot];
-                if (!probe.dirty) { continue; }
+                if (!probe.dirty)
+                {
+                    continue;
+                }
                 if (Result<void> r = captureReflectionProbe(renderer, probe, slot); r)
                 {
-                    logInfo(std::format("reflection probe captured — slot {}, origin ({:.1f}, {:.1f}, {:.1f}), radius {:.1f}",
-                                        slot, probe.origin.x, probe.origin.y, probe.origin.z, probe.influenceRadius));
+                    logInfo(std::format(
+                        "reflection probe captured — slot {}, origin ({:.1f}, {:.1f}, {:.1f}), radius {:.1f}", slot,
+                        probe.origin.x, probe.origin.y, probe.origin.z, probe.influenceRadius));
                 }
                 else
                 {
@@ -822,32 +866,33 @@ namespace se
 
         // The frame as a render graph: declare each pass's resource usage and let the
         // graph derive the barriers + layout transitions. The offscreen color carries
-        // its layout across frames (sampled by ImGui last frame → WAR into this scene).
+        // its layout across frames (sampled by the present blit last frame → WAR into this scene).
         renderer.graph.current = newRenderGraph();
         RenderGraph& graph = renderer.graph.current;
-        // frameSceneColor is always the offscreen (what ImGui samples + tonemap reads). The
+        // frameSceneColor is always the offscreen (what the present blit samples + tonemap reads). The
         // scene's 1x result lands in `sceneOutput`: the offscreen normally, or the FXAA
         // scratch when FXAA is on (FXAA then edge-blurs scratch → offscreen). With MSAA the
         // scene renders to msaaColor and resolves into sceneOutput. mutually exclusive via set-aa.
-        const bool msaa = renderer.targets.sampleCount != vk::SampleCountFlagBits::e1 && renderer.targets.msaaColor.image;
+        const bool msaa =
+            renderer.targets.sampleCount != vk::SampleCountFlagBits::e1 && renderer.targets.msaaColor.image;
         const bool fxaa = renderer.targets.fxaaEnabled && renderer.targets.scratch.image && renderer.pipelines.fxaa;
-        const bool taa = renderer.targets.taaEnabled && renderer.targets.scratch.image &&
-                         renderer.pipelines.motion && renderer.pipelines.taa;
-        renderer.graph.sceneColor = importImage(graph, offscreen.image, offscreen.view,
-            vk::ImageAspectFlagBits::eColor, offscreen.layout, &offscreen.layout);
+        const bool taa = renderer.targets.taaEnabled && renderer.targets.scratch.image && renderer.pipelines.motion &&
+                         renderer.pipelines.taa;
+        renderer.graph.sceneColor = importImage(graph, offscreen.image, offscreen.view, vk::ImageAspectFlagBits::eColor,
+                                                offscreen.layout, &offscreen.layout);
         RgResource sceneOutput = renderer.graph.sceneColor;
         // FXAA + TAA both render the scene's 1x result into the scratch image, then a
         // compute pass resolves scratch -> offscreen.
         if (fxaa || taa)
         {
             sceneOutput = importImage(graph, renderer.targets.scratch.image, renderer.targets.scratch.view,
-                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+                                      vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
         }
         RgResource sceneColorAttachment = sceneOutput;
         if (msaa)
         {
             sceneColorAttachment = importImage(graph, renderer.targets.msaaColor.image, renderer.targets.msaaColor.view,
-                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+                                               vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
         }
         Image* depthTarget = &depth;
         if (msaa)
@@ -855,33 +900,31 @@ namespace se
             depthTarget = &renderer.targets.msaaDepth;
         }
         RgResource sceneDepth = importImage(graph, depthTarget->image, depthTarget->view,
-            vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
+                                            vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
         renderer.graph.swapImage = importImage(graph, renderer.swapchain.images[renderer.frame.imageIndex],
-            renderer.swapchain.imageViews[renderer.frame.imageIndex], vk::ImageAspectFlagBits::eColor,
-            vk::ImageLayout::eUndefined, nullptr);
+                                               renderer.swapchain.imageViews[renderer.frame.imageIndex],
+                                               vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
 
         // Directional shadow: a depth-only pass renders the scene from the light's view
         // into the shadow map; the scene pass then samples it. The graph derives the
         // DepthWrite -> ShaderReadOnly transition (and the cross-frame WAR) from the usages.
-        const bool doShadow = renderer.lighting.shadowPending && renderer.pipelines.shadowDepth &&
-                              renderer.targets.shadowMap.image;
+        const bool doShadow =
+            renderer.lighting.shadowPending && renderer.pipelines.shadowDepth && renderer.targets.shadowMap.image;
         RgResource shadowRes{};
         if (doShadow)
         {
             Image& shadowMap = renderer.targets.shadowMap;
-            shadowRes = importImage(graph, shadowMap.image, shadowMap.view,
-                vk::ImageAspectFlagBits::eDepth, shadowMap.layout, &shadowMap.layout);
+            shadowRes = importImage(graph, shadowMap.image, shadowMap.view, vk::ImageAspectFlagBits::eDepth,
+                                    shadowMap.layout, &shadowMap.layout);
             RgPass shadowPass;
             shadowPass.name = "shadow";
             shadowPass.kind = RgPassKind::Graphics;
-            shadowPass.depth = RgAttachment{ shadowRes, vk::AttachmentLoadOp::eClear,
-                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+            shadowPass.depth = RgAttachment{ shadowRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                                             vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
             shadowPass.renderArea = shadowMap.extent;
             const glm::mat4 lightViewProj = renderer.lighting.shadowViewProj;
             shadowPass.execute = [&renderer, lightViewProj](vk::CommandBuffer cmd)
-        {
-                recordShadowDepth(renderer, cmd, lightViewProj);
-            };
+            { recordShadowDepth(renderer, cmd, lightViewProj); };
             addPass(graph, std::move(shadowPass));
         }
 
@@ -893,19 +936,17 @@ namespace se
         if (doSpotShadow)
         {
             Image& spotMap = renderer.targets.spotShadowMap;
-            spotShadowRes = importImage(graph, spotMap.image, spotMap.view,
-                vk::ImageAspectFlagBits::eDepth, spotMap.layout, &spotMap.layout);
+            spotShadowRes = importImage(graph, spotMap.image, spotMap.view, vk::ImageAspectFlagBits::eDepth,
+                                        spotMap.layout, &spotMap.layout);
             RgPass spotPass;
             spotPass.name = "spot-shadow";
             spotPass.kind = RgPassKind::Graphics;
-            spotPass.depth = RgAttachment{ spotShadowRes, vk::AttachmentLoadOp::eClear,
-                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+            spotPass.depth = RgAttachment{ spotShadowRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                                           vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
             spotPass.renderArea = spotMap.extent;
             const glm::mat4 spotViewProj = renderer.lighting.spotShadowViewProj;
             spotPass.execute = [&renderer, spotViewProj](vk::CommandBuffer cmd)
-        {
-                recordShadowDepth(renderer, cmd, spotViewProj);
-            };
+            { recordShadowDepth(renderer, cmd, spotViewProj); };
             addPass(graph, std::move(spotPass));
         }
 
@@ -923,9 +964,7 @@ namespace se
             const glm::vec3 lightPos = renderer.lighting.pointShadowPos;
             const f32 farPlane = renderer.lighting.pointShadowFar;
             pointPass.execute = [&renderer, lightPos, farPlane](vk::CommandBuffer cmd)
-        {
-                recordPointShadow(renderer, cmd, lightPos, farPlane);
-            };
+            { recordPointShadow(renderer, cmd, lightPos, farPlane); };
             addPass(graph, std::move(pointPass));
         }
 
@@ -942,10 +981,10 @@ namespace se
             cull.kind = RgPassKind::Compute;
             cull.accesses = { RgAccess{ clusterBuffer, RgUsage::StorageWriteCompute } };
             cull.execute = [&renderer, f](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.cull->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                    renderer.pipelines.cull->layout, 0, renderer.lighting.clusterSets[f], {});
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.cull->layout, 0,
+                                       renderer.lighting.clusterSets[f], {});
                 const u32 groups = (ClusterCount + 63) / 64;
                 cmd.dispatch(groups, 1, 1);
             };
@@ -961,13 +1000,10 @@ namespace se
             RgPass depthPass;
             depthPass.name = "depth-prepass";
             depthPass.kind = RgPassKind::Graphics;
-            depthPass.depth = RgAttachment{ sceneDepth, vk::AttachmentLoadOp::eClear,
-                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+            depthPass.depth = RgAttachment{ sceneDepth, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                                            vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
             depthPass.renderArea = offscreen.extent;
-            depthPass.execute = [&renderer](vk::CommandBuffer cmd)
-        {
-                recordDepthPrepass(renderer, cmd);
-            };
+            depthPass.execute = [&renderer](vk::CommandBuffer cmd) { recordDepthPrepass(renderer, cmd); };
             addPass(graph, std::move(depthPass));
         }
 
@@ -976,15 +1012,15 @@ namespace se
         // when ANY of them is on; each effect's compute pass is gated by its toggle. The
         // scene pass samples whichever maps are produced (flags in the light UBO gate the
         // shader reads). The graph derives all the ColorWrite/Storage/SampledRead barriers.
-        const bool gbufReady = renderer.ssao.ready && renderer.pipelines.gbuffer &&
-                               renderer.targets.gNormal.image;
+        const bool gbufReady = renderer.ssao.ready && renderer.pipelines.gbuffer && renderer.targets.gNormal.image;
         const bool doSsao = gbufReady && renderer.ssao.useSsao && renderer.pipelines.gtao && renderer.pipelines.aoBlur;
         const bool doContact = gbufReady && renderer.ssao.useContact && renderer.pipelines.contact;
-        const bool doSsgi = gbufReady && renderer.ssao.useSsgi && renderer.pipelines.ssgi && renderer.pipelines.copyColor;
+        const bool doSsgi =
+            gbufReady && renderer.ssao.useSsgi && renderer.pipelines.ssgi && renderer.pipelines.copyColor;
         // ReSTIR also needs the G-buffer (world pos/normal). Force the prepass when ReSTIR is
         // on even with no screen effect; the gNormal handle is captured for its sets.
-        const bool wantRestir = renderer.restir.useRestir && renderer.restir.ready &&
-                                renderer.context.rtSupported && gbufReady;
+        const bool wantRestir =
+            renderer.restir.useRestir && renderer.restir.ready && renderer.context.rtSupported && gbufReady;
         const bool doScreen = doSsao || doContact || doSsgi || wantRestir;
         const vk::Extent2D ssExtent = offscreen.extent;
         const auto ssGroups = [](u32 n) -> u32 { return (n + 7) / 8; };
@@ -996,17 +1032,18 @@ namespace se
         {
             renderer.graph.hasGbuffer = true;
             RgResource gNormalRes = importImage(graph, renderer.targets.gNormal.image, renderer.targets.gNormal.view,
-                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+                                                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
             RgResource gDepthRes = importImage(graph, renderer.targets.gDepth.image, renderer.targets.gDepth.view,
-                vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
+                                               vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
 
             RgPass gpass;
             gpass.name = "gbuffer";
             gpass.kind = RgPassKind::Graphics;
-            gpass.colors.push_back(RgAttachment{ gNormalRes, vk::AttachmentLoadOp::eClear,
-                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } } });
-            gpass.depth = RgAttachment{ gDepthRes, vk::AttachmentLoadOp::eClear,
-                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+            gpass.colors.push_back(
+                RgAttachment{ gNormalRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                              vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } } });
+            gpass.depth = RgAttachment{ gDepthRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                                        vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
             gpass.renderArea = offscreen.extent;
             gpass.execute = [&renderer](vk::CommandBuffer cmd) { recordGbuffer(renderer, cmd); };
             addPass(graph, std::move(gpass));
@@ -1016,10 +1053,12 @@ namespace se
 
             if (doSsao)
             {
-                RgResource aoRawRes = importImage(graph, renderer.targets.aoRaw.image, renderer.targets.aoRaw.view,
-                    vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+                RgResource aoRawRes =
+                    importImage(graph, renderer.targets.aoRaw.image, renderer.targets.aoRaw.view,
+                                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
                 RgResource aoRes = importImage(graph, renderer.targets.aoMap.image, renderer.targets.aoMap.view,
-                    vk::ImageAspectFlagBits::eColor, renderer.targets.aoMap.layout, &renderer.targets.aoMap.layout);
+                                               vk::ImageAspectFlagBits::eColor, renderer.targets.aoMap.layout,
+                                               &renderer.targets.aoMap.layout);
                 RgPass aopass;
                 aopass.name = "gtao";
                 aopass.kind = RgPassKind::Compute;
@@ -1028,11 +1067,17 @@ namespace se
                 const f32 radius = renderer.ssao.radius;
                 const f32 strength = renderer.ssao.strength;
                 aopass.execute = [&renderer, ssExtent, ssGroups, invProj, radius, strength](vk::CommandBuffer cmd)
-        {
+                {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.gtao->pipeline);
-                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.gtao->layout, 0, renderer.ssao.gtaoSet, {});
-                    struct { glm::mat4 invProjection; glm::vec4 params; } push{ invProj, glm::vec4(radius, strength, 0.0f, 0.0f) };
-                    cmd.pushConstants(renderer.pipelines.gtao->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.gtao->layout, 0,
+                                           renderer.ssao.gtaoSet, {});
+                    struct
+                    {
+                        glm::mat4 invProjection;
+                        glm::vec4 params;
+                    } push{ invProj, glm::vec4(radius, strength, 0.0f, 0.0f) };
+                    cmd.pushConstants(renderer.pipelines.gtao->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                      sizeof(push), &push);
                     cmd.dispatch(ssGroups(ssExtent.width), ssGroups(ssExtent.height), 1);
                 };
                 addPass(graph, std::move(aopass));
@@ -1044,9 +1089,10 @@ namespace se
                                       RgAccess{ gNormalRes, RgUsage::SampledReadCompute },
                                       RgAccess{ aoRes, RgUsage::StorageImageRWCompute } };
                 blurpass.execute = [&renderer, ssExtent, ssGroups](vk::CommandBuffer cmd)
-        {
+                {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.aoBlur->pipeline);
-                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.aoBlur->layout, 0, renderer.ssao.aoBlurSet, {});
+                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.aoBlur->layout, 0,
+                                           renderer.ssao.aoBlurSet, {});
                     cmd.dispatch(ssGroups(ssExtent.width), ssGroups(ssExtent.height), 1);
                 };
                 addPass(graph, std::move(blurpass));
@@ -1056,8 +1102,10 @@ namespace se
 
             if (doContact)
             {
-                RgResource contactRes = importImage(graph, renderer.targets.contactMap.image, renderer.targets.contactMap.view,
-                    vk::ImageAspectFlagBits::eColor, renderer.targets.contactMap.layout, &renderer.targets.contactMap.layout);
+                RgResource contactRes =
+                    importImage(graph, renderer.targets.contactMap.image, renderer.targets.contactMap.view,
+                                vk::ImageAspectFlagBits::eColor, renderer.targets.contactMap.layout,
+                                &renderer.targets.contactMap.layout);
                 RgPass cpass;
                 cpass.name = "contact-shadows";
                 cpass.kind = RgPassKind::Compute;
@@ -1065,12 +1113,19 @@ namespace se
                                    RgAccess{ contactRes, RgUsage::StorageImageRWCompute } };
                 const glm::vec3 sunView = renderer.ssao.sunDirView;
                 cpass.execute = [&renderer, ssExtent, ssGroups, proj, invProj, sunView](vk::CommandBuffer cmd)
-        {
+                {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.contact->pipeline);
-                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.contact->layout, 0, renderer.ssao.contactSet, {});
-                    struct { glm::mat4 projection; glm::mat4 invProjection; glm::vec4 lightDirView; glm::vec4 params; }
-                        push{ proj, invProj, glm::vec4(sunView, 0.0f), glm::vec4(0.6f, 12.0f, 0.6f, 0.0f) };
-                    cmd.pushConstants(renderer.pipelines.contact->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.contact->layout, 0,
+                                           renderer.ssao.contactSet, {});
+                    struct
+                    {
+                        glm::mat4 projection;
+                        glm::mat4 invProjection;
+                        glm::vec4 lightDirView;
+                        glm::vec4 params;
+                    } push{ proj, invProj, glm::vec4(sunView, 0.0f), glm::vec4(0.6f, 12.0f, 0.6f, 0.0f) };
+                    cmd.pushConstants(renderer.pipelines.contact->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                      sizeof(push), &push);
                     cmd.dispatch(ssGroups(ssExtent.width), ssGroups(ssExtent.height), 1);
                 };
                 addPass(graph, std::move(cpass));
@@ -1086,11 +1141,13 @@ namespace se
                 // prevColor rests in ShaderReadOnly between frames (copy_color leaves it
                 // there); seed that and DON'T write the layout back — the graph internally
                 // transitions General for the copy write then back to ShaderReadOnly.
-                RgResource prevColorRes = importImage(graph, renderer.targets.prevColor.image, renderer.targets.prevColor.view,
-                    vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eShaderReadOnlyOptimal, nullptr);
+                RgResource prevColorRes =
+                    importImage(graph, renderer.targets.prevColor.image, renderer.targets.prevColor.view,
+                                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eShaderReadOnlyOptimal, nullptr);
                 renderer.graph.prevColorResource = prevColorRes;
                 RgResource ssgiRes = importImage(graph, renderer.targets.ssgiMap.image, renderer.targets.ssgiMap.view,
-                    vk::ImageAspectFlagBits::eColor, renderer.targets.ssgiMap.layout, &renderer.targets.ssgiMap.layout);
+                                                 vk::ImageAspectFlagBits::eColor, renderer.targets.ssgiMap.layout,
+                                                 &renderer.targets.ssgiMap.layout);
                 RgPass gipass;
                 gipass.name = "ssgi";
                 gipass.kind = RgPassKind::Compute;
@@ -1099,12 +1156,18 @@ namespace se
                                     RgAccess{ ssgiRes, RgUsage::StorageImageRWCompute } };
                 const f32 radius = renderer.ssao.radius;
                 gipass.execute = [&renderer, ssExtent, ssGroups, proj, invProj, radius](vk::CommandBuffer cmd)
-        {
+                {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgi->pipeline);
-                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgi->layout, 0, renderer.ssao.ssgiSet, {});
-                    struct { glm::mat4 projection; glm::mat4 invProjection; glm::vec4 params; }
-                        push{ proj, invProj, glm::vec4(radius * 2.0f, 1.0f, 8.0f, 0.0f) };
-                    cmd.pushConstants(renderer.pipelines.ssgi->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgi->layout, 0,
+                                           renderer.ssao.ssgiSet, {});
+                    struct
+                    {
+                        glm::mat4 projection;
+                        glm::mat4 invProjection;
+                        glm::vec4 params;
+                    } push{ proj, invProj, glm::vec4(radius * 2.0f, 1.0f, 8.0f, 0.0f) };
+                    cmd.pushConstants(renderer.pipelines.ssgi->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                      sizeof(push), &push);
                     cmd.dispatch(ssGroups(ssExtent.width), ssGroups(ssExtent.height), 1);
                 };
                 addPass(graph, std::move(gipass));
@@ -1120,21 +1183,21 @@ namespace se
         if (taa)
         {
             motionRes = importImage(graph, renderer.targets.motion.image, renderer.targets.motion.view,
-                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
-            RgResource motionDepthRes = importImage(graph, renderer.targets.motionDepth.image, renderer.targets.motionDepth.view,
-                vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
+                                    vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+            RgResource motionDepthRes =
+                importImage(graph, renderer.targets.motionDepth.image, renderer.targets.motionDepth.view,
+                            vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
             RgPass motionPass;
             motionPass.name = "motion";
             motionPass.kind = RgPassKind::Graphics;
-            motionPass.colors.push_back(RgAttachment{ motionRes, vk::AttachmentLoadOp::eClear,
-                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } } });
-            motionPass.depth = RgAttachment{ motionDepthRes, vk::AttachmentLoadOp::eClear,
-                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+            motionPass.colors.push_back(
+                RgAttachment{ motionRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                              vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } } });
+            motionPass.depth =
+                RgAttachment{ motionDepthRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                              vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
             motionPass.renderArea = offscreen.extent;
-            motionPass.execute = [&renderer](vk::CommandBuffer cmd)
-        {
-                recordMotion(renderer, cmd);
-            };
+            motionPass.execute = [&renderer](vk::CommandBuffer cmd) { recordMotion(renderer, cmd); };
             addPass(graph, std::move(motionPass));
         }
 
@@ -1142,22 +1205,22 @@ namespace se
         // distance atlases -> octahedral border copy. All compute, before the scene pass that
         // samples the atlases. The voxel image lives in GENERAL (storage read+write); the
         // atlases ping General (blend/border write) <-> ShaderReadOnly (trace prev-read + mesh).
-        const bool doDdgi = renderer.ddgi.useDdgi && renderer.ddgi.ready &&
-                            renderer.pipelines.ddgiVoxelize && renderer.pipelines.ddgiTrace &&
-                            renderer.pipelines.ddgiBlendIrr && renderer.pipelines.ddgiBlendDist &&
-                            renderer.pipelines.ddgiBorder;
+        const bool doDdgi = renderer.ddgi.useDdgi && renderer.ddgi.ready && renderer.pipelines.ddgiVoxelize &&
+                            renderer.pipelines.ddgiTrace && renderer.pipelines.ddgiBlendIrr &&
+                            renderer.pipelines.ddgiBlendDist && renderer.pipelines.ddgiBorder;
         if (doDdgi)
         {
             Ddgi& d = renderer.ddgi;
             const glm::uvec4 probeCount{ DdgiProbesX, DdgiProbesY, DdgiProbesZ, DdgiRaysPerProbe };
             const u32 probeTotal = DdgiProbesX * DdgiProbesY * DdgiProbesZ;
-            RgResource voxelRes = importImage3D(graph, d.voxels.image, d.voxels.view, d.voxels.layout, &d.voxels.layout);
-            RgResource rayRes = importImage(graph, d.rays.image, d.rays.view,
-                vk::ImageAspectFlagBits::eColor, d.rays.layout, &d.rays.layout);
+            RgResource voxelRes =
+                importImage3D(graph, d.voxels.image, d.voxels.view, d.voxels.layout, &d.voxels.layout);
+            RgResource rayRes = importImage(graph, d.rays.image, d.rays.view, vk::ImageAspectFlagBits::eColor,
+                                            d.rays.layout, &d.rays.layout);
             RgResource irrRes = importImage(graph, d.irradiance.image, d.irradiance.view,
-                vk::ImageAspectFlagBits::eColor, d.irradiance.layout, &d.irradiance.layout);
-            RgResource distRes = importImage(graph, d.distance.image, d.distance.view,
-                vk::ImageAspectFlagBits::eColor, d.distance.layout, &d.distance.layout);
+                                            vk::ImageAspectFlagBits::eColor, d.irradiance.layout, &d.irradiance.layout);
+            RgResource distRes = importImage(graph, d.distance.image, d.distance.view, vk::ImageAspectFlagBits::eColor,
+                                             d.distance.layout, &d.distance.layout);
             renderer.graph.ddgiIrradiance = irrRes;
             renderer.graph.ddgiDistance = distRes;
             renderer.graph.hasDdgi = true;
@@ -1180,13 +1243,19 @@ namespace se
             vox.kind = RgPassKind::Compute;
             vox.accesses = { RgAccess{ voxelRes, RgUsage::StorageImageRWCompute } };
             vox.execute = [&renderer, g3, probeCount, volMin, volExt, boxCount](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiVoxelize->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiVoxelize->layout, 0, renderer.ddgi.voxelSet, {});
-                struct { glm::uvec4 gridCount; glm::vec4 volumeMin; glm::vec4 volumeExtent; }
-                    push{ glm::uvec4(DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelRes, boxCount),
-                          glm::vec4(volMin, 0.0f), glm::vec4(volExt, 0.0f) };
-                cmd.pushConstants(renderer.pipelines.ddgiVoxelize->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiVoxelize->layout, 0,
+                                       renderer.ddgi.voxelSet, {});
+                struct
+                {
+                    glm::uvec4 gridCount;
+                    glm::vec4 volumeMin;
+                    glm::vec4 volumeExtent;
+                } push{ glm::uvec4(DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelRes, boxCount), glm::vec4(volMin, 0.0f),
+                        glm::vec4(volExt, 0.0f) };
+                cmd.pushConstants(renderer.pipelines.ddgiVoxelize->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                  sizeof(push), &push);
                 cmd.dispatch(g3, g3, g3);
             };
             addPass(graph, std::move(vox));
@@ -1200,17 +1269,30 @@ namespace se
             trace.accesses = { RgAccess{ voxelRes, RgUsage::StorageImageRWCompute },
                                RgAccess{ irrRes, RgUsage::SampledReadCompute },
                                RgAccess{ rayRes, RgUsage::StorageImageRWCompute } };
-            trace.execute = [&renderer, probeCount, probeTotal, volMin, volExt, sunDir, sunColor, sunI, sky, frameIdx](vk::CommandBuffer cmd)
-        {
+            trace.execute = [&renderer, probeCount, probeTotal, volMin, volExt, sunDir, sunColor, sunI, sky,
+                             frameIdx](vk::CommandBuffer cmd)
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiTrace->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiTrace->layout, 0, renderer.ddgi.traceSet, {});
-                struct {
-                    glm::uvec4 probeCount; glm::uvec4 gridCount; glm::vec4 volumeMin; glm::vec4 volumeExtent;
-                    glm::vec4 sunDir; glm::vec4 sunColor; glm::vec4 skyColor;
-                } push{ probeCount, glm::uvec4(DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelRes, DdgiIrrInterior),
-                        glm::vec4(volMin, 0.0f), glm::vec4(volExt, 0.0f),
-                        glm::vec4(sunDir, sunI), glm::vec4(sunColor, frameIdx), glm::vec4(sky, 0.0f) };
-                cmd.pushConstants(renderer.pipelines.ddgiTrace->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiTrace->layout, 0,
+                                       renderer.ddgi.traceSet, {});
+                struct
+                {
+                    glm::uvec4 probeCount;
+                    glm::uvec4 gridCount;
+                    glm::vec4 volumeMin;
+                    glm::vec4 volumeExtent;
+                    glm::vec4 sunDir;
+                    glm::vec4 sunColor;
+                    glm::vec4 skyColor;
+                } push{ probeCount,
+                        glm::uvec4(DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelRes, DdgiIrrInterior),
+                        glm::vec4(volMin, 0.0f),
+                        glm::vec4(volExt, 0.0f),
+                        glm::vec4(sunDir, sunI),
+                        glm::vec4(sunColor, frameIdx),
+                        glm::vec4(sky, 0.0f) };
+                cmd.pushConstants(renderer.pipelines.ddgiTrace->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                  sizeof(push), &push);
                 cmd.dispatch((DdgiRaysPerProbe + 63) / 64, probeTotal, 1);
             };
             addPass(graph, std::move(trace));
@@ -1224,12 +1306,18 @@ namespace se
             const u32 irrAtlasW = DdgiProbesX * DdgiProbesY * (DdgiIrrInterior + 2);
             const u32 irrAtlasH = DdgiProbesZ * (DdgiIrrInterior + 2);
             bi.execute = [&renderer, probeCount, firstFrame, irrAtlasW, irrAtlasH](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendIrr->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendIrr->layout, 0, renderer.ddgi.blendIrrSet, {});
-                struct { glm::uvec4 probeCount; glm::uvec4 tile; glm::vec4 params; }
-                    push{ probeCount, glm::uvec4(DdgiIrrInterior, firstFrame, 0, 0), glm::vec4(DdgiHysteresis, 0, 0, 0) };
-                cmd.pushConstants(renderer.pipelines.ddgiBlendIrr->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendIrr->layout, 0,
+                                       renderer.ddgi.blendIrrSet, {});
+                struct
+                {
+                    glm::uvec4 probeCount;
+                    glm::uvec4 tile;
+                    glm::vec4 params;
+                } push{ probeCount, glm::uvec4(DdgiIrrInterior, firstFrame, 0, 0), glm::vec4(DdgiHysteresis, 0, 0, 0) };
+                cmd.pushConstants(renderer.pipelines.ddgiBlendIrr->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                  sizeof(push), &push);
                 cmd.dispatch((irrAtlasW + 7) / 8, (irrAtlasH + 7) / 8, 1);
             };
             addPass(graph, std::move(bi));
@@ -1243,12 +1331,19 @@ namespace se
             const u32 distAtlasW = DdgiProbesX * DdgiProbesY * (DdgiDistInterior + 2);
             const u32 distAtlasH = DdgiProbesZ * (DdgiDistInterior + 2);
             bd.execute = [&renderer, probeCount, firstFrame, maxDist, distAtlasW, distAtlasH](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendDist->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendDist->layout, 0, renderer.ddgi.blendDistSet, {});
-                struct { glm::uvec4 probeCount; glm::uvec4 tile; glm::vec4 params; }
-                    push{ probeCount, glm::uvec4(DdgiDistInterior, firstFrame, 0, 0), glm::vec4(DdgiHysteresis, maxDist, 0, 0) };
-                cmd.pushConstants(renderer.pipelines.ddgiBlendDist->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBlendDist->layout, 0,
+                                       renderer.ddgi.blendDistSet, {});
+                struct
+                {
+                    glm::uvec4 probeCount;
+                    glm::uvec4 tile;
+                    glm::vec4 params;
+                } push{ probeCount, glm::uvec4(DdgiDistInterior, firstFrame, 0, 0),
+                        glm::vec4(DdgiHysteresis, maxDist, 0, 0) };
+                cmd.pushConstants(renderer.pipelines.ddgiBlendDist->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                  sizeof(push), &push);
                 cmd.dispatch((distAtlasW + 7) / 8, (distAtlasH + 7) / 8, 1);
             };
             addPass(graph, std::move(bd));
@@ -1260,12 +1355,17 @@ namespace se
             bo.kind = RgPassKind::Compute;
             bo.accesses = { RgAccess{ irrRes, RgUsage::StorageImageRWCompute } };
             bo.execute = [&renderer, probeCount, irrAtlasW, irrAtlasH](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBorder->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBorder->layout, 0, renderer.ddgi.borderSet, {});
-                struct { glm::uvec4 probeCount; glm::uvec4 tile; }
-                    push{ probeCount, glm::uvec4(DdgiIrrInterior, 0, 0, 0) };
-                cmd.pushConstants(renderer.pipelines.ddgiBorder->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ddgiBorder->layout, 0,
+                                       renderer.ddgi.borderSet, {});
+                struct
+                {
+                    glm::uvec4 probeCount;
+                    glm::uvec4 tile;
+                } push{ probeCount, glm::uvec4(DdgiIrrInterior, 0, 0, 0) };
+                cmd.pushConstants(renderer.pipelines.ddgiBorder->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                  sizeof(push), &push);
                 cmd.dispatch((irrAtlasW + 7) / 8, (irrAtlasH + 7) / 8, 1);
             };
             addPass(graph, std::move(bo));
@@ -1288,9 +1388,7 @@ namespace se
             tlasPass.name = "tlas-build";
             tlasPass.kind = RgPassKind::Compute;
             tlasPass.execute = [&renderer](vk::CommandBuffer cmd)
-        {
-                buildTlas(renderer, cmd, renderer.rt.frameModels, renderer.rt.frameMeshes);
-            };
+            { buildTlas(renderer, cmd, renderer.rt.frameModels, renderer.rt.frameMeshes); };
             addPass(graph, std::move(tlasPass));
         }
 
@@ -1300,16 +1398,16 @@ namespace se
         // TLAS. Three compute passes; the reservoir SSBOs serialize via memory barriers the
         // graph derives from StorageWrite->StorageRead on a representative resource.
         renderer.graph.hasRestir = false;
-        const bool doRestir = renderer.restir.useRestir && renderer.restir.ready &&
-                              renderer.context.rtSupported && renderer.rt.tlasReady &&
-                              renderer.graph.hasGbuffer && doCull /* froxel candidate lists */;
+        const bool doRestir = renderer.restir.useRestir && renderer.restir.ready && renderer.context.rtSupported &&
+                              renderer.rt.tlasReady && renderer.graph.hasGbuffer && doCull /* froxel candidate lists */;
         if (doRestir)
         {
             // Per-frame writes: light SSBO + cluster SSBO (they grow), G-buffer + motion
             // samplers, and the TLAS into the resolve set.
             writeRestirFrameBindings(renderer, f);
             RgResource radianceRes = importImage(graph, renderer.restir.radiance.image, renderer.restir.radiance.view,
-                vk::ImageAspectFlagBits::eColor, renderer.restir.radiance.layout, &renderer.restir.radiance.layout);
+                                                 vk::ImageAspectFlagBits::eColor, renderer.restir.radiance.layout,
+                                                 &renderer.restir.radiance.layout);
             // A sentinel buffer access so consecutive ReSTIR passes get RAW barriers on the
             // reservoir storage (initial->reuse->resolve write/read the same buffers).
             RgResource resvSentinel = importBuffer(graph, renderer.restir.combined->buffer);
@@ -1325,15 +1423,23 @@ namespace se
             init.kind = RgPassKind::Compute;
             init.accesses = { RgAccess{ resvSentinel, RgUsage::StorageWriteCompute } };
             init.execute = [&renderer, ex, invView, invProj, fi](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirInitial->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirInitial->layout, 0, renderer.restir.initialSet, {});
-                struct { glm::mat4 invView; glm::mat4 invProjection; glm::uvec4 gridSize; glm::uvec4 screenSize; glm::vec4 zPlanes; }
-                    push{ invView, invProj,
-                          glm::uvec4(ClusterGridX, ClusterGridY, ClusterGridZ, renderer.lighting.frameLightCount),
-                          glm::uvec4(ex.width, ex.height, renderer.restir.candidateCount, fi),
-                          glm::vec4(0.1f, 100.0f, 0.0f, 0.0f) };
-                cmd.pushConstants(renderer.pipelines.restirInitial->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirInitial->layout, 0,
+                                       renderer.restir.initialSet, {});
+                struct
+                {
+                    glm::mat4 invView;
+                    glm::mat4 invProjection;
+                    glm::uvec4 gridSize;
+                    glm::uvec4 screenSize;
+                    glm::vec4 zPlanes;
+                } push{ invView, invProj,
+                        glm::uvec4(ClusterGridX, ClusterGridY, ClusterGridZ, renderer.lighting.frameLightCount),
+                        glm::uvec4(ex.width, ex.height, renderer.restir.candidateCount, fi),
+                        glm::vec4(0.1f, 100.0f, 0.0f, 0.0f) };
+                cmd.pushConstants(renderer.pipelines.restirInitial->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                  sizeof(push), &push);
                 cmd.dispatch((ex.width + 7) / 8, (ex.height + 7) / 8, 1);
             };
             addPass(graph, std::move(init));
@@ -1343,13 +1449,20 @@ namespace se
             reuse.kind = RgPassKind::Compute;
             reuse.accesses = { RgAccess{ resvSentinel, RgUsage::StorageReadCompute } };
             reuse.execute = [&renderer, ex, invView, invProj, fi, histValid](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirReuse->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirReuse->layout, 0, renderer.restir.reuseSet, {});
-                struct { glm::mat4 invView; glm::mat4 invProjection; glm::uvec4 screenSize; glm::vec4 params; }
-                    push{ invView, invProj, glm::uvec4(ex.width, ex.height, 20u, fi),
-                          glm::vec4(16.0f, histValid ? 1.0f : 0.0f, 0.0f, 0.0f) };
-                cmd.pushConstants(renderer.pipelines.restirReuse->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirReuse->layout, 0,
+                                       renderer.restir.reuseSet, {});
+                struct
+                {
+                    glm::mat4 invView;
+                    glm::mat4 invProjection;
+                    glm::uvec4 screenSize;
+                    glm::vec4 params;
+                } push{ invView, invProj, glm::uvec4(ex.width, ex.height, 20u, fi),
+                        glm::vec4(16.0f, histValid ? 1.0f : 0.0f, 0.0f, 0.0f) };
+                cmd.pushConstants(renderer.pipelines.restirReuse->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                  sizeof(push), &push);
                 cmd.dispatch((ex.width + 7) / 8, (ex.height + 7) / 8, 1);
             };
             addPass(graph, std::move(reuse));
@@ -1361,12 +1474,19 @@ namespace se
                                  RgAccess{ radianceRes, RgUsage::StorageImageRWCompute } };
             const glm::vec3 eye = glm::vec3(invView[3]);
             resolve.execute = [&renderer, ex, invView, invProj, eye](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirResolve->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirResolve->layout, 0, renderer.restir.resolveSet, {});
-                struct { glm::mat4 invView; glm::mat4 invProjection; glm::uvec4 screenSize; glm::vec4 eyePosition; }
-                    push{ invView, invProj, glm::uvec4(ex.width, ex.height, 0, 0), glm::vec4(eye, 0.0f) };
-                cmd.pushConstants(renderer.pipelines.restirResolve->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirResolve->layout, 0,
+                                       renderer.restir.resolveSet, {});
+                struct
+                {
+                    glm::mat4 invView;
+                    glm::mat4 invProjection;
+                    glm::uvec4 screenSize;
+                    glm::vec4 eyePosition;
+                } push{ invView, invProj, glm::uvec4(ex.width, ex.height, 0, 0), glm::vec4(eye, 0.0f) };
+                cmd.pushConstants(renderer.pipelines.restirResolve->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                  sizeof(push), &push);
                 cmd.dispatch((ex.width + 7) / 8, (ex.height + 7) / 8, 1);
             };
             addPass(graph, std::move(resolve));
@@ -1386,8 +1506,9 @@ namespace se
             RgPass skyPass;
             skyPass.name = "sky";
             skyPass.kind = RgPassKind::Graphics;
-            skyPass.colors.push_back(RgAttachment{ sceneColorAttachment, vk::AttachmentLoadOp::eClear,
-                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } });
+            skyPass.colors.push_back(
+                RgAttachment{ sceneColorAttachment, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                              vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } });
             skyPass.renderArea = offscreen.extent;
             skyPass.execute = [&renderer](vk::CommandBuffer cmd) { recordSky(renderer, cmd); };
             addPass(graph, std::move(skyPass));
@@ -1432,8 +1553,9 @@ namespace se
         // MSAA: render to the multisampled color, resolve into the offscreen (don't store
         // the multisampled samples). Otherwise render straight into the offscreen.
         RgAttachment sceneColorAtt{ sceneColorAttachment,
-            doSky ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eClear,
-            vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } };
+                                    doSky ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eClear,
+                                    vk::AttachmentStoreOp::eStore,
+                                    vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } };
         if (msaa)
         {
             sceneColorAtt.storeOp = vk::AttachmentStoreOp::eDontCare;
@@ -1447,7 +1569,7 @@ namespace se
             depthLoad = vk::AttachmentLoadOp::eLoad;
         }
         scene.depth = RgAttachment{ sceneDepth, depthLoad, vk::AttachmentStoreOp::eDontCare,
-            vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+                                    vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
         scene.renderArea = offscreen.extent;
         scene.execute = [&renderer](vk::CommandBuffer cmd)
         {
@@ -1470,10 +1592,10 @@ namespace se
                                   RgAccess{ renderer.graph.sceneColor, RgUsage::StorageImageRWCompute } };
             const vk::Extent2D extent = offscreen.extent;
             fxaaPass.execute = [&renderer, extent](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.fxaa->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                    renderer.pipelines.fxaa->layout, 0, renderer.descriptors.fxaaSet, {});
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.fxaa->layout, 0,
+                                       renderer.descriptors.fxaaSet, {});
                 cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
             };
             addPass(graph, std::move(fxaaPass));
@@ -1485,12 +1607,14 @@ namespace se
         if (taa)
         {
             const u32 p = renderer.targets.historyIndex;
-            RgResource histReadRes = importImage(graph, renderer.targets.history[1 - p].image,
-                renderer.targets.history[1 - p].view, vk::ImageAspectFlagBits::eColor,
-                renderer.targets.history[1 - p].layout, &renderer.targets.history[1 - p].layout);
-            RgResource histWriteRes = importImage(graph, renderer.targets.history[p].image,
-                renderer.targets.history[p].view, vk::ImageAspectFlagBits::eColor,
-                renderer.targets.history[p].layout, &renderer.targets.history[p].layout);
+            RgResource histReadRes =
+                importImage(graph, renderer.targets.history[1 - p].image, renderer.targets.history[1 - p].view,
+                            vk::ImageAspectFlagBits::eColor, renderer.targets.history[1 - p].layout,
+                            &renderer.targets.history[1 - p].layout);
+            RgResource histWriteRes =
+                importImage(graph, renderer.targets.history[p].image, renderer.targets.history[p].view,
+                            vk::ImageAspectFlagBits::eColor, renderer.targets.history[p].layout,
+                            &renderer.targets.history[p].layout);
             RgPass taaPass;
             taaPass.name = "taa";
             taaPass.kind = RgPassKind::Compute;
@@ -1502,16 +1626,16 @@ namespace se
             const vk::Extent2D extent = offscreen.extent;
             const bool historyValid = renderer.targets.historyValid;
             taaPass.execute = [&renderer, extent, p, historyValid](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.taa->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                    renderer.pipelines.taa->layout, 0, renderer.descriptors.taaSets[p], {});
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.taa->layout, 0,
+                                       renderer.descriptors.taaSets[p], {});
                 struct TaaPush
                 {
                     glm::vec4 params;
                 } push{ glm::vec4(TaaHistoryWeight, historyValid ? 1.0f : 0.0f, 0.0f, 0.0f) };
-                cmd.pushConstants(renderer.pipelines.taa->layout, vk::ShaderStageFlagBits::eCompute,
-                                  0, sizeof(push), &push);
+                cmd.pushConstants(renderer.pipelines.taa->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push),
+                                  &push);
                 cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
             };
             addPass(graph, std::move(taaPass));
@@ -1535,10 +1659,10 @@ namespace se
                                   RgAccess{ renderer.graph.prevColorResource, RgUsage::StorageImageRWCompute } };
             const vk::Extent2D extent = offscreen.extent;
             copyPass.execute = [&renderer, extent, ssGroups](vk::CommandBuffer cmd)
-        {
+            {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.copyColor->pipeline);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                    renderer.pipelines.copyColor->layout, 0, renderer.ssao.copyColorSet, {});
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.copyColor->layout, 0,
+                                       renderer.ssao.copyColorSet, {});
                 cmd.dispatch(ssGroups(extent.width), ssGroups(extent.height), 1);
             };
             addPass(graph, std::move(copyPass));
@@ -1567,8 +1691,8 @@ namespace se
             RgPass overlay;
             overlay.name = "editor-overlay";
             overlay.kind = RgPassKind::Graphics;
-            overlay.colors.push_back(RgAttachment{ renderer.graph.sceneColor, vk::AttachmentLoadOp::eLoad,
-                vk::AttachmentStoreOp::eStore, {} });
+            overlay.colors.push_back(RgAttachment{
+                renderer.graph.sceneColor, vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, {} });
             overlay.renderArea = offscreen.extent;
             const u32 vertexCount = static_cast<u32>(renderer.overlay.vertices.size());
             overlay.execute = [&renderer, vertexCount](vk::CommandBuffer cmd)
@@ -1576,8 +1700,8 @@ namespace se
                 const u32 f = renderer.frame.index;
                 if (renderer.overlay.capacity[f] < vertexCount)
                 {
-                    auto buffer = makeMappedVertexBuffer(
-                        renderer, static_cast<vk::DeviceSize>(vertexCount) * sizeof(OverlayVertex));
+                    auto buffer = makeMappedVertexBuffer(renderer, static_cast<vk::DeviceSize>(vertexCount) *
+                                                                       sizeof(OverlayVertex));
                     if (!buffer)
                     {
                         logError(buffer.error());
@@ -1631,11 +1755,11 @@ namespace se
         pass.execute = [&renderer](vk::CommandBuffer cmd)
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.tonemap->pipeline);
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                renderer.pipelines.tonemap->layout, 0, renderer.descriptors.tonemapSet, {});
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.tonemap->layout, 0,
+                                   renderer.descriptors.tonemapSet, {});
             const f32 exposure = std::exp2(renderer.exposureEv);
-            cmd.pushConstants(renderer.pipelines.tonemap->layout, vk::ShaderStageFlagBits::eCompute,
-                              0, sizeof(f32), &exposure);
+            cmd.pushConstants(renderer.pipelines.tonemap->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(f32),
+                              &exposure);
             const vk::Extent2D extent = renderer.targets.offscreen.extent;
             cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
         };
@@ -1684,41 +1808,30 @@ namespace se
         Image& src = renderer.targets.offscreen;
         const vk::Image swap = renderer.swapchain.images[renderer.frame.imageIndex];
 
-        transitionImage(
-            cmd, src.image, src.layout, vk::ImageLayout::eTransferSrcOptimal,
-            vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eColorAttachmentWrite,
-            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+        transitionImage(cmd, src.image, src.layout, vk::ImageLayout::eTransferSrcOptimal,
+                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                        vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eColorAttachmentWrite,
+                        vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
         src.layout = vk::ImageLayout::eTransferSrcOptimal;
 
-        transitionImage(
-            cmd, swap, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
+        transitionImage(cmd, swap, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+                        vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                        vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
 
         vk::ImageBlit blit{};
         blit.srcSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
         blit.srcOffsets[0] = vk::Offset3D{ 0, 0, 0 };
-        blit.srcOffsets[1] = vk::Offset3D{
-            static_cast<i32>(src.extent.width),
-            static_cast<i32>(src.extent.height),
-            1
-        };
+        blit.srcOffsets[1] = vk::Offset3D{ static_cast<i32>(src.extent.width), static_cast<i32>(src.extent.height), 1 };
         blit.dstSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
         blit.dstOffsets[0] = vk::Offset3D{ 0, 0, 0 };
-        blit.dstOffsets[1] = vk::Offset3D{
-            static_cast<i32>(renderer.swapchain.extent.width),
-            static_cast<i32>(renderer.swapchain.extent.height),
-            1
-        };
-        cmd.blitImage(src.image, vk::ImageLayout::eTransferSrcOptimal,
-                      swap, vk::ImageLayout::eTransferDstOptimal,
-                      blit, vk::Filter::eNearest);
+        blit.dstOffsets[1] = vk::Offset3D{ static_cast<i32>(renderer.swapchain.extent.width),
+                                           static_cast<i32>(renderer.swapchain.extent.height), 1 };
+        cmd.blitImage(src.image, vk::ImageLayout::eTransferSrcOptimal, swap, vk::ImageLayout::eTransferDstOptimal, blit,
+                      vk::Filter::eNearest);
 
-        transitionImage(
-            cmd, swap, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::ePresentSrcKHR,
-            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
-            vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone);
+        transitionImage(cmd, swap, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::ePresentSrcKHR,
+                        vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
+                        vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone);
     }
 
     void endFrame(Renderer& renderer)
@@ -1730,14 +1843,16 @@ namespace se
         // presentViewportToSwapchain does the offscreen->swapchain blit below instead.
         if (!renderer.presentViewportOnly)
         {
-            // The ui pass samples the (now post-processed) offscreen color and composites
-            // ImGui into the swapchain. Added last so app-authored passes land before it.
+            // The ui pass samples the (now post-processed) offscreen color and composites any
+            // submitUi overlay closures into the swapchain. Added last so app-authored passes land
+            // before it. (Unused by the present-only host, which blits via presentViewportToSwapchain.)
             RgPass ui;
             ui.name = "ui";
             ui.kind = RgPassKind::Graphics;
             ui.accesses = { RgAccess{ renderer.graph.sceneColor, RgUsage::SampledRead } };
             ui.colors.push_back(RgAttachment{ renderer.graph.swapImage, vk::AttachmentLoadOp::eClear,
-                vk::AttachmentStoreOp::eStore, vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } });
+                                              vk::AttachmentStoreOp::eStore,
+                                              vk::ClearValue{ vk::ClearColorValue{ renderer.frame.clearColor } } });
             ui.renderArea = renderer.swapchain.extent;
             ui.execute = [&renderer](vk::CommandBuffer cmd)
             {
@@ -1760,7 +1875,7 @@ namespace se
         }
 
         // The swapchain image is only safely owned in-frame, so a pending capture
-        // is copied here, between the ImGui pass and present; its COLOR->PRESENT
+        // is copied here, between the ui pass and present; its COLOR->PRESENT
         // transition is folded into captureImageToBuffer's toLayout.
         VkBuffer captureBuffer = VK_NULL_HANDLE;
         VmaAllocation captureAlloc = nullptr;
@@ -1769,14 +1884,15 @@ namespace se
         bool doCapture = renderer.captureNextSwapchainPath.has_value();
         // Present-only never leaves the swapchain in eColorAttachmentOptimal, so the
         // window-capture path is invalid here (use screenshot target=viewport instead).
-        if (renderer.presentViewportOnly) { doCapture = false; }
+        if (renderer.presentViewportOnly)
+        {
+            doCapture = false;
+        }
         if (doCapture)
         {
             captureExtent = renderer.swapchain.extent;
-            const vk::DeviceSize bytes =
-                static_cast<vk::DeviceSize>(captureExtent.width) * captureExtent.height * 4;
-            Result<void> created =
-                newHostCaptureBuffer(renderer, bytes, captureBuffer, captureAlloc, captureInfo);
+            const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(captureExtent.width) * captureExtent.height * 4;
+            Result<void> created = newHostCaptureBuffer(renderer, bytes, captureBuffer, captureAlloc, captureInfo);
             if (!created)
             {
                 logError(created.error());
@@ -1792,19 +1908,17 @@ namespace se
         {
             captureImageToBuffer(
                 frame.commandBuffer, renderer.swapchain.images[renderer.frame.imageIndex], captureExtent,
-                vk::ImageLayout::eColorAttachmentOptimal,
-                vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
-                vk::ImageLayout::ePresentSrcKHR,
-                vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone,
-                vk::Buffer{ captureBuffer });
+                vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                vk::AccessFlagBits2::eColorAttachmentWrite, vk::ImageLayout::ePresentSrcKHR,
+                vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone, vk::Buffer{ captureBuffer });
         }
         else
         {
-            transitionImage(
-                frame.commandBuffer, renderer.swapchain.images[renderer.frame.imageIndex],
-                vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR,
-                vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
-                vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone);
+            transitionImage(frame.commandBuffer, renderer.swapchain.images[renderer.frame.imageIndex],
+                            vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR,
+                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                            vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eBottomOfPipe,
+                            vk::AccessFlagBits2::eNone);
         }
 
         static_cast<void>(frame.commandBuffer.end());
@@ -1843,32 +1957,29 @@ namespace se
         {
             static_cast<void>(renderer.context.device.waitIdle());
             vmaInvalidateAllocation(renderer.context.allocator, captureAlloc, 0, VK_WHOLE_SIZE);
-            auto wrote = writeBufferToPng(
-                static_cast<const unsigned char*>(captureInfo.pMappedData),
-                captureExtent.width, captureExtent.height,
-                renderer.swapchain.format, *renderer.captureNextSwapchainPath);
+            auto wrote =
+                writeBufferToPng(static_cast<const unsigned char*>(captureInfo.pMappedData), captureExtent.width,
+                                 captureExtent.height, renderer.swapchain.format, *renderer.captureNextSwapchainPath);
             if (!wrote)
             {
                 logError(wrote.error());
             }
             else
             {
-                logInfo(std::format("captured window ({}x{}) to {}",
-                                    captureExtent.width, captureExtent.height,
+                logInfo(std::format("captured window ({}x{}) to {}", captureExtent.width, captureExtent.height,
                                     *renderer.captureNextSwapchainPath));
             }
             vmaDestroyBuffer(renderer.context.allocator, captureBuffer, captureAlloc);
             renderer.captureNextSwapchainPath.reset();
         }
 
-        const u64 nowNs = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+        const u64 nowNs = static_cast<u64>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
                 .count());
         if (renderer.lastFrameNs != 0)
         {
             const f32 deltaMs = static_cast<f32>(nowNs - renderer.lastFrameNs) / 1.0e6f;
-            renderer.frameMs =
-                renderer.frameMs == 0.0f ? deltaMs : renderer.frameMs * 0.9f + deltaMs * 0.1f;
+            renderer.frameMs = renderer.frameMs == 0.0f ? deltaMs : renderer.frameMs * 0.9f + deltaMs * 0.1f;
         }
         renderer.lastFrameNs = nowNs;
 
@@ -1952,8 +2063,7 @@ namespace se
 
     auto screenEffectsEnabled(const Renderer& renderer) -> bool
     {
-        return renderer.ssao.ready &&
-               (renderer.ssao.useSsao || renderer.ssao.useContact || renderer.ssao.useSsgi);
+        return renderer.ssao.ready && (renderer.ssao.useSsao || renderer.ssao.useContact || renderer.ssao.useSsgi);
     }
 
     auto rtSupported(const Renderer& renderer) -> bool
@@ -1982,12 +2092,12 @@ namespace se
         // shadows are on. Only worth building when something will trace against it.
         renderer.rt.frameModels = std::move(models);
         renderer.rt.frameMeshes = std::move(meshes);
-        renderer.rt.buildPending = renderer.context.rtSupported && renderer.rt.useRtShadows &&
-                                   !renderer.rt.frameModels.empty();
+        renderer.rt.buildPending =
+            renderer.context.rtSupported && renderer.rt.useRtShadows && !renderer.rt.frameModels.empty();
     }
 
-    void buildTlas(Renderer& renderer, vk::CommandBuffer cmd,
-                   const std::vector<glm::mat4>& models, const std::vector<Ref<GpuMesh>>& meshes)
+    void buildTlas(Renderer& renderer, vk::CommandBuffer cmd, const std::vector<glm::mat4>& models,
+                   const std::vector<Ref<GpuMesh>>& meshes)
     {
         renderer.rt.tlasReady = false;
         if (!renderer.context.rtSupported || models.empty())
@@ -2068,9 +2178,8 @@ namespace se
         return renderer.ddgi.useDdgi && renderer.ddgi.ready;
     }
 
-    void setDdgiScene(Renderer& renderer, const std::vector<glm::vec4>& boxMins,
-                      const std::vector<glm::vec4>& boxMaxs, const std::vector<glm::vec4>& boxAlbedos,
-                      glm::vec3 volumeMin, glm::vec3 volumeExtent,
+    void setDdgiScene(Renderer& renderer, const std::vector<glm::vec4>& boxMins, const std::vector<glm::vec4>& boxMaxs,
+                      const std::vector<glm::vec4>& boxAlbedos, glm::vec3 volumeMin, glm::vec3 volumeExtent,
                       glm::vec3 sunDir, glm::vec3 sunColor, f32 sunIntensity, glm::vec3 skyColor)
     {
         Ddgi& d = renderer.ddgi;
@@ -2105,8 +2214,7 @@ namespace se
         d.skyColor = skyColor;
     }
 
-    void setSsaoCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj,
-                       glm::vec3 sunDirectionWorld)
+    void setSsaoCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj, glm::vec3 sunDirectionWorld)
     {
         renderer.ssao.view = view;
         renderer.ssao.viewProj = proj * view;

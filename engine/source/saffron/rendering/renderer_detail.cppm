@@ -55,16 +55,9 @@ export namespace se
         return {};
     }
 
-    void transitionImage(
-        vk::CommandBuffer cmd,
-        vk::Image image,
-        vk::ImageLayout oldLayout,
-        vk::ImageLayout newLayout,
-        vk::PipelineStageFlags2 srcStage,
-        vk::AccessFlags2 srcAccess,
-        vk::PipelineStageFlags2 dstStage,
-        vk::AccessFlags2 dstAccess,
-        vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor)
+    void transitionImage(vk::CommandBuffer cmd, vk::Image image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+                         vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess, vk::PipelineStageFlags2 dstStage,
+                         vk::AccessFlags2 dstAccess, vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor)
     {
         vk::ImageMemoryBarrier2 barrier{};
         barrier.srcStageMask = srcStage;
@@ -124,9 +117,9 @@ export namespace se
         }
 
         vkb::SwapchainBuilder builder{ renderer.context.vkbDevice };
-        builder.set_desired_format(VkSurfaceFormatKHR{
-                   .format = VK_FORMAT_B8G8R8A8_UNORM,
-                   .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
+        builder
+            .set_desired_format(VkSurfaceFormatKHR{ .format = VK_FORMAT_B8G8R8A8_UNORM,
+                                                    .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
             .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
             .set_desired_extent(width, height)
             .add_image_usage_flags(usage);
@@ -174,7 +167,8 @@ export namespace se
         renderer.swapchain.renderFinished.clear();
         for (std::size_t i = 0; i < renderer.swapchain.images.size(); i = i + 1)
         {
-            auto semaphore = checked(renderer.context.device.createSemaphore(vk::SemaphoreCreateInfo{}), "createSemaphore");
+            auto semaphore =
+                checked(renderer.context.device.createSemaphore(vk::SemaphoreCreateInfo{}), "createSemaphore");
             if (!semaphore)
             {
                 return Err(semaphore.error());
@@ -224,9 +218,8 @@ export namespace se
         return checked(device.createShaderModule(info), std::format("createShaderModule '{}'", path));
     }
 
-    auto newColorImage(Renderer& renderer, u32 width, u32 height,
-                                                    vk::Format format, bool storage = false,
-                                                    vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1) -> Result<Image>
+    auto newColorImage(Renderer& renderer, u32 width, u32 height, vk::Format format, bool storage = false,
+                       vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1) -> Result<Image>
     {
         vk::FormatProperties props = renderer.context.physicalDevice.getFormatProperties(format);
         vk::FormatFeatureFlags needed =
@@ -268,7 +261,8 @@ export namespace se
 
         VkImage rawImage = VK_NULL_HANDLE;
         VmaAllocation allocation = nullptr;
-        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) != VK_SUCCESS)
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) !=
+            VK_SUCCESS)
         {
             return Err(std::string{ "vmaCreateImage failed for offscreen target" });
         }
@@ -298,8 +292,8 @@ export namespace se
     }
 
     auto newDepthImage(Renderer& renderer, u32 width, u32 height,
-                                                    vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1,
-                                                    bool sampled = false) -> Result<Image>
+                       vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1, bool sampled = false)
+        -> Result<Image>
     {
         VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -322,7 +316,8 @@ export namespace se
 
         VkImage rawImage = VK_NULL_HANDLE;
         VmaAllocation allocation = nullptr;
-        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) != VK_SUCCESS)
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) !=
+            VK_SUCCESS)
         {
             return Err(std::string{ "vmaCreateImage failed for depth target" });
         }
@@ -370,7 +365,8 @@ export namespace se
         allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         VkImage raw = VK_NULL_HANDLE;
         VmaAllocation allocation = nullptr;
-        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &raw, &allocation, nullptr) != VK_SUCCESS)
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &raw, &allocation, nullptr) !=
+            VK_SUCCESS)
         {
             return Err(std::string{ "vmaCreateImage failed for 3D image" });
         }
@@ -441,19 +437,24 @@ export namespace se
     // Creates an AccelerationStructure (BLAS or TLAS) of the given size + type: allocates the
     // backing AS storage buffer, calls vkCreateAccelerationStructureKHR, fetches its device
     // address. The caller records the build separately.
-    auto createAccelStructure(Renderer& renderer, vk::DeviceSize size,
-                              VkAccelerationStructureTypeKHR type) -> Result<Ref<AccelerationStructure>>
+    auto createAccelStructure(Renderer& renderer, vk::DeviceSize size, VkAccelerationStructureTypeKHR type)
+        -> Result<Ref<AccelerationStructure>>
     {
-        auto storage = makeRtBuffer(renderer, size,
+        auto storage = makeRtBuffer(
+            renderer, size,
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-        if (!storage) { return Err(storage.error()); }
+        if (!storage)
+        {
+            return Err(storage.error());
+        }
 
         VkAccelerationStructureCreateInfoKHR ci{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
         ci.buffer = static_cast<VkBuffer>((*storage)->buffer);
         ci.size = size;
         ci.type = type;
         VkAccelerationStructureKHR rawAs = VK_NULL_HANDLE;
-        if (renderer.context.rt.createAccel(static_cast<VkDevice>(renderer.context.device), &ci, nullptr, &rawAs) != VK_SUCCESS)
+        if (renderer.context.rt.createAccel(static_cast<VkDevice>(renderer.context.device), &ci, nullptr, &rawAs) !=
+            VK_SUCCESS)
         {
             return Err(std::string{ "vkCreateAccelerationStructureKHR failed" });
         }
@@ -468,7 +469,9 @@ export namespace se
         (*storage)->buffer = nullptr;  // ownership moved into the AS
         (*storage)->alloc = nullptr;
 
-        VkAccelerationStructureDeviceAddressInfoKHR ai{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR };
+        VkAccelerationStructureDeviceAddressInfoKHR ai{
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR
+        };
         ai.accelerationStructure = rawAs;
         as.address = renderer.context.rt.getAccelAddress(static_cast<VkDevice>(renderer.context.device), &ai);
         return std::make_shared<AccelerationStructure>(std::move(as));
@@ -491,7 +494,9 @@ export namespace se
         geom.geometry.triangles.indexData.deviceAddress = bufferDeviceAddress(renderer, mesh.indexBuffer);
 
         const u32 triangleCount = mesh.indexCount / 3;
-        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR
+        };
         buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
         buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
         buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
@@ -500,13 +505,22 @@ export namespace se
 
         VkAccelerationStructureBuildSizesInfoKHR sizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
         renderer.context.rt.getBuildSizes(static_cast<VkDevice>(renderer.context.device),
-            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &triangleCount, &sizes);
+                                          VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &triangleCount,
+                                          &sizes);
 
-        auto blas = createAccelStructure(renderer, sizes.accelerationStructureSize, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
-        if (!blas) { return Err(blas.error()); }
-        auto scratch = makeRtBuffer(renderer, sizes.buildScratchSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-        if (!scratch) { return Err(scratch.error()); }
+        auto blas = createAccelStructure(renderer, sizes.accelerationStructureSize,
+                                         VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
+        if (!blas)
+        {
+            return Err(blas.error());
+        }
+        auto scratch =
+            makeRtBuffer(renderer, sizes.buildScratchSize,
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+        if (!scratch)
+        {
+            return Err(scratch.error());
+        }
 
         buildInfo.dstAccelerationStructure = static_cast<VkAccelerationStructureKHR>((*blas)->handle);
         buildInfo.scratchData.deviceAddress = bufferDeviceAddress(renderer, (*scratch)->buffer);
@@ -519,15 +533,20 @@ export namespace se
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
         auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "blas cmd");
-        if (!cmds) { return Err(cmds.error()); }
+        if (!cmds)
+        {
+            return Err(cmds.error());
+        }
         vk::CommandBuffer cmd = (*cmds)[0];
         vk::CommandBufferBeginInfo begin{};
         begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
         static_cast<void>(cmd.begin(begin));
         renderer.context.rt.cmdBuild(static_cast<VkCommandBuffer>(cmd), 1, &buildInfo, &pRange);
         static_cast<void>(cmd.end());
-        vk::CommandBufferSubmitInfo cmdInfo{}; cmdInfo.commandBuffer = cmd;
-        vk::SubmitInfo2 submitInfo{}; submitInfo.setCommandBufferInfos(cmdInfo);
+        vk::CommandBufferSubmitInfo cmdInfo{};
+        cmdInfo.commandBuffer = cmd;
+        vk::SubmitInfo2 submitInfo{};
+        submitInfo.setCommandBufferInfos(cmdInfo);
         static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
         static_cast<void>(renderer.context.device.waitIdle());
         renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
@@ -544,11 +563,23 @@ export namespace se
             return {};
         }
         u32 capacity = renderer.rt.instanceCapacity[frame];
-        if (capacity == 0) { capacity = 64; }
-        while (capacity < count) { capacity = capacity * 2; }
-        auto buf = makeRtBuffer(renderer, static_cast<vk::DeviceSize>(capacity) * sizeof(VkAccelerationStructureInstanceKHR),
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
-        if (!buf) { return Err(buf.error()); }
+        if (capacity == 0)
+        {
+            capacity = 64;
+        }
+        while (capacity < count)
+        {
+            capacity = capacity * 2;
+        }
+        auto buf =
+            makeRtBuffer(renderer, static_cast<vk::DeviceSize>(capacity) * sizeof(VkAccelerationStructureInstanceKHR),
+                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                         true);
+        if (!buf)
+        {
+            return Err(buf.error());
+        }
         renderer.rt.instanceBuffers[frame] = *buf;
         renderer.rt.instanceCapacity[frame] = capacity;
         return {};
@@ -565,9 +596,12 @@ export namespace se
         geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
         geom.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
         geom.geometry.instances.arrayOfPointers = VK_FALSE;
-        geom.geometry.instances.data.deviceAddress = bufferDeviceAddress(renderer, renderer.rt.instanceBuffers[frame]->buffer);
+        geom.geometry.instances.data.deviceAddress =
+            bufferDeviceAddress(renderer, renderer.rt.instanceBuffers[frame]->buffer);
 
-        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR
+        };
         buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
         buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
         buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
@@ -577,24 +611,35 @@ export namespace se
         // Size for the instance-buffer capacity (>= count) so the TLAS is stable until the
         // buffer regrows; query both that and the actual count's scratch.
         const u32 capacity = renderer.rt.instanceCapacity[frame];
-        VkAccelerationStructureBuildSizesInfoKHR capSizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+        VkAccelerationStructureBuildSizesInfoKHR capSizes{
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR
+        };
         renderer.context.rt.getBuildSizes(static_cast<VkDevice>(renderer.context.device),
-            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &capacity, &capSizes);
+                                          VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &capacity,
+                                          &capSizes);
         VkAccelerationStructureBuildSizesInfoKHR sizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
         renderer.context.rt.getBuildSizes(static_cast<VkDevice>(renderer.context.device),
-            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &count, &sizes);
+                                          VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &count, &sizes);
 
         // (Re)create the TLAS when the slot still holds the shared empty seed (capacity 0) or
         // is too small for this frame's instance count.
         if (renderer.rt.tlasCapacity[frame] < count)
         {
-            auto tlas = createAccelStructure(renderer, capSizes.accelerationStructureSize, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
-            if (!tlas) { logError(tlas.error()); return; }
+            auto tlas = createAccelStructure(renderer, capSizes.accelerationStructureSize,
+                                             VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
+            if (!tlas)
+            {
+                logError(tlas.error());
+                return;
+            }
             renderer.rt.tlas[frame] = *tlas;
             renderer.rt.tlasCapacity[frame] = capacity;
             // Write the new TLAS into the frame's mesh set (set 6, binding 0).
-            VkWriteDescriptorSetAccelerationStructureKHR asWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR };
-            VkAccelerationStructureKHR handle = static_cast<VkAccelerationStructureKHR>(renderer.rt.tlas[frame]->handle);
+            VkWriteDescriptorSetAccelerationStructureKHR asWrite{
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR
+            };
+            VkAccelerationStructureKHR handle =
+                static_cast<VkAccelerationStructureKHR>(renderer.rt.tlas[frame]->handle);
             asWrite.accelerationStructureCount = 1;
             asWrite.pAccelerationStructures = &handle;
             VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
@@ -608,9 +653,14 @@ export namespace se
         const vk::DeviceSize scratchNeeded = glm::max(sizes.buildScratchSize, capSizes.buildScratchSize);
         if (!renderer.rt.scratchBuffers[frame] || renderer.rt.scratchCapacity[frame] < scratchNeeded)
         {
-            auto scratch = makeRtBuffer(renderer, scratchNeeded,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-            if (!scratch) { logError(scratch.error()); return; }
+            auto scratch =
+                makeRtBuffer(renderer, scratchNeeded,
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+            if (!scratch)
+            {
+                logError(scratch.error());
+                return;
+            }
             renderer.rt.scratchBuffers[frame] = *scratch;
             renderer.rt.scratchCapacity[frame] = static_cast<u32>(scratchNeeded);
         }
@@ -641,7 +691,9 @@ export namespace se
         VkAccelerationStructureGeometryKHR geom{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
         geom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
         geom.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
-        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR
+        };
         buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
         buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
         buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
@@ -650,14 +702,21 @@ export namespace se
         const u32 zero = 0;
         VkAccelerationStructureBuildSizesInfoKHR sizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
         renderer.context.rt.getBuildSizes(static_cast<VkDevice>(renderer.context.device),
-            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &zero, &sizes);
+                                          VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &zero, &sizes);
 
         auto empty = createAccelStructure(renderer, glm::max<vk::DeviceSize>(sizes.accelerationStructureSize, 256),
                                           VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
-        if (!empty) { return Err(empty.error()); }
-        auto scratch = makeRtBuffer(renderer, glm::max<vk::DeviceSize>(sizes.buildScratchSize, 256),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-        if (!scratch) { return Err(scratch.error()); }
+        if (!empty)
+        {
+            return Err(empty.error());
+        }
+        auto scratch =
+            makeRtBuffer(renderer, glm::max<vk::DeviceSize>(sizes.buildScratchSize, 256),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+        if (!scratch)
+        {
+            return Err(scratch.error());
+        }
         buildInfo.dstAccelerationStructure = static_cast<VkAccelerationStructureKHR>((*empty)->handle);
         buildInfo.scratchData.deviceAddress = bufferDeviceAddress(renderer, (*scratch)->buffer);
         VkAccelerationStructureBuildRangeInfoKHR range{};  // 0 instances
@@ -668,15 +727,20 @@ export namespace se
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
         auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "empty tlas cmd");
-        if (!cmds) { return Err(cmds.error()); }
+        if (!cmds)
+        {
+            return Err(cmds.error());
+        }
         vk::CommandBuffer cmd = (*cmds)[0];
         vk::CommandBufferBeginInfo begin{};
         begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
         static_cast<void>(cmd.begin(begin));
         renderer.context.rt.cmdBuild(static_cast<VkCommandBuffer>(cmd), 1, &buildInfo, &pRange);
         static_cast<void>(cmd.end());
-        vk::CommandBufferSubmitInfo cmdInfo{}; cmdInfo.commandBuffer = cmd;
-        vk::SubmitInfo2 submitInfo{}; submitInfo.setCommandBufferInfos(cmdInfo);
+        vk::CommandBufferSubmitInfo cmdInfo{};
+        cmdInfo.commandBuffer = cmd;
+        vk::SubmitInfo2 submitInfo{};
+        submitInfo.setCommandBufferInfos(cmdInfo);
         static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
         static_cast<void>(renderer.context.device.waitIdle());
         renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
@@ -687,7 +751,9 @@ export namespace se
         for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
         {
             renderer.rt.tlas[i] = *empty;  // shared until a real build replaces this slot
-            VkWriteDescriptorSetAccelerationStructureKHR asWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR };
+            VkWriteDescriptorSetAccelerationStructureKHR asWrite{
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR
+            };
             asWrite.accelerationStructureCount = 1;
             asWrite.pAccelerationStructures = &handle;
             VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
@@ -731,7 +797,8 @@ export namespace se
         allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         VkImage rawImage = VK_NULL_HANDLE;
         VmaAllocation allocation = nullptr;
-        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) != VK_SUCCESS)
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) !=
+            VK_SUCCESS)
         {
             return Err(std::string{ "vmaCreateImage failed for cube" });
         }
@@ -763,8 +830,8 @@ export namespace se
     // A cube-compatible COLOR image (6 layers) usable as a sampled cubemap (the eCube view
     // in `out`) and rendered face-by-face (the 6 single-layer e2D attachment views in
     // `outFaces`). Used for the point-light distance shadow cube.
-    auto newColorCubeImage(Renderer& renderer, u32 size, vk::Format format,
-                           Image& out, std::array<vk::ImageView, 6>& outFaces) -> Result<void>
+    auto newColorCubeImage(Renderer& renderer, u32 size, vk::Format format, Image& out,
+                           std::array<vk::ImageView, 6>& outFaces) -> Result<void>
     {
         VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
         imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
@@ -782,7 +849,8 @@ export namespace se
         allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         VkImage rawImage = VK_NULL_HANDLE;
         VmaAllocation allocation = nullptr;
-        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) != VK_SUCCESS)
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) !=
+            VK_SUCCESS)
         {
             return Err(std::string{ "vmaCreateImage failed for color cube" });
         }
@@ -810,7 +878,10 @@ export namespace se
             if (fv.result != vk::Result::eSuccess)
             {
                 renderer.context.device.destroyImageView(sampleView.value);
-                for (u32 f = 0; f < face; f = f + 1) { renderer.context.device.destroyImageView(outFaces[f]); }
+                for (u32 f = 0; f < face; f = f + 1)
+                {
+                    renderer.context.device.destroyImageView(outFaces[f]);
+                }
                 vmaDestroyImage(renderer.context.allocator, rawImage, allocation);
                 return Err(std::format("createImageView (cube face): {}", vk::to_string(fv.result)));
             }
@@ -835,12 +906,10 @@ export namespace se
     {
         glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f, 0.05f, glm::max(farPlane, 0.1f));
         proj[1][1] *= -1.0f;  // Vulkan framebuffer Y is down; flip so faces match cube sampling
-        const std::array<glm::vec3, 6> fwd{
-            glm::vec3( 1, 0, 0), glm::vec3(-1, 0, 0), glm::vec3(0, 1, 0),
-            glm::vec3( 0,-1, 0), glm::vec3( 0, 0, 1), glm::vec3(0, 0,-1) };
-        const std::array<glm::vec3, 6> up{
-            glm::vec3(0,-1, 0), glm::vec3(0,-1, 0), glm::vec3(0, 0, 1),
-            glm::vec3(0, 0,-1), glm::vec3(0,-1, 0), glm::vec3(0,-1, 0) };
+        const std::array<glm::vec3, 6> fwd{ glm::vec3(1, 0, 0),  glm::vec3(-1, 0, 0), glm::vec3(0, 1, 0),
+                                            glm::vec3(0, -1, 0), glm::vec3(0, 0, 1),  glm::vec3(0, 0, -1) };
+        const std::array<glm::vec3, 6> up{ glm::vec3(0, -1, 0), glm::vec3(0, -1, 0), glm::vec3(0, 0, 1),
+                                           glm::vec3(0, 0, -1), glm::vec3(0, -1, 0), glm::vec3(0, -1, 0) };
         std::array<glm::mat4, 6> result;
         for (u32 i = 0; i < 6; i = i + 1)
         {
@@ -866,8 +935,7 @@ export namespace se
         {
             return;
         }
-        Result<Image> color =
-            newColorImage(renderer, w, h, OffscreenColorFormat, false, renderer.targets.sampleCount);
+        Result<Image> color = newColorImage(renderer, w, h, OffscreenColorFormat, false, renderer.targets.sampleCount);
         if (color)
         {
             renderer.targets.msaaColor = std::move(*color);
@@ -887,10 +955,10 @@ export namespace se
         }
     }
 
-    void updateFxaaSet(Renderer& renderer);  // defined alongside updateTonemapSet below
-    void recreateSsaoTargets(Renderer& renderer);  // defined after the SSAO pipeline helpers
-    void recreateTaaTargets(Renderer& renderer);   // defined after the TAA pipeline helpers
-    void recreateRestirTargets(Renderer& renderer); // defined after the ReSTIR pipeline helpers
+    void updateFxaaSet(Renderer& renderer);          // defined alongside updateTonemapSet below
+    void recreateSsaoTargets(Renderer& renderer);    // defined after the SSAO pipeline helpers
+    void recreateTaaTargets(Renderer& renderer);     // defined after the TAA pipeline helpers
+    void recreateRestirTargets(Renderer& renderer);  // defined after the ReSTIR pipeline helpers
 
     // (Re)create the 1x scratch target FXAA + TAA read from (the scene renders here when
     // either is on); drop it when neither. Sized to the offscreen; the GPU is already idle.
@@ -923,9 +991,8 @@ export namespace se
     }
 
     // Host-visible, mapped buffer the caller owns (vmaDestroyBuffer when done).
-    auto newHostCaptureBuffer(
-        Renderer& renderer, vk::DeviceSize bytes,
-        VkBuffer& outBuffer, VmaAllocation& outAlloc, VmaAllocationInfo& outInfo) -> Result<void>
+    auto newHostCaptureBuffer(Renderer& renderer, vk::DeviceSize bytes, VkBuffer& outBuffer, VmaAllocation& outAlloc,
+                              VmaAllocationInfo& outInfo) -> Result<void>
     {
         VkBufferCreateInfo bufferInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferInfo.size = bytes;
@@ -933,7 +1000,8 @@ export namespace se
         VmaAllocationCreateInfo allocInfo{};
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        if (vmaCreateBuffer(renderer.context.allocator, &bufferInfo, &allocInfo, &outBuffer, &outAlloc, &outInfo) != VK_SUCCESS)
+        if (vmaCreateBuffer(renderer.context.allocator, &bufferInfo, &allocInfo, &outBuffer, &outAlloc, &outInfo) !=
+            VK_SUCCESS)
         {
             return Err(std::string{ "capture: vmaCreateBuffer failed" });
         }
@@ -942,26 +1010,20 @@ export namespace se
 
     // Records a fromLayout->TransferSrc barrier, the image->buffer copy, and a
     // TransferSrc->toLayout barrier into a caller-owned command buffer.
-    void captureImageToBuffer(
-        vk::CommandBuffer cmd, vk::Image image, vk::Extent2D extent,
-        vk::ImageLayout fromLayout, vk::PipelineStageFlags2 fromStage, vk::AccessFlags2 fromAccess,
-        vk::ImageLayout toLayout, vk::PipelineStageFlags2 toStage, vk::AccessFlags2 toAccess,
-        vk::Buffer destination)
+    void captureImageToBuffer(vk::CommandBuffer cmd, vk::Image image, vk::Extent2D extent, vk::ImageLayout fromLayout,
+                              vk::PipelineStageFlags2 fromStage, vk::AccessFlags2 fromAccess, vk::ImageLayout toLayout,
+                              vk::PipelineStageFlags2 toStage, vk::AccessFlags2 toAccess, vk::Buffer destination)
     {
-        transitionImage(
-            cmd, image, fromLayout, vk::ImageLayout::eTransferSrcOptimal,
-            fromStage, fromAccess,
-            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
+        transitionImage(cmd, image, fromLayout, vk::ImageLayout::eTransferSrcOptimal, fromStage, fromAccess,
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
 
         vk::BufferImageCopy region{};
         region.imageSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
         region.imageExtent = vk::Extent3D{ extent.width, extent.height, 1 };
         cmd.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, destination, region);
 
-        transitionImage(
-            cmd, image, vk::ImageLayout::eTransferSrcOptimal, toLayout,
-            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead,
-            toStage, toAccess);
+        transitionImage(cmd, image, vk::ImageLayout::eTransferSrcOptimal, toLayout, vk::PipelineStageFlagBits2::eCopy,
+                        vk::AccessFlagBits2::eTransferRead, toStage, toAccess);
     }
 
     // Bytes per pixel for the capture formats (8-bit RGBA/BGRA, or HDR RGBA16F).
@@ -1021,12 +1083,12 @@ export namespace se
 
     // Writes a PNG file. 8-bit sources reorder BGRA->RGB; the HDR (RGBA16F) offscreen is
     // already tonemapped to display range, so its half floats are clamped to [0,1]*255.
-    auto writeBufferToPng(
-        const unsigned char* pixels, u32 width, u32 height, vk::Format format, const std::string& path) -> Result<void>
+    auto writeBufferToPng(const unsigned char* pixels, u32 width, u32 height, vk::Format format,
+                          const std::string& path) -> Result<void>
     {
         const std::vector<unsigned char> rgb = convertToRgb(pixels, width, height, format);
-        const int ok = stbi_write_png(path.c_str(), static_cast<int>(width), static_cast<int>(height),
-                                      3, rgb.data(), static_cast<int>(width) * 3);
+        const int ok = stbi_write_png(path.c_str(), static_cast<int>(width), static_cast<int>(height), 3, rgb.data(),
+                                      static_cast<int>(width) * 3);
         if (ok == 0)
         {
             return Err(std::format("stbi_write_png failed for '{}'", path));
@@ -1047,8 +1109,8 @@ export namespace se
             const u8* bytes = static_cast<const u8*>(data);
             buffer.insert(buffer.end(), bytes, bytes + size);
         };
-        const int ok = stbi_write_png_to_func(append, &out, static_cast<int>(width), static_cast<int>(height),
-                                              3, rgb.data(), static_cast<int>(width) * 3);
+        const int ok = stbi_write_png_to_func(append, &out, static_cast<int>(width), static_cast<int>(height), 3,
+                                              rgb.data(), static_cast<int>(width) * 3);
         if (ok == 0)
         {
             return Err(std::string{ "stbi_write_png_to_func failed" });
@@ -1059,20 +1121,20 @@ export namespace se
     // Matches the shader's set 1 light uniform (std140).
     struct LightUbo
     {
-        glm::vec4 directionAmbient;     // xyz direction, w ambient
-        glm::vec4 colorIntensity;       // rgb color, a intensity
-        glm::uvec4 counts;              // x=punctual count, y=dir shadow on, z=IBL on
-        glm::vec4 eyePosition;          // xyz world-space camera position
-        glm::mat4 shadowViewProj;       // directional light-space transform (world -> shadow clip)
-        glm::mat4 spotShadowViewProj;   // shadowed spot light-space transform (perspective)
-        glm::uvec4 spotShadow;          // x = shadowed spot's light index, y = enabled (0/1)
-        glm::vec4 pointShadow;          // xyz = shadowed point light world pos, w = far plane
-        glm::uvec4 pointShadowMeta;     // x = shadowed point's light index, y = enabled (0/1)
-        glm::uvec4 screenFlags;         // x = contact-shadows, y = SSGI, z = DDGI (AO is counts.w)
-        glm::vec4 ddgiVolumeMin;        // xyz = DDGI volume world min corner
-        glm::vec4 ddgiVolumeExtent;     // xyz = DDGI volume world size
-        glm::uvec4 ddgiProbeCount;      // xyz = probes per axis
-        glm::vec4 ambientColor;         // rgb = scene-environment ambient (non-IBL fallback), a unused
+        glm::vec4 directionAmbient;    // xyz direction, w ambient
+        glm::vec4 colorIntensity;      // rgb color, a intensity
+        glm::uvec4 counts;             // x=punctual count, y=dir shadow on, z=IBL on
+        glm::vec4 eyePosition;         // xyz world-space camera position
+        glm::mat4 shadowViewProj;      // directional light-space transform (world -> shadow clip)
+        glm::mat4 spotShadowViewProj;  // shadowed spot light-space transform (perspective)
+        glm::uvec4 spotShadow;         // x = shadowed spot's light index, y = enabled (0/1)
+        glm::vec4 pointShadow;         // xyz = shadowed point light world pos, w = far plane
+        glm::uvec4 pointShadowMeta;    // x = shadowed point's light index, y = enabled (0/1)
+        glm::uvec4 screenFlags;        // x = contact-shadows, y = SSGI, z = DDGI (AO is counts.w)
+        glm::vec4 ddgiVolumeMin;       // xyz = DDGI volume world min corner
+        glm::vec4 ddgiVolumeExtent;    // xyz = DDGI volume world size
+        glm::uvec4 ddgiProbeCount;     // xyz = probes per axis
+        glm::vec4 ambientColor;        // rgb = scene-environment ambient (non-IBL fallback), a unused
     };
 
     // Shadow-map resolution + slope/constant depth bias (units of D32 depth). Tuned on
@@ -1135,9 +1197,9 @@ export namespace se
     // struct in mesh.slang: origin + influence radius, box extents + intensity, a valid flag.
     struct ProbeMetaGpu
     {
-        glm::vec4 originRadius{ 0.0f };  // xyz = world origin, w = influence radius
+        glm::vec4 originRadius{ 0.0f };     // xyz = world origin, w = influence radius
         glm::vec4 extentIntensity{ 0.0f };  // xyz = box half-extents, w = intensity
-        glm::uvec4 flags{ 0 };           // x = valid (1/0), y = boxProjection (1/0)
+        glm::uvec4 flags{ 0 };              // x = valid (1/0), y = boxProjection (1/0)
     };
 
     // Froxel cluster grid (X x Y screen tiles, Z exponential view-space slices) and
@@ -1215,9 +1277,8 @@ export namespace se
     // Builds a compute pipeline from a SPIR-V module (entry "computeMain") + a single
     // descriptor set layout, optionally with a compute-stage push constant of the given
     // size. Returned as a Ref<Pipeline> (move-only RAII).
-    auto newComputePipeline(
-        Renderer& renderer, std::string_view shaderName, vk::DescriptorSetLayout setLayout,
-        u32 pushConstantSize = 0) -> Result<Ref<Pipeline>>
+    auto newComputePipeline(Renderer& renderer, std::string_view shaderName, vk::DescriptorSetLayout setLayout,
+                            u32 pushConstantSize = 0) -> Result<Ref<Pipeline>>
     {
         auto moduleResult = loadShaderModule(renderer.context.device, assetPath(shaderName));
         if (!moduleResult)
@@ -1236,7 +1297,8 @@ export namespace se
             pushRange.size = pushConstantSize;
             layoutInfo.setPushConstantRanges(pushRange);
         }
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (compute)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (compute)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);
@@ -1291,7 +1353,8 @@ export namespace se
         std::array<vk::VertexInputAttributeDescription, 3> attributes{
             vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
             vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
-            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) }
+        };
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.setVertexBindingDescriptions(binding);
         vertexInput.setVertexAttributeDescriptions(attributes);
@@ -1324,12 +1387,14 @@ export namespace se
         pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
         pushConstant.offset = 0;
         pushConstant.size = sizeof(glm::mat4);
-        std::array<vk::DescriptorSetLayout, 3> setLayouts{
-            renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout, renderer.descriptors.instanceSetLayout };
+        std::array<vk::DescriptorSetLayout, 3> setLayouts{ renderer.descriptors.bindlessSetLayout,
+                                                           renderer.descriptors.lightSetLayout,
+                                                           renderer.descriptors.instanceSetLayout };
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (depth-prepass)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (depth-prepass)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);
@@ -1388,7 +1453,8 @@ export namespace se
         std::array<vk::VertexInputAttributeDescription, 3> attributes{
             vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
             vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
-            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) }
+        };
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.setVertexBindingDescriptions(binding);
         vertexInput.setVertexAttributeDescriptions(attributes);
@@ -1411,8 +1477,8 @@ export namespace se
         depthStencil.depthWriteEnable = VK_TRUE;
         depthStencil.depthCompareOp = vk::CompareOp::eLess;
         vk::PipelineColorBlendStateCreateInfo colorBlend{};  // no color attachments
-        std::array<vk::DynamicState, 3> dynamicStates{
-            vk::DynamicState::eViewport, vk::DynamicState::eScissor, vk::DynamicState::eDepthBias };
+        std::array<vk::DynamicState, 3> dynamicStates{ vk::DynamicState::eViewport, vk::DynamicState::eScissor,
+                                                       vk::DynamicState::eDepthBias };
         vk::PipelineDynamicStateCreateInfo dynamic{};
         dynamic.setDynamicStates(dynamicStates);
 
@@ -1423,12 +1489,14 @@ export namespace se
         pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
         pushConstant.offset = 0;
         pushConstant.size = sizeof(glm::mat4);
-        std::array<vk::DescriptorSetLayout, 3> setLayouts{
-            renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout, renderer.descriptors.instanceSetLayout };
+        std::array<vk::DescriptorSetLayout, 3> setLayouts{ renderer.descriptors.bindlessSetLayout,
+                                                           renderer.descriptors.lightSetLayout,
+                                                           renderer.descriptors.instanceSetLayout };
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (shadow)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (shadow)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);
@@ -1491,7 +1559,8 @@ export namespace se
         std::array<vk::VertexInputAttributeDescription, 3> attributes{
             vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
             vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
-            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) }
+        };
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.setVertexBindingDescriptions(binding);
         vertexInput.setVertexAttributeDescriptions(attributes);
@@ -1529,12 +1598,14 @@ export namespace se
         pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
         pushConstant.offset = 0;
         pushConstant.size = sizeof(glm::mat4) + sizeof(glm::vec4);
-        std::array<vk::DescriptorSetLayout, 3> setLayouts{
-            renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout, renderer.descriptors.instanceSetLayout };
+        std::array<vk::DescriptorSetLayout, 3> setLayouts{ renderer.descriptors.bindlessSetLayout,
+                                                           renderer.descriptors.lightSetLayout,
+                                                           renderer.descriptors.instanceSetLayout };
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (point-shadow)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (point-shadow)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);
@@ -1596,7 +1667,8 @@ export namespace se
         std::array<vk::VertexInputAttributeDescription, 3> attributes{
             vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
             vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
-            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) }
+        };
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.setVertexBindingDescriptions(binding);
         vertexInput.setVertexAttributeDescriptions(attributes);
@@ -1634,12 +1706,14 @@ export namespace se
         pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
         pushConstant.offset = 0;
         pushConstant.size = 2 * sizeof(glm::mat4);
-        std::array<vk::DescriptorSetLayout, 3> setLayouts{
-            renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout, renderer.descriptors.instanceSetLayout };
+        std::array<vk::DescriptorSetLayout, 3> setLayouts{ renderer.descriptors.bindlessSetLayout,
+                                                           renderer.descriptors.lightSetLayout,
+                                                           renderer.descriptors.instanceSetLayout };
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (gbuffer)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (gbuffer)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);
@@ -1725,12 +1799,13 @@ export namespace se
         pushConstant.stageFlags = vk::ShaderStageFlagBits::eFragment;
         pushConstant.offset = 0;
         pushConstant.size = sizeof(glm::mat4) + 2 * sizeof(glm::vec4);  // invViewProj + params + clearColor
-        std::array<vk::DescriptorSetLayout, 2> setLayouts{
-            renderer.descriptors.bindlessSetLayout, renderer.sky.setLayout };
+        std::array<vk::DescriptorSetLayout, 2> setLayouts{ renderer.descriptors.bindlessSetLayout,
+                                                           renderer.sky.setLayout };
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (sky)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (sky)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);
@@ -1785,25 +1860,53 @@ export namespace se
             return;
         }
         auto gNormal = newColorImage(renderer, w, h, GNormalFormat, false);
-        if (!gNormal) { logError(gNormal.error()); return; }
+        if (!gNormal)
+        {
+            logError(gNormal.error());
+            return;
+        }
         renderer.targets.gNormal = std::move(*gNormal);
         auto gDepth = newDepthImage(renderer, w, h);
-        if (!gDepth) { logError(gDepth.error()); return; }
+        if (!gDepth)
+        {
+            logError(gDepth.error());
+            return;
+        }
         renderer.targets.gDepth = std::move(*gDepth);
         auto aoRaw = newColorImage(renderer, w, h, AoFormat, true);
-        if (!aoRaw) { logError(aoRaw.error()); return; }
+        if (!aoRaw)
+        {
+            logError(aoRaw.error());
+            return;
+        }
         renderer.targets.aoRaw = std::move(*aoRaw);
         auto aoMap = newColorImage(renderer, w, h, AoFormat, true);
-        if (!aoMap) { logError(aoMap.error()); return; }
+        if (!aoMap)
+        {
+            logError(aoMap.error());
+            return;
+        }
         renderer.targets.aoMap = std::move(*aoMap);
         auto contactMap = newColorImage(renderer, w, h, AoFormat, true);
-        if (!contactMap) { logError(contactMap.error()); return; }
+        if (!contactMap)
+        {
+            logError(contactMap.error());
+            return;
+        }
         renderer.targets.contactMap = std::move(*contactMap);
         auto ssgiMap = newColorImage(renderer, w, h, GNormalFormat, true);  // rgba16f radiance
-        if (!ssgiMap) { logError(ssgiMap.error()); return; }
+        if (!ssgiMap)
+        {
+            logError(ssgiMap.error());
+            return;
+        }
         renderer.targets.ssgiMap = std::move(*ssgiMap);
         auto prevColor = newColorImage(renderer, w, h, OffscreenColorFormat, true);
-        if (!prevColor) { logError(prevColor.error()); return; }
+        if (!prevColor)
+        {
+            logError(prevColor.error());
+            return;
+        }
         renderer.targets.prevColor = std::move(*prevColor);
 
         // Transition the three mesh-sampled maps to ShaderReadOnly so set 4 is valid even
@@ -1815,7 +1918,11 @@ export namespace se
             allocInfo.level = vk::CommandBufferLevel::ePrimary;
             allocInfo.commandBufferCount = 1;
             auto cmds = checked(renderer.context.device.allocateCommandBuffers(allocInfo), "ssao init cmd");
-            if (!cmds) { logError(cmds.error()); return; }
+            if (!cmds)
+            {
+                logError(cmds.error());
+                return;
+            }
             vk::CommandBuffer cmd = (*cmds)[0];
             vk::CommandBufferBeginInfo begin{};
             begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
@@ -1824,10 +1931,9 @@ export namespace se
                                               &renderer.targets.ssgiMap, &renderer.targets.prevColor };
             for (Image* img : maps)
             {
-                transitionImage(cmd, img->image,
-                    vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
-                    vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                    vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+                transitionImage(cmd, img->image, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
+                                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
                 img->layout = vk::ImageLayout::eShaderReadOnlyOptimal;
             }
             static_cast<void>(cmd.end());
@@ -1843,9 +1949,7 @@ export namespace se
         const vk::Sampler nearest = renderer.ssao.sampler;
         const vk::Sampler linear = renderer.descriptors.linearSampler;
         auto sampled = [](vk::Sampler s, vk::ImageView v) -> vk::DescriptorImageInfo
-        {
-            return vk::DescriptorImageInfo{ s, v, vk::ImageLayout::eShaderReadOnlyOptimal };
-        };
+        { return vk::DescriptorImageInfo{ s, v, vk::ImageLayout::eShaderReadOnlyOptimal }; };
         auto storage = [](vk::ImageView v) -> vk::DescriptorImageInfo
         {
             vk::DescriptorImageInfo i{};
@@ -1853,7 +1957,8 @@ export namespace se
             i.imageLayout = vk::ImageLayout::eGeneral;
             return i;
         };
-        auto write = [&](vk::DescriptorSet set, u32 binding, vk::DescriptorType type, const vk::DescriptorImageInfo& info)
+        auto write =
+            [&](vk::DescriptorSet set, u32 binding, vk::DescriptorType type, const vk::DescriptorImageInfo& info)
         {
             vk::WriteDescriptorSet wr{};
             wr.dstSet = set;
@@ -1919,7 +2024,8 @@ export namespace se
         std::array<vk::VertexInputAttributeDescription, 3> attributes{
             vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position) },
             vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal) },
-            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) } };
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv0) }
+        };
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.setVertexBindingDescriptions(binding);
         vertexInput.setVertexAttributeDescriptions(attributes);
@@ -1957,12 +2063,14 @@ export namespace se
         pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
         pushConstant.offset = 0;
         pushConstant.size = 2 * sizeof(glm::mat4);
-        std::array<vk::DescriptorSetLayout, 3> setLayouts{
-            renderer.descriptors.bindlessSetLayout, renderer.descriptors.lightSetLayout, renderer.descriptors.instanceSetLayout };
+        std::array<vk::DescriptorSetLayout, 3> setLayouts{ renderer.descriptors.bindlessSetLayout,
+                                                           renderer.descriptors.lightSetLayout,
+                                                           renderer.descriptors.instanceSetLayout };
         vk::PipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.setSetLayouts(setLayouts);
         layoutInfo.setPushConstantRanges(pushConstant);
-        auto layoutResult = checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (motion)");
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (motion)");
         if (!layoutResult)
         {
             renderer.context.device.destroyShaderModule(shaderModule);
@@ -2014,15 +2122,27 @@ export namespace se
             return;
         }
         auto motion = newColorImage(renderer, w, h, MotionFormat, false);
-        if (!motion) { logError(motion.error()); return; }
+        if (!motion)
+        {
+            logError(motion.error());
+            return;
+        }
         renderer.targets.motion = std::move(*motion);
         auto motionDepth = newDepthImage(renderer, w, h);
-        if (!motionDepth) { logError(motionDepth.error()); return; }
+        if (!motionDepth)
+        {
+            logError(motionDepth.error());
+            return;
+        }
         renderer.targets.motionDepth = std::move(*motionDepth);
         for (u32 i = 0; i < 2; i = i + 1)
         {
             auto hist = newColorImage(renderer, w, h, OffscreenColorFormat, true);  // storage (TAA writes it)
-            if (!hist) { logError(hist.error()); return; }
+            if (!hist)
+            {
+                logError(hist.error());
+                return;
+            }
             renderer.targets.history[i] = std::move(*hist);
         }
 
@@ -2034,17 +2154,21 @@ export namespace se
             allocInfo.level = vk::CommandBufferLevel::ePrimary;
             allocInfo.commandBufferCount = 1;
             auto cmds = checked(renderer.context.device.allocateCommandBuffers(allocInfo), "taa init cmd");
-            if (!cmds) { logError(cmds.error()); return; }
+            if (!cmds)
+            {
+                logError(cmds.error());
+                return;
+            }
             vk::CommandBuffer cmd = (*cmds)[0];
             vk::CommandBufferBeginInfo begin{};
             begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
             static_cast<void>(cmd.begin(begin));
             for (u32 i = 0; i < 2; i = i + 1)
             {
-                transitionImage(cmd, renderer.targets.history[i].image,
-                    vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
-                    vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead);
+                transitionImage(cmd, renderer.targets.history[i].image, vk::ImageLayout::eUndefined,
+                                vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eTopOfPipe,
+                                vk::AccessFlagBits2::eNone, vk::PipelineStageFlagBits2::eComputeShader,
+                                vk::AccessFlagBits2::eShaderSampledRead);
                 renderer.targets.history[i].layout = vk::ImageLayout::eShaderReadOnlyOptimal;
             }
             static_cast<void>(cmd.end());
@@ -2062,13 +2186,16 @@ export namespace se
         // TAA reads the scene's 1x result from the scratch image (the scene renders there
         // when TAA is on, mirroring FXAA). When scratch isn't allocated (TAA off), bind the
         // offscreen as a valid placeholder — the set is unused until TAA turns on + rebinds.
-        vk::ImageView sceneInput = renderer.targets.scratch.image ? renderer.targets.scratch.view
-                                                                  : renderer.targets.offscreen.view;
+        vk::ImageView sceneInput =
+            renderer.targets.scratch.image ? renderer.targets.scratch.view : renderer.targets.offscreen.view;
         for (u32 p = 0; p < 2; p = p + 1)
         {
-            vk::DescriptorImageInfo curInfo{ renderer.descriptors.linearSampler, sceneInput, vk::ImageLayout::eShaderReadOnlyOptimal };
-            vk::DescriptorImageInfo histInfo{ renderer.descriptors.linearSampler, renderer.targets.history[1 - p].view, vk::ImageLayout::eShaderReadOnlyOptimal };
-            vk::DescriptorImageInfo motionInfo{ renderer.descriptors.linearSampler, renderer.targets.motion.view, vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo curInfo{ renderer.descriptors.linearSampler, sceneInput,
+                                             vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo histInfo{ renderer.descriptors.linearSampler, renderer.targets.history[1 - p].view,
+                                              vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo motionInfo{ renderer.descriptors.linearSampler, renderer.targets.motion.view,
+                                                vk::ImageLayout::eShaderReadOnlyOptimal };
             vk::DescriptorImageInfo outInfo{};
             outInfo.imageView = renderer.targets.offscreen.view;
             outInfo.imageLayout = vk::ImageLayout::eGeneral;
@@ -2077,9 +2204,11 @@ export namespace se
             histOut.imageLayout = vk::ImageLayout::eGeneral;
             std::array<vk::WriteDescriptorSet, 5> writes{};
             const std::array<vk::DescriptorImageInfo*, 5> infos{ &curInfo, &histInfo, &motionInfo, &outInfo, &histOut };
-            const std::array<vk::DescriptorType, 5> types{
-                vk::DescriptorType::eCombinedImageSampler, vk::DescriptorType::eCombinedImageSampler,
-                vk::DescriptorType::eCombinedImageSampler, vk::DescriptorType::eStorageImage, vk::DescriptorType::eStorageImage };
+            const std::array<vk::DescriptorType, 5> types{ vk::DescriptorType::eCombinedImageSampler,
+                                                           vk::DescriptorType::eCombinedImageSampler,
+                                                           vk::DescriptorType::eCombinedImageSampler,
+                                                           vk::DescriptorType::eStorageImage,
+                                                           vk::DescriptorType::eStorageImage };
             for (u32 b = 0; b < 5; b = b + 1)
             {
                 writes[b].dstSet = renderer.descriptors.taaSets[p];
@@ -2105,16 +2234,41 @@ export namespace se
         renderer.restir.previous.reset();
         const u32 w = renderer.targets.offscreen.extent.width;
         const u32 h = renderer.targets.offscreen.extent.height;
-        if (w == 0 || h == 0) { return; }
+        if (w == 0 || h == 0)
+        {
+            return;
+        }
         const u32 pixels = w * h;
         const vk::DeviceSize reservoirBytes = static_cast<vk::DeviceSize>(pixels) * 2 * sizeof(glm::vec4);  // 2x float4
         auto mk = [&]() -> Result<Ref<Buffer>> { return makeDeviceStorageBuffer(renderer, reservoirBytes); };
-        auto r0 = mk(); if (!r0) { logError(r0.error()); return; } renderer.restir.initial = *r0;
-        auto r1 = mk(); if (!r1) { logError(r1.error()); return; } renderer.restir.combined = *r1;
-        auto r2 = mk(); if (!r2) { logError(r2.error()); return; } renderer.restir.previous = *r2;
+        auto r0 = mk();
+        if (!r0)
+        {
+            logError(r0.error());
+            return;
+        }
+        renderer.restir.initial = *r0;
+        auto r1 = mk();
+        if (!r1)
+        {
+            logError(r1.error());
+            return;
+        }
+        renderer.restir.combined = *r1;
+        auto r2 = mk();
+        if (!r2)
+        {
+            logError(r2.error());
+            return;
+        }
+        renderer.restir.previous = *r2;
         renderer.restir.reservoirCapacity = pixels;
         auto rad = newColorImage(renderer, w, h, GNormalFormat, true);  // rgba16f radiance, storage
-        if (!rad) { logError(rad.error()); return; }
+        if (!rad)
+        {
+            logError(rad.error());
+            return;
+        }
         renderer.restir.radiance = std::move(*rad);
 
         // Radiance rests in ShaderReadOnly (mesh samples it; resolve writes it as storage).
@@ -2124,19 +2278,25 @@ export namespace se
             allocInfo.level = vk::CommandBufferLevel::ePrimary;
             allocInfo.commandBufferCount = 1;
             auto cmds = checked(renderer.context.device.allocateCommandBuffers(allocInfo), "restir init cmd");
-            if (!cmds) { logError(cmds.error()); return; }
+            if (!cmds)
+            {
+                logError(cmds.error());
+                return;
+            }
             vk::CommandBuffer cmd = (*cmds)[0];
             vk::CommandBufferBeginInfo begin{};
             begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
             static_cast<void>(cmd.begin(begin));
             transitionImage(cmd, renderer.restir.radiance.image, vk::ImageLayout::eUndefined,
-                vk::ImageLayout::eShaderReadOnlyOptimal,
-                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+                            vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eTopOfPipe,
+                            vk::AccessFlagBits2::eNone, vk::PipelineStageFlagBits2::eFragmentShader,
+                            vk::AccessFlagBits2::eShaderSampledRead);
             renderer.restir.radiance.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
             static_cast<void>(cmd.end());
-            vk::CommandBufferSubmitInfo cmdInfo{}; cmdInfo.commandBuffer = cmd;
-            vk::SubmitInfo2 submitInfo{}; submitInfo.setCommandBufferInfos(cmdInfo);
+            vk::CommandBufferSubmitInfo cmdInfo{};
+            cmdInfo.commandBuffer = cmd;
+            vk::SubmitInfo2 submitInfo{};
+            submitInfo.setCommandBufferInfos(cmdInfo);
             static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
             static_cast<void>(renderer.context.device.waitIdle());
             renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
@@ -2146,8 +2306,11 @@ export namespace se
         auto wBuf = [&](vk::DescriptorSet set, u32 binding, const Ref<Buffer>& b)
         {
             auto bi = bufInfo(b);
-            vk::WriteDescriptorSet w{}; w.dstSet = set; w.dstBinding = binding;
-            w.descriptorType = vk::DescriptorType::eStorageBuffer; w.setBufferInfo(bi);
+            vk::WriteDescriptorSet w{};
+            w.dstSet = set;
+            w.dstBinding = binding;
+            w.descriptorType = vk::DescriptorType::eStorageBuffer;
+            w.setBufferInfo(bi);
             renderer.context.device.updateDescriptorSets(w, {});
         };
         // initial set: b3 = reservoir out (initial buffer).
@@ -2165,14 +2328,20 @@ export namespace se
             vk::DescriptorImageInfo radStore{};
             radStore.imageView = renderer.restir.radiance.view;
             radStore.imageLayout = vk::ImageLayout::eGeneral;
-            vk::WriteDescriptorSet w{}; w.dstSet = renderer.restir.resolveSet; w.dstBinding = 5;
-            w.descriptorType = vk::DescriptorType::eStorageImage; w.setImageInfo(radStore);
+            vk::WriteDescriptorSet w{};
+            w.dstSet = renderer.restir.resolveSet;
+            w.dstBinding = 5;
+            w.descriptorType = vk::DescriptorType::eStorageImage;
+            w.setImageInfo(radStore);
             renderer.context.device.updateDescriptorSets(w, {});
             // mesh set 7: the radiance sampled.
             vk::DescriptorImageInfo radSamp{ renderer.descriptors.linearSampler, renderer.restir.radiance.view,
                                              vk::ImageLayout::eShaderReadOnlyOptimal };
-            vk::WriteDescriptorSet wm{}; wm.dstSet = renderer.restir.meshSet; wm.dstBinding = 0;
-            wm.descriptorType = vk::DescriptorType::eCombinedImageSampler; wm.setImageInfo(radSamp);
+            vk::WriteDescriptorSet wm{};
+            wm.dstSet = renderer.restir.meshSet;
+            wm.dstBinding = 0;
+            wm.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            wm.setImageInfo(radSamp);
             renderer.context.device.updateDescriptorSets(wm, {});
         }
         renderer.restir.ready = true;
@@ -2185,19 +2354,26 @@ export namespace se
     {
         vk::Device dev = renderer.context.device;
         const vk::ImageView gv = renderer.targets.gNormal.view;
-        const vk::ImageView mv = renderer.targets.motion.image ? renderer.targets.motion.view : gv;  // motion may be absent (TAA off)
+        const vk::ImageView mv =
+            renderer.targets.motion.image ? renderer.targets.motion.view : gv;  // motion may be absent (TAA off)
         auto wSampler = [&](vk::DescriptorSet set, u32 binding, vk::ImageView v)
         {
             vk::DescriptorImageInfo ii{ renderer.restir.sampler, v, vk::ImageLayout::eShaderReadOnlyOptimal };
-            vk::WriteDescriptorSet w{}; w.dstSet = set; w.dstBinding = binding;
-            w.descriptorType = vk::DescriptorType::eCombinedImageSampler; w.setImageInfo(ii);
+            vk::WriteDescriptorSet w{};
+            w.dstSet = set;
+            w.dstBinding = binding;
+            w.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            w.setImageInfo(ii);
             dev.updateDescriptorSets(w, {});
         };
         auto wBuffer = [&](vk::DescriptorSet set, u32 binding, vk::Buffer buf, vk::DeviceSize size)
         {
             vk::DescriptorBufferInfo bi{ buf, 0, size };
-            vk::WriteDescriptorSet w{}; w.dstSet = set; w.dstBinding = binding;
-            w.descriptorType = vk::DescriptorType::eStorageBuffer; w.setBufferInfo(bi);
+            vk::WriteDescriptorSet w{};
+            w.dstSet = set;
+            w.dstBinding = binding;
+            w.descriptorType = vk::DescriptorType::eStorageBuffer;
+            w.setBufferInfo(bi);
             dev.updateDescriptorSets(w, {});
         };
         const Ref<Buffer>& lightBuf = renderer.lighting.lightListBuffers[frame];
@@ -2205,18 +2381,33 @@ export namespace se
 
         // initial: b0 gbuffer, b1 lights, b2 clusters.
         wSampler(renderer.restir.initialSet, 0, gv);
-        if (lightBuf) { wBuffer(renderer.restir.initialSet, 1, lightBuf->buffer, lightBuf->size); }
-        if (clusterBuf) { wBuffer(renderer.restir.initialSet, 2, clusterBuf->buffer, clusterBuf->size); }
+        if (lightBuf)
+        {
+            wBuffer(renderer.restir.initialSet, 1, lightBuf->buffer, lightBuf->size);
+        }
+        if (clusterBuf)
+        {
+            wBuffer(renderer.restir.initialSet, 2, clusterBuf->buffer, clusterBuf->size);
+        }
         // reuse: b0 gbuffer, b1 motion, b4 lights.
         wSampler(renderer.restir.reuseSet, 0, gv);
         wSampler(renderer.restir.reuseSet, 1, mv);
-        if (lightBuf) { wBuffer(renderer.restir.reuseSet, 4, lightBuf->buffer, lightBuf->size); }
+        if (lightBuf)
+        {
+            wBuffer(renderer.restir.reuseSet, 4, lightBuf->buffer, lightBuf->size);
+        }
         // resolve: b0 gbuffer, b3 lights, b4 TLAS.
         wSampler(renderer.restir.resolveSet, 0, gv);
-        if (lightBuf) { wBuffer(renderer.restir.resolveSet, 3, lightBuf->buffer, lightBuf->size); }
+        if (lightBuf)
         {
-            VkAccelerationStructureKHR handle = static_cast<VkAccelerationStructureKHR>(renderer.rt.tlas[frame]->handle);
-            VkWriteDescriptorSetAccelerationStructureKHR asWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR };
+            wBuffer(renderer.restir.resolveSet, 3, lightBuf->buffer, lightBuf->size);
+        }
+        {
+            VkAccelerationStructureKHR handle =
+                static_cast<VkAccelerationStructureKHR>(renderer.rt.tlas[frame]->handle);
+            VkWriteDescriptorSetAccelerationStructureKHR asWrite{
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR
+            };
             asWrite.accelerationStructureCount = 1;
             asWrite.pAccelerationStructures = &handle;
             VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
@@ -2233,7 +2424,8 @@ export namespace se
     // update-after-bind: safe to write a live set between draws.
     void writeBindlessTexture(Renderer& renderer, vk::ImageView view, u32 index)
     {
-        vk::DescriptorImageInfo info{ renderer.descriptors.linearSampler, view, vk::ImageLayout::eShaderReadOnlyOptimal };
+        vk::DescriptorImageInfo info{ renderer.descriptors.linearSampler, view,
+                                      vk::ImageLayout::eShaderReadOnlyOptimal };
         vk::WriteDescriptorSet write{};
         write.dstSet = renderer.descriptors.bindlessSet;
         write.dstBinding = 0;
@@ -2318,7 +2510,8 @@ export namespace se
         shadowSamplerInfo.borderColor = vk::BorderColor::eFloatOpaqueWhite;
         shadowSamplerInfo.compareEnable = VK_TRUE;
         shadowSamplerInfo.compareOp = vk::CompareOp::eLessOrEqual;
-        auto shadowSampler = checked(renderer.context.device.createSampler(shadowSamplerInfo), "createSampler (shadow)");
+        auto shadowSampler =
+            checked(renderer.context.device.createSampler(shadowSamplerInfo), "createSampler (shadow)");
         if (!shadowSampler)
         {
             return Err(shadowSampler.error());
@@ -2343,7 +2536,8 @@ export namespace se
 
         // Point shadow: a color distance cube (+ per-face render views) + a depth scratch.
         if (Result<void> cube = newColorCubeImage(renderer, PointShadowSize, PointShadowColorFormat,
-                                                  renderer.targets.pointShadowCube, renderer.targets.pointShadowFaces); !cube)
+                                                  renderer.targets.pointShadowCube, renderer.targets.pointShadowFaces);
+            !cube)
         {
             return Err(cube.error());
         }
@@ -2369,11 +2563,10 @@ export namespace se
             static_cast<void>(cmd.begin(begin));
             for (vk::Image map : { renderer.targets.shadowMap.image, renderer.targets.spotShadowMap.image })
             {
-                transitionImage(cmd, map,
-                    vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
-                    vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                    vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
-                    vk::ImageAspectFlagBits::eDepth);
+                transitionImage(cmd, map, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
+                                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
+                                vk::ImageAspectFlagBits::eDepth);
             }
             // The point distance cube starts ShaderReadOnly too (all 6 layers).
             {
@@ -2418,7 +2611,8 @@ export namespace se
         materialLayoutInfo.setBindings(albedoBinding);
         materialLayoutInfo.flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
         materialLayoutInfo.pNext = &bindingFlagsInfo;
-        auto materialLayout = checked(renderer.context.device.createDescriptorSetLayout(materialLayoutInfo), "bindlessSetLayout");
+        auto materialLayout =
+            checked(renderer.context.device.createDescriptorSetLayout(materialLayoutInfo), "bindlessSetLayout");
         if (!materialLayout)
         {
             return Err(materialLayout.error());
@@ -2456,7 +2650,8 @@ export namespace se
         lightBindings[6].stageFlags = vk::ShaderStageFlagBits::eFragment;
         vk::DescriptorSetLayoutCreateInfo lightLayoutInfo{};
         lightLayoutInfo.setBindings(lightBindings);
-        auto lightLayout = checked(renderer.context.device.createDescriptorSetLayout(lightLayoutInfo), "lightSetLayout");
+        auto lightLayout =
+            checked(renderer.context.device.createDescriptorSetLayout(lightLayoutInfo), "lightSetLayout");
         if (!lightLayout)
         {
             return Err(lightLayout.error());
@@ -2478,7 +2673,8 @@ export namespace se
         clusterBindings[2].stageFlags = vk::ShaderStageFlagBits::eCompute;
         vk::DescriptorSetLayoutCreateInfo clusterLayoutInfo{};
         clusterLayoutInfo.setBindings(clusterBindings);
-        auto clusterLayout = checked(renderer.context.device.createDescriptorSetLayout(clusterLayoutInfo), "clusterSetLayout");
+        auto clusterLayout =
+            checked(renderer.context.device.createDescriptorSetLayout(clusterLayoutInfo), "clusterSetLayout");
         if (!clusterLayout)
         {
             return Err(clusterLayout.error());
@@ -2499,7 +2695,8 @@ export namespace se
         instanceBindings[1].stageFlags = vk::ShaderStageFlagBits::eVertex;
         vk::DescriptorSetLayoutCreateInfo instanceLayoutInfo{};
         instanceLayoutInfo.setBindings(instanceBindings);
-        auto instanceLayout = checked(renderer.context.device.createDescriptorSetLayout(instanceLayoutInfo), "instanceSetLayout");
+        auto instanceLayout =
+            checked(renderer.context.device.createDescriptorSetLayout(instanceLayoutInfo), "instanceSetLayout");
         if (!instanceLayout)
         {
             return Err(instanceLayout.error());
@@ -2513,7 +2710,8 @@ export namespace se
         tonemapBinding.stageFlags = vk::ShaderStageFlagBits::eCompute;
         vk::DescriptorSetLayoutCreateInfo tonemapLayoutInfo{};
         tonemapLayoutInfo.setBindings(tonemapBinding);
-        auto tonemapLayout = checked(renderer.context.device.createDescriptorSetLayout(tonemapLayoutInfo), "tonemapSetLayout");
+        auto tonemapLayout =
+            checked(renderer.context.device.createDescriptorSetLayout(tonemapLayoutInfo), "tonemapSetLayout");
         if (!tonemapLayout)
         {
             return Err(tonemapLayout.error());
@@ -2547,7 +2745,8 @@ export namespace se
             // ~= two dozen; plus generous headroom.
             vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 48 },
             // RT: one TLAS descriptor per in-flight frame (set 6) + the ReSTIR resolve set + headroom.
-            vk::DescriptorPoolSize{ vk::DescriptorType::eAccelerationStructureKHR, MaxFramesInFlight + 4 } };
+            vk::DescriptorPoolSize{ vk::DescriptorType::eAccelerationStructureKHR, MaxFramesInFlight + 4 }
+        };
         vk::DescriptorPoolCreateInfo poolInfo{};
         poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;  // texture sets freed on Ref drop
         poolInfo.maxSets = 1024 + 8 * MaxFramesInFlight + 64;
@@ -2565,7 +2764,8 @@ export namespace se
         bindlessPoolInfo.flags = vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind;
         bindlessPoolInfo.maxSets = 1;
         bindlessPoolInfo.setPoolSizes(bindlessPoolSize);
-        auto bindlessPoolResult = checked(renderer.context.device.createDescriptorPool(bindlessPoolInfo), "bindlessPool");
+        auto bindlessPoolResult =
+            checked(renderer.context.device.createDescriptorPool(bindlessPoolInfo), "bindlessPool");
         if (!bindlessPoolResult)
         {
             return Err(bindlessPoolResult.error());
@@ -2575,7 +2775,8 @@ export namespace se
         vk::DescriptorSetAllocateInfo bindlessAlloc{};
         bindlessAlloc.descriptorPool = renderer.descriptors.bindlessPool;
         bindlessAlloc.setSetLayouts(renderer.descriptors.bindlessSetLayout);
-        auto bindlessAllocated = checked(renderer.context.device.allocateDescriptorSets(bindlessAlloc), "allocate bindlessSet");
+        auto bindlessAllocated =
+            checked(renderer.context.device.allocateDescriptorSets(bindlessAlloc), "allocate bindlessSet");
         if (!bindlessAllocated)
         {
             return Err(bindlessAllocated.error());
@@ -2591,7 +2792,8 @@ export namespace se
             allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
             allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
             VmaAllocationInfo mapped{};
-            if (vmaCreateBuffer(renderer.context.allocator, &bufferInfo, &allocInfo, &renderer.lighting.lightBuffers[i], &renderer.lighting.lightAllocs[i], &mapped) != VK_SUCCESS)
+            if (vmaCreateBuffer(renderer.context.allocator, &bufferInfo, &allocInfo, &renderer.lighting.lightBuffers[i],
+                                &renderer.lighting.lightAllocs[i], &mapped) != VK_SUCCESS)
             {
                 return Err(std::string{ "light UBO vmaCreateBuffer failed" });
             }
@@ -2607,7 +2809,8 @@ export namespace se
             }
             renderer.lighting.lightSets[i] = (*allocated)[0];
 
-            vk::DescriptorBufferInfo lightBufferInfo{ vk::Buffer{ renderer.lighting.lightBuffers[i] }, 0, sizeof(LightUbo) };
+            vk::DescriptorBufferInfo lightBufferInfo{ vk::Buffer{ renderer.lighting.lightBuffers[i] }, 0,
+                                                      sizeof(LightUbo) };
             vk::WriteDescriptorSet lightWrite{};
             lightWrite.dstSet = renderer.lighting.lightSets[i];
             lightWrite.dstBinding = 0;
@@ -2617,13 +2820,15 @@ export namespace se
 
             // Bind the directional (binding 4) + spot (binding 5) shadow maps with the
             // compare sampler. The graph guarantees ShaderReadOnly when the scene samples.
-            vk::DescriptorImageInfo shadowInfo{ renderer.descriptors.shadowSampler,
-                renderer.targets.shadowMap.view, vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo shadowInfo{ renderer.descriptors.shadowSampler, renderer.targets.shadowMap.view,
+                                                vk::ImageLayout::eShaderReadOnlyOptimal };
             vk::DescriptorImageInfo spotShadowInfo{ renderer.descriptors.shadowSampler,
-                renderer.targets.spotShadowMap.view, vk::ImageLayout::eShaderReadOnlyOptimal };
+                                                    renderer.targets.spotShadowMap.view,
+                                                    vk::ImageLayout::eShaderReadOnlyOptimal };
             // The point distance cube samples with the plain linear sampler (no compare).
             vk::DescriptorImageInfo pointShadowInfo{ renderer.descriptors.linearSampler,
-                renderer.targets.pointShadowCube.view, vk::ImageLayout::eShaderReadOnlyOptimal };
+                                                     renderer.targets.pointShadowCube.view,
+                                                     vk::ImageLayout::eShaderReadOnlyOptimal };
             std::array<vk::WriteDescriptorSet, 3> shadowWrites{};
             shadowWrites[0].dstSet = renderer.lighting.lightSets[i];
             shadowWrites[0].dstBinding = 4;
@@ -2662,7 +2867,8 @@ export namespace se
             vk::DescriptorSetAllocateInfo instanceAlloc{};
             instanceAlloc.descriptorPool = renderer.descriptors.descriptorPool;
             instanceAlloc.setSetLayouts(renderer.descriptors.instanceSetLayout);
-            auto instanceAllocated = checked(renderer.context.device.allocateDescriptorSets(instanceAlloc), "allocate instanceSet");
+            auto instanceAllocated =
+                checked(renderer.context.device.allocateDescriptorSets(instanceAlloc), "allocate instanceSet");
             if (!instanceAllocated)
             {
                 return Err(instanceAllocated.error());
@@ -2671,8 +2877,7 @@ export namespace se
 
             // Cluster light-list buffer (device-local, compute-written) + the
             // cluster params UBO (host-mapped, written each frame).
-            Result<Ref<Buffer>> clusterBuffer =
-                makeDeviceStorageBuffer(renderer, ClusterCount * ClusterStride);
+            Result<Ref<Buffer>> clusterBuffer = makeDeviceStorageBuffer(renderer, ClusterCount * ClusterStride);
             if (!clusterBuffer)
             {
                 return Err(clusterBuffer.error());
@@ -2686,8 +2891,9 @@ export namespace se
             paramAlloc.usage = VMA_MEMORY_USAGE_AUTO;
             paramAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
             VmaAllocationInfo paramMapped{};
-            if (vmaCreateBuffer(renderer.context.allocator, &paramInfo, &paramAlloc, &renderer.lighting.clusterParamBuffers[i],
-                                &renderer.lighting.clusterParamAllocs[i], &paramMapped) != VK_SUCCESS)
+            if (vmaCreateBuffer(renderer.context.allocator, &paramInfo, &paramAlloc,
+                                &renderer.lighting.clusterParamBuffers[i], &renderer.lighting.clusterParamAllocs[i],
+                                &paramMapped) != VK_SUCCESS)
             {
                 return Err(std::string{ "cluster params vmaCreateBuffer failed" });
             }
@@ -2695,7 +2901,8 @@ export namespace se
 
             // Lighting set bindings 2 (cluster lists) + 3 (cluster params).
             vk::DescriptorBufferInfo clusterInfo{ (*clusterBuffer)->buffer, 0, (*clusterBuffer)->size };
-            vk::DescriptorBufferInfo paramBufferInfo{ vk::Buffer{ renderer.lighting.clusterParamBuffers[i] }, 0, sizeof(ClusterParams) };
+            vk::DescriptorBufferInfo paramBufferInfo{ vk::Buffer{ renderer.lighting.clusterParamBuffers[i] }, 0,
+                                                      sizeof(ClusterParams) };
             std::array<vk::WriteDescriptorSet, 2> lightClusterWrites{};
             lightClusterWrites[0].dstSet = renderer.lighting.lightSets[i];
             lightClusterWrites[0].dstBinding = 2;
@@ -2711,7 +2918,8 @@ export namespace se
             vk::DescriptorSetAllocateInfo clusterAlloc{};
             clusterAlloc.descriptorPool = renderer.descriptors.descriptorPool;
             clusterAlloc.setSetLayouts(renderer.descriptors.clusterSetLayout);
-            auto clusterAllocated = checked(renderer.context.device.allocateDescriptorSets(clusterAlloc), "allocate clusterSet");
+            auto clusterAllocated =
+                checked(renderer.context.device.allocateDescriptorSets(clusterAlloc), "allocate clusterSet");
             if (!clusterAllocated)
             {
                 return Err(clusterAllocated.error());
@@ -2745,9 +2953,8 @@ export namespace se
         // Tonemap: a compute pipeline + a set binding the offscreen color as a storage
         // image (read+written in place). beginFrameGraph adds the pass every frame; the
         // exposure multiplier is a compute-stage push constant.
-        Result<Ref<Pipeline>> tonemap =
-            newComputePipeline(renderer, "shaders/tonemap.spv", renderer.descriptors.tonemapSetLayout,
-                               static_cast<u32>(sizeof(f32)));
+        Result<Ref<Pipeline>> tonemap = newComputePipeline(
+            renderer, "shaders/tonemap.spv", renderer.descriptors.tonemapSetLayout, static_cast<u32>(sizeof(f32)));
         if (!tonemap)
         {
             return Err(tonemap.error());
@@ -2757,7 +2964,8 @@ export namespace se
         vk::DescriptorSetAllocateInfo tonemapAlloc{};
         tonemapAlloc.descriptorPool = renderer.descriptors.descriptorPool;
         tonemapAlloc.setSetLayouts(renderer.descriptors.tonemapSetLayout);
-        auto tonemapAllocated = checked(renderer.context.device.allocateDescriptorSets(tonemapAlloc), "allocate tonemapSet");
+        auto tonemapAllocated =
+            checked(renderer.context.device.allocateDescriptorSets(tonemapAlloc), "allocate tonemapSet");
         if (!tonemapAllocated)
         {
             return Err(tonemapAllocated.error());
@@ -2785,8 +2993,7 @@ export namespace se
         renderer.descriptors.fxaaSet = (*fxaaAllocated)[0];
 
         // Depth pre-pass: a vertex-only pipeline that reuses the mesh vertex shader.
-        Result<Ref<Pipeline>> depthPrepass =
-            makeDepthPrepassPipeline(renderer, "shaders/mesh.spv");
+        Result<Ref<Pipeline>> depthPrepass = makeDepthPrepassPipeline(renderer, "shaders/mesh.spv");
         if (!depthPrepass)
         {
             return Err(depthPrepass.error());
@@ -2810,7 +3017,7 @@ export namespace se
         renderer.pipelines.pointShadow = *pointShadow;
 
         // Editor overlay: screen-space gizmo handles + entity billboards drawn over the
-        // tonemapped scene color (so they show under present-only, where ImGui is skipped).
+        // tonemapped scene color (so they show under present-only mode).
         Result<Ref<Pipeline>> overlay = newOverlayPipeline(renderer);
         if (!overlay)
         {
@@ -2892,13 +3099,19 @@ export namespace se
         probeSamplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
         probeSamplerInfo.maxLod = VK_LOD_CLAMP_NONE;
         auto probeSampler = checked(renderer.context.device.createSampler(probeSamplerInfo), "createSampler (probe)");
-        if (!probeSampler) { return Err(probeSampler.error()); }
+        if (!probeSampler)
+        {
+            return Err(probeSampler.error());
+        }
         renderer.reflection.sampler = *probeSampler;
         renderer.reflection.meshSet = renderer.ibl.set;
 
         auto probeMeta = makeRtBuffer(renderer, sizeof(ProbeMetaGpu) * MaxReflectionProbes,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        if (!probeMeta) { return Err(probeMeta.error()); }
+        if (!probeMeta)
+        {
+            return Err(probeMeta.error());
+        }
         renderer.reflection.metaBuffer = *probeMeta;
         std::memset(renderer.reflection.metaBuffer->mapped, 0, sizeof(ProbeMetaGpu) * MaxReflectionProbes);
 
@@ -2953,7 +3166,8 @@ export namespace se
         }
         renderer.ssao.sampler = *ssaoSampler;
 
-        auto makeComputeLayout = [&](u32 samplerCount, u32 storageCount, const char* name) -> Result<vk::DescriptorSetLayout>
+        auto makeComputeLayout = [&](u32 samplerCount, u32 storageCount,
+                                     const char* name) -> Result<vk::DescriptorSetLayout>
         {
             std::vector<vk::DescriptorSetLayoutBinding> bindings;
             for (u32 b = 0; b < samplerCount; b = b + 1)
@@ -2979,10 +3193,16 @@ export namespace se
             return checked(renderer.context.device.createDescriptorSetLayout(info), name);
         };
         auto c2 = makeComputeLayout(1, 1, "compute2Layout");
-        if (!c2) { return Err(c2.error()); }
+        if (!c2)
+        {
+            return Err(c2.error());
+        }
         renderer.ssao.compute2Layout = *c2;
         auto c3 = makeComputeLayout(2, 1, "compute3Layout");
-        if (!c3) { return Err(c3.error()); }
+        if (!c3)
+        {
+            return Err(c3.error());
+        }
         renderer.ssao.compute3Layout = *c3;
 
         std::array<vk::DescriptorSetLayoutBinding, 3> meshAoBindings{};
@@ -2995,7 +3215,8 @@ export namespace se
         }
         vk::DescriptorSetLayoutCreateInfo meshAoLayoutInfo{};
         meshAoLayoutInfo.setBindings(meshAoBindings);
-        auto meshAoLayout = checked(renderer.context.device.createDescriptorSetLayout(meshAoLayoutInfo), "meshAoSetLayout");
+        auto meshAoLayout =
+            checked(renderer.context.device.createDescriptorSetLayout(meshAoLayoutInfo), "meshAoSetLayout");
         if (!meshAoLayout)
         {
             return Err(meshAoLayout.error());
@@ -3008,48 +3229,87 @@ export namespace se
             ai.descriptorPool = renderer.descriptors.descriptorPool;
             ai.setSetLayouts(layout);
             auto s = checked(renderer.context.device.allocateDescriptorSets(ai), name);
-            if (!s) { return Err(s.error()); }
+            if (!s)
+            {
+                return Err(s.error());
+            }
             return (*s)[0];
         };
         auto gtaoSet = allocSet(renderer.ssao.compute2Layout, "gtaoSet");
-        if (!gtaoSet) { return Err(gtaoSet.error()); }
+        if (!gtaoSet)
+        {
+            return Err(gtaoSet.error());
+        }
         renderer.ssao.gtaoSet = *gtaoSet;
         auto aoBlurSet = allocSet(renderer.ssao.compute3Layout, "aoBlurSet");
-        if (!aoBlurSet) { return Err(aoBlurSet.error()); }
+        if (!aoBlurSet)
+        {
+            return Err(aoBlurSet.error());
+        }
         renderer.ssao.aoBlurSet = *aoBlurSet;
         auto contactSet = allocSet(renderer.ssao.compute2Layout, "contactSet");
-        if (!contactSet) { return Err(contactSet.error()); }
+        if (!contactSet)
+        {
+            return Err(contactSet.error());
+        }
         renderer.ssao.contactSet = *contactSet;
         auto ssgiSet = allocSet(renderer.ssao.compute3Layout, "ssgiSet");
-        if (!ssgiSet) { return Err(ssgiSet.error()); }
+        if (!ssgiSet)
+        {
+            return Err(ssgiSet.error());
+        }
         renderer.ssao.ssgiSet = *ssgiSet;
         auto copyColorSet = allocSet(renderer.ssao.compute2Layout, "copyColorSet");
-        if (!copyColorSet) { return Err(copyColorSet.error()); }
+        if (!copyColorSet)
+        {
+            return Err(copyColorSet.error());
+        }
         renderer.ssao.copyColorSet = *copyColorSet;
         auto meshSet = allocSet(renderer.ssao.meshSetLayout, "meshAoSet");
-        if (!meshSet) { return Err(meshSet.error()); }
+        if (!meshSet)
+        {
+            return Err(meshSet.error());
+        }
         renderer.ssao.meshSet = *meshSet;
 
         Result<Ref<Pipeline>> gbufferPipe = makeGbufferPipeline(renderer, "shaders/gbuffer.spv");
-        if (!gbufferPipe) { return Err(gbufferPipe.error()); }
+        if (!gbufferPipe)
+        {
+            return Err(gbufferPipe.error());
+        }
         renderer.pipelines.gbuffer = *gbufferPipe;
         // gtao + ssgi + contact use a mat4x2 + vec4 push (160B); ao_blur + copy_color none.
         const u32 bigPush = static_cast<u32>(2 * sizeof(glm::mat4) + sizeof(glm::vec4) + sizeof(glm::vec4));
         auto gtaoPipe = newComputePipeline(renderer, "shaders/gtao.spv", renderer.ssao.compute2Layout,
                                            static_cast<u32>(sizeof(glm::mat4) + sizeof(glm::vec4)));
-        if (!gtaoPipe) { return Err(gtaoPipe.error()); }
+        if (!gtaoPipe)
+        {
+            return Err(gtaoPipe.error());
+        }
         renderer.pipelines.gtao = *gtaoPipe;
         auto aoBlurPipe = newComputePipeline(renderer, "shaders/ao_blur.spv", renderer.ssao.compute3Layout);
-        if (!aoBlurPipe) { return Err(aoBlurPipe.error()); }
+        if (!aoBlurPipe)
+        {
+            return Err(aoBlurPipe.error());
+        }
         renderer.pipelines.aoBlur = *aoBlurPipe;
         auto contactPipe = newComputePipeline(renderer, "shaders/contact.spv", renderer.ssao.compute2Layout, bigPush);
-        if (!contactPipe) { return Err(contactPipe.error()); }
+        if (!contactPipe)
+        {
+            return Err(contactPipe.error());
+        }
         renderer.pipelines.contact = *contactPipe;
         auto ssgiPipe = newComputePipeline(renderer, "shaders/ssgi.spv", renderer.ssao.compute3Layout, bigPush);
-        if (!ssgiPipe) { return Err(ssgiPipe.error()); }
+        if (!ssgiPipe)
+        {
+            return Err(ssgiPipe.error());
+        }
         renderer.pipelines.ssgi = *ssgiPipe;
         auto copyColorPipe = newComputePipeline(renderer, "shaders/copy_color.spv", renderer.ssao.compute2Layout);
-        if (!copyColorPipe) { return Err(copyColorPipe.error()); }
+        if (!copyColorPipe)
+        {
+            return Err(copyColorPipe.error());
+        }
         renderer.pipelines.copyColor = *copyColorPipe;
 
         recreateSsaoTargets(renderer);
@@ -3100,9 +3360,8 @@ export namespace se
         }
         renderer.pipelines.motion = *motionPipe;
 
-        Result<Ref<Pipeline>> taaPipe =
-            newComputePipeline(renderer, "shaders/taa.spv", renderer.descriptors.taaSetLayout,
-                               static_cast<u32>(sizeof(glm::vec4)));
+        Result<Ref<Pipeline>> taaPipe = newComputePipeline(
+            renderer, "shaders/taa.spv", renderer.descriptors.taaSetLayout, static_cast<u32>(sizeof(glm::vec4)));
         if (!taaPipe)
         {
             return Err(taaPipe.error());
@@ -3121,19 +3380,35 @@ export namespace se
         const u32 distH = DdgiProbesZ * distTile;
 
         auto voxels = newImage3D(renderer, DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelRes, DdgiVoxelFormat);
-        if (!voxels) { return Err(voxels.error()); }
+        if (!voxels)
+        {
+            return Err(voxels.error());
+        }
         renderer.ddgi.voxels = std::move(*voxels);
         auto irr = newColorImage(renderer, irrW, irrH, DdgiIrrFormat, true);
-        if (!irr) { return Err(irr.error()); }
+        if (!irr)
+        {
+            return Err(irr.error());
+        }
         renderer.ddgi.irradiance = std::move(*irr);
         auto dist = newColorImage(renderer, distW, distH, DdgiDistFormat, true);
-        if (!dist) { return Err(dist.error()); }
+        if (!dist)
+        {
+            return Err(dist.error());
+        }
         renderer.ddgi.distance = std::move(*dist);
         auto rays = newColorImage(renderer, DdgiRaysPerProbe, probeTotal, DdgiVoxelFormat, true);
-        if (!rays) { return Err(rays.error()); }
+        if (!rays)
+        {
+            return Err(rays.error());
+        }
         renderer.ddgi.rays = std::move(*rays);
-        auto boxBuf = makeMappedStorageBuffer(renderer, static_cast<vk::DeviceSize>(DdgiMaxBoxes) * 3 * sizeof(glm::vec4));
-        if (!boxBuf) { return Err(boxBuf.error()); }
+        auto boxBuf =
+            makeMappedStorageBuffer(renderer, static_cast<vk::DeviceSize>(DdgiMaxBoxes) * 3 * sizeof(glm::vec4));
+        if (!boxBuf)
+        {
+            return Err(boxBuf.error());
+        }
         renderer.ddgi.boxBuffer = *boxBuf;
         renderer.ddgi.boxCapacity = DdgiMaxBoxes;
 
@@ -3145,12 +3420,15 @@ export namespace se
         ddgiSamplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
         ddgiSamplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
         auto ddgiSampler = checked(renderer.context.device.createSampler(ddgiSamplerInfo), "createSampler (ddgi)");
-        if (!ddgiSampler) { return Err(ddgiSampler.error()); }
+        if (!ddgiSampler)
+        {
+            return Err(ddgiSampler.error());
+        }
         renderer.ddgi.sampler = *ddgiSampler;
 
         // Layout builder: ordered (type) list of compute (or fragment) bindings.
-        auto makeLayout = [&](std::vector<vk::DescriptorType> types, vk::ShaderStageFlags stage, const char* name)
-            -> Result<vk::DescriptorSetLayout>
+        auto makeLayout = [&](std::vector<vk::DescriptorType> types, vk::ShaderStageFlags stage,
+                              const char* name) -> Result<vk::DescriptorSetLayout>
         {
             std::vector<vk::DescriptorSetLayoutBinding> b;
             for (u32 i = 0; i < types.size(); i = i + 1)
@@ -3170,17 +3448,41 @@ export namespace se
         const auto CS = vk::DescriptorType::eCombinedImageSampler;
         const auto SB = vk::DescriptorType::eStorageBuffer;
         const auto comp = vk::ShaderStageFlagBits::eCompute;
-        auto voxL = makeLayout({ SI, SB }, comp, "ddgiVoxelLayout");           if (!voxL) { return Err(voxL.error()); }
+        auto voxL = makeLayout({ SI, SB }, comp, "ddgiVoxelLayout");
+        if (!voxL)
+        {
+            return Err(voxL.error());
+        }
         renderer.ddgi.voxelLayout = *voxL;
-        auto trL = makeLayout({ SI, CS, SI }, comp, "ddgiTraceLayout");        if (!trL) { return Err(trL.error()); }
+        auto trL = makeLayout({ SI, CS, SI }, comp, "ddgiTraceLayout");
+        if (!trL)
+        {
+            return Err(trL.error());
+        }
         renderer.ddgi.traceLayout = *trL;
-        auto biL = makeLayout({ CS, SI }, comp, "ddgiBlendIrrLayout");         if (!biL) { return Err(biL.error()); }
+        auto biL = makeLayout({ CS, SI }, comp, "ddgiBlendIrrLayout");
+        if (!biL)
+        {
+            return Err(biL.error());
+        }
         renderer.ddgi.blendIrrLayout = *biL;
-        auto bdL = makeLayout({ CS, SI }, comp, "ddgiBlendDistLayout");        if (!bdL) { return Err(bdL.error()); }
+        auto bdL = makeLayout({ CS, SI }, comp, "ddgiBlendDistLayout");
+        if (!bdL)
+        {
+            return Err(bdL.error());
+        }
         renderer.ddgi.blendDistLayout = *bdL;
-        auto boL = makeLayout({ SI }, comp, "ddgiBorderLayout");               if (!boL) { return Err(boL.error()); }
+        auto boL = makeLayout({ SI }, comp, "ddgiBorderLayout");
+        if (!boL)
+        {
+            return Err(boL.error());
+        }
         renderer.ddgi.borderLayout = *boL;
-        auto meL = makeLayout({ CS, CS }, vk::ShaderStageFlagBits::eFragment, "ddgiMeshLayout"); if (!meL) { return Err(meL.error()); }
+        auto meL = makeLayout({ CS, CS }, vk::ShaderStageFlagBits::eFragment, "ddgiMeshLayout");
+        if (!meL)
+        {
+            return Err(meL.error());
+        }
         renderer.ddgi.meshLayout = *meL;
 
         auto allocOne = [&](vk::DescriptorSetLayout layout, const char* name) -> Result<vk::DescriptorSet>
@@ -3189,22 +3491,59 @@ export namespace se
             ai.descriptorPool = renderer.descriptors.descriptorPool;
             ai.setSetLayouts(layout);
             auto s = checked(renderer.context.device.allocateDescriptorSets(ai), name);
-            if (!s) { return Err(s.error()); }
+            if (!s)
+            {
+                return Err(s.error());
+            }
             return (*s)[0];
         };
-        auto vs = allocOne(renderer.ddgi.voxelLayout, "ddgiVoxelSet");      if (!vs) { return Err(vs.error()); } renderer.ddgi.voxelSet = *vs;
-        auto ts = allocOne(renderer.ddgi.traceLayout, "ddgiTraceSet");     if (!ts) { return Err(ts.error()); } renderer.ddgi.traceSet = *ts;
-        auto bis = allocOne(renderer.ddgi.blendIrrLayout, "ddgiBlendIrr"); if (!bis) { return Err(bis.error()); } renderer.ddgi.blendIrrSet = *bis;
-        auto bds = allocOne(renderer.ddgi.blendDistLayout, "ddgiBlendDist"); if (!bds) { return Err(bds.error()); } renderer.ddgi.blendDistSet = *bds;
-        auto bos = allocOne(renderer.ddgi.borderLayout, "ddgiBorder");     if (!bos) { return Err(bos.error()); } renderer.ddgi.borderSet = *bos;
-        auto mes = allocOne(renderer.ddgi.meshLayout, "ddgiMeshSet");      if (!mes) { return Err(mes.error()); } renderer.ddgi.meshSet = *mes;
+        auto vs = allocOne(renderer.ddgi.voxelLayout, "ddgiVoxelSet");
+        if (!vs)
+        {
+            return Err(vs.error());
+        }
+        renderer.ddgi.voxelSet = *vs;
+        auto ts = allocOne(renderer.ddgi.traceLayout, "ddgiTraceSet");
+        if (!ts)
+        {
+            return Err(ts.error());
+        }
+        renderer.ddgi.traceSet = *ts;
+        auto bis = allocOne(renderer.ddgi.blendIrrLayout, "ddgiBlendIrr");
+        if (!bis)
+        {
+            return Err(bis.error());
+        }
+        renderer.ddgi.blendIrrSet = *bis;
+        auto bds = allocOne(renderer.ddgi.blendDistLayout, "ddgiBlendDist");
+        if (!bds)
+        {
+            return Err(bds.error());
+        }
+        renderer.ddgi.blendDistSet = *bds;
+        auto bos = allocOne(renderer.ddgi.borderLayout, "ddgiBorder");
+        if (!bos)
+        {
+            return Err(bos.error());
+        }
+        renderer.ddgi.borderSet = *bos;
+        auto mes = allocOne(renderer.ddgi.meshLayout, "ddgiMeshSet");
+        if (!mes)
+        {
+            return Err(mes.error());
+        }
+        renderer.ddgi.meshSet = *mes;
 
         // Static descriptor writes (the images/buffer never reallocate after init).
-        auto wImg = [&](vk::DescriptorSet set, u32 binding, vk::DescriptorType type, vk::ImageView v, vk::ImageLayout l, vk::Sampler s)
+        auto wImg = [&](vk::DescriptorSet set, u32 binding, vk::DescriptorType type, vk::ImageView v, vk::ImageLayout l,
+                        vk::Sampler s)
         {
             vk::DescriptorImageInfo ii{ s, v, l };
             vk::WriteDescriptorSet w{};
-            w.dstSet = set; w.dstBinding = binding; w.descriptorType = type; w.setImageInfo(ii);
+            w.dstSet = set;
+            w.dstBinding = binding;
+            w.descriptorType = type;
+            w.setImageInfo(ii);
             renderer.context.device.updateDescriptorSets(w, {});
         };
         const vk::ImageLayout GEN = vk::ImageLayout::eGeneral;
@@ -3213,8 +3552,11 @@ export namespace se
         wImg(renderer.ddgi.voxelSet, 0, SI, renderer.ddgi.voxels.view, GEN, nullptr);
         {
             vk::DescriptorBufferInfo bi{ renderer.ddgi.boxBuffer->buffer, 0, renderer.ddgi.boxBuffer->size };
-            vk::WriteDescriptorSet w{}; w.dstSet = renderer.ddgi.voxelSet; w.dstBinding = 1;
-            w.descriptorType = SB; w.setBufferInfo(bi);
+            vk::WriteDescriptorSet w{};
+            w.dstSet = renderer.ddgi.voxelSet;
+            w.dstBinding = 1;
+            w.descriptorType = SB;
+            w.setBufferInfo(bi);
             renderer.context.device.updateDescriptorSets(w, {});
         }
         // trace: voxel storage (read) + irradiance sampler (prev) + ray storage
@@ -3239,15 +3581,37 @@ export namespace se
         const u32 blendPush = static_cast<u32>(2 * sizeof(glm::uvec4) + sizeof(glm::vec4));
         const u32 borderPush = static_cast<u32>(2 * sizeof(glm::uvec4));
         auto p1 = newComputePipeline(renderer, "shaders/ddgi_voxelize.spv", renderer.ddgi.voxelLayout, voxPush);
-        if (!p1) { return Err(p1.error()); } renderer.pipelines.ddgiVoxelize = *p1;
+        if (!p1)
+        {
+            return Err(p1.error());
+        }
+        renderer.pipelines.ddgiVoxelize = *p1;
         auto p2 = newComputePipeline(renderer, "shaders/ddgi_trace.spv", renderer.ddgi.traceLayout, tracePush);
-        if (!p2) { return Err(p2.error()); } renderer.pipelines.ddgiTrace = *p2;
-        auto p3 = newComputePipeline(renderer, "shaders/ddgi_blend_irradiance.spv", renderer.ddgi.blendIrrLayout, blendPush);
-        if (!p3) { return Err(p3.error()); } renderer.pipelines.ddgiBlendIrr = *p3;
-        auto p4 = newComputePipeline(renderer, "shaders/ddgi_blend_distance.spv", renderer.ddgi.blendDistLayout, blendPush);
-        if (!p4) { return Err(p4.error()); } renderer.pipelines.ddgiBlendDist = *p4;
+        if (!p2)
+        {
+            return Err(p2.error());
+        }
+        renderer.pipelines.ddgiTrace = *p2;
+        auto p3 =
+            newComputePipeline(renderer, "shaders/ddgi_blend_irradiance.spv", renderer.ddgi.blendIrrLayout, blendPush);
+        if (!p3)
+        {
+            return Err(p3.error());
+        }
+        renderer.pipelines.ddgiBlendIrr = *p3;
+        auto p4 =
+            newComputePipeline(renderer, "shaders/ddgi_blend_distance.spv", renderer.ddgi.blendDistLayout, blendPush);
+        if (!p4)
+        {
+            return Err(p4.error());
+        }
+        renderer.pipelines.ddgiBlendDist = *p4;
         auto p5 = newComputePipeline(renderer, "shaders/ddgi_border.spv", renderer.ddgi.borderLayout, borderPush);
-        if (!p5) { return Err(p5.error()); } renderer.pipelines.ddgiBorder = *p5;
+        if (!p5)
+        {
+            return Err(p5.error());
+        }
+        renderer.pipelines.ddgiBorder = *p5;
 
         // Initial layouts: atlases + voxel begin in their resting state. Irradiance/distance
         // are sampler-read by the mesh (RO); voxel is storage (GENERAL). One-shot barrier.
@@ -3257,22 +3621,27 @@ export namespace se
             allocInfo.level = vk::CommandBufferLevel::ePrimary;
             allocInfo.commandBufferCount = 1;
             auto cmds = checked(renderer.context.device.allocateCommandBuffers(allocInfo), "ddgi init cmd");
-            if (!cmds) { return Err(cmds.error()); }
+            if (!cmds)
+            {
+                return Err(cmds.error());
+            }
             vk::CommandBuffer cmd = (*cmds)[0];
             vk::CommandBufferBeginInfo begin{};
             begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
             static_cast<void>(cmd.begin(begin));
             transitionImage(cmd, renderer.ddgi.irradiance.image, vk::ImageLayout::eUndefined, RO,
-                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+                            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
             transitionImage(cmd, renderer.ddgi.distance.image, vk::ImageLayout::eUndefined, RO,
-                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
+                            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead);
             renderer.ddgi.irradiance.layout = RO;
             renderer.ddgi.distance.layout = RO;
             static_cast<void>(cmd.end());
-            vk::CommandBufferSubmitInfo cmdInfo{}; cmdInfo.commandBuffer = cmd;
-            vk::SubmitInfo2 submitInfo{}; submitInfo.setCommandBufferInfos(cmdInfo);
+            vk::CommandBufferSubmitInfo cmdInfo{};
+            cmdInfo.commandBuffer = cmd;
+            vk::SubmitInfo2 submitInfo{};
+            submitInfo.setCommandBufferInfos(cmdInfo);
             static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
             static_cast<void>(renderer.context.device.waitIdle());
             renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
@@ -3291,8 +3660,12 @@ export namespace se
             tlasBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
             vk::DescriptorSetLayoutCreateInfo tlasLayoutInfo{};
             tlasLayoutInfo.setBindings(tlasBinding);
-            auto tlasLayout = checked(renderer.context.device.createDescriptorSetLayout(tlasLayoutInfo), "rtMeshLayout");
-            if (!tlasLayout) { return Err(tlasLayout.error()); }
+            auto tlasLayout =
+                checked(renderer.context.device.createDescriptorSetLayout(tlasLayoutInfo), "rtMeshLayout");
+            if (!tlasLayout)
+            {
+                return Err(tlasLayout.error());
+            }
             renderer.rt.meshLayout = *tlasLayout;
             for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
             {
@@ -3300,7 +3673,10 @@ export namespace se
                 ai.descriptorPool = renderer.descriptors.descriptorPool;
                 ai.setSetLayouts(renderer.rt.meshLayout);
                 auto s = checked(renderer.context.device.allocateDescriptorSets(ai), "allocate rtMeshSet");
-                if (!s) { return Err(s.error()); }
+                if (!s)
+                {
+                    return Err(s.error());
+                }
                 renderer.rt.meshSets[i] = (*s)[0];
             }
 
@@ -3324,11 +3700,15 @@ export namespace se
             rsSampler.addressModeV = vk::SamplerAddressMode::eClampToEdge;
             rsSampler.addressModeW = vk::SamplerAddressMode::eClampToEdge;
             auto rss = checked(renderer.context.device.createSampler(rsSampler), "restir sampler");
-            if (!rss) { return Err(rss.error()); }
+            if (!rss)
+            {
+                return Err(rss.error());
+            }
             renderer.restir.sampler = *rss;
 
             // Layout helper: ordered descriptor types (sampler / storage-buffer / storage-image / AS).
-            auto rsLayout = [&](std::vector<vk::DescriptorType> types, const char* name) -> Result<vk::DescriptorSetLayout>
+            auto rsLayout = [&](std::vector<vk::DescriptorType> types,
+                                const char* name) -> Result<vk::DescriptorSetLayout>
             {
                 std::vector<vk::DescriptorSetLayoutBinding> b;
                 for (u32 i = 0; i < types.size(); i = i + 1)
@@ -3349,11 +3729,26 @@ export namespace se
             const auto SI = vk::DescriptorType::eStorageImage;
             const auto AS = vk::DescriptorType::eAccelerationStructureKHR;
             // initial: gbuffer + lightSSBO + clusterSSBO + reservoirOut
-            auto il = rsLayout({ CS, SB, SB, SB }, "restirInitialLayout");      if (!il) { return Err(il.error()); } renderer.restir.initialLayout = *il;
+            auto il = rsLayout({ CS, SB, SB, SB }, "restirInitialLayout");
+            if (!il)
+            {
+                return Err(il.error());
+            }
+            renderer.restir.initialLayout = *il;
             // reuse: gbuffer + motion + initial + previous + lights + combined
-            auto rl = rsLayout({ CS, CS, SB, SB, SB, SB }, "restirReuseLayout"); if (!rl) { return Err(rl.error()); } renderer.restir.reuseLayout = *rl;
+            auto rl = rsLayout({ CS, CS, SB, SB, SB, SB }, "restirReuseLayout");
+            if (!rl)
+            {
+                return Err(rl.error());
+            }
+            renderer.restir.reuseLayout = *rl;
             // resolve: gbuffer + combined + previousOut + lights + TLAS + radianceImage
-            auto sl = rsLayout({ CS, SB, SB, SB, AS, SI }, "restirResolveLayout"); if (!sl) { return Err(sl.error()); } renderer.restir.resolveLayout = *sl;
+            auto sl = rsLayout({ CS, SB, SB, SB, AS, SI }, "restirResolveLayout");
+            if (!sl)
+            {
+                return Err(sl.error());
+            }
+            renderer.restir.resolveLayout = *sl;
             // mesh set 7: the radiance sampler (fragment stage)
             vk::DescriptorSetLayoutBinding meshBind{};
             meshBind.binding = 0;
@@ -3363,7 +3758,11 @@ export namespace se
             vk::DescriptorSetLayoutCreateInfo meshLi{};
             meshLi.setBindings(meshBind);
             auto ml = checked(renderer.context.device.createDescriptorSetLayout(meshLi), "restirMeshLayout");
-            if (!ml) { return Err(ml.error()); } renderer.restir.meshLayout = *ml;
+            if (!ml)
+            {
+                return Err(ml.error());
+            }
+            renderer.restir.meshLayout = *ml;
 
             auto rsAlloc = [&](vk::DescriptorSetLayout layout, const char* name) -> Result<vk::DescriptorSet>
             {
@@ -3371,24 +3770,62 @@ export namespace se
                 ai.descriptorPool = renderer.descriptors.descriptorPool;
                 ai.setSetLayouts(layout);
                 auto s = checked(renderer.context.device.allocateDescriptorSets(ai), name);
-                if (!s) { return Err(s.error()); }
+                if (!s)
+                {
+                    return Err(s.error());
+                }
                 return (*s)[0];
             };
-            auto si0 = rsAlloc(renderer.restir.initialLayout, "restirInitialSet"); if (!si0) { return Err(si0.error()); } renderer.restir.initialSet = *si0;
-            auto si1 = rsAlloc(renderer.restir.reuseLayout, "restirReuseSet");     if (!si1) { return Err(si1.error()); } renderer.restir.reuseSet = *si1;
-            auto si2 = rsAlloc(renderer.restir.resolveLayout, "restirResolveSet"); if (!si2) { return Err(si2.error()); } renderer.restir.resolveSet = *si2;
-            auto si3 = rsAlloc(renderer.restir.meshLayout, "restirMeshSet");       if (!si3) { return Err(si3.error()); } renderer.restir.meshSet = *si3;
+            auto si0 = rsAlloc(renderer.restir.initialLayout, "restirInitialSet");
+            if (!si0)
+            {
+                return Err(si0.error());
+            }
+            renderer.restir.initialSet = *si0;
+            auto si1 = rsAlloc(renderer.restir.reuseLayout, "restirReuseSet");
+            if (!si1)
+            {
+                return Err(si1.error());
+            }
+            renderer.restir.reuseSet = *si1;
+            auto si2 = rsAlloc(renderer.restir.resolveLayout, "restirResolveSet");
+            if (!si2)
+            {
+                return Err(si2.error());
+            }
+            renderer.restir.resolveSet = *si2;
+            auto si3 = rsAlloc(renderer.restir.meshLayout, "restirMeshSet");
+            if (!si3)
+            {
+                return Err(si3.error());
+            }
+            renderer.restir.meshSet = *si3;
 
             // Pipelines. initial: invView+invProj+grid+screen+zPlanes; reuse: +params; resolve: +eye.
-            const u32 initialPush = static_cast<u32>(2 * sizeof(glm::mat4) + 2 * sizeof(glm::uvec4) + sizeof(glm::vec4));
+            const u32 initialPush =
+                static_cast<u32>(2 * sizeof(glm::mat4) + 2 * sizeof(glm::uvec4) + sizeof(glm::vec4));
             const u32 reusePush = static_cast<u32>(2 * sizeof(glm::mat4) + sizeof(glm::uvec4) + sizeof(glm::vec4));
             const u32 resolvePush = static_cast<u32>(2 * sizeof(glm::mat4) + sizeof(glm::uvec4) + sizeof(glm::vec4));
-            auto rp1 = newComputePipeline(renderer, "shaders/restir_initial.spv", renderer.restir.initialLayout, initialPush);
-            if (!rp1) { return Err(rp1.error()); } renderer.pipelines.restirInitial = *rp1;
+            auto rp1 =
+                newComputePipeline(renderer, "shaders/restir_initial.spv", renderer.restir.initialLayout, initialPush);
+            if (!rp1)
+            {
+                return Err(rp1.error());
+            }
+            renderer.pipelines.restirInitial = *rp1;
             auto rp2 = newComputePipeline(renderer, "shaders/restir_reuse.spv", renderer.restir.reuseLayout, reusePush);
-            if (!rp2) { return Err(rp2.error()); } renderer.pipelines.restirReuse = *rp2;
-            auto rp3 = newComputePipeline(renderer, "shaders/restir_resolve.spv", renderer.restir.resolveLayout, resolvePush);
-            if (!rp3) { return Err(rp3.error()); } renderer.pipelines.restirResolve = *rp3;
+            if (!rp2)
+            {
+                return Err(rp2.error());
+            }
+            renderer.pipelines.restirReuse = *rp2;
+            auto rp3 =
+                newComputePipeline(renderer, "shaders/restir_resolve.spv", renderer.restir.resolveLayout, resolvePush);
+            if (!rp3)
+            {
+                return Err(rp3.error());
+            }
+            renderer.pipelines.restirResolve = *rp3;
 
             recreateRestirTargets(renderer);
         }
@@ -3407,7 +3844,8 @@ export namespace se
         vk::ImageView irr = valid ? refl.probes[slot].irradianceCube.view : renderer.ibl.irradianceCube.view;
         std::array<vk::DescriptorImageInfo, 2> infos{
             vk::DescriptorImageInfo{ refl.sampler, pre, vk::ImageLayout::eShaderReadOnlyOptimal },
-            vk::DescriptorImageInfo{ refl.sampler, irr, vk::ImageLayout::eShaderReadOnlyOptimal } };
+            vk::DescriptorImageInfo{ refl.sampler, irr, vk::ImageLayout::eShaderReadOnlyOptimal }
+        };
         std::array<vk::WriteDescriptorSet, 2> writes{};
         for (u32 b = 0; b < 2; b = b + 1)
         {
@@ -3460,19 +3898,29 @@ export namespace se
 
         if (!probe.allocated)
         {
-            if (Result<void> r = newColorCubeImage(renderer, IblEnvSize, IblColorFormat,
-                                                   probe.envCube, probe.faceViews); !r)
+            if (Result<void> r =
+                    newColorCubeImage(renderer, IblEnvSize, IblColorFormat, probe.envCube, probe.faceViews);
+                !r)
             {
                 return Err(r.error());
             }
             auto depth = newDepthImage(renderer, IblEnvSize, IblEnvSize);
-            if (!depth) { return Err(depth.error()); }
+            if (!depth)
+            {
+                return Err(depth.error());
+            }
             probe.envDepth = std::move(*depth);
             auto irr = newCubeImage(renderer, IblIrradianceSize, 1, IblColorFormat);
-            if (!irr) { return Err(irr.error()); }
+            if (!irr)
+            {
+                return Err(irr.error());
+            }
             probe.irradianceCube = std::move(*irr);
             auto pre = newCubeImage(renderer, IblPrefilterSize, preMips, IblColorFormat);
-            if (!pre) { return Err(pre.error()); }
+            if (!pre)
+            {
+                return Err(pre.error());
+            }
             probe.prefilteredCube = std::move(*pre);
             probe.allocated = true;
         }
@@ -3483,7 +3931,8 @@ export namespace se
         // each face's view-proj in place of the camera's. recordSceneDrawList binds the probe set, but the
         // probe being captured is not yet `valid`, so its slot still resolves to the global env —
         // no self-feedback (its envCube is the attachment, never sampled here).
-        const std::array<glm::mat4, 6> faces = pointShadowFaceMatrices(probe.origin, glm::max(probe.influenceRadius * 4.0f, 50.0f));
+        const std::array<glm::mat4, 6> faces =
+            pointShadowFaceMatrices(probe.origin, glm::max(probe.influenceRadius * 4.0f, 50.0f));
         const glm::mat4 savedViewProj = renderer.frame.sceneDrawList.viewProj;
 
         vk::CommandBufferAllocateInfo cmdAlloc{};
@@ -3491,21 +3940,26 @@ export namespace se
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
         auto cmds = checked(device.allocateCommandBuffers(cmdAlloc), "probe capture cmd");
-        if (!cmds) { return Err(cmds.error()); }
+        if (!cmds)
+        {
+            return Err(cmds.error());
+        }
         vk::CommandBuffer cmd = (*cmds)[0];
         vk::CommandBufferBeginInfo begin{};
         begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
         static_cast<void>(cmd.begin(begin));
 
-        auto barrier = [&](vk::Image image, vk::ImageLayout oldL, vk::ImageLayout newL,
-                           vk::PipelineStageFlags2 srcS, vk::AccessFlags2 srcA,
-                           vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA,
+        auto barrier = [&](vk::Image image, vk::ImageLayout oldL, vk::ImageLayout newL, vk::PipelineStageFlags2 srcS,
+                           vk::AccessFlags2 srcA, vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA,
                            vk::ImageAspectFlags aspect, u32 baseMip, u32 mipCount, u32 baseLayer, u32 layerCount)
         {
             vk::ImageMemoryBarrier2 b{};
-            b.srcStageMask = srcS; b.srcAccessMask = srcA;
-            b.dstStageMask = dstS; b.dstAccessMask = dstA;
-            b.oldLayout = oldL; b.newLayout = newL;
+            b.srcStageMask = srcS;
+            b.srcAccessMask = srcA;
+            b.dstStageMask = dstS;
+            b.dstAccessMask = dstA;
+            b.oldLayout = oldL;
+            b.newLayout = newL;
             b.image = image;
             b.subresourceRange = vk::ImageSubresourceRange{ aspect, baseMip, mipCount, baseLayer, layerCount };
             vk::DependencyInfo d{};
@@ -3551,10 +4005,10 @@ export namespace se
             recordSceneDrawList(renderer, cmd);
             cmd.endRendering();
 
-            barrier(probe.envCube.image, vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-                    vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite,
-                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead,
-                    vk::ImageAspectFlagBits::eColor, 0, 1, f, 1);
+            barrier(probe.envCube.image, vk::ImageLayout::eColorAttachmentOptimal,
+                    vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                    vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eComputeShader,
+                    vk::AccessFlagBits2::eShaderSampledRead, vk::ImageAspectFlagBits::eColor, 0, 1, f, 1);
         }
         renderer.frame.sceneDrawList.viewProj = savedViewProj;
         probe.envCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
@@ -3563,12 +4017,17 @@ export namespace se
         // pool/layouts/sets/pipelines + 2D-array storage views, exactly like bakeEnvironment.
         std::array<vk::DescriptorPoolSize, 2> poolSizes{
             vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 16 },
-            vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 16 } };
+            vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 16 }
+        };
         vk::DescriptorPoolCreateInfo poolInfo{};
         poolInfo.maxSets = 32;
         poolInfo.setPoolSizes(poolSizes);
         auto poolR = checked(device.createDescriptorPool(poolInfo), "probe convolve pool");
-        if (!poolR) { device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd); return Err(poolR.error()); }
+        if (!poolR)
+        {
+            device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+            return Err(poolR.error());
+        }
         vk::DescriptorPool pool = *poolR;
 
         std::array<vk::DescriptorSetLayoutBinding, 2> bindB{};
@@ -3597,9 +4056,19 @@ export namespace se
         };
 
         auto irrP = newComputePipeline(renderer, "shaders/ibl_irradiance.spv", layoutB);
-        if (!irrP) { cleanup(); device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd); return Err(irrP.error()); }
+        if (!irrP)
+        {
+            cleanup();
+            device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+            return Err(irrP.error());
+        }
         auto preP = newComputePipeline(renderer, "shaders/ibl_prefilter.spv", layoutB, static_cast<u32>(sizeof(f32)));
-        if (!preP) { cleanup(); device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd); return Err(preP.error()); }
+        if (!preP)
+        {
+            cleanup();
+            device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+            return Err(preP.error());
+        }
 
         std::vector<vk::ImageView> transientViews;
         auto makeStorageView = [&](vk::Image image, u32 mip) -> vk::ImageView
@@ -3631,7 +4100,8 @@ export namespace se
         {
             vk::DescriptorImageInfo ii{ renderer.ibl.sampler, view, vk::ImageLayout::eShaderReadOnlyOptimal };
             vk::WriteDescriptorSet w{};
-            w.dstSet = set; w.dstBinding = binding;
+            w.dstSet = set;
+            w.dstBinding = binding;
             w.descriptorType = vk::DescriptorType::eCombinedImageSampler;
             w.setImageInfo(ii);
             device.updateDescriptorSets(w, {});
@@ -3642,7 +4112,8 @@ export namespace se
             ii.imageView = view;
             ii.imageLayout = vk::ImageLayout::eGeneral;
             vk::WriteDescriptorSet w{};
-            w.dstSet = set; w.dstBinding = binding;
+            w.dstSet = set;
+            w.dstBinding = binding;
             w.descriptorType = vk::DescriptorType::eStorageImage;
             w.setImageInfo(ii);
             device.updateDescriptorSets(w, {});
@@ -3680,7 +4151,10 @@ export namespace se
         for (u32 m = 0; m < preMips; m = m + 1)
         {
             u32 mipSize = IblPrefilterSize >> m;
-            if (mipSize == 0) { mipSize = 1; }
+            if (mipSize == 0)
+            {
+                mipSize = 1;
+            }
             f32 roughness = preMips > 1 ? static_cast<f32>(m) / static_cast<f32>(preMips - 1) : 0.0f;
             cmd.pushConstants(preP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(f32), &roughness);
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, preP.value()->layout, 0, preSets[m], {});
@@ -3702,7 +4176,10 @@ export namespace se
 
         probe.irradianceCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
         probe.prefilteredCube.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        for (vk::ImageView v : transientViews) { device.destroyImageView(v); }
+        for (vk::ImageView v : transientViews)
+        {
+            device.destroyImageView(v);
+        }
         cleanup();
 
         probe.valid = true;
@@ -3723,28 +4200,49 @@ export namespace se
         if (firstBake)
         {
             auto env = newCubeImage(renderer, IblEnvSize, 1, IblColorFormat);
-            if (!env) { return Err(env.error()); }
+            if (!env)
+            {
+                return Err(env.error());
+            }
             renderer.ibl.envCube = std::move(*env);
             auto irr = newCubeImage(renderer, IblIrradianceSize, 1, IblColorFormat);
-            if (!irr) { return Err(irr.error()); }
+            if (!irr)
+            {
+                return Err(irr.error());
+            }
             renderer.ibl.irradianceCube = std::move(*irr);
             auto pre = newCubeImage(renderer, IblPrefilterSize, preMips, IblColorFormat);
-            if (!pre) { return Err(pre.error()); }
+            if (!pre)
+            {
+                return Err(pre.error());
+            }
             renderer.ibl.prefilteredCube = std::move(*pre);
             auto lut = newColorImage(renderer, IblLutSize, IblLutSize, IblColorFormat, true);
-            if (!lut) { return Err(lut.error()); }
+            if (!lut)
+            {
+                return Err(lut.error());
+            }
             renderer.ibl.brdfLut = std::move(*lut);
             renderer.ibl.prefilterMips = preMips;
 
             // Atmosphere LUTs (storage + sampled, persistent like the cubes above).
             auto trans = newColorImage(renderer, AtmosTransmittanceW, AtmosTransmittanceH, IblColorFormat, true);
-            if (!trans) { return Err(trans.error()); }
+            if (!trans)
+            {
+                return Err(trans.error());
+            }
             renderer.ibl.transmittanceLut = std::move(*trans);
             auto ms = newColorImage(renderer, AtmosMultiScatterSize, AtmosMultiScatterSize, IblColorFormat, true);
-            if (!ms) { return Err(ms.error()); }
+            if (!ms)
+            {
+                return Err(ms.error());
+            }
             renderer.ibl.multiScatterLut = std::move(*ms);
             auto sv = newColorImage(renderer, AtmosSkyViewW, AtmosSkyViewH, IblColorFormat, true);
-            if (!sv) { return Err(sv.error()); }
+            if (!sv)
+            {
+                return Err(sv.error());
+            }
             renderer.ibl.skyViewLut = std::move(*sv);
         }
         else
@@ -3757,12 +4255,16 @@ export namespace se
         // A transient pool + layouts + sets used only for this bake (freed at the end).
         std::array<vk::DescriptorPoolSize, 2> poolSizes{
             vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 16 },
-            vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 16 } };
+            vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 16 }
+        };
         vk::DescriptorPoolCreateInfo poolInfo{};
         poolInfo.maxSets = 32;
         poolInfo.setPoolSizes(poolSizes);
         auto poolR = checked(device.createDescriptorPool(poolInfo), "ibl bake pool");
-        if (!poolR) { return Err(poolR.error()); }
+        if (!poolR)
+        {
+            return Err(poolR.error());
+        }
         vk::DescriptorPool pool = *poolR;
 
         vk::DescriptorSetLayoutBinding bindA{};
@@ -3773,7 +4275,11 @@ export namespace se
         vk::DescriptorSetLayoutCreateInfo layoutAInfo{};
         layoutAInfo.setBindings(bindA);
         auto layoutAR = checked(device.createDescriptorSetLayout(layoutAInfo), "ibl layoutA");
-        if (!layoutAR) { device.destroyDescriptorPool(pool); return Err(layoutAR.error()); }
+        if (!layoutAR)
+        {
+            device.destroyDescriptorPool(pool);
+            return Err(layoutAR.error());
+        }
         vk::DescriptorSetLayout layoutA = *layoutAR;
 
         std::array<vk::DescriptorSetLayoutBinding, 2> bindB{};
@@ -3803,18 +4309,38 @@ export namespace se
             device.destroyDescriptorPool(pool);
         };
 
-        auto skygenP = newComputePipeline(renderer, "shaders/ibl_skygen.spv", layoutA,
-                                          static_cast<u32>(2 * sizeof(glm::vec4)));
-        if (!skygenP) { cleanupLayouts(); return Err(skygenP.error()); }
-        auto equirectP = newComputePipeline(renderer, "shaders/ibl_equirect.spv", layoutB,
-                                            static_cast<u32>(sizeof(glm::vec4)));
-        if (!equirectP) { cleanupLayouts(); return Err(equirectP.error()); }
+        auto skygenP =
+            newComputePipeline(renderer, "shaders/ibl_skygen.spv", layoutA, static_cast<u32>(2 * sizeof(glm::vec4)));
+        if (!skygenP)
+        {
+            cleanupLayouts();
+            return Err(skygenP.error());
+        }
+        auto equirectP =
+            newComputePipeline(renderer, "shaders/ibl_equirect.spv", layoutB, static_cast<u32>(sizeof(glm::vec4)));
+        if (!equirectP)
+        {
+            cleanupLayouts();
+            return Err(equirectP.error());
+        }
         auto irrP = newComputePipeline(renderer, "shaders/ibl_irradiance.spv", layoutB);
-        if (!irrP) { cleanupLayouts(); return Err(irrP.error()); }
+        if (!irrP)
+        {
+            cleanupLayouts();
+            return Err(irrP.error());
+        }
         auto preP = newComputePipeline(renderer, "shaders/ibl_prefilter.spv", layoutB, static_cast<u32>(sizeof(f32)));
-        if (!preP) { cleanupLayouts(); return Err(preP.error()); }
+        if (!preP)
+        {
+            cleanupLayouts();
+            return Err(preP.error());
+        }
         auto lutP = newComputePipeline(renderer, "shaders/ibl_brdf.spv", layoutA);
-        if (!lutP) { cleanupLayouts(); return Err(lutP.error()); }
+        if (!lutP)
+        {
+            cleanupLayouts();
+            return Err(lutP.error());
+        }
 
         // The atmosphere chain. transmittance writes one storage image (layoutA); multiscatter
         // and skyview read prior LUTs (layoutC = two samplers + one storage out), and skygen
@@ -3839,12 +4365,19 @@ export namespace se
         if (useAtmosphere)
         {
             auto layoutCR = checked(device.createDescriptorSetLayout(layoutCInfo), "atmos layoutC");
-            if (!layoutCR) { cleanupLayouts(); return Err(layoutCR.error()); }
+            if (!layoutCR)
+            {
+                cleanupLayouts();
+                return Err(layoutCR.error());
+            }
             layoutC = *layoutCR;
         }
         auto cleanupAtmos = [&]()
         {
-            if (layoutC) { device.destroyDescriptorSetLayout(layoutC); }
+            if (layoutC)
+            {
+                device.destroyDescriptorSetLayout(layoutC);
+            }
         };
 
         const u32 atmosPush = static_cast<u32>(5 * sizeof(glm::vec4));
@@ -3855,16 +4388,36 @@ export namespace se
         if (useAtmosphere)
         {
             auto t = newComputePipeline(renderer, "shaders/atmos_transmittance.spv", layoutA, atmosPush);
-            if (!t) { cleanupAtmos(); cleanupLayouts(); return Err(t.error()); }
+            if (!t)
+            {
+                cleanupAtmos();
+                cleanupLayouts();
+                return Err(t.error());
+            }
             transP = *t;
             auto m = newComputePipeline(renderer, "shaders/atmos_multiscatter.spv", layoutC, atmosPush);
-            if (!m) { cleanupAtmos(); cleanupLayouts(); return Err(m.error()); }
+            if (!m)
+            {
+                cleanupAtmos();
+                cleanupLayouts();
+                return Err(m.error());
+            }
             multiP = *m;
             auto s = newComputePipeline(renderer, "shaders/atmos_skyview.spv", layoutC, atmosPush);
-            if (!s) { cleanupAtmos(); cleanupLayouts(); return Err(s.error()); }
+            if (!s)
+            {
+                cleanupAtmos();
+                cleanupLayouts();
+                return Err(s.error());
+            }
             skyViewP = *s;
             auto g = newComputePipeline(renderer, "shaders/atmos_skygen.spv", layoutB, atmosPush);
-            if (!g) { cleanupAtmos(); cleanupLayouts(); return Err(g.error()); }
+            if (!g)
+            {
+                cleanupAtmos();
+                cleanupLayouts();
+                return Err(g.error());
+            }
             atmosSkygenP = *g;
         }
 
@@ -3970,7 +4523,10 @@ export namespace se
         auto cmds = checked(device.allocateCommandBuffers(cmdAlloc), "ibl bake cmd");
         if (!cmds)
         {
-            for (vk::ImageView v : transientViews) { device.destroyImageView(v); }
+            for (vk::ImageView v : transientViews)
+            {
+                device.destroyImageView(v);
+            }
             cleanupAtmos();
             cleanupLayouts();
             return Err(cmds.error());
@@ -3980,10 +4536,9 @@ export namespace se
         begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
         static_cast<void>(cmd.begin(begin));
 
-        auto barrier = [&](vk::Image image, vk::ImageLayout oldL, vk::ImageLayout newL,
-                           vk::PipelineStageFlags2 srcS, vk::AccessFlags2 srcA,
-                           vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA,
-                           u32 baseMip, u32 mipCount, u32 layerCount)
+        auto barrier = [&](vk::Image image, vk::ImageLayout oldL, vk::ImageLayout newL, vk::PipelineStageFlags2 srcS,
+                           vk::AccessFlags2 srcA, vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA, u32 baseMip,
+                           u32 mipCount, u32 layerCount)
         {
             vk::ImageMemoryBarrier2 b{};
             b.srcStageMask = srcS;
@@ -3993,7 +4548,8 @@ export namespace se
             b.oldLayout = oldL;
             b.newLayout = newL;
             b.image = image;
-            b.subresourceRange = vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, baseMip, mipCount, 0, layerCount };
+            b.subresourceRange =
+                vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, baseMip, mipCount, 0, layerCount };
             vk::DependencyInfo d{};
             d.setImageMemoryBarriers(b);
             cmd.pipelineBarrier2(d);
@@ -4002,8 +4558,7 @@ export namespace se
 
         // Environment cube -> general, fill it (procedural skygen or an equirect panorama),
         // -> shader-read for the convolutions. A missing panorama degrades to Procedural.
-        const bool useEquirect = renderer.ibl.source == EnvSource::Equirect &&
-                                 renderer.ibl.envPanorama != nullptr;
+        const bool useEquirect = renderer.ibl.source == EnvSource::Equirect && renderer.ibl.envPanorama != nullptr;
         if (renderer.ibl.source == EnvSource::Equirect && renderer.ibl.envPanorama == nullptr)
         {
             logWarn("ibl bake: Equirect source has no panorama; falling back to procedural sky");
@@ -4016,17 +4571,16 @@ export namespace se
             const AtmosphereParams& a = sky.atmosphere;
             struct AtmosPush
             {
-                glm::vec4 sunDir;     // xyz = dir to sun, w = sun intensity
-                glm::vec4 rayleigh;   // xyz = rayleigh scattering, w = rayleigh scale height
-                glm::vec4 ozone;      // xyz = ozone absorption, w = mie scattering
-                glm::vec4 params0;    // planetRadius, atmosphereHeight, mieScaleHeight, mieAnisotropy
-                glm::vec4 params1;    // sunDiskAngularRadius, sunDiskIntensity, cameraAltitude, 0
-            } atmos{
-                glm::vec4(glm::normalize(sky.sunDir), sky.sunIntensity),
-                glm::vec4(a.rayleighScattering, a.rayleighScaleHeight),
-                glm::vec4(a.ozoneAbsorption, a.mieScattering),
-                glm::vec4(a.planetRadius, a.atmosphereHeight, a.mieScaleHeight, a.mieAnisotropy),
-                glm::vec4(a.sunDiskAngularRadius, a.sunDiskIntensity, 0.0f, 0.0f) };
+                glm::vec4 sunDir;    // xyz = dir to sun, w = sun intensity
+                glm::vec4 rayleigh;  // xyz = rayleigh scattering, w = rayleigh scale height
+                glm::vec4 ozone;     // xyz = ozone absorption, w = mie scattering
+                glm::vec4 params0;   // planetRadius, atmosphereHeight, mieScaleHeight, mieAnisotropy
+                glm::vec4 params1;   // sunDiskAngularRadius, sunDiskIntensity, cameraAltitude, 0
+            } atmos{ glm::vec4(glm::normalize(sky.sunDir), sky.sunIntensity),
+                     glm::vec4(a.rayleighScattering, a.rayleighScaleHeight),
+                     glm::vec4(a.ozoneAbsorption, a.mieScattering),
+                     glm::vec4(a.planetRadius, a.atmosphereHeight, a.mieScaleHeight, a.mieAnisotropy),
+                     glm::vec4(a.sunDiskAngularRadius, a.sunDiskIntensity, 0.0f, 0.0f) };
 
             barrier(renderer.ibl.transmittanceLut.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
@@ -4035,9 +4589,10 @@ export namespace se
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, transP.value()->layout, 0, transSet, {});
             cmd.pushConstants(transP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(atmos), &atmos);
             cmd.dispatch(group(AtmosTransmittanceW), group(AtmosTransmittanceH), 1);
-            barrier(renderer.ibl.transmittanceLut.image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
-                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
-                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead, 0, 1, 1);
+            barrier(renderer.ibl.transmittanceLut.image, vk::ImageLayout::eGeneral,
+                    vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eComputeShader,
+                    vk::AccessFlagBits2::eShaderStorageWrite, vk::PipelineStageFlagBits2::eComputeShader,
+                    vk::AccessFlagBits2::eShaderSampledRead, 0, 1, 1);
 
             barrier(renderer.ibl.multiScatterLut.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
@@ -4046,9 +4601,10 @@ export namespace se
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, multiP.value()->layout, 0, multiSet, {});
             cmd.pushConstants(multiP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(atmos), &atmos);
             cmd.dispatch(group(AtmosMultiScatterSize), group(AtmosMultiScatterSize), 1);
-            barrier(renderer.ibl.multiScatterLut.image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
-                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
-                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead, 0, 1, 1);
+            barrier(renderer.ibl.multiScatterLut.image, vk::ImageLayout::eGeneral,
+                    vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eComputeShader,
+                    vk::AccessFlagBits2::eShaderStorageWrite, vk::PipelineStageFlagBits2::eComputeShader,
+                    vk::AccessFlagBits2::eShaderSampledRead, 0, 1, 1);
 
             barrier(renderer.ibl.skyViewLut.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
@@ -4075,23 +4631,23 @@ export namespace se
                 glm::vec4 ozone;
                 glm::vec4 params0;
                 glm::vec4 params1;
-            } atmos{
-                glm::vec4(glm::normalize(sky.sunDir), sky.sunIntensity),
-                glm::vec4(a.rayleighScattering, a.rayleighScaleHeight),
-                glm::vec4(a.ozoneAbsorption, a.mieScattering),
-                glm::vec4(a.planetRadius, a.atmosphereHeight, a.mieScaleHeight, a.mieAnisotropy),
-                glm::vec4(a.sunDiskAngularRadius, a.sunDiskIntensity, 0.0f, 0.0f) };
+            } atmos{ glm::vec4(glm::normalize(sky.sunDir), sky.sunIntensity),
+                     glm::vec4(a.rayleighScattering, a.rayleighScaleHeight),
+                     glm::vec4(a.ozoneAbsorption, a.mieScattering),
+                     glm::vec4(a.planetRadius, a.atmosphereHeight, a.mieScaleHeight, a.mieAnisotropy),
+                     glm::vec4(a.sunDiskAngularRadius, a.sunDiskIntensity, 0.0f, 0.0f) };
             cmd.bindPipeline(vk::PipelineBindPoint::eCompute, atmosSkygenP.value()->pipeline);
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, atmosSkygenP.value()->layout, 0, atmosSkygenSet, {});
-            cmd.pushConstants(atmosSkygenP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(atmos), &atmos);
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, atmosSkygenP.value()->layout, 0, atmosSkygenSet,
+                                   {});
+            cmd.pushConstants(atmosSkygenP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(atmos),
+                              &atmos);
             cmd.dispatch(group(IblEnvSize), group(IblEnvSize), 6);
         }
         else if (useEquirect)
         {
             // The panorama wraps in longitude, so it reads through the eRepeat linearSampler
             // (ibl.sampler is eClampToEdge and would seam the meridian).
-            vk::DescriptorImageInfo panoInfo{ renderer.descriptors.linearSampler,
-                                              renderer.ibl.envPanorama->view,
+            vk::DescriptorImageInfo panoInfo{ renderer.descriptors.linearSampler, renderer.ibl.envPanorama->view,
                                               vk::ImageLayout::eShaderReadOnlyOptimal };
             vk::WriteDescriptorSet panoWrite{};
             panoWrite.dstSet = equirectSet;
@@ -4105,15 +4661,19 @@ export namespace se
             // x = rotation, y = intensity. The IBL bakes the raw panorama (no rotation, unit
             // intensity); the visible-sky pass applies the scene's rotation/intensity itself.
             const glm::vec4 equirectPush{ 0.0f, 1.0f, 0.0f, 0.0f };
-            cmd.pushConstants(equirectP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(equirectPush), &equirectPush);
+            cmd.pushConstants(equirectP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(equirectPush),
+                              &equirectPush);
             cmd.dispatch(group(IblEnvSize), group(IblEnvSize), 6);
         }
         else
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eCompute, skygenP.value()->pipeline);
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, skygenP.value()->layout, 0, skygenSet, {});
-            struct SkyPush { glm::vec4 sunDir; glm::vec4 sunColor; } skyPush{
-                glm::vec4(sky.sunDir, sky.sunIntensity), glm::vec4(sky.sunColor, 1.0f) };
+            struct SkyPush
+            {
+                glm::vec4 sunDir;
+                glm::vec4 sunColor;
+            } skyPush{ glm::vec4(sky.sunDir, sky.sunIntensity), glm::vec4(sky.sunColor, 1.0f) };
             cmd.pushConstants(skygenP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(skyPush), &skyPush);
             cmd.dispatch(group(IblEnvSize), group(IblEnvSize), 6);
         }
@@ -4140,7 +4700,10 @@ export namespace se
         for (u32 m = 0; m < preMips; m = m + 1)
         {
             u32 mipSize = IblPrefilterSize >> m;
-            if (mipSize == 0) { mipSize = 1; }
+            if (mipSize == 0)
+            {
+                mipSize = 1;
+            }
             f32 roughness = preMips > 1 ? static_cast<f32>(m) / static_cast<f32>(preMips - 1) : 0.0f;
             cmd.pushConstants(preP.value()->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(f32), &roughness);
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, preP.value()->layout, 0, preSets[m], {});
@@ -4179,33 +4742,37 @@ export namespace se
         // same images/views (only their contents change), so the sets stay valid.
         if (firstBake)
         {
-        // Write the persistent set 3 the mesh fragment samples.
-        std::array<vk::DescriptorImageInfo, 3> setImages{
-            vk::DescriptorImageInfo{ renderer.ibl.sampler, renderer.ibl.irradianceCube.view, vk::ImageLayout::eShaderReadOnlyOptimal },
-            vk::DescriptorImageInfo{ renderer.ibl.sampler, renderer.ibl.prefilteredCube.view, vk::ImageLayout::eShaderReadOnlyOptimal },
-            vk::DescriptorImageInfo{ renderer.ibl.sampler, renderer.ibl.brdfLut.view, vk::ImageLayout::eShaderReadOnlyOptimal } };
-        std::array<vk::WriteDescriptorSet, 3> setWrites{};
-        for (u32 b = 0; b < 3; b = b + 1)
-        {
-            setWrites[b].dstSet = renderer.ibl.set;
-            setWrites[b].dstBinding = b;
-            setWrites[b].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-            setWrites[b].setImageInfo(setImages[b]);
-        }
-        device.updateDescriptorSets(setWrites, {});
-        renderer.ibl.ready = true;
+            // Write the persistent set 3 the mesh fragment samples.
+            std::array<vk::DescriptorImageInfo, 3> setImages{
+                vk::DescriptorImageInfo{ renderer.ibl.sampler, renderer.ibl.irradianceCube.view,
+                                         vk::ImageLayout::eShaderReadOnlyOptimal },
+                vk::DescriptorImageInfo{ renderer.ibl.sampler, renderer.ibl.prefilteredCube.view,
+                                         vk::ImageLayout::eShaderReadOnlyOptimal },
+                vk::DescriptorImageInfo{ renderer.ibl.sampler, renderer.ibl.brdfLut.view,
+                                         vk::ImageLayout::eShaderReadOnlyOptimal }
+            };
+            std::array<vk::WriteDescriptorSet, 3> setWrites{};
+            for (u32 b = 0; b < 3; b = b + 1)
+            {
+                setWrites[b].dstSet = renderer.ibl.set;
+                setWrites[b].dstBinding = b;
+                setWrites[b].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+                setWrites[b].setImageInfo(setImages[b]);
+            }
+            device.updateDescriptorSets(setWrites, {});
+            renderer.ibl.ready = true;
 
-        // The visible-sky pass samples the same procedural environment cube (set 1, binding 0)
-        // so the background matches the IBL lighting.
-        vk::DescriptorImageInfo skyImage{ renderer.ibl.sampler, renderer.ibl.envCube.view,
-            vk::ImageLayout::eShaderReadOnlyOptimal };
-        vk::WriteDescriptorSet skyWrite{};
-        skyWrite.dstSet = renderer.sky.set;
-        skyWrite.dstBinding = 0;
-        skyWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        skyWrite.setImageInfo(skyImage);
-        device.updateDescriptorSets(skyWrite, {});
-        renderer.sky.ready = true;
+            // The visible-sky pass samples the same procedural environment cube (set 1, binding 0)
+            // so the background matches the IBL lighting.
+            vk::DescriptorImageInfo skyImage{ renderer.ibl.sampler, renderer.ibl.envCube.view,
+                                              vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::WriteDescriptorSet skyWrite{};
+            skyWrite.dstSet = renderer.sky.set;
+            skyWrite.dstBinding = 0;
+            skyWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            skyWrite.setImageInfo(skyImage);
+            device.updateDescriptorSets(skyWrite, {});
+            renderer.sky.ready = true;
         }
 
         if (useAtmosphere)
@@ -4215,11 +4782,14 @@ export namespace se
             renderer.ibl.skyViewLut.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
         }
 
-        for (vk::ImageView v : transientViews) { device.destroyImageView(v); }
+        for (vk::ImageView v : transientViews)
+        {
+            device.destroyImageView(v);
+        }
         cleanupAtmos();
         cleanupLayouts();
-        logInfo(std::format("ibl baked — env {}^2, irradiance {}^2, prefiltered {}^2 x{} mips, lut {}^2{}",
-                            IblEnvSize, IblIrradianceSize, IblPrefilterSize, preMips, IblLutSize,
+        logInfo(std::format("ibl baked — env {}^2, irradiance {}^2, prefiltered {}^2 x{} mips, lut {}^2{}", IblEnvSize,
+                            IblIrradianceSize, IblPrefilterSize, preMips, IblLutSize,
                             useAtmosphere ? " (atmosphere)" : ""));
         return {};
     }

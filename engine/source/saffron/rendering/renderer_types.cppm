@@ -31,7 +31,7 @@ export namespace se
 
     // Format of the offscreen color target. RGBA16_SFLOAT so the scene pass can write
     // linear HDR radiance that survives to the mandatory tonemap pass; it is also a
-    // storage image (the tonemap/FXAA compute passes write it) and sampled by ImGui.
+    // storage image (the tonemap/FXAA compute passes write it) and sampled by the present blit.
     inline constexpr vk::Format OffscreenColorFormat = vk::Format::eR16G16B16A16Sfloat;
 
     // A unit of GPU work recorded into the active command buffer — the deferred
@@ -65,8 +65,7 @@ export namespace se
         Pipeline(const Pipeline&) = delete;
         auto operator=(const Pipeline&) -> Pipeline& = delete;
 
-        Pipeline(Pipeline&& other) noexcept
-            : device(other.device), pipeline(other.pipeline), layout(other.layout)
+        Pipeline(Pipeline&& other) noexcept : device(other.device), pipeline(other.pipeline), layout(other.layout)
         {
             other.device = nullptr;
             other.pipeline = nullptr;
@@ -129,9 +128,8 @@ export namespace se
         auto operator=(const Image&) -> Image& = delete;
 
         Image(Image&& other) noexcept
-            : device(other.device), allocator(other.allocator), image(other.image),
-              view(other.view), alloc(other.alloc), extent(other.extent),
-              format(other.format), layout(other.layout)
+            : device(other.device), allocator(other.allocator), image(other.image), view(other.view),
+              alloc(other.alloc), extent(other.extent), format(other.format), layout(other.layout)
         {
             other.device = nullptr;
             other.allocator = nullptr;
@@ -212,8 +210,8 @@ export namespace se
         GpuMesh(GpuMesh&& other) noexcept
             : allocator(other.allocator), vertexBuffer(other.vertexBuffer), vertexAlloc(other.vertexAlloc),
               indexBuffer(other.indexBuffer), indexAlloc(other.indexAlloc), skinBuffer(other.skinBuffer),
-              skinAlloc(other.skinAlloc), indexCount(other.indexCount),
-              submeshes(std::move(other.submeshes)), boundsMin(other.boundsMin), boundsMax(other.boundsMax)
+              skinAlloc(other.skinAlloc), indexCount(other.indexCount), submeshes(std::move(other.submeshes)),
+              boundsMin(other.boundsMin), boundsMax(other.boundsMax)
         {
             other.allocator = nullptr;
             other.vertexBuffer = nullptr;
@@ -292,7 +290,7 @@ export namespace se
         vk::Image image;
         vk::ImageView view;
         VmaAllocation alloc = nullptr;
-        u32 bindlessIndex = 0;             // slot in the bindless texture array (set 0)
+        u32 bindlessIndex = 0;  // slot in the bindless texture array (set 0)
         vk::Extent2D extent;
         vk::Format format = vk::Format::eUndefined;
 
@@ -301,9 +299,8 @@ export namespace se
         auto operator=(const GpuTexture&) -> GpuTexture& = delete;
 
         GpuTexture(GpuTexture&& other) noexcept
-            : device(other.device), allocator(other.allocator), image(other.image),
-              view(other.view), alloc(other.alloc), bindlessIndex(other.bindlessIndex),
-              extent(other.extent), format(other.format)
+            : device(other.device), allocator(other.allocator), image(other.image), view(other.view),
+              alloc(other.alloc), bindlessIndex(other.bindlessIndex), extent(other.extent), format(other.format)
         {
             other.device = nullptr;
             other.allocator = nullptr;
@@ -362,8 +359,8 @@ export namespace se
     // other meta-layer resources. Destroyed via the resolved RtDispatch (no static dispatch).
     struct AccelerationStructure
     {
-        vk::Device device;                 // borrowed
-        VmaAllocator allocator = nullptr;  // borrowed
+        vk::Device device;                                          // borrowed
+        VmaAllocator allocator = nullptr;                           // borrowed
         PFN_vkDestroyAccelerationStructureKHR destroyFn = nullptr;  // borrowed
         vk::AccelerationStructureKHR handle;
         vk::DeviceAddress address = 0;
@@ -374,23 +371,37 @@ export namespace se
         AccelerationStructure(const AccelerationStructure&) = delete;
         auto operator=(const AccelerationStructure&) -> AccelerationStructure& = delete;
         AccelerationStructure(AccelerationStructure&& o) noexcept
-            : device(o.device), allocator(o.allocator), destroyFn(o.destroyFn), handle(o.handle),
-              address(o.address), buffer(o.buffer), alloc(o.alloc)
+            : device(o.device), allocator(o.allocator), destroyFn(o.destroyFn), handle(o.handle), address(o.address),
+              buffer(o.buffer), alloc(o.alloc)
         {
-            o.handle = nullptr; o.buffer = nullptr; o.alloc = nullptr; o.allocator = nullptr;
+            o.handle = nullptr;
+            o.buffer = nullptr;
+            o.alloc = nullptr;
+            o.allocator = nullptr;
         }
         auto operator=(AccelerationStructure&& o) noexcept -> AccelerationStructure&
         {
             if (this != &o)
             {
                 reset();
-                device = o.device; allocator = o.allocator; destroyFn = o.destroyFn; handle = o.handle;
-                address = o.address; buffer = o.buffer; alloc = o.alloc;
-                o.handle = nullptr; o.buffer = nullptr; o.alloc = nullptr; o.allocator = nullptr;
+                device = o.device;
+                allocator = o.allocator;
+                destroyFn = o.destroyFn;
+                handle = o.handle;
+                address = o.address;
+                buffer = o.buffer;
+                alloc = o.alloc;
+                o.handle = nullptr;
+                o.buffer = nullptr;
+                o.alloc = nullptr;
+                o.allocator = nullptr;
             }
             return *this;
         }
-        ~AccelerationStructure() { reset(); }
+        ~AccelerationStructure()
+        {
+            reset();
+        }
         void reset()
         {
             if (destroyFn != nullptr && device && handle)
@@ -401,7 +412,9 @@ export namespace se
             {
                 vmaDestroyBuffer(allocator, static_cast<VkBuffer>(buffer), alloc);
             }
-            handle = nullptr; buffer = nullptr; alloc = nullptr;
+            handle = nullptr;
+            buffer = nullptr;
+            alloc = nullptr;
         }
     };
 
@@ -420,8 +433,8 @@ export namespace se
         auto operator=(const Buffer&) -> Buffer& = delete;
 
         Buffer(Buffer&& other) noexcept
-            : allocator(other.allocator), buffer(other.buffer), alloc(other.alloc),
-              mapped(other.mapped), size(other.size)
+            : allocator(other.allocator), buffer(other.buffer), alloc(other.alloc), mapped(other.mapped),
+              size(other.size)
         {
             other.allocator = nullptr;
             other.buffer = nullptr;
@@ -504,7 +517,7 @@ export namespace se
     // offsets into the frame's instance buffer.
     struct DrawBatch
     {
-        Ref<Pipeline> pipeline;      // resolved from the material via the PSO cache
+        Ref<Pipeline> pipeline;  // resolved from the material via the PSO cache
         Ref<GpuMesh> mesh;
         u32 baseInstance = 0;
         u32 instanceCount = 0;
@@ -546,7 +559,7 @@ export namespace se
     };
 
     // Per-frame editor overlay geometry, drawn into the post-tonemap scene color so it
-    // composites under present-only mode (where ImGui is skipped). Buffers grow on demand.
+    // composites under present-only mode. Buffers grow on demand.
     struct OverlayState
     {
         std::vector<OverlayVertex> vertices;
@@ -593,7 +606,7 @@ export namespace se
         std::vector<vk::Image> images;
         std::vector<vk::ImageView> imageViews;
         std::vector<vk::Semaphore> renderFinished;  // one per swapchain image
-        std::vector<vk::Fence> imagesInFlight;       // borrowed per-frame fence per image
+        std::vector<vk::Fence> imagesInFlight;      // borrowed per-frame fence per image
     };
 
     // Per-frame ring + the frame-scoped geometry beginFrame resets / endFrame consumes.
@@ -613,25 +626,25 @@ export namespace se
     struct Descriptors
     {
         vk::Sampler linearSampler;
-        vk::Sampler shadowSampler;                   // depth-compare sampler (PCF) for the shadow map
-        vk::DescriptorSetLayout bindlessSetLayout;   // set 0: bindless combined-image-sampler array
-        vk::DescriptorSetLayout lightSetLayout;      // set 1: directional light UBO
-        vk::DescriptorSetLayout instanceSetLayout;   // set 2: per-instance storage buffer
-        vk::DescriptorPool descriptorPool;           // eFreeDescriptorSet (texture sets freed on Ref drop)
+        vk::Sampler shadowSampler;                  // depth-compare sampler (PCF) for the shadow map
+        vk::DescriptorSetLayout bindlessSetLayout;  // set 0: bindless combined-image-sampler array
+        vk::DescriptorSetLayout lightSetLayout;     // set 1: directional light UBO
+        vk::DescriptorSetLayout instanceSetLayout;  // set 2: per-instance storage buffer
+        vk::DescriptorPool descriptorPool;          // eFreeDescriptorSet (texture sets freed on Ref drop)
         // Bindless: one global texture array bound once; uploadTexture writes a stable
         // slot (update-after-bind) and returns its index. The default white is slot 0.
-        vk::DescriptorPool bindlessPool;             // eUpdateAfterBindPool
-        vk::DescriptorSet bindlessSet;               // the single set 0 for all draws
+        vk::DescriptorPool bindlessPool;  // eUpdateAfterBindPool
+        vk::DescriptorSet bindlessSet;    // the single set 0 for all draws
         u32 nextBindlessIndex = 0;
-        vk::DescriptorSetLayout tonemapSetLayout;    // compute set 0: storage image
-        vk::DescriptorSet tonemapSet;                // points at the offscreen color view (GENERAL)
+        vk::DescriptorSetLayout tonemapSetLayout;  // compute set 0: storage image
+        vk::DescriptorSet tonemapSet;              // points at the offscreen color view (GENERAL)
         vk::DescriptorSetLayout fxaaSetLayout;
         vk::DescriptorSet fxaaSet;
         // TAA resolve set (compute): current + history + motion samplers, offscreen +
         // history storage. Two sets (one per ping-pong parity) rewritten when targets change.
         vk::DescriptorSetLayout taaSetLayout;
         std::array<vk::DescriptorSet, 2> taaSets;
-        vk::DescriptorSetLayout clusterSetLayout;    // compute set 0
+        vk::DescriptorSetLayout clusterSetLayout;  // compute set 0
     };
 
     // Directional + punctual lights and the clustered-forward froxel apparatus.
@@ -646,19 +659,19 @@ export namespace se
         // Per-frame punctual-light storage buffer (set 1, binding 1), grown on demand.
         std::array<Ref<Buffer>, MaxFramesInFlight> lightListBuffers;
         std::array<u32, MaxFramesInFlight> lightListCapacity{};
-        std::array<vk::DescriptorSet, MaxFramesInFlight> clusterSets;  // compute
-        std::array<Ref<Buffer>, MaxFramesInFlight> clusterBuffers;     // per-cluster count + indices
-        std::array<VkBuffer, MaxFramesInFlight> clusterParamBuffers{}; // cluster params UBO
+        std::array<vk::DescriptorSet, MaxFramesInFlight> clusterSets;   // compute
+        std::array<Ref<Buffer>, MaxFramesInFlight> clusterBuffers;      // per-cluster count + indices
+        std::array<VkBuffer, MaxFramesInFlight> clusterParamBuffers{};  // cluster params UBO
         std::array<VmaAllocation, MaxFramesInFlight> clusterParamAllocs{};
         std::array<void*, MaxFramesInFlight> clusterParamMapped{};
-        bool useClustered = true;        // false = fragment loops all lights (reference)
-        u32 frameLightCount = 0;         // punctual lights uploaded this frame
-        u32 frameProbeCount = 0;         // reflection probes sampled this frame (encoded in ambientColor.w)
+        bool useClustered = true;  // false = fragment loops all lights (reference)
+        u32 frameLightCount = 0;   // punctual lights uploaded this frame
+        u32 frameProbeCount = 0;   // reflection probes sampled this frame (encoded in ambientColor.w)
         bool clusterDispatchPending = false;
         // Directional shadow: the light-space transform written into the light UBO + the
         // shadow pass push constant. shadowPending arms the depth pass for the frame.
-        bool useShadows = true;          // master toggle (se set-shadows)
-        bool shadowPending = false;      // a shadow-casting directional light is present this frame
+        bool useShadows = true;      // master toggle (se set-shadows)
+        bool shadowPending = false;  // a shadow-casting directional light is present this frame
         glm::mat4 shadowViewProj{ 1.0f };
         // Spot shadow: the first shadow-casting spot light gets a dedicated depth map. Its
         // perspective light-space transform + its index in the per-frame light list.
@@ -689,40 +702,40 @@ export namespace se
     // the uebershader maps many materials to one PSO, permutations add cache entries).
     struct Pipelines
     {
-        Ref<Pipeline> thumbnail;     // lazy mesh-thumbnail graphics pipeline
-        Ref<Pipeline> tonemap;       // in-place compute tonemap (post-process)
-        Ref<Pipeline> depthPrepass;  // vertex-only depth pre-pass
-        Ref<Pipeline> shadowDepth;   // vertex-only depth pass into the shadow map (depth-biased)
-        Ref<Pipeline> pointShadow;   // color (distance) + depth pass into a point shadow cube face
-        Ref<Pipeline> gbuffer;       // thin G-buffer prepass (view normal + view-Z)
-        Ref<Pipeline> gtao;          // compute screen-space AO from the G-buffer
-        Ref<Pipeline> aoBlur;        // bilateral denoise of the raw AO
-        Ref<Pipeline> contact;       // screen-space contact shadows (directional)
-        Ref<Pipeline> ssgi;          // screen-space one-bounce GI
-        Ref<Pipeline> copyColor;     // capture linear-HDR scene color into prevColor
-        Ref<Pipeline> motion;        // motion-vector prepass (camera reprojection)
-        Ref<Pipeline> taa;           // compute TAA resolve
-        Ref<Pipeline> ddgiVoxelize;  // build the voxel scene proxy
-        Ref<Pipeline> ddgiTrace;     // software probe ray trace
-        Ref<Pipeline> ddgiBlendIrr;  // blend rays -> irradiance atlas
-        Ref<Pipeline> ddgiBlendDist; // blend rays -> moment atlas
-        Ref<Pipeline> ddgiBorder;    // octahedral gutter copy
-        Ref<Pipeline> restirInitial; // ReSTIR initial candidate sampling
-        Ref<Pipeline> restirReuse;   // ReSTIR temporal + spatial reuse
-        Ref<Pipeline> restirResolve; // ReSTIR resolve (1 shadow ray) + shade
-        Ref<Pipeline> fxaa;          // compute FXAA post-process
-        Ref<Pipeline> cull;          // compute light-cull (clustered forward)
-        Ref<Pipeline> overlay;       // screen-space editor overlay (gizmo + billboards)
+        Ref<Pipeline> thumbnail;      // lazy mesh-thumbnail graphics pipeline
+        Ref<Pipeline> tonemap;        // in-place compute tonemap (post-process)
+        Ref<Pipeline> depthPrepass;   // vertex-only depth pre-pass
+        Ref<Pipeline> shadowDepth;    // vertex-only depth pass into the shadow map (depth-biased)
+        Ref<Pipeline> pointShadow;    // color (distance) + depth pass into a point shadow cube face
+        Ref<Pipeline> gbuffer;        // thin G-buffer prepass (view normal + view-Z)
+        Ref<Pipeline> gtao;           // compute screen-space AO from the G-buffer
+        Ref<Pipeline> aoBlur;         // bilateral denoise of the raw AO
+        Ref<Pipeline> contact;        // screen-space contact shadows (directional)
+        Ref<Pipeline> ssgi;           // screen-space one-bounce GI
+        Ref<Pipeline> copyColor;      // capture linear-HDR scene color into prevColor
+        Ref<Pipeline> motion;         // motion-vector prepass (camera reprojection)
+        Ref<Pipeline> taa;            // compute TAA resolve
+        Ref<Pipeline> ddgiVoxelize;   // build the voxel scene proxy
+        Ref<Pipeline> ddgiTrace;      // software probe ray trace
+        Ref<Pipeline> ddgiBlendIrr;   // blend rays -> irradiance atlas
+        Ref<Pipeline> ddgiBlendDist;  // blend rays -> moment atlas
+        Ref<Pipeline> ddgiBorder;     // octahedral gutter copy
+        Ref<Pipeline> restirInitial;  // ReSTIR initial candidate sampling
+        Ref<Pipeline> restirReuse;    // ReSTIR temporal + spatial reuse
+        Ref<Pipeline> restirResolve;  // ReSTIR resolve (1 shadow ray) + shade
+        Ref<Pipeline> fxaa;           // compute FXAA post-process
+        Ref<Pipeline> cull;           // compute light-cull (clustered forward)
+        Ref<Pipeline> overlay;        // screen-space editor overlay (gizmo + billboards)
         std::unordered_map<std::string, Ref<Pipeline>> cache;
     };
 
     // The offscreen render targets + the AA state that decides which targets exist.
     struct Targets
     {
-        Image offscreen;     // scene render target shown in the Viewport panel
-        Image depth;         // depth buffer for the scene pass, sized to the viewport
-        Image shadowMap;     // directional-light depth map (sampled with the compare sampler)
-        Image spotShadowMap; // first shadow-casting spot light's depth map (same compare sampler)
+        Image offscreen;      // scene render target shown in the Viewport panel
+        Image depth;          // depth buffer for the scene pass, sized to the viewport
+        Image shadowMap;      // directional-light depth map (sampled with the compare sampler)
+        Image spotShadowMap;  // first shadow-casting spot light's depth map (same compare sampler)
         // First shadow-casting point light's omnidirectional distance cubemap: a color cube
         // (R32_SFLOAT = world distance to the nearest occluder) rendered face-by-face with a
         // shared depth scratch; the mesh samples it by direction and compares linear distance.
@@ -745,8 +758,8 @@ export namespace se
         Image motion;
         Image motionDepth;
         std::array<Image, 2> history;
-        u32 historyIndex = 0;      // this frame writes history[historyIndex], reads the other
-        bool historyValid = false; // false on the first frame / after a resize
+        u32 historyIndex = 0;       // this frame writes history[historyIndex], reads the other
+        bool historyValid = false;  // false on the first frame / after a resize
         // MSAA: when sampleCount > 1 the scene renders to these multisampled targets and
         // resolves color into offscreen. Sized to the viewport, recreated with it.
         Image msaaColor;
@@ -756,12 +769,13 @@ export namespace se
         Image scratch;
         vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1;     // 1 = MSAA off
         vk::SampleCountFlagBits maxSampleCount = vk::SampleCountFlagBits::e1;  // device cap
-        vk::SampleCountFlags supportedSampleCounts = vk::SampleCountFlagBits::e1;  // counts the color+depth MSAA formats accept
-        bool fxaaEnabled = false;  // FXAA post-process (mutually exclusive with MSAA)
-        bool taaEnabled = false;   // TAA resolve (mutually exclusive with MSAA/FXAA)
-        u32 desiredWidth = 0;      // requested by the UI panel (applied next frame)
+        vk::SampleCountFlags supportedSampleCounts =
+            vk::SampleCountFlagBits::e1;  // counts the color+depth MSAA formats accept
+        bool fxaaEnabled = false;         // FXAA post-process (mutually exclusive with MSAA)
+        bool taaEnabled = false;          // TAA resolve (mutually exclusive with MSAA/FXAA)
+        u32 desiredWidth = 0;             // requested by the UI panel (applied next frame)
         u32 desiredHeight = 0;
-        u32 generation = 0;        // bumped whenever the offscreen image is recreated
+        u32 generation = 0;  // bumped whenever the offscreen image is recreated
     };
 
     // Which shader fills the IBL environment cube before the convolution chain.
@@ -821,22 +835,22 @@ export namespace se
     // sky inputs change (the directional light moves).
     struct Ibl
     {
-        Image envCube;          // source environment (procedural sky)
+        Image envCube;           // source environment (procedural sky)
         Image transmittanceLut;  // atmosphere: view-zenith x altitude extinction (rgba16f)
         Image multiScatterLut;   // atmosphere: isotropic multiple-scattering term (rgba16f)
         Image skyViewLut;        // atmosphere: azimuth x elevation in-scatter, horizon-densified
-        Image irradianceCube;   // diffuse irradiance convolution
-        Image prefilteredCube;  // GGX-prefiltered specular (one mip per roughness step)
-        Image brdfLut;          // split-sum (scale, bias) table (rgba16f, RG used)
+        Image irradianceCube;    // diffuse irradiance convolution
+        Image prefilteredCube;   // GGX-prefiltered specular (one mip per roughness step)
+        Image brdfLut;           // split-sum (scale, bias) table (rgba16f, RG used)
         u32 prefilterMips = 1;
         vk::Sampler sampler;                // linear, clamp, mipped — all three sampled in the mesh
         vk::DescriptorSetLayout setLayout;  // set 3 (irradiance, prefiltered, brdf LUT)
         vk::DescriptorSet set;
         bool ready = false;
-        bool useIbl = true;     // false = flat scalar ambient fallback
-        SkygenParams bakedParams;    // the params the current envCube was baked with
-        SkygenParams pendingParams;  // requested params (applied at the next beginFrameGraph)
-        bool rebakePending = false;  // pendingParams differ from bakedParams -> re-bake
+        bool useIbl = true;                             // false = flat scalar ambient fallback
+        SkygenParams bakedParams;                       // the params the current envCube was baked with
+        SkygenParams pendingParams;                     // requested params (applied at the next beginFrameGraph)
+        bool rebakePending = false;                     // pendingParams differ from bakedParams -> re-bake
         EnvSource source = EnvSource::Procedural;       // which shader fills envCube
         EnvSource bakedSource = EnvSource::Procedural;  // source the current envCube was baked with
         Ref<GpuTexture> envPanorama;                    // Equirect source (held alive across the bake)
@@ -871,13 +885,13 @@ export namespace se
     struct ReflectionProbes
     {
         std::array<ReflectionProbe, MaxReflectionProbes> probes;
-        u32 count = 0;                       // active probe slots (<= MaxReflectionProbes)
-        vk::DescriptorSet meshSet;           // the IBL set (set 3); probes live at bindings 3-5
-        vk::Sampler sampler;                 // linear, clamp, mipped — cube sampling in the mesh
-        Ref<Buffer> metaBuffer;              // MaxReflectionProbes ProbeMeta records (origin/radius/...)
+        u32 count = 0;              // active probe slots (<= MaxReflectionProbes)
+        vk::DescriptorSet meshSet;  // the IBL set (set 3); probes live at bindings 3-5
+        vk::Sampler sampler;        // linear, clamp, mipped — cube sampling in the mesh
+        Ref<Buffer> metaBuffer;     // MaxReflectionProbes ProbeMeta records (origin/radius/...)
         bool useProbes = true;
-        bool capturePending = false;         // any probe dirty this frame -> capture in beginFrameGraph
-        bool warnedOverflow = false;         // logged once when probe count exceeds the cap
+        bool capturePending = false;  // any probe dirty this frame -> capture in beginFrameGraph
+        bool warnedOverflow = false;  // logged once when probe count exceeds the cap
     };
 
     // Visible sky background, drawn by a fullscreen graphics pass before the scene pass.
@@ -896,7 +910,7 @@ export namespace se
         Ref<Pipeline> pipeline;             // fullscreen PSO; bakes the sample count, rebuilt on AA change
         vk::DescriptorSetLayout setLayout;  // set 1: envCube (combined image sampler)
         vk::DescriptorSet set;
-        bool ready = false;                 // set written + envCube baked
+        bool ready = false;  // set written + envCube baked
     };
 
     // Screen-space ambient occlusion (GTAO-lite). When on, a G-buffer prepass + a compute
@@ -907,30 +921,30 @@ export namespace se
     // G-buffer + the scene's view/proj; the mesh samples their three maps via set 4.
     struct Ssao
     {
-        bool useSsao = true;     // GTAO ambient occlusion
-        bool useContact = true;  // screen-space contact shadows (directional)
-        bool useSsgi = true;     // screen-space one-bounce GI
-        bool ready = false;                          // sets/views valid (built after targets exist)
-        glm::mat4 view{ 1.0f };                      // world -> view (G-buffer prepass)
-        glm::mat4 viewProj{ 1.0f };                  // world -> clip (G-buffer prepass)
-        glm::mat4 projection{ 1.0f };                // view -> clip (contact/SSGI reproject)
-        glm::mat4 invProjection{ 1.0f };             // clip -> view (reconstruct view pos)
-        glm::vec3 sunDirView{ 0.0f, 1.0f, 0.0f };    // direction TO the sun, view space (contact)
+        bool useSsao = true;                       // GTAO ambient occlusion
+        bool useContact = true;                    // screen-space contact shadows (directional)
+        bool useSsgi = true;                       // screen-space one-bounce GI
+        bool ready = false;                        // sets/views valid (built after targets exist)
+        glm::mat4 view{ 1.0f };                    // world -> view (G-buffer prepass)
+        glm::mat4 viewProj{ 1.0f };                // world -> clip (G-buffer prepass)
+        glm::mat4 projection{ 1.0f };              // view -> clip (contact/SSGI reproject)
+        glm::mat4 invProjection{ 1.0f };           // clip -> view (reconstruct view pos)
+        glm::vec3 sunDirView{ 0.0f, 1.0f, 0.0f };  // direction TO the sun, view space (contact)
         f32 radius = 1.0f;
         f32 strength = 3.0f;
-        vk::Sampler sampler;                         // nearest, clamp — samples the G-buffer
+        vk::Sampler sampler;  // nearest, clamp — samples the G-buffer
         // Two compute set layouts shared by the screen-space passes: 2-binding
         // (sampler + storage) and 3-binding (sampler + sampler + storage).
         vk::DescriptorSetLayout compute2Layout;
         vk::DescriptorSetLayout compute3Layout;
-        vk::DescriptorSet gtaoSet;       // gbuffer + aoRaw         (compute2)
-        vk::DescriptorSet aoBlurSet;     // aoRaw + gbuffer + aoMap (compute3)
-        vk::DescriptorSet contactSet;    // gbuffer + contactMap    (compute2)
-        vk::DescriptorSet ssgiSet;       // gbuffer + prevColor + ssgiMap (compute3)
-        vk::DescriptorSet copyColorSet;  // sceneColor + prevColor  (compute2)
-        vk::DescriptorSetLayout meshSetLayout;       // set 4 in the mesh pipeline (AO + contact + SSGI)
+        vk::DescriptorSet gtaoSet;              // gbuffer + aoRaw         (compute2)
+        vk::DescriptorSet aoBlurSet;            // aoRaw + gbuffer + aoMap (compute3)
+        vk::DescriptorSet contactSet;           // gbuffer + contactMap    (compute2)
+        vk::DescriptorSet ssgiSet;              // gbuffer + prevColor + ssgiMap (compute3)
+        vk::DescriptorSet copyColorSet;         // sceneColor + prevColor  (compute2)
+        vk::DescriptorSetLayout meshSetLayout;  // set 4 in the mesh pipeline (AO + contact + SSGI)
         vk::DescriptorSet meshSet;
-        u32 generation = 0;                          // bumped when targets recreate (sets refreshed)
+        u32 generation = 0;  // bumped when targets recreate (sets refreshed)
     };
 
     // A VMA-allocated 3D image (the DDGI voxel scene proxy). Move-only like Image; a 3D
@@ -950,28 +964,53 @@ export namespace se
         Image3D(const Image3D&) = delete;
         auto operator=(const Image3D&) -> Image3D& = delete;
         Image3D(Image3D&& o) noexcept
-            : device(o.device), allocator(o.allocator), image(o.image), view(o.view),
-              alloc(o.alloc), extent(o.extent), format(o.format), layout(o.layout)
+            : device(o.device), allocator(o.allocator), image(o.image), view(o.view), alloc(o.alloc), extent(o.extent),
+              format(o.format), layout(o.layout)
         {
-            o.device = nullptr; o.allocator = nullptr; o.image = nullptr; o.view = nullptr; o.alloc = nullptr;
+            o.device = nullptr;
+            o.allocator = nullptr;
+            o.image = nullptr;
+            o.view = nullptr;
+            o.alloc = nullptr;
         }
         auto operator=(Image3D&& o) noexcept -> Image3D&
         {
             if (this != &o)
             {
                 reset();
-                device = o.device; allocator = o.allocator; image = o.image; view = o.view;
-                alloc = o.alloc; extent = o.extent; format = o.format; layout = o.layout;
-                o.device = nullptr; o.allocator = nullptr; o.image = nullptr; o.view = nullptr; o.alloc = nullptr;
+                device = o.device;
+                allocator = o.allocator;
+                image = o.image;
+                view = o.view;
+                alloc = o.alloc;
+                extent = o.extent;
+                format = o.format;
+                layout = o.layout;
+                o.device = nullptr;
+                o.allocator = nullptr;
+                o.image = nullptr;
+                o.view = nullptr;
+                o.alloc = nullptr;
             }
             return *this;
         }
-        ~Image3D() { reset(); }
+        ~Image3D()
+        {
+            reset();
+        }
         void reset()
         {
-            if (device && view) { device.destroyImageView(view); }
-            if (allocator != nullptr && image) { vmaDestroyImage(allocator, static_cast<VkImage>(image), alloc); }
-            view = nullptr; image = nullptr; alloc = nullptr;
+            if (device && view)
+            {
+                device.destroyImageView(view);
+            }
+            if (allocator != nullptr && image)
+            {
+                vmaDestroyImage(allocator, static_cast<VkImage>(image), alloc);
+            }
+            view = nullptr;
+            image = nullptr;
+            alloc = nullptr;
         }
     };
 
@@ -990,7 +1029,7 @@ export namespace se
         Ref<Buffer> boxBuffer;     // per-frame scene box SSBO (world AABB + albedo)
         u32 boxCapacity = 0;
         u32 frameBoxCount = 0;
-        u32 frameIndex = 0;        // rotates the trace ray set
+        u32 frameIndex = 0;  // rotates the trace ray set
         // Volume placement (world space) — fit to the scene AABB each frame.
         glm::vec3 volumeMin{ -8.0f };
         glm::vec3 volumeExtent{ 16.0f };
@@ -998,13 +1037,13 @@ export namespace se
         glm::vec3 sunColor{ 1.0f };
         f32 sunIntensity = 1.0f;
         glm::vec3 skyColor{ 0.1f, 0.13f, 0.2f };
-        vk::Sampler sampler;       // linear clamp — atlases sampled in mesh + trace
-        vk::DescriptorSetLayout voxelLayout;     // voxelize: 3D storage + box SSBO
-        vk::DescriptorSetLayout traceLayout;     // trace: voxel storage + irr sampler + ray storage
-        vk::DescriptorSetLayout blendIrrLayout;  // ray sampler + irr storage
-        vk::DescriptorSetLayout blendDistLayout; // ray sampler + dist storage
-        vk::DescriptorSetLayout borderLayout;    // irr storage
-        vk::DescriptorSetLayout meshLayout;      // set 5: irr sampler + dist sampler
+        vk::Sampler sampler;                      // linear clamp — atlases sampled in mesh + trace
+        vk::DescriptorSetLayout voxelLayout;      // voxelize: 3D storage + box SSBO
+        vk::DescriptorSetLayout traceLayout;      // trace: voxel storage + irr sampler + ray storage
+        vk::DescriptorSetLayout blendIrrLayout;   // ray sampler + irr storage
+        vk::DescriptorSetLayout blendDistLayout;  // ray sampler + dist storage
+        vk::DescriptorSetLayout borderLayout;     // irr storage
+        vk::DescriptorSetLayout meshLayout;       // set 5: irr sampler + dist sampler
         vk::DescriptorSet voxelSet;
         vk::DescriptorSet traceSet;
         vk::DescriptorSet blendIrrSet;
@@ -1024,13 +1063,13 @@ export namespace se
         std::array<u32, MaxFramesInFlight> tlasCapacity{};  // instances the slot's TLAS is sized for (0 = empty seed)
         std::array<Ref<Buffer>, MaxFramesInFlight> instanceBuffers;  // VkAccelerationStructureInstanceKHR[]
         std::array<u32, MaxFramesInFlight> instanceCapacity{};
-        std::array<Ref<Buffer>, MaxFramesInFlight> scratchBuffers;   // TLAS build scratch
+        std::array<Ref<Buffer>, MaxFramesInFlight> scratchBuffers;  // TLAS build scratch
         std::array<u32, MaxFramesInFlight> scratchCapacity{};
         u32 frameInstanceCount = 0;
-        bool tlasReady = false;     // a TLAS has been built this frame (bind is valid)
+        bool tlasReady = false;              // a TLAS has been built this frame (bind is valid)
         vk::DescriptorSetLayout meshLayout;  // set 6: the TLAS
         std::array<vk::DescriptorSet, MaxFramesInFlight> meshSets;
-        u32 blasCount = 0;          // built BLAS count (rt-stats)
+        u32 blasCount = 0;  // built BLAS count (rt-stats)
         // This frame's instance transforms + meshes, captured by renderScene + consumed by
         // the TLAS-build graph pass. Cleared each frame in beginFrame.
         std::vector<glm::mat4> frameModels;
@@ -1048,22 +1087,22 @@ export namespace se
         bool useRestir = false;
         bool ready = false;
         bool historyReset = true;
-        Image radiance;             // per-pixel resolved direct radiance (rgba16f)
-        Ref<Buffer> initial;        // initial reservoirs (this frame's candidate sampling)
-        Ref<Buffer> combined;       // after temporal+spatial reuse
-        Ref<Buffer> previous;       // last frame's combined (temporal source)
-        u32 reservoirCapacity = 0;  // pixels the buffers are sized for
-        vk::Sampler sampler;        // nearest, clamp — samples G-buffer/motion
-        vk::DescriptorSetLayout initialLayout;   // 4 bindings
-        vk::DescriptorSetLayout reuseLayout;     // 6 bindings
-        vk::DescriptorSetLayout resolveLayout;   // 6 bindings (incl. TLAS)
-        vk::DescriptorSetLayout meshLayout;      // set 7: the radiance sampler
+        Image radiance;                         // per-pixel resolved direct radiance (rgba16f)
+        Ref<Buffer> initial;                    // initial reservoirs (this frame's candidate sampling)
+        Ref<Buffer> combined;                   // after temporal+spatial reuse
+        Ref<Buffer> previous;                   // last frame's combined (temporal source)
+        u32 reservoirCapacity = 0;              // pixels the buffers are sized for
+        vk::Sampler sampler;                    // nearest, clamp — samples G-buffer/motion
+        vk::DescriptorSetLayout initialLayout;  // 4 bindings
+        vk::DescriptorSetLayout reuseLayout;    // 6 bindings
+        vk::DescriptorSetLayout resolveLayout;  // 6 bindings (incl. TLAS)
+        vk::DescriptorSetLayout meshLayout;     // set 7: the radiance sampler
         vk::DescriptorSet initialSet;
         vk::DescriptorSet reuseSet;
         vk::DescriptorSet resolveSet;
         vk::DescriptorSet meshSet;
         u32 frameIndex = 0;
-        u32 candidateCount = 16;    // K initial candidates per pixel
+        u32 candidateCount = 16;  // K initial candidates per pixel
     };
 
     // The frame as a render graph + the resource handles app-authored passes reference.
@@ -1072,18 +1111,18 @@ export namespace se
         RenderGraph current;
         RgResource sceneColor;  // the offscreen color handle, for app-authored passes
         RgResource swapImage;
-        RgResource aoResource;        // the AO map handle when SSAO ran this frame
-        RgResource contactResource;   // contact-shadow map handle when contact ran
-        RgResource ssgiResource;      // SSGI radiance handle when SSGI ran
-        RgResource prevColorResource; // prevColor handle (imported once; read by SSGI, written by copy)
-        RgResource ddgiIrradiance;    // DDGI irradiance atlas handle when DDGI ran
-        RgResource ddgiDistance;      // DDGI moment atlas handle when DDGI ran
-        RgResource restirRadiance;    // ReSTIR direct-radiance handle when ReSTIR ran
+        RgResource aoResource;         // the AO map handle when SSAO ran this frame
+        RgResource contactResource;    // contact-shadow map handle when contact ran
+        RgResource ssgiResource;       // SSGI radiance handle when SSGI ran
+        RgResource prevColorResource;  // prevColor handle (imported once; read by SSGI, written by copy)
+        RgResource ddgiIrradiance;     // DDGI irradiance atlas handle when DDGI ran
+        RgResource ddgiDistance;       // DDGI moment atlas handle when DDGI ran
+        RgResource restirRadiance;     // ReSTIR direct-radiance handle when ReSTIR ran
         bool hasAo = false;
         bool hasContact = false;
         bool hasSsgi = false;
         bool hasDdgi = false;
-        bool hasGbuffer = false;      // the thin G-buffer prepass ran (screen effects or ReSTIR)
+        bool hasGbuffer = false;  // the thin G-buffer prepass ran (screen effects or ReSTIR)
         bool hasRestir = false;
     };
 
@@ -1107,11 +1146,11 @@ export namespace se
         FrameGraphState graph;
 
         bool useDepthPrepass = false;
-        bool useSkinning = true;  // gate for the GPU skinning path; off = skinned items never gather
-        bool presentViewportOnly = false;  // native-viewport host: blit offscreen->swapchain, skip the ui pass
-        f32 exposureEv = 0.0f;  // tonemap exposure in stops; the tonemap pass applies exp2(this)
-        glm::mat4 prevViewProj{ 1.0f };  // last frame's camera viewProj, for TAA motion vectors
-        bool prevViewProjValid = false;  // false until the first frame stores one
+        bool useSkinning = true;              // gate for the GPU skinning path; off = skinned items never gather
+        bool presentViewportOnly = false;     // native-viewport host: blit offscreen->swapchain, skip the ui pass
+        f32 exposureEv = 0.0f;                // tonemap exposure in stops; the tonemap pass applies exp2(this)
+        glm::mat4 prevViewProj{ 1.0f };       // last frame's camera viewProj, for TAA motion vectors
+        bool prevViewProjValid = false;       // false until the first frame stores one
         Ref<GpuTexture> defaultWhiteTexture;  // 1x1 white; bound when a material has no albedo
         RenderStats stats;                    // populated each frame by submitDrawList
         f32 frameMs = 0.0f;                   // EMA-smoothed frame-to-frame CPU time, updated in endFrame
@@ -1169,7 +1208,7 @@ export namespace se
         glm::mat4 model;
         glm::mat4 normalMatrix;  // transpose(inverse(mat3(model))), correct under non-uniform scale
         glm::vec4 baseColor;
-        glm::uvec4 texture{ 0 };  // .x = bindless albedo index; rest pads to std430 16 bytes
+        glm::uvec4 texture{ 0 };                  // .x = bindless albedo index; rest pads to std430 16 bytes
         glm::vec4 pbr{ 0.0f, 1.0f, 0.0f, 0.0f };  // x = metallic, y = roughness
         glm::vec4 emissive{ 0.0f };               // rgb = emissive radiance (strength baked in)
     };
@@ -1188,8 +1227,7 @@ export namespace se
     auto uploadMesh(Renderer& renderer, const Mesh& mesh) -> Result<Ref<GpuMesh>>;
     // As above, plus the VertexSkin stream (must parallel mesh.vertices) uploaded as the
     // second vertex buffer the skinned PSO binds.
-    auto uploadMesh(Renderer& renderer, const Mesh& mesh, const std::vector<VertexSkin>& skin)
-        -> Result<Ref<GpuMesh>>;
+    auto uploadMesh(Renderer& renderer, const Mesh& mesh, const std::vector<VertexSkin>& skin) -> Result<Ref<GpuMesh>>;
     auto uploadTexture(Renderer& renderer, const u8* rgba, u32 width, u32 height, bool srgb) -> Result<Ref<GpuTexture>>;
     /// Uploads tightly-packed linear float RGBA (width*height*4 floats) as a half-float
     /// (eR16G16B16A16Sfloat) sampled texture in the bindless array. For HDR panoramas /
@@ -1198,8 +1236,8 @@ export namespace se
 
     // Rasterizes an SVG to a square RGBA icon (tint multiplied in) and uploads it as a
     // GPU texture — used for asset-browser type icons. "currentColor" maps to white.
-    auto uploadSvgIcon(Renderer& renderer, const std::string& svgPath,
-                                                              u32 pixelSize, glm::vec4 tint) -> Result<Ref<GpuTexture>>;
+    auto uploadSvgIcon(Renderer& renderer, const std::string& svgPath, u32 pixelSize, glm::vec4 tint)
+        -> Result<Ref<GpuTexture>>;
 
     // Renders a mesh to a square GPU texture (a 3/4 view framed by the mesh AABB, lit by
     // a fixed light) for an asset thumbnail. Synchronous one-off render; safe between frames.
@@ -1209,7 +1247,8 @@ export namespace se
     // never on the present path). Mesh: framed like renderMeshThumbnail at size×size. Texture:
     // read back at the texture's native extent (size is a hint).
     auto encodeAssetThumbnailPng(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<std::vector<u8>>;
-    auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size) -> Result<std::vector<u8>>;
+    auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size)
+        -> Result<std::vector<u8>>;
 
     // Resolves each item's material to a cached PSO, batches by (pipeline, mesh, texture),
     // uploads the frame's instance buffer, and stores the structured draw list on the
@@ -1227,12 +1266,12 @@ export namespace se
     // Per-frame visible-sky settings, resolved by renderScene from Scene.environment.
     struct SkyRenderSettings
     {
-        u32 mode = 2;            // 0 = Color, 1 = Texture, 2 = Procedural
+        u32 mode = 2;  // 0 = Color, 1 = Texture, 2 = Procedural
         glm::vec3 clearColor{ 0.05f, 0.06f, 0.08f };
         f32 intensity = 1.0f;
-        f32 rotation = 0.0f;     // yaw radians
+        f32 rotation = 0.0f;  // yaw radians
         bool visible = true;
-        u32 textureIndex = 0;    // bindless slot of the panorama (Texture mode)
+        u32 textureIndex = 0;  // bindless slot of the panorama (Texture mode)
     };
     // Stores the sky settings for this frame; the sky pass (added in beginFrameGraph when
     // visible) draws from them. Leaves the pipeline/set/ready state intact.
@@ -1245,8 +1284,7 @@ export namespace se
     // (ibl_equirect), holding the Ref alive across the bake. Arms a re-bake (consumed in
     // beginFrameGraph) when the source, the panorama identity, or — for Procedural — `params`
     // change. No-op if nothing changed, so it is cheap to call every frame.
-    void requestEnvBake(Renderer& renderer, EnvSource source, Ref<GpuTexture> panorama,
-                        const SkygenParams& params);
+    void requestEnvBake(Renderer& renderer, EnvSource source, Ref<GpuTexture> panorama, const SkygenParams& params);
     // Procedural-source convenience wrapper over requestEnvBake.
     void requestSkyBake(Renderer& renderer, const SkygenParams& params);
 
@@ -1269,14 +1307,14 @@ export namespace se
     // camera eye position into the UBO and the punctual lights into the storage buffer
     // (grown on demand). The eye position feeds the BRDF view vector. `ambient` is the
     // premultiplied RGB fallback ambient (color * intensity), used when IBL is off.
-    void setSceneLighting(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity,
-                          glm::vec3 ambient, glm::vec3 eyePosition, const std::vector<GpuLight>& lights);
+    void setSceneLighting(Renderer& renderer, glm::vec3 direction, glm::vec3 color, f32 intensity, glm::vec3 ambient,
+                          glm::vec3 eyePosition, const std::vector<GpuLight>& lights);
 
     // Uploads the camera into the cluster-params UBO and arms the per-frame light-cull
     // compute dispatch (clustered forward). `proj` is the Y-flipped projection used for
     // rendering. Call once per frame after setSceneLighting, before endFrame.
-    void setClusterCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj,
-                          f32 nearPlane, f32 farPlane);
+    void setClusterCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj, f32 nearPlane,
+                          f32 farPlane);
 
     // Toggles clustered light culling. When off, the fragment shader loops every light
     // (the reference path) — useful for A/B verification.
@@ -1310,9 +1348,8 @@ export namespace se
     auto ddgiEnabled(const Renderer& renderer) -> bool;
     // Uploads the scene's per-draw world AABBs + albedo into the DDGI box SSBO and fits the
     // probe volume to them; arms the per-frame DDGI update. Called from renderScene.
-    void setDdgiScene(Renderer& renderer, const std::vector<glm::vec4>& boxMins,
-                      const std::vector<glm::vec4>& boxMaxs, const std::vector<glm::vec4>& boxAlbedos,
-                      glm::vec3 volumeMin, glm::vec3 volumeExtent,
+    void setDdgiScene(Renderer& renderer, const std::vector<glm::vec4>& boxMins, const std::vector<glm::vec4>& boxMaxs,
+                      const std::vector<glm::vec4>& boxAlbedos, glm::vec3 volumeMin, glm::vec3 volumeExtent,
                       glm::vec3 sunDir, glm::vec3 sunColor, f32 sunIntensity, glm::vec3 skyColor);
     // Hardware ray tracing (feature-gated). rtSupported reports device capability; the
     // toggle is a no-op when unsupported. RT shadows trace one ray-query per light.
@@ -1324,8 +1361,8 @@ export namespace se
     void setRtScene(Renderer& renderer, std::vector<glm::mat4> models, std::vector<Ref<GpuMesh>> meshes);
     // Builds the per-frame TLAS over the scene's mesh instances (model matrix per instance).
     // Records into the active command buffer (a graph compute pass). Arms tlasReady.
-    void buildTlas(Renderer& renderer, vk::CommandBuffer cmd,
-                   const std::vector<glm::mat4>& models, const std::vector<Ref<GpuMesh>>& meshes);
+    void buildTlas(Renderer& renderer, vk::CommandBuffer cmd, const std::vector<glm::mat4>& models,
+                   const std::vector<Ref<GpuMesh>>& meshes);
     // ReSTIR many-light direct lighting (feature-gated on rtSupported). Diffuse direct in v1.
     void setRestir(Renderer& renderer, bool enabled);
     auto restirEnabled(const Renderer& renderer) -> bool;
@@ -1333,8 +1370,7 @@ export namespace se
     void recordGbuffer(Renderer& renderer, vk::CommandBuffer cmd);
     // Feeds the camera the screen-space passes need: view, proj (SAME Y-flipped projection
     // the scene renders with, so the maps align), and the world-space sun direction.
-    void setSsaoCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj,
-                       glm::vec3 sunDirectionWorld);
+    void setSsaoCamera(Renderer& renderer, const glm::mat4& view, const glm::mat4& proj, glm::vec3 sunDirectionWorld);
     // Directional shadow map: toggle + the per-frame light-space transform. renderScene
     // fits the transform to the scene each frame; beginFrameGraph runs the depth pass.
     void setShadows(Renderer& renderer, bool enabled);
