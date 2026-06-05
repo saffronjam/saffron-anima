@@ -6,7 +6,7 @@ import { client, type Client } from "../control/client";
 import type { ProjectInfo } from "../control/client";
 import type {
   AssetEntry,
-  EntityRef,
+  EntityListEntry,
   Environment,
   GizmoState,
   InspectResult,
@@ -14,6 +14,9 @@ import type {
 } from "../protocol";
 
 export type EnginePhase = "idle" | "starting" | "attaching" | "ready" | "error";
+/// The active left-bottom dock tab. Tree rows switch it (the Environment sentinel
+/// selects-and-switches); the tab strip itself stays clickable as before.
+export type BottomTab = "inspector" | "environment" | "stats";
 export type ViewTab =
   | { id: "scene"; kind: "scene"; title: "Scene"; closable: false }
   | {
@@ -32,8 +35,16 @@ export interface EngineStatus {
 }
 
 export interface EditorState {
-  entities: EntityRef[];
+  entities: EntityListEntry[];
   selectedId: string | null;
+  /// Hierarchy rows whose children are shown. Plain UI state, deliberately outside
+  /// the sceneVersion/selectionVersion keying so a scene mutation never collapses
+  /// the tree; setEntities prunes ids that vanished from the scene.
+  expandedIds: Set<string>;
+  /// The selected non-entity tree row (the pinned Environment node). Never written
+  /// to selectedId, so get-selection/inspect are never handed a non-entity id.
+  selectedSentinel: "environment" | null;
+  bottomTab: BottomTab;
   sceneVersion: number;
   selectionVersion: number;
   componentsBySelected: InspectResult | null;
@@ -65,13 +76,33 @@ export interface EditorState {
   /// webview stays live; this flag is the app-side lock that stops a second dialog
   /// from being opened and greys the controls that would open one.
   nativeDialogOpen: boolean;
+  /// Show the SELECTED entity's components as read-only leaf subrows in the
+  /// hierarchy (sourced from componentsBySelected — never an extra inspect).
+  /// A persisted view preference, default off so the outliner stays clean.
+  showComponentSubrows: boolean;
+  /// Hide skeleton joints (rows flagged `bone` by list-entities) in the outliner;
+  /// their non-bone descendants re-anchor to the nearest visible ancestor. A
+  /// persisted view preference like the subrows toggle.
+  hideBones: boolean;
+  /// One-shot "jump the Inspector to this component" signal set by a subrow click;
+  /// the Inspector consumes and clears it. Never gated on the poll's versions.
+  focusComponent: string | null;
 
-  setEntities(entities: EntityRef[]): void;
+  setEntities(entities: EntityListEntry[]): void;
   /// Optimistically rename one entity's hierarchy row between polls (inline rename).
   /// The reconcile poll's sceneVersion bump re-fetches the authoritative list.
   applyOptimisticEntityName(id: string, name: string): void;
   setSelectedId(selectedId: string | null): void;
   selectEntity(id: string): void;
+  toggleExpanded(id: string): void;
+  setExpanded(id: string, expanded: boolean): void;
+  selectSentinel(sentinel: "environment" | null): void;
+  setBottomTab(bottomTab: BottomTab): void;
+  /// Engine-authoritative reparent (null detaches to root): optimistically relink the
+  /// moved entity's parentId in place — selection untouched — and hold dragActive over
+  /// the round trip so the poll cannot clobber the relink. A rejection falls back to
+  /// the next authoritative list (set-parent bumps sceneVersion on success only).
+  setParent(id: string, parentId: string | null): Promise<void>;
   setSceneVersion(sceneVersion: number): void;
   setSelectionVersion(selectionVersion: number): void;
   setComponentsBySelected(components: InspectResult | null): void;
@@ -103,11 +134,17 @@ export interface EditorState {
   setGizmo(patch: Partial<GizmoState>): void;
   setViewportHidden(viewportHidden: boolean): void;
   setNativeDialogOpen(nativeDialogOpen: boolean): void;
+  toggleComponentSubrows(): void;
+  toggleHideBones(): void;
+  setFocusComponent(focusComponent: string | null): void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
   entities: [],
   selectedId: null,
+  expandedIds: new Set<string>(),
+  selectedSentinel: null,
+  bottomTab: "inspector",
   sceneVersion: -1,
   selectionVersion: -1,
   componentsBySelected: null,
@@ -126,8 +163,22 @@ export const useEditorStore = create<EditorState>((set) => ({
   gizmo: { op: "translate", space: "world" },
   viewportHidden: false,
   nativeDialogOpen: false,
+  showComponentSubrows: loadShowSubrows(),
+  hideBones: loadHideBones(),
+  focusComponent: null,
 
-  setEntities: (entities) => set({ entities }),
+  setEntities: (entities) =>
+    set((s) => {
+      // Prune expand-state for ids that left the scene; survivors keep their state
+      // so a poll refresh never collapses the tree.
+      const present = new Set(entities.map((e) => e.id));
+      let expandedIds = s.expandedIds;
+      if ([...expandedIds].some((id) => !present.has(id))) {
+        expandedIds = new Set([...expandedIds].filter((id) => present.has(id)));
+        persistExpanded(expandedIds);
+      }
+      return { entities, expandedIds };
+    }),
   applyOptimisticEntityName: (id, name) =>
     set((s) => ({
       entities: s.entities.map((e) => (e.id === id ? { ...e, name } : e)),
@@ -136,7 +187,63 @@ export const useEditorStore = create<EditorState>((set) => ({
   // Optimistic local selection: set immediately on a hierarchy click so the row
   // highlights without waiting a poll interval; the reconcile poll confirms via
   // selectionVersion (engine is authoritative if a newer version arrives).
-  selectEntity: (id) => set({ selectedId: id }),
+  selectEntity: (id) => set({ selectedId: id, selectedSentinel: null }),
+  toggleExpanded: (id) =>
+    set((s) => {
+      const expandedIds = new Set(s.expandedIds);
+      if (!expandedIds.delete(id)) {
+        expandedIds.add(id);
+      }
+      persistExpanded(expandedIds);
+      return { expandedIds };
+    }),
+  setExpanded: (id, expanded) =>
+    set((s) => {
+      if (s.expandedIds.has(id) === expanded) {
+        return {};
+      }
+      const expandedIds = new Set(s.expandedIds);
+      if (expanded) {
+        expandedIds.add(id);
+      } else {
+        expandedIds.delete(id);
+      }
+      persistExpanded(expandedIds);
+      return { expandedIds };
+    }),
+  selectSentinel: (sentinel) =>
+    set((s) => ({
+      selectedSentinel: sentinel,
+      bottomTab: sentinel === "environment" ? "environment" : s.bottomTab,
+    })),
+  setBottomTab: (bottomTab) =>
+    set((s) => ({
+      bottomTab,
+      // Leaving the Environment tab drops the sentinel highlight so the tree and
+      // the tab strip never disagree about what is active.
+      selectedSentinel: bottomTab === "environment" ? s.selectedSentinel : null,
+    })),
+  setParent: async (id, parentId) => {
+    const previous = useEditorStore.getState().entities.find((e) => e.id === id)?.parentId;
+    useEditorStore.getState().setDragActive(true);
+    set((s) => ({
+      entities: s.entities.map((e) =>
+        e.id === id ? { ...e, parentId: parentId ?? undefined } : e,
+      ),
+    }));
+    try {
+      await client.setParent(id, parentId);
+    } catch (err) {
+      // A rejected reparent never bumps sceneVersion, so the poll will not restore
+      // the row — roll the optimistic relink back by hand.
+      set((s) => ({
+        entities: s.entities.map((e) => (e.id === id ? { ...e, parentId: previous } : e)),
+      }));
+      throw err;
+    } finally {
+      useEditorStore.getState().setDragActive(false);
+    }
+  },
   setSceneVersion: (sceneVersion) => set({ sceneVersion }),
   setSelectionVersion: (selectionVersion) => set({ selectionVersion }),
   setComponentsBySelected: (componentsBySelected) => set({ componentsBySelected }),
@@ -228,7 +335,12 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   setEnvironment: (environment) => set({ environment }),
   setRenderStats: (renderStats) => set({ renderStats }),
-  setProject: (project) => set({ project }),
+  // Rehydrate the persisted expand-state when a project (path) becomes current.
+  setProject: (project) =>
+    set({
+      project,
+      expandedIds: project?.path ? loadExpanded(project.path) : new Set<string>(),
+    }),
   setPollRateHz: (pollRateHz) => set({ pollRateHz }),
   setUiFrameStats: (uiFrameRateHz, uiFrameMs) => set({ uiFrameRateHz, uiFrameMs }),
   resetSceneState: () => {
@@ -237,6 +349,8 @@ export const useEditorStore = create<EditorState>((set) => ({
     set({
       entities: [],
       selectedId: null,
+      expandedIds: new Set<string>(),
+      selectedSentinel: null,
       componentsBySelected: null,
       assets: [],
       assetFolders: [],
@@ -247,6 +361,9 @@ export const useEditorStore = create<EditorState>((set) => ({
       // hierarchy/inspector/assets/env all re-fetch against the loaded scene.
       sceneVersion: -1,
       selectionVersion: -1,
+      // One-shot UI intent; never meaningful across a scene swap. The subrows
+      // toggle survives — it is a view preference, not scene state.
+      focusComponent: null,
     });
   },
   setEngineStatus: (patch) => set((s) => ({ engineStatus: { ...s.engineStatus, ...patch } })),
@@ -263,6 +380,27 @@ export const useEditorStore = create<EditorState>((set) => ({
   setGizmo: (patch) => set((s) => ({ gizmo: { ...s.gizmo, ...patch } })),
   setViewportHidden: (viewportHidden) => set({ viewportHidden }),
   setNativeDialogOpen: (nativeDialogOpen) => set({ nativeDialogOpen }),
+  toggleComponentSubrows: () =>
+    set((s) => {
+      const showComponentSubrows = !s.showComponentSubrows;
+      try {
+        localStorage.setItem(SUBROWS_STORAGE_KEY, showComponentSubrows ? "1" : "0");
+      } catch {
+        // Storage unavailable; the preference is then session-only.
+      }
+      return { showComponentSubrows };
+    }),
+  toggleHideBones: () =>
+    set((s) => {
+      const hideBones = !s.hideBones;
+      try {
+        localStorage.setItem(HIDE_BONES_STORAGE_KEY, hideBones ? "1" : "0");
+      } catch {
+        // Storage unavailable; the preference is then session-only.
+      }
+      return { hideBones };
+    }),
+  setFocusComponent: (focusComponent) => set({ focusComponent }),
 }));
 
 /// Run a native file-dialog thunk (`open`/`save`) under the app-side dialog lock:
@@ -281,6 +419,104 @@ export async function withNativeDialog<T>(fn: () => Promise<T>): Promise<T | nul
   } finally {
     useEditorStore.getState().setNativeDialogOpen(false);
   }
+}
+
+/// One outliner node: an entity plus its resolved children. The tree is built
+/// client-side from the flat `entities` slice; the engine ships only `parentId`.
+export interface TreeNode {
+  entity: EntityListEntry;
+  children: TreeNode[];
+}
+
+/// Group the flat entity list into a forest by parentId. Absent/`"0"` parentId,
+/// an unknown parent id, or a self-reference all land the entry at the root
+/// (defensive: the engine roots dangling parents on load, and the client must
+/// never loop). Sibling order preserves the engine's array order (unordered v1).
+export function buildTree(entities: EntityListEntry[]): TreeNode[] {
+  const nodes = new Map<string, TreeNode>();
+  for (const entity of entities) {
+    nodes.set(entity.id, { entity, children: [] });
+  }
+  const roots: TreeNode[] = [];
+  for (const entity of entities) {
+    const node = nodes.get(entity.id)!;
+    const parentId = entity.parentId;
+    const parent =
+      parentId && parentId !== "0" && parentId !== entity.id ? nodes.get(parentId) : undefined;
+    if (parent) {
+      parent.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
+/// Expand-state persistence, keyed by project path (plain UI state, like the
+/// thumbnail cache kept out of Zustand): survives reloads, never the poll's concern.
+const EXPANDED_STORAGE_PREFIX = "saffron.expandedIds:";
+
+function persistExpanded(ids: Set<string>): void {
+  const path = useEditorStore.getState().project?.path;
+  if (!path) {
+    return;
+  }
+  try {
+    localStorage.setItem(EXPANDED_STORAGE_PREFIX + path, JSON.stringify([...ids]));
+  } catch {
+    // Storage may be unavailable (private mode); expansion is then session-only.
+  }
+}
+
+function loadExpanded(path: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_STORAGE_PREFIX + path);
+    if (raw) {
+      return new Set(JSON.parse(raw) as string[]);
+    }
+  } catch {
+    // Fall through to empty.
+  }
+  return new Set<string>();
+}
+
+/// The component-subrows toggle is a view preference (one key, unlike the
+/// per-project expand-state); default off keeps the outliner clean.
+const SUBROWS_STORAGE_KEY = "saffron.showComponentSubrows";
+
+function loadShowSubrows(): boolean {
+  try {
+    return localStorage.getItem(SUBROWS_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+const HIDE_BONES_STORAGE_KEY = "saffron.hideBones";
+
+function loadHideBones(): boolean {
+  try {
+    return localStorage.getItem(HIDE_BONES_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/// The outliner's bone filter: drop rows flagged `bone` and re-anchor every surviving
+/// entity whose ancestry passes through bones to its nearest visible ancestor (walks
+/// are bounded so corrupt data cannot loop). Pure — used before buildTree.
+export function reanchorPastBones(entities: EntityListEntry[]): EntityListEntry[] {
+  const byId = new Map(entities.map((e) => [e.id, e]));
+  return entities
+    .filter((e) => !e.bone)
+    .map((e) => {
+      let parent = e.parentId ? byId.get(e.parentId) : undefined;
+      for (let steps = 0; parent?.bone && steps <= entities.length; steps++) {
+        parent = parent.parentId ? byId.get(parent.parentId) : undefined;
+      }
+      const parentId = parent?.id;
+      return parentId === e.parentId ? e : { ...e, parentId };
+    });
 }
 
 const FAST_RECONCILE_INTERVAL_MS = 50; // cheap state lane, target ~20 Hz

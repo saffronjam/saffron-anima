@@ -34,6 +34,7 @@ export type {
   DestroyEntityResult,
   EditorCamera,
   EntityList,
+  EntityListEntry,
   EntityParams,
   EntityRef,
   GizmoPointerParams,

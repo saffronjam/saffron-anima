@@ -70,6 +70,15 @@ export interface Relationship {
   parent: WireUuid;
 }
 
+export interface SkinnedMesh {
+  mesh: WireUuid;
+  rootBone: WireUuid;
+  bones: WireUuid[];
+  inverseBind: number[][];
+}
+
+export interface Bone {}
+
 export interface AtmosphereSettingsDto {
   enabled: boolean;
   planetRadius: number;
@@ -95,6 +104,8 @@ export interface Components {
   SpotLight?: SpotLight;
   ReflectionProbe?: ReflectionProbe;
   Relationship?: Relationship;
+  SkinnedMesh?: SkinnedMesh;
+  Bone?: Bone;
 }
 
 export type ComponentBody =
@@ -108,6 +119,8 @@ export type ComponentBody =
   | SpotLight
   | ReflectionProbe
   | Relationship
+  | SkinnedMesh
+  | Bone
   | Record<string, unknown>;
 
 export interface EntityRef {
@@ -207,6 +220,10 @@ export interface SetShadowsResult {
   shadows: boolean;
 }
 
+export interface SetSkinningResult {
+  skinning: boolean;
+}
+
 export interface SetDepthPrepassResult {
   depthPrepass: boolean;
 }
@@ -254,7 +271,14 @@ export interface ResizeNativeViewportResult {
 }
 
 export interface EntityList {
-  entities: EntityRef[];
+  entities: EntityListEntry[];
+}
+
+export interface EntityListEntry {
+  id: WireUuid;
+  name: string;
+  parentId?: WireUuid;
+  bone?: boolean;
 }
 
 export interface ComponentList {
@@ -271,6 +295,11 @@ export interface EntityParams {
 
 export interface DestroyEntityResult {
   destroyed: WireUuid;
+}
+
+export interface SetParentParams {
+  entity: WireUuid | string | number;
+  parent?: WireUuid | string | number;
 }
 
 export interface ComponentParams {
@@ -664,6 +693,7 @@ export interface CommandParamsMap {
   "set-restir": ToggleParams;
   "set-gi": SetGiParams;
   "set-shadows": ToggleParams;
+  "set-skinning": ToggleParams;
   "set-depth-prepass": ToggleParams;
   "viewport-native-info": EmptyParams;
   "attach-native-viewport": AttachNativeViewportParams;
@@ -672,6 +702,7 @@ export interface CommandParamsMap {
   "list-components": EmptyParams;
   "create-entity": CreateEntityParams;
   "destroy-entity": EntityParams;
+  "set-parent": SetParentParams;
   "add-component": ComponentParams;
   "remove-component": ComponentParams;
   "set-component": SetComponentParams;
@@ -737,6 +768,7 @@ export interface CommandResultMap {
   "set-restir": SetRestirResult;
   "set-gi": SetGiResult;
   "set-shadows": SetShadowsResult;
+  "set-skinning": SetSkinningResult;
   "set-depth-prepass": SetDepthPrepassResult;
   "viewport-native-info": ViewportNativeInfoResult;
   "attach-native-viewport": AttachNativeViewportResult;
@@ -745,6 +777,7 @@ export interface CommandResultMap {
   "list-components": ComponentList;
   "create-entity": EntityRef;
   "destroy-entity": DestroyEntityResult;
+  "set-parent": EntityRef;
   "add-component": AddComponentResult;
   "remove-component": RemoveComponentResult;
   "set-component": SetComponentResult;

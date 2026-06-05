@@ -105,6 +105,11 @@ export const client = {
   destroyEntity(id: string): Promise<unknown> {
     return call("destroy-entity", { entity: id });
   },
+  /// Reparent (engine-authoritative, cycle-guarded); null detaches to root. Ids stay
+  /// strings end-to-end (u64 precision).
+  setParent(id: string, parentId: string | null): Promise<EntityRef> {
+    return call("set-parent", { entity: id, parent: parentId ?? "0" });
+  },
   deselect(): Promise<unknown> {
     return call("deselect");
   },
