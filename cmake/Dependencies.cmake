@@ -30,42 +30,7 @@ FetchContent_Declare(nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
     GIT_TAG v3.12.0 GIT_SHALLOW ON)
 
-# Dear ImGui — docking branch (separate from master in 2026, required for a dockable editor).
-FetchContent_Declare(imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG v1.92.8-docking GIT_SHALLOW ON)
-
-# ImGuizmo — in-viewport translate/rotate/scale gizmo (master tracks current ImGui).
-# SOURCE_SUBDIR points at a dir with no CMakeLists so MakeAvailable only downloads it
-# (we compile ImGuizmo.cpp into the imgui target ourselves, not its own CMake target).
-FetchContent_Declare(imguizmo
-    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
-    GIT_TAG master GIT_SHALLOW ON
-    SOURCE_SUBDIR src)
-
-FetchContent_MakeAvailable(EnTT glm VulkanMemoryAllocator vk-bootstrap nlohmann_json imgui imguizmo)
-
-# --- Dear ImGui static lib (no upstream CMake) --------------------------------
-# Core + SDL3 platform backend + Vulkan renderer backend + ImGuizmo.
-add_library(imgui STATIC
-    ${imgui_SOURCE_DIR}/imgui.cpp
-    ${imgui_SOURCE_DIR}/imgui_draw.cpp
-    ${imgui_SOURCE_DIR}/imgui_tables.cpp
-    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/imgui_demo.cpp
-    ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp   # ImGui::InputText(std::string*)
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
-    ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp)
-target_include_directories(imgui PUBLIC
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
-    ${imgui_SOURCE_DIR}/misc/cpp
-    ${imguizmo_SOURCE_DIR}/src)
-# ImGuizmo (and our code) use the ImVec2/ImVec4 math operators from imgui.h.
-target_compile_definitions(imgui PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
-target_link_libraries(imgui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
-# Enable docking + viewports config flags at the API level (set in code via io.ConfigFlags).
+FetchContent_MakeAvailable(EnTT glm VulkanMemoryAllocator vk-bootstrap nlohmann_json)
 
 # --- VMA implementation TU ----------------------------------------------------
 # VMA is header-only; one translation unit must define VMA_IMPLEMENTATION.
@@ -111,8 +76,7 @@ target_link_libraries(saffron_third_party INTERFACE
     stb
     cgltf
     tinyobjloader
-    nanosvg
-    imgui)
+    nanosvg)
 # The engine bans exceptions; make nlohmann/json turn would-be throws into abort()
 # so any stray .at()/operator[] on missing keys fails loudly instead of throwing.
 # GLM_FORCE_DEPTH_ZERO_TO_ONE makes glm::perspective emit Vulkan's [0,1] clip depth.
