@@ -16,7 +16,6 @@ target_sources(SaffronEngineLib
             source/saffron/rendering/renderer_types.cppm
             source/saffron/rendering/renderer_detail.cppm
             source/saffron/rendering/renderer.cppm
-            source/saffron/ui/ui.cppm
             source/saffron/assets/assets.cppm
             source/saffron/sceneedit/scene_edit_context.cppm
             source/saffron/sceneedit/sceneedit.cppm

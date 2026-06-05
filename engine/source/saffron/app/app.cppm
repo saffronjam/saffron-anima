@@ -4,7 +4,6 @@ import std;
 import Saffron.Core;
 import Saffron.Window;
 import Saffron.Rendering;
-import Saffron.Ui;
 
 export namespace se
 {
@@ -26,7 +25,6 @@ export namespace se
     {
         Window window;
         Renderer renderer;
-        Ui ui;
         std::vector<Layer> layers;
         bool running = false;
     };
@@ -38,7 +36,6 @@ export namespace se
         WindowConfig window;
         std::function<void(App&)> onCreate;
         std::function<void(App&)> onExit;
-        bool useImGui = true;  // present-only hosts disable ImGui entirely (no init, no per-frame work)
     };
 
     void attachLayer(App& app, Layer layer)
@@ -79,7 +76,12 @@ export namespace se
 
         App app;
         app.window = std::move(*windowResult);
-        app.window.onClose.subscribe([&app]() { app.running = false; return false; });
+        app.window.onClose.subscribe(
+            [&app]()
+            {
+                app.running = false;
+                return false;
+            });
 
         auto rendererResult = newRenderer(app.window);
         if (!rendererResult)
@@ -89,20 +91,6 @@ export namespace se
             return 1;
         }
         app.renderer = std::move(*rendererResult);
-
-        const bool useImGui = config.useImGui;
-        if (useImGui)
-        {
-            auto uiResult = newUi(app.renderer, app.window);
-            if (!uiResult)
-            {
-                logError(std::format("failed to create ui: {}", uiResult.error()));
-                destroyRenderer(app.renderer);
-                destroyWindow(app.window);
-                return 1;
-            }
-            app.ui = std::move(*uiResult);
-        }
 
         if (config.onCreate)
         {
@@ -151,21 +139,12 @@ export namespace se
                         layer.onRender();
                     }
                 }
-                if (useImGui)
-                {
-                    uiBeginFrame(app.ui);
-                }
                 for (Layer& layer : app.layers)
                 {
                     if (layer.onUi)
                     {
                         layer.onUi();
                     }
-                }
-                if (useImGui)
-                {
-                    uiEndFrame(app.ui);
-                    uiRecordDrawData(app.renderer);
                 }
 
                 // Build the frame graph (cull + scene), let layers add passes against
@@ -215,10 +194,6 @@ export namespace se
             }
         }
 
-        if (useImGui)
-        {
-            destroyUi(app.renderer, app.ui);
-        }
         destroyRenderer(app.renderer);
         destroyWindow(app.window);
         return 0;
