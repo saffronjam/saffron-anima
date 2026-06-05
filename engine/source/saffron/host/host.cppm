@@ -42,7 +42,23 @@ namespace se
         se::SceneEditContext* editor = nullptr;
         se::ControlContext* control = nullptr;
         se::AssetServer assets;
+        bool flyActive = false;          // RMB-fly: keyboard grabbed + relative mouse on
+        glm::vec2 flyLookDelta{ 0.0f };  // accumulated xrel/yrel, drained each onUpdate
     };
+
+    // Release the RMB-fly grab + relative mouse and clear accumulated look. Idempotent
+    // (safe when not flying) — used on RMB-up, focus loss, ESC, and teardown.
+    void endSceneEditFly(HostState& state, SDL_Window* window)
+    {
+        if (!state.flyActive)
+        {
+            return;
+        }
+        state.flyActive = false;
+        state.flyLookDelta = glm::vec2{ 0.0f };
+        SDL_SetWindowRelativeMouseMode(window, false);
+        SDL_SetWindowKeyboardGrab(window, false);
+    }
 
     enum class BillboardKind
     {
@@ -205,8 +221,7 @@ namespace se
                                                             se::NativeGizmoHandle::Z };
         for (se::u32 i = 0; i < 3; i = i + 1)
         {
-            const se::GizmoProjection end =
-                se::viewportProject(cam, width, height, position + axes[i] * axisLen);
+            const se::GizmoProjection end = se::viewportProject(cam, width, height, position + axes[i] * axisLen);
             if (!end.visible)
             {
                 continue;
@@ -225,8 +240,7 @@ namespace se
             };
             for (const auto& [handle, offset] : planes)
             {
-                const se::GizmoProjection center =
-                    se::viewportProject(cam, width, height, position + offset);
+                const se::GizmoProjection center = se::viewportProject(cam, width, height, position + offset);
                 if (center.visible)
                 {
                     addBox(vertices, center.pixel, 18.0f, se::axisColor(handle, editor.nativeGizmo), width, height);
@@ -305,8 +319,7 @@ namespace se
                     const glm::vec4 color = sel ? selectedColor : glm::vec4{ 0.45f, 0.85f, 1.0f, 0.9f };
                     addBulbIcon(vertices, p.pixel, color, width, height);
                     const glm::vec3 forward = se::worldRotation(editor.scene, e) * glm::vec3{ 0.0f, 0.0f, -1.0f };
-                    const se::GizmoProjection tip =
-                        se::viewportProject(cam, width, height, position + forward * 0.6f);
+                    const se::GizmoProjection tip = se::viewportProject(cam, width, height, position + forward * 0.6f);
                     if (tip.visible)
                     {
                         addLine(vertices, p.pixel, tip.pixel, 3.0f, color, width, height);
@@ -442,16 +455,13 @@ export namespace se
             .height = height,
             .hidden = std::getenv("SAFFRON_EDITOR_NATIVE_VIEWPORT") != nullptr,
         };
-        // The editor is the headless native-viewport host: it never runs ImGui — the full
-        // editor UI is the React/Tauri frontend driving this host over the control plane.
-        config.useImGui = false;
 
         config.onCreate = [state](se::App& app)
         {
             state->editor = se::newSceneEditContext();
             state->control = se::newControlContext();
             state->assets = se::newAssetServer(se::assetPath("assets"));
-            // The editor is the headless native-viewport host: always present-only (no ImGui
+            // The editor is the headless native-viewport host: always present-only (no engine
             // panels), reparented under the Tauri window and driven over the control plane.
             se::setPresentViewportOnly(app.renderer, true);
 
@@ -545,29 +555,77 @@ export namespace se
                 se::setSelection(*state->editor, renderable);
             }
 
-            // Raw SDL pointer → overlay-gizmo hover/drag + mesh ray-pick. This works
-            // only when the reparented child window actually receives mouse events; the
-            // command-driven gizmo-pointer path is the robust fallback (control plane).
+            // Raw SDL input. Mouse events reach the reparented child by cursor position
+            // (overlay-gizmo hover/drag + mesh ray-pick on LMB); keyboard does not, because
+            // focus stays on the Tauri webview. So while RMB is held we grab the keyboard
+            // (and switch to relative-mouse for clean look deltas), releasing on RMB-up or
+            // focus loss. Gizmo/pick is suppressed while flying.
             app.window.eventSinks.push_back(
                 [state, &app](const SDL_Event& event)
                 {
-                    se::syncNativeGizmo(*state->editor);
-                    const se::CameraView cam = se::sceneEditCameraView(state->editor->camera);
-                    static_cast<void>(
-                        handleNativeGizmoPointer(*state->editor, state->assets, app.renderer, cam, event));
+                    SDL_Window* win = app.window.handle;
+                    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT)
+                    {
+                        state->flyActive = true;
+                        state->flyLookDelta = glm::vec2{ 0.0f };
+                        SDL_SetWindowKeyboardGrab(win, true);
+                        SDL_SetWindowRelativeMouseMode(win, true);
+                        return;
+                    }
+                    if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_RIGHT)
+                    {
+                        endSceneEditFly(*state, win);
+                        return;
+                    }
+                    if (event.type == SDL_EVENT_MOUSE_MOTION && state->flyActive)
+                    {
+                        state->flyLookDelta.x += event.motion.xrel;
+                        state->flyLookDelta.y += event.motion.yrel;
+                        return;
+                    }
+                    if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE)
+                    {
+                        endSceneEditFly(*state, win);
+                        return;
+                    }
+                    if (!state->flyActive)
+                    {
+                        se::syncNativeGizmo(*state->editor);
+                        const se::CameraView cam = se::sceneEditCameraView(state->editor->camera);
+                        static_cast<void>(
+                            handleNativeGizmoPointer(*state->editor, state->assets, app.renderer, cam, event));
+                    }
                 });
 
             se::Layer layer;
             layer.name = "HostLayer";
-            layer.onUpdate = [state, &app](se::TimeSpan)
+            layer.onUpdate = [state, &app](se::TimeSpan dt)
             {
                 if (state->control != nullptr)
                 {
                     se::pollControl(*state->control, app.window, app.renderer, *state->editor, state->assets);
                 }
+                // Fly-cam: drive the editor eye from raw SDL input while RMB is held. The
+                // keyboard grab (set on RMB-down) lets these key reads see WASD even though
+                // the reparented child holds no X11 keyboard focus.
+                se::SceneEditCameraInput input;
+                input.active = state->flyActive;
+                if (state->flyActive)
+                {
+                    input.lookDelta = state->flyLookDelta;
+                    const bool* keys = SDL_GetKeyboardState(nullptr);
+                    input.forward = keys[SDL_SCANCODE_W];
+                    input.back = keys[SDL_SCANCODE_S];
+                    input.left = keys[SDL_SCANCODE_A];
+                    input.right = keys[SDL_SCANCODE_D];
+                    input.up = keys[SDL_SCANCODE_LSHIFT];
+                    input.down = keys[SDL_SCANCODE_LCTRL];
+                }
+                se::updateSceneEditCamera(state->editor->camera, input, dt.seconds);
+                state->flyLookDelta = glm::vec2{ 0.0f };
             };
             // Present-only host: the editor is the headless native-viewport host the Tauri
-            // app spawns + reparents. There are no ImGui panels — the scene renders through
+            // app spawns + reparents. There are no engine panels — the scene renders through
             // the editor (fly-cam) camera into the swapchain, with the gizmo handles + entity
             // billboards drawn by the engine overlay pass. The full editor UI is the React/
             // Tauri frontend, which drives this host over the control plane.
@@ -577,8 +635,6 @@ export namespace se
                 // pointer, valid only for this frame); also set on the control side.
                 state->editor->scene.catalog = &state->assets.catalog;
                 se::setViewportDesiredSize(app.renderer, app.window.width, app.window.height);
-                // Command-driven camera (controlling is false), so the frame dt is unused.
-                se::updateSceneEditCamera(state->editor->camera, false, 0.0f);
                 se::syncNativeGizmo(*state->editor);
                 se::CameraView cam = se::sceneEditCameraView(state->editor->camera);
                 if (app.window.width > 0 && app.window.height > 0)
@@ -590,19 +646,29 @@ export namespace se
             se::attachLayer(app, std::move(layer));
 
             app.window.onKeyPressed.subscribe(
-                [&app](se::i32 key, bool isRepeat)
+                [state, &app](se::i32 key, bool isRepeat)
                 {
                     static_cast<void>(isRepeat);
                     if (key == KeyEscape)
                     {
-                        app.window.shouldClose = true;
+                        // While flying, ESC ends fly (releasing the grab) rather than
+                        // quitting the host; otherwise it closes the standalone window.
+                        if (state->flyActive)
+                        {
+                            endSceneEditFly(*state, app.window.handle);
+                        }
+                        else
+                        {
+                            app.window.shouldClose = true;
+                        }
                     }
                     return false;
                 });
         };
 
-        config.onExit = [state](se::App&)
+        config.onExit = [state](se::App& app)
         {
+            endSceneEditFly(*state, app.window.handle);
             if (state->control != nullptr)
             {
                 se::destroyControlContext(state->control);

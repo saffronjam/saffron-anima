@@ -1,11 +1,9 @@
 module;
 
-// The editor's shared types + public surface. ImGui/ImGuizmo/entt/glm are header-heavy,
-// so this partition uses classic includes (no `import std`), like the rest of the editor.
+// The editor's shared types + public surface. entt/glm are header-heavy, so this
+// partition uses classic includes (no `import std`), like the rest of the editor.
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <imgui.h>
-#include <ImGuizmo.h>
 
 #include <array>
 #include <functional>
@@ -35,8 +33,22 @@ export namespace se
         bool controlling = false;  // latched while RMB is held (so a drag can leave the rect)
     };
 
-    // Backend-neutral gizmo op + reference space (no ImGuizmo/imgui types, so the control
-    // TU can read/write them); editor_gizmo.cpp maps these to ImGuizmo at the call site.
+    // Backend-neutral per-frame fly-cam input. The host (which owns SDL) fills this so
+    // SceneEdit stays SDL-free. lookDelta is summed relative-mouse motion (pixels) for the
+    // frame; the bools are the move-key state during the RMB hold.
+    struct SceneEditCameraInput
+    {
+        bool active = false;  // RMB-fly engaged (keyboard grabbed)
+        glm::vec2 lookDelta{ 0.0f };
+        bool forward = false;
+        bool back = false;
+        bool left = false;
+        bool right = false;
+        bool up = false;    // LShift
+        bool down = false;  // LCtrl
+    };
+
+    // Backend-neutral gizmo op + reference space, shared by the control TU and the native overlay.
     enum class GizmoOp
     {
         Translate,
@@ -55,9 +67,8 @@ export namespace se
     auto gizmoSpaceFromName(const std::string& name) -> GizmoSpace;
 
     // The engine-rendered (overlay) gizmo. mode/space are driven FROM the backend-neutral
-    // GizmoOp/GizmoSpace (the single source) — mapped each frame — so the ImGuizmo path
-    // (the retired C++ ImGui editor) and the native overlay path stay in sync. The remaining fields are the
-    // overlay's own hover/drag interaction state.
+    // GizmoOp/GizmoSpace (the single source) — mapped each frame. The remaining fields are
+    // the overlay's own hover/drag interaction state.
     enum class NativeGizmoMode
     {
         Translate,
@@ -90,10 +101,10 @@ export namespace se
         NativeGizmoHandle active = NativeGizmoHandle::None;
         bool dragging = false;
         glm::vec2 startMouse{ 0.0f };
-        glm::vec3 startTranslation{ 0.0f };       // world translation at drag begin
-        glm::vec3 startRotation{ 0.0f };          // world rotation (Euler) at drag begin
-        glm::vec3 startScale{ 1.0f };             // local scale (scale never rebases)
-        glm::mat4 startParentWorld{ 1.0f };       // frozen parent world for the whole drag
+        glm::vec3 startTranslation{ 0.0f };  // world translation at drag begin
+        glm::vec3 startRotation{ 0.0f };     // world rotation (Euler) at drag begin
+        glm::vec3 startScale{ 1.0f };        // local scale (scale never rebases)
+        glm::mat4 startParentWorld{ 1.0f };  // frozen parent world for the whole drag
         Entity target{ entt::null };
     };
 
@@ -146,9 +157,9 @@ export namespace se
     // and the gizmo draw from the same eye.
     auto sceneEditCameraView(const SceneEditCamera& camera) -> CameraView;
 
-    // Fly the editor camera while RMB is held over the viewport: mouse look + WASD move,
-    // Shift up / Ctrl down (world Y). Reads ImGui input, so call from onUi each frame.
-    void updateSceneEditCamera(SceneEditCamera& camera, bool viewportHovered, f32 dt);
+    // Fly the editor camera from host-gathered SDL input (active while RMB is held): mouse
+    // look + WASD move, Shift up / Ctrl down (world Y). Call from onUpdate with the frame dt.
+    void updateSceneEditCamera(SceneEditCamera& camera, const SceneEditCameraInput& input, f32 dt);
 
     // Native (overlay) gizmo math — pure glm + Scene types, no Rendering. Shared by the
     // SDL event sink (editor app) and the gizmo-pointer control command so both drive one
