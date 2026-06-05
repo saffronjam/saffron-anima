@@ -2,7 +2,7 @@
 // image). One invocation per pixel: read the linear HDR radiance, apply exposure, a
 // Reinhard tonemap + gamma 2.2, write it back. The render graph transitions the
 // offscreen Color -> General before this pass and General -> ShaderReadOnly after
-// (for ImGui to sample). set 0 binding 0; the exposure multiplier is a push constant.
+// (for the present blit to sample). set 0 binding 0; the exposure multiplier is a push constant.
 
 [[vk::image_format("rgba16f")]]
 [[vk::binding(0, 0)]] RWTexture2D<float4> target;
