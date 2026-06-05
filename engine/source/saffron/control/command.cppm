@@ -56,20 +56,20 @@ export namespace se
     void registerCommand(CommandRegistry& reg, std::string name, std::string help, Handler handler)
     {
         registerCommand(reg, std::move(name), std::move(help),
-            [handler = std::move(handler)](EngineContext& ctx, const json& params) -> Result<json>
-            {
-                auto parsed = parseDto(params, DtoTag<Params>{});
-                if (!parsed)
-                {
-                    return Err(std::move(parsed.error()));
-                }
-                auto result = handler(ctx, *parsed);
-                if (!result)
-                {
-                    return Err(std::move(result.error()));
-                }
-                return dtoToJson(*result);
-            });
+                        [handler = std::move(handler)](EngineContext& ctx, const json& params) -> Result<json>
+                        {
+                            auto parsed = parseDto(params, DtoTag<Params>{});
+                            if (!parsed)
+                            {
+                                return Err(std::move(parsed.error()));
+                            }
+                            auto result = handler(ctx, *parsed);
+                            if (!result)
+                            {
+                                return Err(std::move(result.error()));
+                            }
+                            return dtoToJson(*result);
+                        });
     }
     auto findCommand(const CommandRegistry& reg, const std::string& name) -> const CommandTraits*;
 
@@ -130,5 +130,6 @@ export namespace se
 
     /// Drains and runs any pending control commands on the calling (main) thread.
     /// Call once per frame.
-    void pollControl(ControlContext& ctx, Window& window, Renderer& renderer, SceneEditContext& editor, AssetServer& assets);
+    void pollControl(ControlContext& ctx, Window& window, Renderer& renderer, SceneEditContext& editor,
+                     AssetServer& assets);
 }

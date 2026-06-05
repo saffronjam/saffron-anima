@@ -673,17 +673,50 @@ namespace se
                         atmos[it.key()] = it.value();
                     }
                 }
-                if (params.enabled) { atmos["enabled"] = *params.enabled; }
-                if (params.planetRadius) { atmos["planetRadius"] = *params.planetRadius; }
-                if (params.atmosphereHeight) { atmos["atmosphereHeight"] = *params.atmosphereHeight; }
-                if (params.rayleighScattering) { atmos["rayleighScattering"] = vec3Json(*params.rayleighScattering); }
-                if (params.rayleighScaleHeight) { atmos["rayleighScaleHeight"] = *params.rayleighScaleHeight; }
-                if (params.mieScattering) { atmos["mieScattering"] = *params.mieScattering; }
-                if (params.mieScaleHeight) { atmos["mieScaleHeight"] = *params.mieScaleHeight; }
-                if (params.mieAnisotropy) { atmos["mieAnisotropy"] = *params.mieAnisotropy; }
-                if (params.ozoneAbsorption) { atmos["ozoneAbsorption"] = vec3Json(*params.ozoneAbsorption); }
-                if (params.sunDiskAngularRadius) { atmos["sunDiskAngularRadius"] = *params.sunDiskAngularRadius; }
-                if (params.sunDiskIntensity) { atmos["sunDiskIntensity"] = *params.sunDiskIntensity; }
+                if (params.enabled)
+                {
+                    atmos["enabled"] = *params.enabled;
+                }
+                if (params.planetRadius)
+                {
+                    atmos["planetRadius"] = *params.planetRadius;
+                }
+                if (params.atmosphereHeight)
+                {
+                    atmos["atmosphereHeight"] = *params.atmosphereHeight;
+                }
+                if (params.rayleighScattering)
+                {
+                    atmos["rayleighScattering"] = vec3Json(*params.rayleighScattering);
+                }
+                if (params.rayleighScaleHeight)
+                {
+                    atmos["rayleighScaleHeight"] = *params.rayleighScaleHeight;
+                }
+                if (params.mieScattering)
+                {
+                    atmos["mieScattering"] = *params.mieScattering;
+                }
+                if (params.mieScaleHeight)
+                {
+                    atmos["mieScaleHeight"] = *params.mieScaleHeight;
+                }
+                if (params.mieAnisotropy)
+                {
+                    atmos["mieAnisotropy"] = *params.mieAnisotropy;
+                }
+                if (params.ozoneAbsorption)
+                {
+                    atmos["ozoneAbsorption"] = vec3Json(*params.ozoneAbsorption);
+                }
+                if (params.sunDiskAngularRadius)
+                {
+                    atmos["sunDiskAngularRadius"] = *params.sunDiskAngularRadius;
+                }
+                if (params.sunDiskIntensity)
+                {
+                    atmos["sunDiskIntensity"] = *params.sunDiskIntensity;
+                }
                 body["atmosphere"] = atmos;
                 ctx.sceneEdit.scene.environment = environmentFromJson(body);
                 ctx.sceneEdit.sceneVersion += 1;

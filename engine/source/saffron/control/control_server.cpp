@@ -101,13 +101,14 @@ namespace se
         Entity found{ entt::null };
         if (haveUuid)
         {
-            forEach<IdComponent>(scene, [&](Entity entity, IdComponent& id)
-        {
-                if (id.id.value == wanted)
-                {
-                    found = entity;
-                }
-            });
+            forEach<IdComponent>(scene,
+                                 [&](Entity entity, IdComponent& id)
+                                 {
+                                     if (id.id.value == wanted)
+                                     {
+                                         found = entity;
+                                     }
+                                 });
             if (found.handle != entt::null)
             {
                 return found;
@@ -116,13 +117,14 @@ namespace se
         if (selector.is_string())
         {
             const std::string name = selector.get<std::string>();
-            forEach<NameComponent>(scene, [&](Entity entity, NameComponent& component)
-        {
-                if (found.handle == entt::null && component.name == name)
-                {
-                    found = entity;
-                }
-            });
+            forEach<NameComponent>(scene,
+                                   [&](Entity entity, NameComponent& component)
+                                   {
+                                       if (found.handle == entt::null && component.name == name)
+                                       {
+                                           found = entity;
+                                       }
+                                   });
         }
         if (found.handle == entt::null)
         {
@@ -329,7 +331,8 @@ namespace se
         delete ctx;
     }
 
-    void pollControl(ControlContext& ctx, Window& window, Renderer& renderer, SceneEditContext& editor, AssetServer& assets)
+    void pollControl(ControlContext& ctx, Window& window, Renderer& renderer, SceneEditContext& editor,
+                     AssetServer& assets)
     {
         if (!ctx.active)
         {

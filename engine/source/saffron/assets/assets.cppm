@@ -625,14 +625,14 @@ export namespace se
         ensureAssetDirectories(assets);
         const std::string relativePath = "models/" + std::to_string(meshId.value) + ".smesh";
         Result<void> baked = model->hasSkin
-            ? saveMeshSkinned(model->mesh, model->skin, assets.root + "/" + relativePath)
-            : saveMesh(model->mesh, assets.root + "/" + relativePath);
+                                 ? saveMeshSkinned(model->mesh, model->skin, assets.root + "/" + relativePath)
+                                 : saveMesh(model->mesh, assets.root + "/" + relativePath);
         if (!baked)
         {
             return Err(baked.error());
         }
-        auto meshRef = model->hasSkin ? uploadMesh(renderer, model->mesh, model->skin)
-                                      : uploadMesh(renderer, model->mesh);
+        auto meshRef =
+            model->hasSkin ? uploadMesh(renderer, model->mesh, model->skin) : uploadMesh(renderer, model->mesh);
         if (!meshRef)
         {
             return Err(meshRef.error());
@@ -773,15 +773,15 @@ export namespace se
 
         const i32 meshNode = result.skinDesc.meshNode;
         Entity meshEntity = meshNode >= 0 && static_cast<std::size_t>(meshNode) < nodeEntities.size()
-            ? nodeEntities[static_cast<std::size_t>(meshNode)]
-            : createEntity(scene, name);
+                                ? nodeEntities[static_cast<std::size_t>(meshNode)]
+                                : createEntity(scene, name);
         getComponent<NameComponent>(scene, meshEntity).name = std::move(name);
         SkinnedMeshComponent& skin = addComponent<SkinnedMeshComponent>(scene, meshEntity);
         skin.mesh = result.mesh;
         const i32 root = result.skinDesc.skeletonRoot;
         skin.rootBone = root >= 0 && static_cast<std::size_t>(root) < nodeUuids.size()
-            ? nodeUuids[static_cast<std::size_t>(root)]
-            : (bones.empty() ? Uuid{ 0 } : bones.front());
+                            ? nodeUuids[static_cast<std::size_t>(root)]
+                            : (bones.empty() ? Uuid{ 0 } : bones.front());
         skin.bones = std::move(bones);
         skin.inverseBind = result.skinDesc.inverseBind;
         MaterialComponent& material = addComponent<MaterialComponent>(scene, meshEntity);
@@ -847,8 +847,8 @@ export namespace se
                                                // A parented light re-aims with its parent; a
                                                // transformless one keeps its raw direction.
                                                lightDir = hasComponent<TransformComponent>(scene, entity)
-                                                   ? worldRotation(scene, entity) * light.direction
-                                                   : light.direction;
+                                                              ? worldRotation(scene, entity) * light.direction
+                                                              : light.direction;
                                                lightColor = light.color;
                                                lightIntensity = light.intensity;
                                                lightAmbient = light.ambient;
@@ -1278,63 +1278,64 @@ export namespace se
 
         Entity hit{ entt::null };
         f32 nearest = std::numeric_limits<f32>::max();
-        forEach<TransformComponent, MeshComponent>(
-            scene,
-            [&](Entity entity, TransformComponent&, MeshComponent& mesh)
-            {
-                auto meshRef = loadMeshAsset(assets, renderer, mesh.mesh);
-                if (!meshRef)
-                {
-                    return;
-                }
-                // World AABB from the 8 transformed local-AABB corners; the world matrix
-                // comes from the last frame's flatten (lockstep with the draw loop).
-                const glm::mat4 model = worldMatrix(scene, entity);
-                const glm::vec3 lo = meshRef->boundsMin;
-                const glm::vec3 hi = meshRef->boundsMax;
-                glm::vec3 worldMin{ std::numeric_limits<f32>::max() };
-                glm::vec3 worldMax{ std::numeric_limits<f32>::lowest() };
-                for (u32 corner = 0; corner < 8; corner = corner + 1)
-                {
-                    glm::vec3 p = lo;
-                    if (corner & 1u)
-                    {
-                        p.x = hi.x;
-                    }
-                    if (corner & 2u)
-                    {
-                        p.y = hi.y;
-                    }
-                    if (corner & 4u)
-                    {
-                        p.z = hi.z;
-                    }
-                    const glm::vec3 world = glm::vec3(model * glm::vec4(p, 1.0f));
-                    worldMin = glm::min(worldMin, world);
-                    worldMax = glm::max(worldMax, world);
-                }
+        forEach<TransformComponent, MeshComponent>(scene,
+                                                   [&](Entity entity, TransformComponent&, MeshComponent& mesh)
+                                                   {
+                                                       auto meshRef = loadMeshAsset(assets, renderer, mesh.mesh);
+                                                       if (!meshRef)
+                                                       {
+                                                           return;
+                                                       }
+                                                       // World AABB from the 8 transformed local-AABB corners; the
+                                                       // world matrix comes from the last frame's flatten (lockstep
+                                                       // with the draw loop).
+                                                       const glm::mat4 model = worldMatrix(scene, entity);
+                                                       const glm::vec3 lo = meshRef->boundsMin;
+                                                       const glm::vec3 hi = meshRef->boundsMax;
+                                                       glm::vec3 worldMin{ std::numeric_limits<f32>::max() };
+                                                       glm::vec3 worldMax{ std::numeric_limits<f32>::lowest() };
+                                                       for (u32 corner = 0; corner < 8; corner = corner + 1)
+                                                       {
+                                                           glm::vec3 p = lo;
+                                                           if (corner & 1u)
+                                                           {
+                                                               p.x = hi.x;
+                                                           }
+                                                           if (corner & 2u)
+                                                           {
+                                                               p.y = hi.y;
+                                                           }
+                                                           if (corner & 4u)
+                                                           {
+                                                               p.z = hi.z;
+                                                           }
+                                                           const glm::vec3 world =
+                                                               glm::vec3(model * glm::vec4(p, 1.0f));
+                                                           worldMin = glm::min(worldMin, world);
+                                                           worldMax = glm::max(worldMax, world);
+                                                       }
 
-                const glm::vec3 t0 = (worldMin - origin) * invDir;
-                const glm::vec3 t1 = (worldMax - origin) * invDir;
-                const glm::vec3 tlo = glm::min(t0, t1);
-                const glm::vec3 thi = glm::max(t0, t1);
-                const f32 tEnter = glm::max(glm::max(tlo.x, tlo.y), tlo.z);
-                const f32 tExit = glm::min(glm::min(thi.x, thi.y), thi.z);
-                if (tExit < 0.0f || tEnter > tExit)
-                {
-                    return;
-                }
-                f32 t = tEnter;
-                if (t < 0.0f)
-                {
-                    t = tExit;  // ray origin inside the box
-                }
-                if (t < nearest)
-                {
-                    nearest = t;
-                    hit = entity;
-                }
-            });
+                                                       const glm::vec3 t0 = (worldMin - origin) * invDir;
+                                                       const glm::vec3 t1 = (worldMax - origin) * invDir;
+                                                       const glm::vec3 tlo = glm::min(t0, t1);
+                                                       const glm::vec3 thi = glm::max(t0, t1);
+                                                       const f32 tEnter = glm::max(glm::max(tlo.x, tlo.y), tlo.z);
+                                                       const f32 tExit = glm::min(glm::min(thi.x, thi.y), thi.z);
+                                                       if (tExit < 0.0f || tEnter > tExit)
+                                                       {
+                                                           return;
+                                                       }
+                                                       f32 t = tEnter;
+                                                       if (t < 0.0f)
+                                                       {
+                                                           t = tExit;  // ray origin inside the box
+                                                       }
+                                                       if (t < nearest)
+                                                       {
+                                                           nearest = t;
+                                                           hit = entity;
+                                                       }
+                                                   });
         return hit;
     }
 }
