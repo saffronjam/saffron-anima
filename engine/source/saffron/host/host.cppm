@@ -192,21 +192,21 @@ namespace se
         {
             return;
         }
-        se::TransformComponent& transform = se::getComponent<se::TransformComponent>(editor.scene, editor.selected);
-        const auto axes = se::gizmoAxes(transform, editor.nativeGizmo.space);
-        const se::GizmoProjection origin = se::viewportProject(cam, width, height, transform.translation);
+        const glm::vec3 position = se::worldTranslation(editor.scene, editor.selected);
+        const auto axes = se::gizmoAxes(se::worldRotation(editor.scene, editor.selected), editor.nativeGizmo.space);
+        const se::GizmoProjection origin = se::viewportProject(cam, width, height, position);
         if (!origin.visible)
         {
             return;
         }
-        const se::f32 distance = glm::length(se::cameraPosition(cam) - transform.translation);
+        const se::f32 distance = glm::length(se::cameraPosition(cam) - position);
         const se::f32 axisLen = std::max(0.75f, distance * 0.22f);
         const std::array<se::NativeGizmoHandle, 3> handles{ se::NativeGizmoHandle::X, se::NativeGizmoHandle::Y,
                                                             se::NativeGizmoHandle::Z };
         for (se::u32 i = 0; i < 3; i = i + 1)
         {
             const se::GizmoProjection end =
-                se::viewportProject(cam, width, height, transform.translation + axes[i] * axisLen);
+                se::viewportProject(cam, width, height, position + axes[i] * axisLen);
             if (!end.visible)
             {
                 continue;
@@ -226,7 +226,7 @@ namespace se
             for (const auto& [handle, offset] : planes)
             {
                 const se::GizmoProjection center =
-                    se::viewportProject(cam, width, height, transform.translation + offset);
+                    se::viewportProject(cam, width, height, position + offset);
                 if (center.visible)
                 {
                     addBox(vertices, center.pixel, 18.0f, se::axisColor(handle, editor.nativeGizmo), width, height);
@@ -251,7 +251,7 @@ namespace se
                 {
                     const se::f32 t = static_cast<se::f32>(i) / static_cast<se::f32>(segments) * glm::two_pi<se::f32>();
                     const se::GizmoProjection cur = se::viewportProject(
-                        cam, width, height, transform.translation + (a * std::cos(t) + b * std::sin(t)) * radius);
+                        cam, width, height, position + (a * std::cos(t) + b * std::sin(t)) * radius);
                     if (i > 0 && prev.visible && cur.visible)
                     {
                         addLine(vertices, prev.pixel, cur.pixel, 3.0f, se::axisColor(handles[axis], editor.nativeGizmo),
@@ -280,14 +280,15 @@ namespace se
 
         se::forEach<se::TransformComponent>(
             editor.scene,
-            [&](se::Entity e, se::TransformComponent& transform)
+            [&](se::Entity e, se::TransformComponent&)
             {
                 const BillboardKind kind = billboardKind(editor.scene, e);
                 if (kind == BillboardKind::None)
                 {
                     return;
                 }
-                const se::GizmoProjection p = se::viewportProject(cam, width, height, transform.translation);
+                const glm::vec3 position = se::worldTranslation(editor.scene, e);
+                const se::GizmoProjection p = se::viewportProject(cam, width, height, position);
                 if (!p.visible)
                 {
                     return;
@@ -303,9 +304,9 @@ namespace se
                 {
                     const glm::vec4 color = sel ? selectedColor : glm::vec4{ 0.45f, 0.85f, 1.0f, 0.9f };
                     addBulbIcon(vertices, p.pixel, color, width, height);
-                    const glm::vec3 forward = glm::quat(transform.rotation) * glm::vec3{ 0.0f, 0.0f, -1.0f };
+                    const glm::vec3 forward = se::worldRotation(editor.scene, e) * glm::vec3{ 0.0f, 0.0f, -1.0f };
                     const se::GizmoProjection tip =
-                        se::viewportProject(cam, width, height, transform.translation + forward * 0.6f);
+                        se::viewportProject(cam, width, height, position + forward * 0.6f);
                     if (tip.visible)
                     {
                         addLine(vertices, p.pixel, tip.pixel, 3.0f, color, width, height);
@@ -331,14 +332,14 @@ namespace se
         se::Entity hit{ entt::null };
         se::f32 best = half;
         se::forEach<se::TransformComponent>(editor.scene,
-                                            [&](se::Entity e, se::TransformComponent& transform)
+                                            [&](se::Entity e, se::TransformComponent&)
                                             {
                                                 if (billboardKind(editor.scene, e) == BillboardKind::None)
                                                 {
                                                     return;
                                                 }
-                                                const se::GizmoProjection p =
-                                                    se::viewportProject(cam, width, height, transform.translation);
+                                                const se::GizmoProjection p = se::viewportProject(
+                                                    cam, width, height, se::worldTranslation(editor.scene, e));
                                                 if (!p.visible)
                                                 {
                                                     return;
@@ -400,11 +401,7 @@ namespace se
                 gizmo.dragging = true;
                 gizmo.startMouse = mouse;
                 gizmo.target = editor.selected;
-                se::TransformComponent& transform =
-                    se::getComponent<se::TransformComponent>(editor.scene, editor.selected);
-                gizmo.startTranslation = transform.translation;
-                gizmo.startRotation = transform.rotation;
-                gizmo.startScale = transform.scale;
+                se::snapshotNativeGizmoStart(editor, editor.selected);
                 return true;
             }
             const se::Entity billboard = pickSceneEditBillboard(editor, cam, width, height, mouse);
