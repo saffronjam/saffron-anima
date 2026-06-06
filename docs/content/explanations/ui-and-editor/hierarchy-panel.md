@@ -26,9 +26,8 @@ Rows indent by depth and show a twisty only when they have children.
 Expand/collapse state (`expandedIds`) is plain UI state, deliberately outside the
 `sceneVersion` keying — a scene mutation never collapses the tree. `setEntities` prunes ids that
 left the scene, selection reveals collapsed ancestors, and the set persists per project path in
-`localStorage`. The context menu and the inline rename input anchor to the sidebar rows: the
-viewport is a reparented native X11 child that paints over the webview, so every popover and drag
-affordance must stay in non-viewport DOM.
+`localStorage`. The context menu and the inline rename input anchor to the sidebar rows, next to
+the content they act on.
 
 A header toggle (default off) additionally shows the **selected** entity's components as
 read-only leaf subrows under its row, sourced from the `inspect` result the poll already keeps

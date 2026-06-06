@@ -9,7 +9,7 @@ Capture writes a frame of rendered output to a PNG on disk. The `screenshot` com
 
 The viewport is a renderer-owned offscreen image that can be made idle and copied on demand. The window's image belongs to the presentation engine and is untouchable until it has been presented. The reply's `pending` field records the difference: a viewport grab finishes inside the command (`pending:false`), while a window grab only requests the capture and returns immediately (`pending:true`), writing the file when the current frame presents.
 
-The viewport grab reads the offscreen image back the same way the [live frame transport](../../ui-and-editor/tauri-editor-and-viewport-transport/) does — the per-frame readback ring that feeds the editor canvas is the same offscreen-to-host copy, made async. A window grab targets the swapchain image, so it exists only in the standalone swapchain run; under the editor's windowless transport there is no swapchain to copy from.
+The viewport grab reads the offscreen image back the same way the [live frame transport](../../ui-and-editor/viewport-compositing/) does — the per-frame readback ring that feeds the editor canvas is the same offscreen-to-host copy, made async. A window grab targets the swapchain image, so it exists only in the standalone swapchain run; under the editor's windowless transport there is no swapchain to copy from.
 
 ## Synchronous viewport capture
 

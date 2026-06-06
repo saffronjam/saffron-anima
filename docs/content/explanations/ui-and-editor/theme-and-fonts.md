@@ -56,6 +56,6 @@ The dock is reproduced with `react-resizable-panels` (shadcn's `resizable`): a f
 
 ## Related
 
-- [Tauri editor and the viewport transport](../tauri-editor-and-viewport-transport/) — the shell the theme dresses
+- [Tauri editor and the viewport bridge](../tauri-editor-and-viewport-bridge/) — the shell the theme dresses
 - [Viewport panel](../viewport-panel/) — the panel that fills the dock center
 - [Inspector](../inspector/) — uses the mono font for its data fields

@@ -41,6 +41,7 @@ Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [
 | `get-gizmo` | — | the gizmo `{op, space}` |
 | `set-gizmo` | `{op?:translate\|rotate\|scale, space?:world\|local}` | set the gizmo op/space |
 | `gizmo-pointer` | `{phase:hover\|begin\|drag\|end, x, y}` | drive the native overlay gizmo from NDC `x,y∈[-1,1]`; returns `{hovered, dragging}` |
+| `fly-input` | `{active, lookDx, lookDy, forward, back, left, right, up, down}` | stream editor fly-cam input; look deltas (pixels) accumulate until the engine drains them each frame |
 ## Render commands
 *(`control_commands_render.cpp`)*
 
@@ -62,9 +63,8 @@ Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [
 | `set-skinning` | `{0\|1}` | the GPU skinning path (off = skinned meshes do not gather) |
 | `set-exposure` | `{ev}` | tonemap exposure in stops (`exp2(ev)`) |
 | `set-depth-prepass` | `{0\|1}` | depth pre-pass |
-| `viewport-native-info` | — | viewport surface status `{platform, transport, status, controlSocket, width, height, message}`; `transport` is `shm` under the readback transport (frames stream into the editor webview canvas), else `swapchain` (standalone window) |
-| `viewport-frame-info` | — | viewport frame transport + geometry. Shm: `{transport:"shm", width, height, shmPath, strideBytes, format:"rgba8", planeCount:3, generation, seqno}` (seqno is a u64 string); swapchain: `{transport:"swapchain", width, height}` |
-| `set-viewport-size` | `{width, height}` | desired viewport size in pixels (clamped ≥ 1); under shm transport updates the window + renderer extent, under swapchain drives only the offscreen extent |
+| `viewport-native-info` | — | viewport bridge status `{platform, transport, status, controlSocket, width, height, message}`; the editor polls it as its readiness probe (`transport` is `wayland-subsurface`) |
+| `set-viewport-size` | `{width, height}` | desired offscreen render size in device pixels (clamped ≥ 1); the editor sends it from the viewport panel's rect |
 
 > Under present-only mode `screenshot target=window` is disabled (the swapchain is never in a
 > capturable layout) — use `screenshot target=viewport` instead.

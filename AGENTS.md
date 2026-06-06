@@ -1,11 +1,12 @@
 # SaffronEngine
 
 A from-scratch **Vulkan** renderer / **C++26** game engine. The engine is a static library
-(`Saffron::Engine`) that also builds **`SaffronEngine`**, a *present-only viewport host*: it opens a
-Vulkan swapchain, draws the scene plus a native gizmo overlay, and serves the control plane — **no UI
-panels of its own**. The **editor is the Tauri/React/TypeScript app in `editor/`**; it spawns the host,
-reparents its X11 window as a native child, and drives every operation over a JSON-over-unix-socket
-control plane. This is a clean-slate rewrite of an older DirectX 11 engine (prior code on `old-master`
+(`Saffron::Engine`) that also builds **`SaffronEngine`**, a *headless viewport host*: it renders the
+scene plus a native gizmo overlay offscreen, publishes frames into shared memory, and serves the
+control plane — **no UI panels of its own**. The **editor is the Tauri/React/TypeScript app in
+`editor/`**; it spawns the host, presents its frames on a Wayland subsurface below the transparent
+webview (UI composites over the live viewport), and drives every operation over a
+JSON-over-unix-socket control plane. This is a clean-slate rewrite of an older DirectX 11 engine (prior code on `old-master`
 / `rework`, reference only); it preserves the API *shape* that worked — an `App`/`Layer` lifecycle, a
 deferred `submit(lambda)` render seam, a frame graph, an entt scene, signal/slot events — and drops
 everything DX11-specific and the heavy OOP.
@@ -84,7 +85,7 @@ cd editor && bun install && bun run check && bun run tauri dev
 
 `bun run check` regenerates `@saffron/protocol` from `schemas/control` and typechecks; `bun run format`
 (oxfmt) and `bun run lint` (oxlint) cover style. `tauri dev` spawns `build/debug/bin/SaffronEngine`
-(override with `SAFFRON_ENGINE_BIN`) and needs an X11/XWayland display for the reparent.
+(override with `SAFFRON_ENGINE_BIN`) and needs a Wayland session for the subsurface presenter.
 
 ## Architecture
 

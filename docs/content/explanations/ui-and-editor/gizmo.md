@@ -7,7 +7,7 @@ weight = 4
 
 A transform gizmo is an on-screen widget that edits a selected entity's translation, rotation, or scale by dragging handles drawn over it in the viewport. It is the direct-manipulation alternative to typing transform values into a panel.
 
-The gizmo is rendered by the engine, not a UI toolkit. The engine has no ImGui/ImGuizmo; under [present-only mode](../tauri-editor-and-viewport-transport/) it draws the handles itself as a native overlay, and the webview forwards pointer intent and the chosen mode over the control socket.
+The gizmo is rendered by the engine, not a UI toolkit. The engine has no ImGui/ImGuizmo; under [the compositing path](../viewport-compositing/) it draws the handles itself as a native overlay, and the webview forwards pointer intent and the chosen mode over the control socket.
 
 ## Engine-rendered overlay
 

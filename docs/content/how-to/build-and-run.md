@@ -35,7 +35,7 @@ Build `SaffronEngine` first; the Tauri app spawns it on launch.
 
 ## Run the Tauri editor
 
-The Tauri app builds and runs in the same toolbox, with the host `bun` on the PATH (the home directory is shared in). `bun run tauri dev` spawns the `SaffronEngine` host built above and reparents its viewport into the webview, so build the host first.
+The Tauri app builds and runs in the same toolbox, with the host `bun` on the PATH (the home directory is shared in). `bun run tauri dev` spawns the `SaffronEngine` host built above and composites its frames under the webview, so build the host first.
 
 ```sh
 toolbox run -c saffron-build bash -lc '
@@ -46,7 +46,7 @@ toolbox run -c saffron-build bash -lc '
   bun run tauri dev  # spawns the engine host + opens the editor'
 ```
 
-`bun run check` regenerates `editor/src/protocol/` from the [control schemas](../../explanations/tooling-and-control/shared-types/) and typechecks. The dev launch needs an X11/XWayland display because the reparented child is Xlib-only. It cannot run under the toolbox's headless Wayland compositor; use a real desktop session.
+`bun run check` regenerates `editor/src/protocol/` from the [control schemas](../../explanations/tooling-and-control/shared-types/) and typechecks. The dev launch needs a Wayland session because the viewport presents on a wl_subsurface; use a real desktop session.
 
 ## Verify
 
@@ -73,6 +73,6 @@ toolbox run -c saffron-build bash -lc '
 
 ## Related
 
-- [Tauri editor and the X11 bridge](../../explanations/ui-and-editor/tauri-editor-and-x11-bridge/) — how the editor drives the host
+- [Tauri editor and the viewport bridge](../../explanations/ui-and-editor/tauri-editor-and-viewport-bridge/) — how the editor drives the host
 - [Main loop](../../explanations/app-lifecycle-and-window/main-loop-and-run/)
 - [Headless runs and capture](../../explanations/app-lifecycle-and-window/headless-and-capture/)
