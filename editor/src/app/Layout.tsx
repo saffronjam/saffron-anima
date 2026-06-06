@@ -1,12 +1,13 @@
-/// The resizable dock layout: Hierarchy + a tabbed Inspector/Environment/Stats
-/// column on the LEFT, Assets along the BOTTOM, Viewport in the CENTER. The split
-/// ratios are Assets bottom 0.28 and leftBottom 0.55 (so Hierarchy is the top 0.45
-/// of the left column). The left sidebar uses a pixel width so it cannot collapse
-/// while the native viewport is attaching.
+/// The resizable dock layout: a full-height Hierarchy + tabbed
+/// Inspector/Environment/Stats column on the LEFT; the RIGHT region stacks the
+/// Viewport on top of the Assets browser (so Assets sits beside the sidebar, not
+/// under it). The split ratios are right-region Assets 0.28 and leftBottom 0.55
+/// (Hierarchy is the top 0.45 of the sidebar). The left sidebar uses a pixel width
+/// so it cannot collapse while the native viewport is attaching.
 ///
-/// Nested ResizablePanelGroups (react-resizable-panels via the shadcn wrapper):
-///   outer vertical  : top region (~72) + Assets bottom (~28)
-///   left vertical   : Hierarchy (~45) + tabbed panel (~55)
+/// ResizablePanelGroups (react-resizable-panels via the shadcn wrapper):
+///   right vertical : Viewport (~72) + Assets bottom (~28)
+///   left vertical  : Hierarchy (~45) + tabbed panel (~55)
 ///
 /// Every Radix popover/menu and every resize handle lives in a non-viewport region,
 /// so none of them are occluded by the reparented native X11 window. The Viewport
@@ -74,41 +75,41 @@ export function Layout() {
   };
 
   return (
-    <ResizablePanelGroup
-      orientation="vertical"
-      className="min-h-0 flex-1"
-      onLayoutChanged={syncViewportAfterLayout}
-    >
-      <ResizablePanel defaultSize={72} minSize={30} className="min-h-0">
-        <div className="flex h-full min-w-0">
-          <aside className="min-h-0 flex-none bg-background" style={{ width: `${sidebarWidth}px` }}>
-            <ResizablePanelGroup orientation="vertical" onLayoutChanged={syncViewportAfterLayout}>
-              <ResizablePanel defaultSize={45} minSize={15} className="min-h-0 bg-background">
-                <HierarchyPanel />
-              </ResizablePanel>
-              <ResizableHandle />
-              <ResizablePanel defaultSize={55} minSize={15} className="min-h-0 bg-background">
-                <LeftBottomTabs />
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          </aside>
-          <div
-            className="relative flex w-px flex-none cursor-col-resize items-center justify-center bg-border after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            onPointerDown={beginSidebarResize}
-          />
-          <main className="min-w-0 flex-1 overflow-hidden">
+    <div className="flex min-h-0 min-w-0 flex-1">
+      <aside className="min-h-0 flex-none bg-background" style={{ width: `${sidebarWidth}px` }}>
+        <ResizablePanelGroup orientation="vertical" onLayoutChanged={syncViewportAfterLayout}>
+          <ResizablePanel defaultSize={45} minSize={15} className="min-h-0 bg-background">
+            <HierarchyPanel />
+          </ResizablePanel>
+          <ResizableHandle />
+          <ResizablePanel defaultSize={55} minSize={15} className="min-h-0 bg-background">
+            <LeftBottomTabs />
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      </aside>
+      <div
+        className="relative flex w-px flex-none cursor-col-resize items-center justify-center bg-border after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        onPointerDown={beginSidebarResize}
+      />
+      <ResizablePanelGroup
+        orientation="vertical"
+        className="min-h-0 min-w-0 flex-1"
+        onLayoutChanged={syncViewportAfterLayout}
+      >
+        <ResizablePanel defaultSize={72} minSize={30} className="min-h-0">
+          <main className="h-full min-w-0 overflow-hidden">
             <ViewportPanel />
           </main>
-        </div>
-      </ResizablePanel>
-      <ResizableHandle />
-      <ResizablePanel defaultSize={28} minSize={12} className="min-h-0 bg-background">
-        <AssetsPanel />
-      </ResizablePanel>
-    </ResizablePanelGroup>
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel defaultSize={28} minSize={12} className="min-h-0 bg-background">
+          <AssetsPanel />
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    </div>
   );
 }
 

@@ -74,14 +74,9 @@ for the poll to recover from.
 Drag visuals are in-flow sidebar DOM only (a row ring and a root drop strip); a floating drag
 image or a portal'd indicator over the viewport rect would be painted over by the native child.
 
-## The Environment sentinel
-
-The first row is a pinned `Environment` node: non-deletable, non-draggable, never a drop target,
-and backed by no entity id. Selecting it flips the bottom dock tab to the Environment panel and
-records a `selectedSentinel` flag — `selectedId` stays untouched, so `get-selection` / `inspect`
-are never handed a non-entity id. This keeps one environment editor (the panel) with two entry
-points, and honors the engine-side decision that the environment is global `Scene` state, not an
-entity.
+The tree holds entities only. The environment is global `Scene` state, not an entity, and is
+edited solely through the Environment tab in the sidebar — it never appears as a tree row, so
+`get-selection` / `inspect` are never handed a non-entity id.
 
 ## Creating entities
 

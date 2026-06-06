@@ -43,7 +43,7 @@ The theme defaults to system sans and monospace stacks. Roboto and Roboto Mono r
 
 ## Layout: a resizable dock
 
-The dock is reproduced with `react-resizable-panels` (shadcn's `resizable`): Hierarchy plus a tabbed Inspector/Environment/Stats column on the left, Assets along the bottom, [Viewport](../viewport-panel/) in the center. The split ratios are left 0.20, bottom 0.28, and a 0.45/0.55 split within the left column. Render Stats is tabbed next to Inspector and Environment. The viewport is a `<canvas>` the webview paints, so panels, popovers, and modals stack over it by `z-index` like any other DOM element — the chrome and the viewport are one composited surface.
+The dock is reproduced with `react-resizable-panels` (shadcn's `resizable`): a full-height Hierarchy plus tabbed Inspector/Environment/Stats column on the left, and a right region stacking the [Viewport](../viewport-panel/) over the Assets browser. The split ratios are right-region bottom 0.28 and a 0.45/0.55 split within the left column. Render Stats is tabbed next to Inspector and Environment. The viewport is a `<canvas>` the webview paints, so panels, popovers, and modals stack over it by `z-index` like any other DOM element — the chrome and the viewport are one composited surface.
 
 ## In the code
 
