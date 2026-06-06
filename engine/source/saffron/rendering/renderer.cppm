@@ -424,6 +424,8 @@ namespace se
             static_cast<void>(renderer.context.device.waitIdle());
         }
 
+        destroyShmPublish(renderer);  // slot images/buffers + the shm segment
+
         // Drop any Refs the renderer itself still holds, plus the closure vectors
         // (which may capture Refs), before the descriptor pool / allocator / device
         // are torn down — a GpuTexture frees its material set from the pool.
@@ -698,28 +700,42 @@ namespace se
 
         static_cast<void>(renderer.context.device.waitForFences(frame.inFlight, VK_TRUE, UINT64_MAX));
 
-        vk::ResultValue<u32> acquire = renderer.context.device.acquireNextImageKHR(
-            renderer.swapchain.handle, UINT64_MAX, frame.imageAvailable, nullptr);
-        if (acquire.result == vk::Result::eErrorOutOfDateKHR)
+        if (renderer.shmPublish.enabled)
         {
-            recreateSwapchain(renderer);
-            return false;
+            // The fence wait above guarantees this slot's recorded readback (from
+            // MaxFramesInFlight frames ago) has completed: hand it to the editor. The
+            // swapchain is never acquired or presented in this mode.
+            ShmPublishSlot& slot = renderer.shmPublish.slots[renderer.frame.index];
+            if (slot.valid)
+            {
+                publishShmPublishSlot(renderer, slot);
+            }
         }
-        if (acquire.result != vk::Result::eSuccess && acquire.result != vk::Result::eSuboptimalKHR)
+        else
         {
-            logError(std::format("vkAcquireNextImageKHR failed: {}", vk::to_string(acquire.result)));
-            return false;
-        }
-        renderer.frame.imageIndex = acquire.value;
+            vk::ResultValue<u32> acquire = renderer.context.device.acquireNextImageKHR(
+                renderer.swapchain.handle, UINT64_MAX, frame.imageAvailable, nullptr);
+            if (acquire.result == vk::Result::eErrorOutOfDateKHR)
+            {
+                recreateSwapchain(renderer);
+                return false;
+            }
+            if (acquire.result != vk::Result::eSuccess && acquire.result != vk::Result::eSuboptimalKHR)
+            {
+                logError(std::format("vkAcquireNextImageKHR failed: {}", vk::to_string(acquire.result)));
+                return false;
+            }
+            renderer.frame.imageIndex = acquire.value;
 
-        // Ensure the previous frame that used THIS image has finished before we
-        // reuse the image's renderFinished semaphore.
-        if (renderer.swapchain.imagesInFlight[renderer.frame.imageIndex])
-        {
-            static_cast<void>(renderer.context.device.waitForFences(
-                renderer.swapchain.imagesInFlight[renderer.frame.imageIndex], VK_TRUE, UINT64_MAX));
+            // Ensure the previous frame that used THIS image has finished before we
+            // reuse the image's renderFinished semaphore.
+            if (renderer.swapchain.imagesInFlight[renderer.frame.imageIndex])
+            {
+                static_cast<void>(renderer.context.device.waitForFences(
+                    renderer.swapchain.imagesInFlight[renderer.frame.imageIndex], VK_TRUE, UINT64_MAX));
+            }
+            renderer.swapchain.imagesInFlight[renderer.frame.imageIndex] = frame.inFlight;
         }
-        renderer.swapchain.imagesInFlight[renderer.frame.imageIndex] = frame.inFlight;
 
         // Apply a pending Viewport resize (requested last frame). Single shared
         // target, so a full device idle is required before recreating it.
@@ -1834,6 +1850,74 @@ namespace se
                         vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone);
     }
 
+    // Records the offscreen→BGRA8→staging readback into the frame's own command buffer —
+    // the GPU does the RGBA16F→BGRA8 conversion via blit, and the only CPU sync is the
+    // frame fence beginFrame already waits on. No extra submits, no waitIdle.
+    void recordShmPublishCopy(Renderer& renderer, vk::CommandBuffer cmd)
+    {
+        Image& src = renderer.targets.offscreen;
+        const u32 width = src.extent.width;
+        const u32 height = src.extent.height;
+        if (width == 0 || height == 0)
+        {
+            return;
+        }
+        ShmPublishSlot& slot = renderer.shmPublish.slots[renderer.frame.index];
+        if (!ensureShmPublishSlot(renderer, slot, width, height))
+        {
+            return;
+        }
+
+        transitionImage(
+            cmd, src.image, src.layout, vk::ImageLayout::eTransferSrcOptimal,
+            vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eColorAttachmentWrite,
+            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+        src.layout = vk::ImageLayout::eTransferSrcOptimal;
+
+        transitionImage(
+            cmd, slot.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
+
+        vk::ImageBlit blit{};
+        blit.srcSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
+        blit.srcOffsets[0] = vk::Offset3D{ 0, 0, 0 };
+        blit.srcOffsets[1] = vk::Offset3D{ static_cast<i32>(width), static_cast<i32>(height), 1 };
+        blit.dstSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
+        blit.dstOffsets[0] = vk::Offset3D{ 0, 0, 0 };
+        blit.dstOffsets[1] = vk::Offset3D{ static_cast<i32>(width), static_cast<i32>(height), 1 };
+        cmd.blitImage(src.image, vk::ImageLayout::eTransferSrcOptimal, slot.image,
+                      vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eNearest);
+
+        transitionImage(
+            cmd, slot.image, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
+            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
+            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
+
+        vk::BufferImageCopy region{};
+        region.imageSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
+        region.imageExtent = vk::Extent3D{ width, height, 1 };
+        cmd.copyImageToBuffer(slot.image, vk::ImageLayout::eTransferSrcOptimal, vk::Buffer{ slot.buffer }, region);
+
+        // Make the staging write visible to host reads once the frame fence signals.
+        vk::BufferMemoryBarrier2 hostBarrier{};
+        hostBarrier.srcStageMask = vk::PipelineStageFlagBits2::eCopy;
+        hostBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
+        hostBarrier.dstStageMask = vk::PipelineStageFlagBits2::eHost;
+        hostBarrier.dstAccessMask = vk::AccessFlagBits2::eHostRead;
+        hostBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        hostBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        hostBarrier.buffer = vk::Buffer{ slot.buffer };
+        hostBarrier.offset = 0;
+        hostBarrier.size = VK_WHOLE_SIZE;
+        vk::DependencyInfo dependency{};
+        dependency.setBufferMemoryBarriers(hostBarrier);
+        cmd.pipelineBarrier2(dependency);
+
+        slot.valid = true;
+    }
+
     void endFrame(Renderer& renderer)
     {
         FrameData& frame = renderer.frame.frames[renderer.frame.index];
@@ -1900,7 +1984,11 @@ namespace se
                 renderer.captureNextSwapchainPath.reset();
             }
         }
-        if (renderer.presentViewportOnly)
+        if (renderer.shmPublish.enabled)
+        {
+            recordShmPublishCopy(renderer, frame.commandBuffer);
+        }
+        else if (renderer.presentViewportOnly)
         {
             presentViewportToSwapchain(renderer, frame.commandBuffer);
         }
@@ -1923,33 +2011,46 @@ namespace se
 
         static_cast<void>(frame.commandBuffer.end());
 
-        vk::Semaphore signalSemaphore = renderer.swapchain.renderFinished[renderer.frame.imageIndex];
-
-        vk::SemaphoreSubmitInfo waitInfo{};
-        waitInfo.semaphore = frame.imageAvailable;
-        waitInfo.stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput;
-
-        vk::SemaphoreSubmitInfo signalInfo{};
-        signalInfo.semaphore = signalSemaphore;
-        signalInfo.stageMask = vk::PipelineStageFlagBits2::eAllCommands;
-
-        vk::CommandBufferSubmitInfo cmdInfo{};
-        cmdInfo.commandBuffer = frame.commandBuffer;
-
-        vk::SubmitInfo2 submitInfo{};
-        submitInfo.setWaitSemaphoreInfos(waitInfo);
-        submitInfo.setCommandBufferInfos(cmdInfo);
-        submitInfo.setSignalSemaphoreInfos(signalInfo);
-        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, frame.inFlight));
-
-        vk::PresentInfoKHR presentInfo{};
-        presentInfo.setWaitSemaphores(signalSemaphore);
-        presentInfo.setSwapchains(renderer.swapchain.handle);
-        presentInfo.setImageIndices(renderer.frame.imageIndex);
-        vk::Result present = renderer.context.graphicsQueue.presentKHR(presentInfo);
-        if (present == vk::Result::eErrorOutOfDateKHR || present == vk::Result::eSuboptimalKHR)
+        if (renderer.shmPublish.enabled)
         {
-            recreateSwapchain(renderer);
+            // No swapchain image was acquired and nothing presents: submit with the frame
+            // fence only, so the loop is paced purely by GPU completion (frames in flight).
+            vk::CommandBufferSubmitInfo cmdInfo{};
+            cmdInfo.commandBuffer = frame.commandBuffer;
+            vk::SubmitInfo2 submitInfo{};
+            submitInfo.setCommandBufferInfos(cmdInfo);
+            static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, frame.inFlight));
+        }
+        else
+        {
+            vk::Semaphore signalSemaphore = renderer.swapchain.renderFinished[renderer.frame.imageIndex];
+
+            vk::SemaphoreSubmitInfo waitInfo{};
+            waitInfo.semaphore = frame.imageAvailable;
+            waitInfo.stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+
+            vk::SemaphoreSubmitInfo signalInfo{};
+            signalInfo.semaphore = signalSemaphore;
+            signalInfo.stageMask = vk::PipelineStageFlagBits2::eAllCommands;
+
+            vk::CommandBufferSubmitInfo cmdInfo{};
+            cmdInfo.commandBuffer = frame.commandBuffer;
+
+            vk::SubmitInfo2 submitInfo{};
+            submitInfo.setWaitSemaphoreInfos(waitInfo);
+            submitInfo.setCommandBufferInfos(cmdInfo);
+            submitInfo.setSignalSemaphoreInfos(signalInfo);
+            static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, frame.inFlight));
+
+            vk::PresentInfoKHR presentInfo{};
+            presentInfo.setWaitSemaphores(signalSemaphore);
+            presentInfo.setSwapchains(renderer.swapchain.handle);
+            presentInfo.setImageIndices(renderer.frame.imageIndex);
+            vk::Result present = renderer.context.graphicsQueue.presentKHR(presentInfo);
+            if (present == vk::Result::eErrorOutOfDateKHR || present == vk::Result::eSuboptimalKHR)
+            {
+                recreateSwapchain(renderer);
+            }
         }
 
         // The recorded copy is now submitted; idle so it completed, then write the PNG.

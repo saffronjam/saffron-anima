@@ -621,6 +621,38 @@ export namespace se
         std::vector<RenderFn> uiSubmissions;     // replayed into the swapchain pass
     };
 
+    // Pipelined publication of the offscreen viewport into POSIX shared memory for the
+    // editor's compositor-side presenter. Per frame-in-flight slot: a BGRA8 image the GPU
+    // blits into (format conversion) and a persistently mapped staging buffer the CPU
+    // memcpys from once the slot's fence has signalled — no waitIdle anywhere on the path.
+    struct ShmPublishSlot
+    {
+        vk::Image image;
+        VmaAllocation imageAlloc = nullptr;
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VmaAllocation bufferAlloc = nullptr;
+        VmaAllocationInfo bufferInfo{};
+        u32 width = 0;
+        u32 height = 0;
+        bool valid = false;  // a recorded readback is in flight / completed for this slot
+    };
+
+    struct ShmPublish
+    {
+        bool enabled = false;
+        std::string name;
+        std::array<ShmPublishSlot, MaxFramesInFlight> slots{};
+        // Grow-only mapped segment: a 32-byte header [magic, width, height, seq, ringSlots,
+        // slotCapacity, 0, 0] followed by ringSlots fixed-capacity BGRA8 frames. Frame with
+        // sequence s lands in ring slot s % ringSlots, so a compositor can keep reading an
+        // older slot while the engine writes the next.
+        int fd = -1;
+        unsigned char* base = nullptr;
+        std::size_t mappedSize = 0;
+        std::size_t slotCapacity = 0;
+        u32 seq = 0;
+    };
+
     // Descriptor infrastructure built once: layouts, pools, the bindless set, and the
     // post-process compute sets. set 0 = bindless image array, 1 = light UBO, 2 = instances.
     struct Descriptors
@@ -1148,6 +1180,7 @@ export namespace se
         bool useDepthPrepass = false;
         bool useSkinning = true;              // gate for the GPU skinning path; off = skinned items never gather
         bool presentViewportOnly = false;     // native-viewport host: blit offscreen->swapchain, skip the ui pass
+        ShmPublish shmPublish;  // pipelined offscreen→shm publish; replaces present when enabled
         f32 exposureEv = 0.0f;                // tonemap exposure in stops; the tonemap pass applies exp2(this)
         glm::mat4 prevViewProj{ 1.0f };       // last frame's camera viewProj, for TAA motion vectors
         bool prevViewProjValid = false;       // false until the first frame stores one
@@ -1417,4 +1450,13 @@ export namespace se
     // Requests a PNG of the next presented frame (written in endFrame). Fails here
     // if the surface lacks TRANSFER_SRC; otherwise returns immediately.
     auto requestWindowCapture(Renderer& renderer, std::string path) -> Result<void>;
+
+    // Pipelined offscreen→shared-memory publish for the editor's presenter. Once enabled,
+    // endFrame records an offscreen→BGRA8→staging readback into each frame's own command
+    // buffer and skips swapchain acquire/present entirely; beginFrame memcpys the ready
+    // slot into the shared segment after its fence wait. Zero added stalls.
+    void enableViewportShmPublish(Renderer& renderer, const std::string& shmName);
+    auto ensureShmPublishSlot(Renderer& renderer, ShmPublishSlot& slot, u32 width, u32 height) -> bool;
+    void publishShmPublishSlot(Renderer& renderer, ShmPublishSlot& slot);
+    void destroyShmPublish(Renderer& renderer);
 }
