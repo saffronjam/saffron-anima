@@ -222,6 +222,11 @@ export const client = {
   assetUsages(id: string): Promise<AssetUsagesResult> {
     return call("asset-usages", { asset: id });
   },
+  /// On-disk metadata for one asset: size, vertex/triangle counts (meshes), and the
+  /// file's modified time. Backs the assets-panel detail view.
+  probeAsset(id: string): Promise<CommandResultMap["probe-asset"]> {
+    return call("probe-asset", { asset: id });
+  },
   deleteAsset(id: string): Promise<CommandResultMap["delete-asset"]> {
     return call("delete-asset", { asset: id });
   },

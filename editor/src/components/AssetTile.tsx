@@ -49,6 +49,17 @@ export function readAssetPayload(dt: DataTransfer): AssetDragPayload | null {
   return null;
 }
 
+/// The asset ids carried by a drag payload, preferring the multi-select list.
+export function assetIdsFromPayload(payload: AssetDragPayload | null): string[] {
+  if (!payload) {
+    return [];
+  }
+  if (payload.ids && payload.ids.length > 0) {
+    return payload.ids;
+  }
+  return payload.id ? [payload.id] : [];
+}
+
 function TypeIcon({ type }: { type: AssetEntry["type"] }) {
   const className = "size-7 text-muted-foreground";
   if (type === "mesh") {
@@ -151,7 +162,7 @@ export function AssetTile({
   };
 
   return (
-    <div className="relative w-[72px]">
+    <div className="relative w-[72px]" onContextMenu={(event) => event.stopPropagation()}>
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
@@ -162,7 +173,6 @@ export function AssetTile({
             onDragStart={onDragStart}
             onClick={(event) => onSelect(entry, event)}
             onDoubleClick={() => onView(entry)}
-            title={`${entry.name}\n${entry.path}`}
             className={cn(
               "group flex w-[72px] cursor-grab flex-col gap-1 rounded-md border border-border bg-background p-1",
               "transition-colors hover:border-ring hover:bg-accent/40 active:cursor-grabbing",
@@ -194,8 +204,7 @@ export function AssetTile({
             ) : (
               <button
                 type="button"
-                className="truncate rounded-sm px-0.5 text-center text-[11px] leading-tight text-foreground hover:bg-accent"
-                title={entry.name}
+                className="truncate rounded-sm px-0.5 text-center text-[11px] leading-tight text-foreground"
               >
                 {entry.name}
               </button>

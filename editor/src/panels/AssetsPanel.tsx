@@ -1,21 +1,25 @@
 /// The Assets panel: the React port of the C++ `assetCatalogPanel`
-/// (editor_panels.cpp:226-325). A responsive tile grid over `store.assets`, an
-/// Import button (Tauri file dialog), an OS file-drop target, and the View modal.
-/// Imports route by extension (parity with `importToCatalog`,
+/// (editor_panels.cpp:226-325). A folder tree sidebar plus a responsive tile grid
+/// over `store.assets`, navigated through a back/forward history and clickable
+/// breadcrumbs, with an Import button (Tauri file dialog), an OS file-drop target,
+/// and the View modal. Imports route by extension (parity with `importToCatalog`,
 /// editor_app.cppm:188-205): images → import-texture (no spawn), everything else →
 /// import-model (spawns + selects an entity, matching `se import-model`).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ArrowUp, Folder, FolderPlus, Pen, Plus, Trash } from "lucide-react";
+import { ArrowLeft, ArrowRight, Folder, FolderPlus, Pen, Plus, Trash } from "lucide-react";
 import { client } from "../control/client";
 import { invalidateThumbnails, useEditorStore, withNativeDialog } from "../state/store";
 import { AssetTile, DeleteConfirm } from "../components/AssetTile";
-import { ASSET_DND_MIME, readAssetPayload } from "../components/AssetTile";
-import type { AssetEntry } from "../protocol";
+import { ASSET_DND_MIME, assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
+import { AssetFolderTree, folderAncestorPaths } from "./AssetFolderTree";
+import { AssetMetadataPanel } from "../components/AssetMetadataPanel";
+import type { AssetEntry, AssetMetadataDto } from "../protocol";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import {
@@ -42,11 +46,6 @@ function extensionOf(path: string): string {
 function parentFolderPath(folder: string): string | null {
   const slash = folder.lastIndexOf("/");
   return slash >= 0 ? folder.slice(0, slash) : null;
-}
-
-function folderLabel(folder: string): string {
-  const slash = folder.lastIndexOf("/");
-  return slash >= 0 ? folder.slice(slash + 1) : folder;
 }
 
 function isFolderDescendant(candidate: string, folder: string): boolean {
@@ -77,13 +76,29 @@ function normalizeFolderInput(input: string, parent: string | null): string | nu
   return parent ? `${parent}/${relative}` : relative;
 }
 
-function folderAncestorPaths(folder: string): string[] {
-  const segments = folder.split("/");
-  const paths: string[] = [];
-  for (let i = 1; i <= segments.length; i += 1) {
-    paths.push(segments.slice(0, i).join("/"));
+/// Folder navigation history with browser semantics: navigating truncates the
+/// forward tail; back/forward skip entries whose folder no longer exists.
+interface FolderHistory {
+  stack: (string | null)[];
+  index: number;
+}
+
+/// A folder command initiated from the grid or the tree; the origin picks which
+/// surface renders the inline input / confirm so the two never both mount.
+interface FolderActionTarget {
+  path: string;
+  origin: "grid" | "tree";
+}
+
+/// The nearest history entry in `step` direction that still exists; -1 if none.
+function nearestHistoryIndex(history: FolderHistory, folders: string[], step: -1 | 1): number {
+  for (let i = history.index + step; i >= 0 && i < history.stack.length; i += step) {
+    const entry = history.stack[i];
+    if (entry === null || folders.includes(entry)) {
+      return i;
+    }
   }
-  return paths;
+  return -1;
 }
 
 async function importPath(path: string, folder: string | null): Promise<void> {
@@ -113,24 +128,76 @@ export function AssetsPanel() {
   const nativeDialogOpen = useEditorStore((s) => s.nativeDialogOpen);
   const openAssetTab = useEditorStore((s) => s.openAssetTab);
   const closeViewTab = useEditorStore((s) => s.closeViewTab);
-  const [currentFolder, setCurrentFolder] = useState<string | null>(null);
+  const [history, setHistory] = useState<FolderHistory>({ stack: [null], index: 0 });
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [creatingFolderName, setCreatingFolderName] = useState("");
-  const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
+  const [renamingFolder, setRenamingFolder] = useState<FolderActionTarget | null>(null);
   const [pendingAssetDelete, setPendingAssetDelete] = useState<PendingAssetDelete | null>(null);
-  const [pendingFolderDelete, setPendingFolderDelete] = useState<string | null>(null);
+  const [pendingFolderDelete, setPendingFolderDelete] = useState<FolderActionTarget | null>(null);
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [assetDropTarget, setAssetDropTarget] = useState<string | null>(null);
+  const [metadata, setMetadata] = useState<AssetMetadataDto | null>(null);
+  const currentFolder = history.stack[history.index] ?? null;
   const visibleAssets = assets.filter((asset) => (asset.folder ?? "") === (currentFolder ?? ""));
+  const detailAssetId = selectedAssetIds.size === 1 ? [...selectedAssetIds][0] : null;
+
+  // Probe on-disk metadata for the single selected asset; ignore stale responses
+  // when the selection changes mid-flight.
+  useEffect(() => {
+    if (!detailAssetId) {
+      setMetadata(null);
+      return;
+    }
+    let active = true;
+    setMetadata(null);
+    void client
+      .probeAsset(detailAssetId)
+      .then((meta) => {
+        if (active) {
+          setMetadata(meta);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [detailAssetId]);
+
+  const navigateTo = useCallback((folder: string | null): void => {
+    setHistory((current) => {
+      if (current.stack[current.index] === folder) {
+        return current;
+      }
+      const stack = [...current.stack.slice(0, current.index + 1), folder];
+      return { stack, index: stack.length - 1 };
+    });
+  }, []);
+
+  const goBack = useCallback((): void => {
+    setHistory((current) => {
+      const index = nearestHistoryIndex(current, folders, -1);
+      return index < 0 ? current : { ...current, index };
+    });
+  }, [folders]);
+
+  const goForward = useCallback((): void => {
+    setHistory((current) => {
+      const index = nearestHistoryIndex(current, folders, 1);
+      return index < 0 ? current : { ...current, index };
+    });
+  }, [folders]);
+
+  const canGoBack = nearestHistoryIndex(history, folders, -1) >= 0;
+  const canGoForward = nearestHistoryIndex(history, folders, 1) >= 0;
 
   useEffect(() => {
     if (currentFolder && !folders.includes(currentFolder)) {
-      setCurrentFolder(null);
+      navigateTo(null);
     }
-  }, [currentFolder, folders]);
+  }, [currentFolder, folders, navigateTo]);
 
   useEffect(() => {
     const visibleIds = new Set(visibleAssets.map((asset) => asset.id));
@@ -202,10 +269,25 @@ export function AssetsPanel() {
     await importMany(Array.isArray(selection) ? selection : [selection]);
   }, [importMany]);
 
+  // Creation always happens in the current folder; tree-initiated "New Folder"
+  // navigates there first so there is exactly one creation tile.
+  const startCreateFolder = useCallback(
+    (parent: string | null): void => {
+      navigateTo(parent);
+      setFolderError(null);
+      setCreatingFolderName("");
+      setCreatingFolder(true);
+    },
+    [navigateTo],
+  );
+
   const onNewFolder = useCallback((): void => {
+    startCreateFolder(currentFolder);
+  }, [currentFolder, startCreateFolder]);
+
+  const startRenameFolder = useCallback((folder: string, origin: "grid" | "tree"): void => {
     setFolderError(null);
-    setCreatingFolderName("");
-    setCreatingFolder(true);
+    setRenamingFolder({ path: folder, origin });
   }, []);
 
   const commitNewFolder = useCallback(
@@ -256,7 +338,6 @@ export function AssetsPanel() {
       }
       if (folders.includes(next)) {
         setFolderError("Folder already exists");
-        setRenamingFolder(folder);
         return;
       }
       try {
@@ -268,17 +349,19 @@ export function AssetsPanel() {
         }
         await client.renameAssetFolder(folder, next);
         await refreshAssets();
-        if (currentFolder) {
-          setCurrentFolder(replaceFolderPrefix(currentFolder, folder, next));
-        }
+        setHistory((current) => ({
+          ...current,
+          stack: current.stack.map((entry) =>
+            entry === null ? null : replaceFolderPrefix(entry, folder, next),
+          ),
+        }));
         setRenamingFolder(null);
         setFolderError(null);
       } catch {
         setFolderError("Could not rename folder");
-        setRenamingFolder(folder);
       }
     },
-    [currentFolder, folders, refreshAssets],
+    [folders, refreshAssets],
   );
 
   const cancelRenameFolder = useCallback((): void => {
@@ -384,9 +467,9 @@ export function AssetsPanel() {
     [closeViewTab, refreshAssets],
   );
 
-  const requestDeleteFolder = useCallback((folder: string): void => {
+  const requestDeleteFolder = useCallback((folder: string, origin: "grid" | "tree"): void => {
     setPendingAssetDelete(null);
-    setPendingFolderDelete(folder);
+    setPendingFolderDelete({ path: folder, origin });
   }, []);
 
   const confirmDeleteFolder = useCallback(
@@ -396,12 +479,12 @@ export function AssetsPanel() {
         currentFolder === folder ||
         (currentFolder && isFolderDescendant(currentFolder, folder))
       ) {
-        setCurrentFolder(null);
+        navigateTo(null);
       }
       setPendingFolderDelete(null);
       await refreshAssets();
     },
-    [currentFolder, refreshAssets],
+    [currentFolder, navigateTo, refreshAssets],
   );
 
   return (
@@ -436,61 +519,218 @@ export function AssetsPanel() {
           </Button>
         </div>
       </div>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="min-h-0 flex-1">
-            <ScrollArea className="h-full">
-              <AssetPanelBody
-                assets={visibleAssets}
-                folders={folders}
-                currentFolder={currentFolder}
-                dropActive={dropActive}
-                creatingFolder={creatingFolder}
-                creatingFolderName={creatingFolderName}
-                renamingFolder={renamingFolder}
-                folderError={folderError}
-                pendingAssetDelete={pendingAssetDelete}
-                pendingFolderDelete={pendingFolderDelete}
-                selectedAssetIds={selectedAssetIds}
-                assetDropTarget={assetDropTarget}
-                onOpenFolder={setCurrentFolder}
-                onView={openAssetTab}
-                onSelectAsset={selectAsset}
-                onDeleteAsset={(asset) => void requestDeleteAsset(asset)}
-                onConfirmDeleteAsset={(asset) => void confirmDeleteAsset(asset)}
-                onCancelDeleteAsset={() => setPendingAssetDelete(null)}
-                onDeleteFolder={requestDeleteFolder}
-                onConfirmDeleteFolder={(folder) => void confirmDeleteFolder(folder)}
-                onCancelDeleteFolder={() => setPendingFolderDelete(null)}
-                onMoveAssets={(assetIds, folder) => void moveAssetsToFolder(assetIds, folder)}
-                getDragAssetIds={getDragAssetIds}
-                onSetMarqueeSelection={(assetIds) => {
-                  setSelectedAssetIds(new Set(assetIds));
-                  setSelectionAnchorId(assetIds.at(-1) ?? null);
-                }}
-                onCommitNewFolder={(name) => void commitNewFolder(name)}
-                onChangeNewFolderName={setCreatingFolderName}
-                onCancelNewFolder={cancelNewFolder}
-                onStartRenameFolder={setRenamingFolder}
-                onCommitRenameFolder={(folder, name) => void commitRenameFolder(folder, name)}
-                onCancelRenameFolder={cancelRenameFolder}
-                onAssetDropTarget={setAssetDropTarget}
-                onClearFolderError={() => setFolderError(null)}
-              />
-            </ScrollArea>
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-40">
-          <ContextMenuItem onSelect={onNewFolder}>
-            <Folder />
-            New Folder
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => void onImportClick()} disabled={nativeDialogOpen}>
-            <Plus />
-            Import
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+      <div className="flex h-8 flex-none items-center gap-1 border-b border-border px-2">
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          disabled={!canGoBack}
+          onClick={goBack}
+          title="Back"
+        >
+          <ArrowLeft />
+        </Button>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          disabled={!canGoForward}
+          onClick={goForward}
+          title="Forward"
+        >
+          <ArrowRight />
+        </Button>
+        <Breadcrumbs
+          currentFolder={currentFolder}
+          onNavigate={navigateTo}
+          onMoveAssets={(assetIds, folder) => void moveAssetsToFolder(assetIds, folder)}
+        />
+      </div>
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+        <ResizablePanel
+          defaultSize={220}
+          minSize={140}
+          maxSize={480}
+          groupResizeBehavior="preserve-pixel-size"
+          className="min-w-0"
+        >
+          <ContextMenu modal={false}>
+            <ContextMenuTrigger asChild>
+              <div className="h-full min-h-0">
+                <ScrollArea className="h-full">
+                  <AssetFolderTree
+                    folders={folders}
+                    currentFolder={currentFolder}
+                    renamingFolder={renamingFolder?.origin === "tree" ? renamingFolder.path : null}
+                    renameInvalid={folderError !== null}
+                    pendingDelete={
+                      pendingFolderDelete?.origin === "tree"
+                        ? {
+                            path: pendingFolderDelete.path,
+                            body: deleteFolderBody(pendingFolderDelete.path),
+                          }
+                        : null
+                    }
+                    onNavigate={navigateTo}
+                    onMoveAssets={(assetIds, folder) => void moveAssetsToFolder(assetIds, folder)}
+                    onNewFolder={startCreateFolder}
+                    onStartRename={(folder) => startRenameFolder(folder, "tree")}
+                    onChangeRename={() => setFolderError(null)}
+                    onCommitRename={(folder, name) => void commitRenameFolder(folder, name)}
+                    onCancelRename={cancelRenameFolder}
+                    onDelete={(folder) => requestDeleteFolder(folder, "tree")}
+                    onConfirmDelete={(folder) => void confirmDeleteFolder(folder)}
+                    onCancelDelete={() => setPendingFolderDelete(null)}
+                  />
+                </ScrollArea>
+              </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="min-w-40">
+              <ContextMenuItem onSelect={onNewFolder}>
+                <Folder />
+                New Folder
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => void onImportClick()} disabled={nativeDialogOpen}>
+                <Plus />
+                Import
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel className="relative min-w-0">
+          <ContextMenu modal={false}>
+            <ContextMenuTrigger asChild>
+              <div className="h-full min-h-0">
+                <AssetPanelBody
+                  assets={visibleAssets}
+                  folders={folders}
+                  currentFolder={currentFolder}
+                  dropActive={dropActive}
+                  creatingFolder={creatingFolder}
+                  creatingFolderName={creatingFolderName}
+                  renamingFolder={renamingFolder}
+                  folderError={folderError}
+                  pendingAssetDelete={pendingAssetDelete}
+                  pendingFolderDelete={pendingFolderDelete}
+                  selectedAssetIds={selectedAssetIds}
+                  assetDropTarget={assetDropTarget}
+                  onOpenFolder={navigateTo}
+                  onView={openAssetTab}
+                  onSelectAsset={selectAsset}
+                  onDeleteAsset={(asset) => void requestDeleteAsset(asset)}
+                  onConfirmDeleteAsset={(asset) => void confirmDeleteAsset(asset)}
+                  onCancelDeleteAsset={() => setPendingAssetDelete(null)}
+                  onDeleteFolder={(folder) => requestDeleteFolder(folder, "grid")}
+                  onConfirmDeleteFolder={(folder) => void confirmDeleteFolder(folder)}
+                  onCancelDeleteFolder={() => setPendingFolderDelete(null)}
+                  onMoveAssets={(assetIds, folder) => void moveAssetsToFolder(assetIds, folder)}
+                  getDragAssetIds={getDragAssetIds}
+                  onSetMarqueeSelection={(assetIds) => {
+                    setSelectedAssetIds(new Set(assetIds));
+                    setSelectionAnchorId(assetIds.at(-1) ?? null);
+                  }}
+                  onCommitNewFolder={(name) => void commitNewFolder(name)}
+                  onChangeNewFolderName={setCreatingFolderName}
+                  onCancelNewFolder={cancelNewFolder}
+                  onStartRenameFolder={(folder) => startRenameFolder(folder, "grid")}
+                  onCommitRenameFolder={(folder, name) => void commitRenameFolder(folder, name)}
+                  onCancelRenameFolder={cancelRenameFolder}
+                  onAssetDropTarget={setAssetDropTarget}
+                  onClearFolderError={() => setFolderError(null)}
+                />
+              </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="min-w-40">
+              <ContextMenuItem onSelect={onNewFolder}>
+                <Folder />
+                New Folder
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => void onImportClick()} disabled={nativeDialogOpen}>
+                <Plus />
+                Import
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+          <AssetMetadataPanel
+            metadata={metadata}
+            open={detailAssetId !== null}
+            onClose={() => {
+              setSelectedAssetIds(new Set());
+              setSelectionAnchorId(null);
+            }}
+          />
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    </div>
+  );
+}
+
+/// The clickable path: Root plus one segment per folder level, each navigating to
+/// its prefix and accepting an asset drop (the move-to-root affordance the old Root
+/// tile provided).
+function Breadcrumbs({
+  currentFolder,
+  onNavigate,
+  onMoveAssets,
+}: {
+  currentFolder: string | null;
+  onNavigate(folder: string | null): void;
+  onMoveAssets(assetIds: string[], folder: string | null): void;
+}) {
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const segments = currentFolder ? currentFolder.split("/") : [];
+  const crumbs: { key: string; label: string; target: string | null }[] = [
+    { key: "", label: "Root", target: null },
+    ...segments.map((segment, i) => {
+      const prefix = segments.slice(0, i + 1).join("/");
+      return { key: prefix, label: segment, target: prefix };
+    }),
+  ];
+  return (
+    <div className="ml-1 flex min-w-0 items-center gap-0.5 overflow-hidden text-xs text-muted-foreground">
+      {crumbs.map((crumb, i) => (
+        <Fragment key={crumb.key}>
+          {i > 0 ? <span className="flex-none">/</span> : null}
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            className={cn(
+              "max-w-40 truncate px-1 font-mono",
+              i === crumbs.length - 1 && i > 0 && "text-foreground",
+              dropTarget === crumb.key && "bg-accent/60 ring-1 ring-ring",
+            )}
+            onClick={() => onNavigate(crumb.target)}
+            onDragEnter={(event) => {
+              if (event.dataTransfer.types.includes(ASSET_DND_MIME)) {
+                setDropTarget(crumb.key);
+              }
+            }}
+            onDragOver={(event) => {
+              if (event.dataTransfer.types.includes(ASSET_DND_MIME)) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setDropTarget(crumb.key);
+              }
+            }}
+            onDragLeave={() => {
+              setDropTarget((current) => (current === crumb.key ? null : current));
+            }}
+            onDrop={(event) => {
+              const ids = assetIdsFromPayload(readAssetPayload(event.dataTransfer));
+              if (ids.length === 0) {
+                return;
+              }
+              event.preventDefault();
+              setDropTarget(null);
+              onMoveAssets(ids, crumb.target);
+            }}
+          >
+            {crumb.label}
+          </Button>
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -535,10 +775,10 @@ function AssetPanelBody({
   dropActive: boolean;
   creatingFolder: boolean;
   creatingFolderName: string;
-  renamingFolder: string | null;
+  renamingFolder: FolderActionTarget | null;
   folderError: string | null;
   pendingAssetDelete: PendingAssetDelete | null;
-  pendingFolderDelete: string | null;
+  pendingFolderDelete: FolderActionTarget | null;
   selectedAssetIds: Set<string>;
   assetDropTarget: string | null;
   onOpenFolder(folder: string | null): void;
@@ -563,8 +803,9 @@ function AssetPanelBody({
   onClearFolderError(): void;
 }) {
   const folderItems = sortedFolderItems(folders, currentFolder, creatingFolder);
-  const empty =
-    !creatingFolder && folderItems.length === 0 && assets.length === 0 && !currentFolder;
+  const blank = !creatingFolder && folderItems.length === 0 && assets.length === 0;
+  const empty = blank && !currentFolder;
+  const folderEmpty = blank && currentFolder !== null;
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [marquee, setMarquee] = useState<MarqueeState | null>(null);
 
@@ -626,11 +867,10 @@ function AssetPanelBody({
   return (
     <div
       ref={panelRef}
-      className={
-        dropActive
-          ? "relative min-h-full rounded-sm p-2 ring-2 ring-inset ring-ring"
-          : "relative min-h-full p-2"
-      }
+      className={cn(
+        "relative h-full min-h-0",
+        dropActive && "rounded-sm ring-2 ring-inset ring-ring",
+      )}
       onPointerDown={startMarquee}
       onPointerMove={moveMarquee}
       onPointerUp={endMarquee}
@@ -664,108 +904,97 @@ function AssetPanelBody({
         onMoveAssets(assetIdsFromPayload(payload), currentFolder);
       }}
     >
-      <div className="mb-2 flex h-7 items-center gap-1 text-xs text-muted-foreground">
-        <Button type="button" size="xs" variant="ghost" onClick={() => onOpenFolder(null)}>
-          Root
-        </Button>
-        {currentFolder ? (
-          <>
-            <span>/</span>
-            <span className="font-mono text-foreground">{currentFolder}</span>
-          </>
-        ) : null}
-      </div>
-      {empty ? (
-        <p className="px-1 py-3 text-center text-xs italic text-muted-foreground">
-          No assets yet. Import or drag-and-drop a model or texture.
-        </p>
-      ) : (
-        <div
-          className="grid gap-2"
-          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(72px, 1fr))" }}
-        >
-          {currentFolder ? (
-            <FolderTile
-              name="Root"
-              kind="root"
-              dragActive={assetDropTarget === ""}
-              onOpen={() => onOpenFolder(null)}
-              onAssetDropTarget={() => onAssetDropTarget("")}
-              onClearAssetDropTarget={() => onAssetDropTarget(null)}
-              onMoveAssets={(assetIds) => onMoveAssets(assetIds, null)}
-            />
-          ) : null}
-          {folderItems.map((item) =>
-            item.kind === "new" ? (
-              <NewFolderTile
-                key="new-folder"
-                value={creatingFolderName}
-                invalid={folderError !== null}
-                onChange={(name) => {
-                  onChangeNewFolderName(name);
-                  if (folderError !== null) {
-                    onClearFolderError();
-                  }
-                }}
-                onCommit={onCommitNewFolder}
-                onCancel={onCancelNewFolder}
-              />
-            ) : (
-              <FolderTile
-                key={item.path}
-                name={item.label}
-                editing={renamingFolder === item.path}
-                invalid={folderError !== null && renamingFolder === item.path}
-                dragActive={assetDropTarget === item.path}
-                onOpen={() => onOpenFolder(item.path)}
-                onAssetDropTarget={() => onAssetDropTarget(item.path)}
-                onClearAssetDropTarget={() => onAssetDropTarget(null)}
-                onMoveAssets={(assetIds) => onMoveAssets(assetIds, item.path)}
-                onRename={() => onStartRenameFolder(item.path)}
-                onDelete={() => onDeleteFolder(item.path)}
-                confirmingDelete={pendingFolderDelete === item.path}
-                deleteBody={deleteFolderBody(item.path)}
-                onConfirmDelete={() => onConfirmDeleteFolder(item.path)}
-                onCancelDelete={onCancelDeleteFolder}
-                onCommitRename={(name) => onCommitRenameFolder(item.path, name)}
-                onChangeRename={onClearFolderError}
-                onCancelRename={onCancelRenameFolder}
-              />
-            ),
+      <ScrollArea className="h-full">
+        <div className="min-h-full p-2">
+          {empty ? (
+            <p className="px-1 py-3 text-center text-xs italic text-muted-foreground">
+              No assets yet. Import or drag-and-drop a model or texture.
+            </p>
+          ) : folderEmpty ? (
+            <p className="px-1 py-3 text-center text-xs italic text-muted-foreground">
+              This folder is empty. Drag assets here to move them.
+            </p>
+          ) : (
+            <div
+              className="grid gap-2"
+              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(72px, 1fr))" }}
+            >
+              {folderItems.map((item) =>
+                item.kind === "new" ? (
+                  <NewFolderTile
+                    key="new-folder"
+                    value={creatingFolderName}
+                    invalid={folderError !== null}
+                    onChange={(name) => {
+                      onChangeNewFolderName(name);
+                      if (folderError !== null) {
+                        onClearFolderError();
+                      }
+                    }}
+                    onCommit={onCommitNewFolder}
+                    onCancel={onCancelNewFolder}
+                  />
+                ) : (
+                  <FolderTile
+                    key={item.path}
+                    name={item.label}
+                    editing={renamingFolder?.origin === "grid" && renamingFolder.path === item.path}
+                    invalid={folderError !== null && renamingFolder?.path === item.path}
+                    dragActive={assetDropTarget === item.path}
+                    onOpen={() => onOpenFolder(item.path)}
+                    onAssetDropTarget={() => onAssetDropTarget(item.path)}
+                    onClearAssetDropTarget={() => onAssetDropTarget(null)}
+                    onMoveAssets={(assetIds) => onMoveAssets(assetIds, item.path)}
+                    onRename={() => onStartRenameFolder(item.path)}
+                    onDelete={() => onDeleteFolder(item.path)}
+                    confirmingDelete={
+                      pendingFolderDelete?.origin === "grid" &&
+                      pendingFolderDelete.path === item.path
+                    }
+                    deleteBody={deleteFolderBody(item.path)}
+                    onConfirmDelete={() => onConfirmDeleteFolder(item.path)}
+                    onCancelDelete={onCancelDeleteFolder}
+                    onCommitRename={(name) => onCommitRenameFolder(item.path, name)}
+                    onChangeRename={onClearFolderError}
+                    onCancelRename={onCancelRenameFolder}
+                  />
+                ),
+              )}
+              {assets.map((asset) => (
+                <AssetTile
+                  key={asset.id}
+                  entry={asset}
+                  selected={selectedAssetIds.has(asset.id)}
+                  onView={onView}
+                  onDelete={onDeleteAsset}
+                  onSelect={onSelectAsset}
+                  getDragAssetIds={getDragAssetIds}
+                  confirmingDelete={pendingAssetDelete?.asset.id === asset.id}
+                  deleteBody={pendingAssetDelete?.body}
+                  onConfirmDelete={onConfirmDeleteAsset}
+                  onCancelDelete={onCancelDeleteAsset}
+                />
+              ))}
+            </div>
           )}
-          {assets.map((asset) => (
-            <AssetTile
-              key={asset.id}
-              entry={asset}
-              selected={selectedAssetIds.has(asset.id)}
-              onView={onView}
-              onDelete={onDeleteAsset}
-              onSelect={onSelectAsset}
-              getDragAssetIds={getDragAssetIds}
-              confirmingDelete={pendingAssetDelete?.asset.id === asset.id}
-              deleteBody={pendingAssetDelete?.body}
-              onConfirmDelete={onConfirmDeleteAsset}
-              onCancelDelete={onCancelDeleteAsset}
-            />
-          ))}
         </div>
-      )}
+      </ScrollArea>
       {marquee ? <MarqueeBox panel={panelRef.current} marquee={marquee} /> : null}
     </div>
   );
+}
 
-  function assetsInFolderCount(folder: string): number {
-    return useEditorStore
-      .getState()
-      .assets.filter(
-        (asset) => asset.folder === folder || isFolderDescendant(asset.folder ?? "", folder),
-      ).length;
-  }
+function assetsInFolderCount(folder: string): number {
+  return useEditorStore
+    .getState()
+    .assets.filter(
+      (asset) => asset.folder === folder || isFolderDescendant(asset.folder ?? "", folder),
+    ).length;
+}
 
-  function deleteFolderBody(folder: string): string {
-    const count = assetsInFolderCount(folder);
-    return `Moves ${count} asset${count === 1 ? "" : "s"} to Root.`;
-  }
+function deleteFolderBody(folder: string): string {
+  const count = assetsInFolderCount(folder);
+  return `Moves ${count} asset${count === 1 ? "" : "s"} to Root.`;
 }
 
 function NewFolderTile({
@@ -838,7 +1067,6 @@ function NewFolderTile({
 
 function FolderTile({
   name,
-  kind = "folder",
   editing = false,
   invalid = false,
   dragActive = false,
@@ -857,7 +1085,6 @@ function FolderTile({
   onCancelRename,
 }: {
   name: string;
-  kind?: "folder" | "root";
   editing?: boolean;
   invalid?: boolean;
   dragActive?: boolean;
@@ -875,11 +1102,10 @@ function FolderTile({
   onChangeRename?(): void;
   onCancelRename?(): void;
 }) {
-  const Icon = kind === "root" ? ArrowUp : Folder;
   const content = (
     <>
       <div className="flex aspect-square w-full items-center justify-center rounded-sm bg-muted">
-        <Icon className="size-8 text-muted-foreground" />
+        <Folder className="size-8 text-muted-foreground" />
       </div>
       {editing && onCommitRename && onCancelRename ? (
         <FolderNameInput
@@ -952,7 +1178,7 @@ function FolderTile({
   }
 
   return (
-    <div className="relative w-[72px]">
+    <div className="relative w-[72px]" onContextMenu={(event) => event.stopPropagation()}>
       <ContextMenu>
         <ContextMenuTrigger asChild>{tile}</ContextMenuTrigger>
         <ContextMenuContent className="min-w-32">
@@ -1148,16 +1374,6 @@ async function moveImportedAsset(assetId: string, folder: string): Promise<void>
   if (assetId !== "0") {
     await client.moveAsset(assetId, folder);
   }
-}
-
-function assetIdsFromPayload(payload: ReturnType<typeof readAssetPayload>): string[] {
-  if (!payload) {
-    return [];
-  }
-  if (payload.ids && payload.ids.length > 0) {
-    return payload.ids;
-  }
-  return payload.id ? [payload.id] : [];
 }
 
 /// Hit-test a physical-pixel drop position against the Assets panel's DOM rect.
