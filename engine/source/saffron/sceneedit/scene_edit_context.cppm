@@ -19,7 +19,7 @@ export namespace se
 {
     // The viewport's own fly-camera (the scene-view eye, distinct from any ECS
     // CameraComponent / game camera). Hold RMB over the viewport to look + WASD to move,
-    // Shift up / Ctrl down. yaw/pitch in degrees; at yaw 0 the camera looks down -Z.
+    // Space up / Shift down. yaw/pitch in degrees; at yaw 0 the camera looks down -Z.
     struct SceneEditCamera
     {
         glm::vec3 position{ 3.0f, 2.5f, 4.0f };
@@ -44,8 +44,8 @@ export namespace se
         bool back = false;
         bool left = false;
         bool right = false;
-        bool up = false;    // LShift
-        bool down = false;  // LCtrl
+        bool up = false;    // Space
+        bool down = false;  // LShift
     };
 
     // Backend-neutral gizmo op + reference space, shared by the control TU and the native overlay.
@@ -158,7 +158,7 @@ export namespace se
     auto sceneEditCameraView(const SceneEditCamera& camera) -> CameraView;
 
     // Fly the editor camera from host-gathered SDL input (active while RMB is held): mouse
-    // look + WASD move, Shift up / Ctrl down (world Y). Call from onUpdate with the frame dt.
+    // look + WASD move, Space up / Shift down (world Y). Call from onUpdate with the frame dt.
     void updateSceneEditCamera(SceneEditCamera& camera, const SceneEditCameraInput& input, f32 dt);
 
     // Native (overlay) gizmo math — pure glm + Scene types, no Rendering. Shared by the

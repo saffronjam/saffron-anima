@@ -4,6 +4,9 @@ module;
 // `import std`) — consistent with the engine's rendering/scene modules.
 #include <entt/entt.hpp>
 #include <SDL3/SDL.h>
+#include <X11/Xlib.h>
+// Xlib's None macro collides with the scoped-enum None members used below.
+#undef None
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -42,12 +45,48 @@ namespace se
         se::SceneEditContext* editor = nullptr;
         se::ControlContext* control = nullptr;
         se::AssetServer assets;
-        bool flyActive = false;          // RMB-fly: keyboard grabbed + relative mouse on
+        bool flyActive = false;          // RMB-fly: focus taken, keyboard grabbed, pointer locked
         glm::vec2 flyLookDelta{ 0.0f };  // accumulated xrel/yrel, drained each onUpdate
     };
 
-    // Release the RMB-fly grab + relative mouse and clear accumulated look. Idempotent
-    // (safe when not flying) — used on RMB-up, focus loss, ESC, and teardown.
+    // The X11 display/window behind the SDL window, plus the parent it was reparented
+    // into. embedded is false when running standalone (parent is the root window).
+    struct X11WindowInfo
+    {
+        Display* display = nullptr;
+        ::Window window = 0;
+        ::Window parent = 0;
+        bool embedded = false;
+    };
+
+    auto x11WindowInfo(SDL_Window* window) -> X11WindowInfo
+    {
+        X11WindowInfo info;
+        SDL_PropertiesID props = SDL_GetWindowProperties(window);
+        info.display =
+            static_cast<Display*>(SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr));
+        info.window = static_cast<::Window>(SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
+        if (info.display == nullptr || info.window == 0)
+        {
+            return info;
+        }
+        ::Window root = 0;
+        ::Window* children = nullptr;
+        unsigned int childCount = 0;
+        if (XQueryTree(info.display, info.window, &root, &info.parent, &children, &childCount) != 0)
+        {
+            if (children != nullptr)
+            {
+                XFree(children);
+            }
+            info.embedded = info.parent != 0 && info.parent != root;
+        }
+        return info;
+    }
+
+    // Release the RMB-fly grabs + pointer lock, clear accumulated look, and hand the
+    // X11 input focus back to the Tauri parent. Idempotent (safe when not flying) —
+    // used on RMB-up, focus loss, ESC, and teardown.
     void endSceneEditFly(HostState& state, SDL_Window* window)
     {
         if (!state.flyActive)
@@ -57,7 +96,15 @@ namespace se
         state.flyActive = false;
         state.flyLookDelta = glm::vec2{ 0.0f };
         SDL_SetWindowRelativeMouseMode(window, false);
+        SDL_SetWindowMouseGrab(window, false);
         SDL_SetWindowKeyboardGrab(window, false);
+        SDL_ShowCursor();
+        const X11WindowInfo x11 = x11WindowInfo(window);
+        if (x11.embedded)
+        {
+            XSetInputFocus(x11.display, x11.parent, RevertToParent, CurrentTime);
+            XFlush(x11.display);
+        }
     }
 
     enum class BillboardKind
@@ -557,9 +604,10 @@ export namespace se
 
             // Raw SDL input. Mouse events reach the reparented child by cursor position
             // (overlay-gizmo hover/drag + mesh ray-pick on LMB); keyboard does not, because
-            // focus stays on the Tauri webview. So while RMB is held we grab the keyboard
-            // (and switch to relative-mouse for clean look deltas), releasing on RMB-up or
-            // focus loss. Gizmo/pick is suppressed while flying.
+            // focus stays on the Tauri webview. So while RMB is held we take the X11 input
+            // focus, grab the keyboard, and lock the pointer (mouse grab + relative mode),
+            // releasing everything on RMB-up or focus loss. Gizmo/pick is suppressed while
+            // flying.
             app.window.eventSinks.push_back(
                 [state, &app](const SDL_Event& event)
                 {
@@ -568,8 +616,17 @@ export namespace se
                     {
                         state->flyActive = true;
                         state->flyLookDelta = glm::vec2{ 0.0f };
-                        SDL_SetWindowKeyboardGrab(win, true);
-                        SDL_SetWindowRelativeMouseMode(win, true);
+                        // A reparented X11 child never holds input focus (it stays on the
+                        // Tauri toplevel), and SDL only applies grabs and routes relative
+                        // motion to a focused window — take the focus for the duration of the
+                        // fly. The grabs + pointer lock are asserted in onUpdate, once SDL has
+                        // processed the focus change.
+                        const X11WindowInfo x11 = x11WindowInfo(win);
+                        if (x11.embedded)
+                        {
+                            XSetInputFocus(x11.display, x11.window, RevertToParent, CurrentTime);
+                            XFlush(x11.display);
+                        }
                         return;
                     }
                     if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_RIGHT)
@@ -605,24 +662,46 @@ export namespace se
                 {
                     se::pollControl(*state->control, app.window, app.renderer, *state->editor, state->assets);
                 }
-                // Fly-cam: drive the editor eye from raw SDL input while RMB is held. The
-                // keyboard grab (set on RMB-down) lets these key reads see WASD even though
-                // the reparented child holds no X11 keyboard focus.
+                // Fly-cam: drive the editor eye from raw SDL input while RMB is held.
                 se::SceneEditCameraInput input;
                 input.active = state->flyActive;
                 if (state->flyActive)
                 {
+                    // (Re)assert the grabs + pointer lock each frame: SDL only engages
+                    // relative mouse once it has processed the focus change taken on
+                    // RMB-down, which lands a frame later for a reparented child. All are
+                    // idempotent. SDL_HideCursor covers compositors that show the system
+                    // cursor under relative mode.
+                    SDL_Window* win = app.window.handle;
+                    SDL_SetWindowKeyboardGrab(win, true);
+                    SDL_SetWindowMouseGrab(win, true);
+                    SDL_SetWindowRelativeMouseMode(win, true);
+                    SDL_HideCursor();
+
                     input.lookDelta = state->flyLookDelta;
                     const bool* keys = SDL_GetKeyboardState(nullptr);
                     input.forward = keys[SDL_SCANCODE_W];
                     input.back = keys[SDL_SCANCODE_S];
                     input.left = keys[SDL_SCANCODE_A];
                     input.right = keys[SDL_SCANCODE_D];
-                    input.up = keys[SDL_SCANCODE_LSHIFT];
-                    input.down = keys[SDL_SCANCODE_LCTRL];
+                    input.up = keys[SDL_SCANCODE_SPACE];
+                    input.down = keys[SDL_SCANCODE_LSHIFT];
                 }
                 se::updateSceneEditCamera(state->editor->camera, input, dt.seconds);
                 state->flyLookDelta = glm::vec2{ 0.0f };
+
+                if (state->flyActive)
+                {
+                    // Pin the cursor to the window center so it cannot escape the viewport.
+                    // Relative mode reports raw deltas and ignores this warp, so it adds no
+                    // drift; it covers compositors (XWayland) where relative mode does not
+                    // freeze the OS pointer.
+                    SDL_Window* win = app.window.handle;
+                    int w = 0;
+                    int h = 0;
+                    SDL_GetWindowSize(win, &w, &h);
+                    SDL_WarpMouseInWindow(win, static_cast<f32>(w) * 0.5f, static_cast<f32>(h) * 0.5f);
+                }
             };
             // Present-only host: the editor is the headless native-viewport host the Tauri
             // app spawns + reparents. There are no engine panels — the scene renders through

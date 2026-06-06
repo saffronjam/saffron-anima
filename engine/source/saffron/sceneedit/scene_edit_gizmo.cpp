@@ -311,6 +311,9 @@ namespace se
         {
             return;
         }
+        // Past the guard the drag will write the transform; bump the scene stamp so the
+        // control-plane poll re-inspects and the editor's Inspector tracks the drag live.
+        editor.sceneVersion += 1;
         TransformComponent& transform = getComponent<TransformComponent>(editor.scene, gizmo.target);
         const auto axes = gizmoAxes(worldRotation(editor.scene, gizmo.target), gizmo.space);
         const glm::vec2 delta = mouse - gizmo.startMouse;
