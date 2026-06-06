@@ -123,3 +123,32 @@
   inset: 0;
   background: transparent;
 }
+
+/* Inspector/environment fields scrub by drag and type directly; the native
+   number-input stepper arrows only steal width, so hide them everywhere. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* react-colorful canvas inside the inspector color popover: compact + themed. */
+.color-picker-canvas .react-colorful {
+  width: 196px;
+  height: 168px;
+}
+.color-picker-canvas .react-colorful__saturation {
+  border-radius: 4px 4px 0 0;
+}
+.color-picker-canvas .react-colorful__last-control {
+  border-radius: 0 0 4px 4px;
+}
+.color-picker-canvas .react-colorful__hue,
+.color-picker-canvas .react-colorful__alpha {
+  height: 14px;
+}

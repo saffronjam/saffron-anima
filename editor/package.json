@@ -24,6 +24,7 @@
     "lucide-react": "^0.468.0",
     "radix-ui": "^1.4.3",
     "react": "^19.2.0",
+    "react-colorful": "^5.7.0",
     "react-dom": "^19.2.0",
     "react-resizable-panels": "^4",
     "tailwind-merge": "^3.6.0",

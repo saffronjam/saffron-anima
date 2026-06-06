@@ -21,6 +21,7 @@ import { renderField, resolveHint } from "../components/fieldRenderer";
 import type { Material, Transform } from "../protocol";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { humanizeFieldName } from "@/lib/humanize";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -110,11 +111,6 @@ export function InspectorPanel() {
   if (!selectedId || !inspected || !componentsObj) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-10 flex-none items-center border-b border-border px-3">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Inspector
-          </span>
-        </div>
         <div className="min-h-0 flex-1 p-3.5 text-center italic text-muted-foreground">
           No entity selected
         </div>
@@ -199,11 +195,6 @@ export function InspectorPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-10 flex-none items-center border-b border-border px-3">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Inspector
-        </span>
-      </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-2 p-1.5">
           {names.map((component) => {
@@ -242,7 +233,7 @@ export function InspectorPanel() {
                   {Object.entries(dto).map(([field, value]) => (
                     <div key={field} className="grid grid-cols-[78px_1fr] items-center gap-1.5">
                       <Label className="truncate text-[11px] font-normal text-muted-foreground">
-                        {field}
+                        {humanizeFieldName(field)}
                       </Label>
                       <div className="min-w-0">
                         {renderField(
