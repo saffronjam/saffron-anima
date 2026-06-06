@@ -141,6 +141,13 @@ export namespace se
 
     auto saveMesh(const Mesh& mesh, const std::string& path) -> Result<void>;  // baked .smesh
     auto loadMesh(const std::string& path) -> Result<Mesh>;
+    // Vertex/index totals read from a .smesh's 64-byte header, without loading the data.
+    struct MeshCounts
+    {
+        u32 vertexCount;
+        u32 indexCount;
+    };
+    auto meshFileCounts(const std::string& path) -> Result<MeshCounts>;
     // Skinned bake: v1 layout plus a VertexSkin section (skin must parallel vertices).
     auto saveMeshSkinned(const Mesh& mesh, const std::vector<VertexSkin>& skin, const std::string& path)
         -> Result<void>;
@@ -895,6 +902,22 @@ namespace se
             return Err(std::format("read failed for '{}'", path));
         }
         return mesh;
+    }
+
+    auto meshFileCounts(const std::string& path) -> Result<MeshCounts>
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+        {
+            return Err(std::format("cannot open '{}'", path));
+        }
+        SMeshHeader header{};
+        in.read(reinterpret_cast<char*>(&header), sizeof(header));
+        if (!in || std::memcmp(header.magic, "SMSH", 4) != 0)
+        {
+            return Err(std::format("'{}' is not a .smesh (bad magic)", path));
+        }
+        return MeshCounts{ header.vertexCount, header.indexCount };
     }
 
     auto saveMeshSkinned(const Mesh& mesh, const std::vector<VertexSkin>& skin, const std::string& path) -> Result<void>
