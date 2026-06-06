@@ -29,7 +29,7 @@ gizmoPointer(phase: GizmoPointerPhase, x: number, y: number): Promise<unknown> {
 
 - A bare move streams `hover`, so the engine highlights the handle under the cursor.
 - A press sends `begin`.
-- Travel past a few pixels turns the gesture into a `drag`, streamed and throttled; it sets `store.dragActive` so the reconcile poll will not clobber the in-progress transform.
+- Travel past a few pixels turns the gesture into a `drag`, streamed and throttled; it sets `store.dragActive` so the reconcile poll will not clobber the in-progress transform. Each applied drag bumps the engine's `sceneVersion`, so the poll re-inspects and the Inspector's transform fields track the drag live.
 - The release always sends `end`, where the engine commits the authoritative transform.
 
 A press that does not move is a click, and [ray-picks](../selection/) instead of dragging.

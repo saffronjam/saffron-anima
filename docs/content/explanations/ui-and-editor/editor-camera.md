@@ -30,17 +30,19 @@ return glm::normalize(glm::vec3(std::cos(pitch) * std::sin(yaw),
 ## Input
 
 Look and move input is native — the engine reads the raw SDL stream from its own window. While the
-**right mouse button is held** the engine grabs the keyboard and switches to relative-mouse mode, then
-reads right-drag for look and WASD + Shift/Ctrl for movement; releasing the button (or losing window
-focus, or pressing Escape) ends the fly and hands the keyboard back to the editor.
+**right mouse button is held** the engine takes the X11 input focus, grabs the keyboard, and locks the
+pointer (mouse grab + relative-mouse mode), then reads right-drag for look and WASD + Space/Shift for
+movement; releasing the button (or losing focus, or pressing Escape) releases everything and hands the
+focus back to the editor.
 
-The keyboard grab is what lets the keys reach the engine at all: its window is an X11 child reparented
-under the Tauri webview, and an X11 child holds no keyboard focus, so key events go to the focused
-top-level (the webview) unless grabbed. Mouse events arrive regardless — X11 delivers them to the
-window under the cursor — so look and the gizmo never need a grab; only the move keys do. A
-"controlling" latch keeps control while the view swings off the panel mid-drag; movement is frame-rate
-independent (`moveSpeed * dt`) along the forward and right basis, and pitch is clamped just shy of
-vertical so the camera never flips.
+The focus move is what lets the keys reach the engine at all: its window is an X11 child reparented
+under the Tauri webview, and an X11 child holds no keyboard focus — key events go to the focused
+top-level (the webview), and SDL only applies grabs and routes relative motion to a focused window. So
+the engine borrows the focus for exactly the duration of the hold (the XEmbed model). Mouse buttons
+arrive regardless — X11 delivers them to the window under the cursor — which is why the gizmo needs no
+focus and why RMB-down can bootstrap the fly. A "controlling" latch keeps control while the view
+swings off the panel mid-drag; movement is frame-rate independent (`moveSpeed * dt`) along the forward
+and right basis, and pitch is clamped just shy of vertical so the camera never flips.
 
 The camera is also scriptable over the control socket through `get-camera` and `set-camera`, which
 merge the fly-cam fields the same way the transform commands do:
