@@ -101,6 +101,9 @@ export namespace se
         NativeGizmoHandle active = NativeGizmoHandle::None;
         bool dragging = false;
         glm::vec2 startMouse{ 0.0f };
+        glm::vec2 dragTarget{ 0.0f };        // latest raw pointer sample (viewport pixels)
+        glm::vec2 dragSmoothed{ 0.0f };      // per-frame smoothed pointer the drag math consumes
+        bool dragPending = false;            // command-driven drag: smooth + apply each frame
         glm::vec3 startTranslation{ 0.0f };  // world translation at drag begin
         glm::vec3 startRotation{ 0.0f };     // world rotation (Euler) at drag begin
         glm::vec3 startScale{ 1.0f };        // local scale (scale never rebases)
@@ -192,6 +195,10 @@ export namespace se
         -> NativeGizmoHandle;
     // Applies an in-progress gizmo drag, writing the dragged entity's TransformComponent.
     void applyNativeGizmoDrag(SceneEditContext& editor, const CameraView& cam, u32 width, u32 height, glm::vec2 mouse);
+    // Advances a command-driven drag each rendered frame: exponentially smooths the pointer
+    // toward dragTarget and applies the drag, so ~60Hz control samples render fluidly at
+    // the engine's frame rate. No-op unless a gizmo-pointer drag sample is pending.
+    void stepNativeGizmoDrag(SceneEditContext& editor, const CameraView& cam, u32 width, u32 height, f32 dt);
     // Captures the drag-begin state (world translation/rotation, local scale, frozen parent
     // world) — the one snapshot both the SDL and control gizmo-pointer paths share.
     void snapshotNativeGizmoStart(SceneEditContext& editor, Entity target);

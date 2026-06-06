@@ -420,4 +420,19 @@ namespace se
             transform.scale = gizmo.startScale * glm::vec3{ 1.0f, 1.0f, factor };
         }
     }
+
+    void stepNativeGizmoDrag(SceneEditContext& editor, const CameraView& cam, u32 width, u32 height, f32 dt)
+    {
+        NativeGizmoState& gizmo = editor.nativeGizmo;
+        if (!gizmo.dragging || !gizmo.dragPending)
+        {
+            return;
+        }
+        // Time constant ~25ms: reaches a 60Hz sample in roughly two frames' worth of lag
+        // while turning the sample staircase into continuous motion.
+        constexpr f32 tau = 0.025f;
+        const f32 alpha = 1.0f - std::exp(-std::max(0.0f, dt) / tau);
+        gizmo.dragSmoothed += (gizmo.dragTarget - gizmo.dragSmoothed) * alpha;
+        applyNativeGizmoDrag(editor, cam, width, height, gizmo.dragSmoothed);
+    }
 }

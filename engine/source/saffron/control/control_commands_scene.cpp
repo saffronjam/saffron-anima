@@ -1005,17 +1005,29 @@ namespace se
                         gizmo.active = gizmo.hovered;
                         gizmo.dragging = true;
                         gizmo.startMouse = mouse;
+                        gizmo.dragTarget = mouse;
+                        gizmo.dragSmoothed = mouse;
+                        gizmo.dragPending = false;
                         gizmo.target = ctx.sceneEdit.selected;
                         snapshotNativeGizmoStart(ctx.sceneEdit, ctx.sceneEdit.selected);
                     }
                 }
                 else if (phase == GizmoPointerPhase::Drag)
                 {
-                    applyNativeGizmoDrag(ctx.sceneEdit, cam, width, height, mouse);
+                    // Record the sample only; stepNativeGizmoDrag smooths toward it every
+                    // rendered frame, so ~60Hz pointer samples don't staircase on screen.
+                    gizmo.dragTarget = mouse;
+                    gizmo.dragPending = true;
                 }
                 else if (phase == GizmoPointerPhase::End)
                 {
+                    // Land exactly on the release position regardless of smoothing lag.
+                    if (gizmo.dragging)
+                    {
+                        applyNativeGizmoDrag(ctx.sceneEdit, cam, width, height, mouse);
+                    }
                     gizmo.dragging = false;
+                    gizmo.dragPending = false;
                     gizmo.active = NativeGizmoHandle::None;
                     gizmo.target = Entity{ entt::null };
                 }

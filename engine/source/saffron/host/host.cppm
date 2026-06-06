@@ -662,6 +662,13 @@ export namespace se
                 {
                     se::pollControl(*state->control, app.window, app.renderer, *state->editor, state->assets);
                 }
+                // Command-driven gizmo drags arrive at the webview's pointer rate (~60Hz);
+                // smooth toward the latest sample every frame so the drag renders fluidly.
+                {
+                    const se::CameraView cam = se::sceneEditCameraView(state->editor->camera);
+                    se::stepNativeGizmoDrag(*state->editor, cam, se::viewportWidth(app.renderer),
+                                            se::viewportHeight(app.renderer), dt.seconds);
+                }
                 // Fly-cam: drive the editor eye from raw SDL input while RMB is held.
                 se::SceneEditCameraInput input;
                 input.active = state->flyActive;
