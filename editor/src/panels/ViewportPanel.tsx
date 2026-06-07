@@ -10,6 +10,7 @@ import { makeCoalescer } from "../control/coalesce";
 import { useEditorStore } from "../state/store";
 import { LoadingOverlay } from "../app/LoadingOverlay";
 import { onLayoutSettled } from "../app/layoutBus";
+import { bindingFor } from "../lib/keybindings";
 
 /// Resize-end commit debounce: after the last layout/resize change settles, send one
 /// final exact bounds — this is the tier that also resizes the engine's render target
@@ -331,23 +332,30 @@ export function ViewportPanel() {
       scheduleSend();
     };
 
+    // Map a physical key code to a fly direction via the configured (hold-kind)
+    // bindings. Read live from the store so a rebind in settings applies without
+    // re-running this pointer-lock effect.
     const keyFor = (code: string): keyof typeof keys | null => {
-      switch (code) {
-        case "KeyW":
-          return "forward";
-        case "KeyS":
-          return "back";
-        case "KeyA":
-          return "left";
-        case "KeyD":
-          return "right";
-        case "Space":
-          return "up";
-        case "ShiftLeft":
-          return "down";
-        default:
-          return null;
+      const overrides = useEditorStore.getState().keyBindings;
+      if (code === bindingFor("camera.flyForward", overrides)) {
+        return "forward";
       }
+      if (code === bindingFor("camera.flyBack", overrides)) {
+        return "back";
+      }
+      if (code === bindingFor("camera.flyLeft", overrides)) {
+        return "left";
+      }
+      if (code === bindingFor("camera.flyRight", overrides)) {
+        return "right";
+      }
+      if (code === bindingFor("camera.flyUp", overrides)) {
+        return "up";
+      }
+      if (code === bindingFor("camera.flyDown", overrides)) {
+        return "down";
+      }
+      return null;
     };
 
     const onKey =

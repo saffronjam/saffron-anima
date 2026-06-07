@@ -12,20 +12,24 @@
 ///
 /// The handler is gated OFF while a text input / textarea / select / contentEditable
 /// is focused, so typing a value (e.g. an entity name or a number field) never
-/// retargets the gizmo.
+/// retargets the gizmo, and while the Editor Settings modal is open (it holds focus
+/// on non-text elements, so the text-entry guard alone would not catch it). Each
+/// shortcut is matched against the configured binding (see lib/keybindings), so a
+/// rebind in settings takes effect immediately.
 import { useEffect } from "react";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
-import { errorText } from "../lib/flash";
+import { errorText, notify } from "../lib/flash";
+import { matchesBinding, type CommandId } from "../lib/keybindings";
 import type { GizmoState } from "../protocol";
 
 type GizmoOp = GizmoState["op"];
 
-const KEY_TO_OP: Record<string, GizmoOp> = {
-  w: "translate",
-  e: "rotate",
-  r: "scale",
-};
+const GIZMO_COMMANDS: { id: CommandId; op: GizmoOp }[] = [
+  { id: "gizmo.translate", op: "translate" },
+  { id: "gizmo.rotate", op: "rotate" },
+  { id: "gizmo.scale", op: "scale" },
+];
 
 /// Log a rejected shortcut command. The hook is a global key listener with no panel
 /// to anchor a flash banner, so the failure goes to the console rather than vanishing.
@@ -49,33 +53,84 @@ function isTextEntryFocused(): boolean {
 export function useGizmoShortcuts(): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      // Let modified chords (Ctrl/Cmd/Alt) through — they belong to menus / the OS.
-      if (event.ctrlKey || event.metaKey || event.altKey) {
-        return;
-      }
       if (isTextEntryFocused()) {
         return;
       }
-      // Every shortcut here drives engine state, so only act once it is live.
       const store = useEditorStore.getState();
+      // The settings modal owns the keyboard while open (its capture widget binds
+      // keys); never drive the engine underneath it.
+      if (store.settingsOpen) {
+        return;
+      }
+      // Every shortcut here drives engine state, so only act once it is live.
       if (store.engineStatus.phase !== "ready") {
         return;
       }
 
-      const key = event.key.toLowerCase();
+      const overrides = store.keyBindings;
 
-      const op = KEY_TO_OP[key];
-      if (op) {
+      // Play-mode family (not rebindable): Ctrl+P play/stop, Ctrl+Shift+P pause/resume,
+      // Ctrl+Alt+P step. Webview-owned because Ctrl+P would open the print dialog
+      // otherwise; the clicks are mirrored by the Topbar buttons. metaKey covers macOS.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "p") {
         event.preventDefault();
-        // Optimistic local update + the command; the reconcile poll's get-gizmo read
-        // keeps it in sync with any external mutation (e.g. `se set-gizmo`).
-        store.setGizmo({ op });
-        void client.setGizmo({ op }).catch((err: unknown) => logRejected("set-gizmo", err));
+        const ps = store.playState;
+        if (event.altKey) {
+          if (ps === "paused") {
+            void client.step().catch((err: unknown) => logRejected("step", err));
+          }
+        } else if (event.shiftKey) {
+          if (ps === "playing") {
+            store.setPlayState("paused");
+            void client.pause().catch((err: unknown) => {
+              store.setPlayState("playing");
+              logRejected("pause", err);
+            });
+          } else if (ps === "paused") {
+            store.setPlayState("playing");
+            void client.play().catch((err: unknown) => {
+              store.setPlayState("paused");
+              logRejected("play", err);
+            });
+          }
+        } else if (ps === "edit") {
+          store.setPlayState("playing");
+          void client
+            .play()
+            .then((result) => {
+              if (!result.hasPrimaryCamera) {
+                notify("No primary camera — using the editor camera");
+              }
+            })
+            .catch((err: unknown) => {
+              store.setPlayState("edit");
+              logRejected("play", err);
+            });
+        } else {
+          store.setPlayState("edit");
+          void client.stop().catch((err: unknown) => logRejected("stop", err));
+        }
         return;
       }
 
-      // F focuses the editor camera on the current selection.
-      if (key === "f") {
+      // Exact-modifier matching (a binding of "f" does not fire on Ctrl+F), so
+      // unbound menu/OS chords still pass straight through. The gizmo is hidden
+      // during play, so W/E/R only retarget it in edit mode.
+      if (store.playState === "edit") {
+        for (const { id, op } of GIZMO_COMMANDS) {
+          if (matchesBinding(event, id, overrides)) {
+            event.preventDefault();
+            // Optimistic local update + the command; the reconcile poll's get-gizmo
+            // read keeps it in sync with any external mutation (e.g. `se set-gizmo`).
+            store.setGizmo({ op });
+            void client.setGizmo({ op }).catch((err: unknown) => logRejected("set-gizmo", err));
+            return;
+          }
+        }
+      }
+
+      // Focus the editor camera on the current selection.
+      if (matchesBinding(event, "camera.focus", overrides)) {
         const selectedId = store.selectedId;
         if (selectedId === null) {
           return;
@@ -85,9 +140,9 @@ export function useGizmoShortcuts(): void {
         return;
       }
 
-      // Escape deselects: clear local selection immediately and tell the engine; the
+      // Deselect: clear local selection immediately and tell the engine; the
       // reconcile poll confirms via selectionVersion.
-      if (event.key === "Escape") {
+      if (matchesBinding(event, "selection.deselect", overrides)) {
         if (store.selectedId === null) {
           return;
         }
