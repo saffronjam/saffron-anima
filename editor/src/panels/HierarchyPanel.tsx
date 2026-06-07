@@ -119,7 +119,18 @@ export function HierarchyPanel() {
           <CreateMenu />
         </div>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea
+        className="min-h-0 flex-1"
+        onClick={(e) => {
+          // A click in the empty space below/around the rows clears the selection,
+          // mirroring the Escape shortcut. Row clicks land inside a treeitem.
+          if ((e.target as Element).closest('[role="treeitem"]')) {
+            return;
+          }
+          setSelectedId(null);
+          void client.deselect().catch((err: unknown) => flash(errorText(err)));
+        }}
+      >
         <HierarchyTree actions={actions} />
       </ScrollArea>
       {message ? (

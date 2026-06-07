@@ -13,7 +13,7 @@ A user selects in three ways:
 - clicking a light or camera billboard in the viewport;
 - ray-picking a mesh.
 
-Clicking empty space deselects. The two copies stay in agreement through a version-stamped poll, and local writes apply optimistically, so the interface never waits on a round-trip to the engine.
+Clicking empty space deselects — in the viewport (a pick that misses), in the hierarchy panel below the rows, or with Escape. The two copies stay in agreement through a version-stamped poll, and local writes apply optimistically, so the interface never waits on a round-trip to the engine.
 
 ## Optimistic select, then reconcile
 
