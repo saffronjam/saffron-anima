@@ -8,7 +8,9 @@ math = false
 
 Every command registered in `Saffron.Control` and driven by the `se` CLI over the unix socket. Commands are grouped by registering file. Params are positional unless named, and `?` marks an optional param. Each command returns a JSON result.
 
-Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [the id-encoding contract](../../explanations/tooling-and-control/control-plane-architecture/#id-encoding-on-the-wire)). Entity selectors resolve a string id, a number, or an exact name. Every scene-mutating command bumps `sceneVersion`; selection changes bump `selectionVersion` — both are read back by `get-selection`.
+Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [the id-encoding contract](../../explanations/tooling-and-control/control-plane-architecture/#id-encoding-on-the-wire)). Entity selectors resolve a string id, a number, or an exact name. Every scene-mutating command bumps `sceneVersion`; selection changes bump `selectionVersion` — both are read back by `get-selection`, which also carries `playState`/`playVersion`.
+
+During play (see `play`/`pause`/`stop`/`step`), scene commands address the *running* scene — a throwaway duplicate of the authored one — so every read and write is discarded on `stop`. Project and scene swaps (`load-scene`, `load-project`, `reload-project`, `new-project`, `open-project`, `delete-asset`) error with "stop play first"; `save-scene`/`save-project` always serialize the authored scene; the gizmo (`set-gizmo`, `gizmo-pointer`) is hidden during play.
 
 ## Scene commands
 *(`control_commands_scene.cpp`)*
@@ -23,15 +25,20 @@ Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [
 | `add-component` | `{entity, component}` | add a default-constructed component |
 | `remove-component` | `{entity, component}` | remove it (errors if not removable) |
 | `set-component` | `{entity, component, json}` | apply a serialized component body |
-| `set-transform` | `{entity, translation?, rotation?, scale?}` | merge over current; rotation is Euler radians `{x,y,z}` |
-| `set-material` | `{entity, baseColor?:{x,y,z,w}, albedoTexture?:uuid, metallic?, roughness?, emissive?:{x,y,z}, emissiveStrength?, unlit?:0\|1}` | add/merge the Material |
+| `set-transform` | `{entity, translation?, rotation?, scale?, smooth?:0\|1}` | merge over current; rotation is Euler radians `{x,y,z}`; `smooth` animates toward the values (~25ms, exact under preserve-children) |
+| `set-material` | `{entity, baseColor?:{x,y,z,w}, albedoTexture?:uuid, metallic?, roughness?, emissive?:{x,y,z}, emissiveStrength?, unlit?:0\|1, smooth?:0\|1}` | add/merge the Material; with `smooth`, numeric fields animate toward the values (~25ms) instead of snapping, texture/unlit apply immediately |
 | `set-light` | `{entity?, direction?, color?, intensity?, ambient?}` | set the given (else first) directional light |
 | `select` | `{entity}` | set the editor selection |
 | `pick` | `{u=0.5, v=0.5}` | pick at viewport UV (0,0 = top-left): tests light/camera billboards first, then mesh ray-AABB; selects the hit. Returns `{hit, kind:"billboard"\|"mesh", id?, name?}` |
 | `inspect` | `{entity}` | dump all the entity's components as JSON |
 | `focus` | `{entity}` | aim the editor camera at it |
-| `get-selection` | — | current selection + `{selectionVersion, sceneVersion}` (entity may be null) |
+| `get-selection` | — | current selection + `{selectionVersion, sceneVersion, playState, playVersion}` (entity may be null) |
 | `deselect` | — | clear the editor selection |
+| `play` | — | enter play mode (from edit) or resume (from paused): duplicate the scene, cut to its primary camera. Returns `{state, playVersion, sceneVersion, hasPrimaryCamera}` |
+| `pause` | — | freeze the runtime tick (rendering + control keep running); `playing` only |
+| `step` | `{frames=1}` | advance exactly `frames` fixed ticks; `paused` only |
+| `stop` | — | discard the play duplicate and restore the authored scene; idempotent in edit |
+| `get-play-state` | — | the current `{state, playVersion, sceneVersion, hasPrimaryCamera}` |
 | `add-entity` | `{preset=empty\|cube\|model\|point-light\|spot-light\|directional-light\|camera}` | spawn a preset, select it |
 | `copy-entity` | `{entity}` | deep-duplicate it, select the copy |
 | `rename-entity` | `{entity, name}` | set its Name component, return its ref |
@@ -77,6 +84,7 @@ Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [
 | `get-project` | — | active project metadata `{loaded, root, path, name, displayName}` |
 | `new-project` | `{name, displayName?, root?}` | create and open a project |
 | `open-project` | `{path}` | open a project name, directory, or `project.json` |
+| `reload-project` | — | close and re-open the active project from its own path (deselects) |
 | `import-model` | `{path}` | import + bake a model, spawn an entity carrying it (selected) |
 | `import-texture` | `{path}` | import an image into the asset dir; returns its texture id |
 | `list-assets` | — | the project catalog `{assets:[{id, name, type, path, folder?}], folders}` |

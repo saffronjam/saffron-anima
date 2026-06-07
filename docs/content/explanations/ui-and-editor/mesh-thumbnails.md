@@ -35,8 +35,12 @@ upright.
 
 The thumbnail pipeline is deliberately bare: vertex position, normal, and uv in; a two-matrix push
 constant (MVP and a normal matrix); no descriptor sets, no lighting, no materials. The mesh shows in a
-flat color. The image is rendered with a one-time-submit command buffer through dynamic rendering —
-clear to dark gray, draw each submesh, then transition to transfer-source for the readback:
+flat color. The render is multisampled at the highest count the device supports (up to 8x) — at
+thumbnail sizes geometry edges alias hard without it, and a one-shot tiny render makes the extra
+samples free in practice. The pass draws into a transient MSAA target and resolves into the 1x image
+that gets read back; the sample count is independent of the viewport's [AA mode](../../anti-aliasing/aa-modes/).
+The image is rendered with a one-time-submit command buffer through dynamic rendering — clear to dark
+gray, draw each submesh, resolve, then transition for the readback:
 
 ```cpp
 transitionImage(cmd, color.image, eUndefined, eColorAttachmentOptimal, ...);
@@ -74,6 +78,7 @@ readback runs once per asset, not once per tile or per frame. That
 | The render | `renderer_thumbnail.cpp` | `renderMeshThumbnail` |
 | Auto-framing | `renderer_thumbnail.cpp` | `center`/`radius`/`distance`, the `(1, 0.7, 1)` eye |
 | The minimal pipeline | `renderer_thumbnail.cpp` | `newThumbnailPipeline`, `renderer.pipelines.thumbnail` |
+| MSAA + resolve | `renderer_thumbnail.cpp` | `thumbnailSampleCount`, the `resolveMode` color attachment |
 | Readback → base64 PNG (engine) | `control_commands_asset.cpp` | `get-thumbnail`, `view-asset` |
 | Decode + blob-URL cache (client) | `editor/src/state/store.ts` | `getThumbnailUrl`, `base64ToBlob`, `thumbnailCache` |
 

@@ -56,6 +56,14 @@ A few fields skip the full-DTO write because the engine offers merge helpers for
 - `Mesh.mesh` and `Material.albedoTexture` use the dedicated `assign-asset`.
 - Any other uuid field uses the single-field merge `set-component-field`.
 
+## Smoothed drags, drag-local widgets
+
+A drag samples at the webview's pointer rate (~60 Hz), far below the engine's frame rate, so writing each sample directly would render as visible steps. Material and Transform edits borrow the [gizmo's](../gizmo/) answer: mid-drag sends carry `smooth:1`, which makes `set-material`/`set-transform` record the numeric fields as per-entity targets instead of writing them, and the engine converges the live component toward those targets every rendered frame with the same ~25ms exponential the gizmo uses for pointer samples (`stepEditSmoothing`). Once within epsilon the value snaps exactly and the entry is dropped. Transform smoothing yields to a live gizmo drag on the same entity, and applies exact under preserve-children (each write must rebase the subtree).
+
+The widgets themselves never wait on that round trip. Every scrub widget (NumberDrag, SliderField, VectorEditor, ColorField) renders drag-local state through `useScrubValue`: the pointer updates the widget immediately, changes flow outward at most once per animation frame, and the prop only drives the widget when no gesture is active — so the color canvas or a scrubbed axis tracks the cursor exactly while the store, wire, and viewport follow.
+
+The release always ends the stream with one exact write: the widget flushes its pending emit, then `onFieldDragEnd` re-pushes the field's latest optimistic value after clearing `dragActive`, and a non-smooth send both writes verbatim and cancels any pending animation for that entity. Texture and `unlit` are not animatable and apply immediately either way.
+
 ## Add and remove
 
 `add-component` and `remove-component` are guarded the same way the engine guards them. Remove only shows for removable components: `Name` and `Transform` are in `NON_REMOVABLE`, so the inspector cannot strip an entity of its identity or place in the world. The Add Component dropdown lists every registered component the entity does not already have; selecting one calls `add-component`, and the new component appears on the next reconcile tick.
@@ -70,6 +78,8 @@ A few fields skip the full-DTO write because the engine offers merge helpers for
 | Read-modify-write routing | `editor/src/panels/InspectorPanel.tsx` | `onFieldChange`, `sendWrite`, `coalescerFor` |
 | Optimistic overlay | `editor/src/state/store.ts` | `applyOptimisticComponent`, `dragActive` |
 | Edits (engine) | `control_commands_scene.cpp` | `set-component`, `set-transform`, `set-material`, `set-component-field`, `add-component`, `remove-component` |
+| Smoothed drags (engine) | `scene_edit_gizmo.cpp`, `scene_edit_context.cppm` | `stepEditSmoothing`, `MaterialSmoothTarget`, `TransformSmoothTarget` |
+| Drag-local widgets | `editor/src/lib/useScrubValue.ts` | `useScrubValue`, `ScrubValue` |
 
 ## Related
 

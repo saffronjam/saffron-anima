@@ -90,7 +90,9 @@ Copy and delete go through the engine, so the commands are safe to call directly
 handler. `copy-entity` is a deep duplicate — every component, a fresh UUID — that joins the
 source's parent as a sibling and selects the copy. `destroy-entity` takes the whole subtree with
 it and clears the engine selection when it sat anywhere inside; the panel clears its local
-selection for the root case in the same step.
+selection for the root case in the same step. The Delete key on a focused row (clicking a row
+focuses it) runs the same delete as the context menu item; the key is the `hierarchy.delete`
+binding (default Delete), rebindable in [Editor Settings](../editor-settings/).
 
 Rename is inline: double-click a row (or use the context menu) to edit in place. Enter or blur
 commits through `rename-entity` with an optimistic row update; Escape cancels.

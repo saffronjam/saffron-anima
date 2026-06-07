@@ -28,11 +28,11 @@ project file and is what the editor shows to users.
 ## How it works
 
 A project save serializes one JSON document: a version, the project name, the display name,
-the asset catalog, the scene, and the renderer settings. The catalog lists every asset by id,
+the asset catalog, the scene, the renderer settings, and the editor camera. The catalog lists every asset by id,
 name, type, and path. The scene half is the registry-driven scene serializer. A load reverses
 this, after first making the GPU idle so the previous project's resources can be released safely.
 
-## One document, three parts
+## One document
 
 ```json
 {
@@ -56,6 +56,12 @@ this, after first making the GPU idle so the previous project's resources can be
     "exposureEv": 0.0,
     "clustered": true,
     "shadows": true
+  },
+  "editorCamera": {
+    "position": { "x": 3.0, "y": 2.5, "z": 4.0 },
+    "yaw": -37.0,
+    "pitch": -29.0,
+    "fov": 45.0
   }
 }
 ```
@@ -78,6 +84,13 @@ ReSTIR) — so a project reopens looking the way it was saved. The block is appl
 the same setters the control commands use; missing fields keep their current value, so a
 project saved before the block existed loads unchanged, and the RT toggles only apply on
 a device that reports ray-tracing support.
+
+The [editor camera](../../ui-and-editor/editor-camera/) rides along the same way:
+`editorCamera` stores the viewport eye (position, yaw, pitch, fov), so a reopened project
+shows the framing it was saved with. The serde lives in SceneEdit — the camera is editor
+state, not an asset — and `saveProject`/`loadProject` just carry the block; callers in the
+control commands and the host startup path apply it. A project without the block keeps the
+current camera, like the render settings.
 
 ## Loading replaces both, after a device idle
 
@@ -146,6 +159,7 @@ paths working. New imports and new saves use `models/`.
 | Load the project | `assets.cppm` | `loadProject` |
 | Catalog ↔ JSON | `assets.cppm` | `catalogToJson`, `catalogFromJson`, `assetTypeName` |
 | Render settings ↔ JSON | `assets.cppm` | `renderSettingsToJson`, `applyRenderSettings` |
+| Editor camera ↔ JSON | `scene_edit_camera.cpp` | `sceneEditCameraToJson`, `sceneEditCameraFromJson` |
 | Legacy migration | `assets.cppm` | `newAssetServer` |
 | Project commands | `control_commands_asset.cpp` | `get-project`, `new-project`, `open-project`, `save-project` |
 | Scene half | `scene.cppm` | `sceneToJson`, `sceneFromJson` |

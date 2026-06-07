@@ -19,6 +19,8 @@ Every editor operation rides the JSON-over-unix-socket [control protocol](../too
 | `viewport-panel` | the transparent host div, two-tier bounds-sync over `set_viewport_bounds`, parking, gizmo + pointer-lock fly forwarding | `ViewportPanel.tsx` |
 | `editor-camera` | the engine `EditorCamera`, fly input streamed over `fly-input`, driven by `get-/set-camera` | `editor_camera.cpp` |
 | `gizmo` | the engine-rendered overlay gizmo, `gizmo-pointer`, the Topbar T/R/S + world/local | `Topbar.tsx` · `useGizmoShortcuts.ts` |
+| `play-mode` | play/pause/stop/step, scene-duplication discard, camera handover + fallback, live-tune-and-discard tint + locks | `scene_edit_play.cpp` · `Topbar.tsx` · `state/store.ts` |
+| `editor-settings` | the gear-button settings modal, the rebindable-keybinding registry + delta `settings.json`, the `load/save_editor_settings` bridge | `SettingsModal.tsx` · `lib/keybindings.ts` · `src-tauri/src/lib.rs` |
 | `hierarchy-panel` | the React tree outliner (`parentId` → forest), drag-reparent, the Environment sentinel, Create presets | `HierarchyPanel.tsx` · `HierarchyTree.tsx` |
 | `inspector` | the DTO-typed component inspector (fieldRenderer + FIELD_HINTS), RMW writes, add/remove guarded | `InspectorPanel.tsx` · `fieldRenderer.tsx` |
 | `asset-pickers-and-drag-drop` | the AssetPicker uuid combo, type-gated HTML5 drag-drop | `AssetPicker.tsx` · `AssetTile.tsx` |

@@ -38,6 +38,12 @@ frame into `updateSceneEditCamera`, so a burst of samples between frames is neve
 Releasing the button — or Escape, which exits pointer lock natively — sends `active:false`
 and ends the fly.
 
+Samples arrive at ~60Hz, slower than the engine renders, so applying each delta whole would
+staircase the view. The drained delta instead lands in a pending accumulator (`lookPending`)
+that yaw and pitch consume through an exponential filter — the same ~25ms time constant the
+[gizmo](../gizmo/) uses for drag samples — turning the sample steps into continuous motion at
+about two frames of lag. The filter only reshapes timing; every pixel of input still lands.
+
 A "controlling" latch keeps control while the view swings off the panel mid-drag; movement is
 frame-rate independent (`moveSpeed * dt`) along the forward and right basis, and pitch is
 clamped just shy of vertical so the camera never flips.
@@ -74,14 +80,23 @@ auto sceneEditCameraView(const SceneEditCamera& camera) -> CameraView
 The view holds only the world-to-view transform and the projection params. The projection matrix, and
 the Vulkan Y-flip, is built where it is used.
 
+## Persistence
+
+The eye is part of the project: saving writes an `editorCamera` block (position, yaw, pitch, fov)
+into [`project.json`](../../geometry-and-assets/project-serialization/), and opening a project
+restores it, so a reopened project shows the framing it was saved with. Projects saved before the
+block existed keep the current camera. The tuning fields (speeds, planes) are not persisted —
+they are session preferences, not framing.
+
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
 | State | `scene_edit_context.cppm` | `SceneEditCamera`, `SceneEditCameraInput` |
 | Forward from yaw/pitch | `scene_edit_camera.cpp` | `sceneEditCameraForward` |
-| Move/look math | `scene_edit_camera.cpp` | `updateSceneEditCamera`, the `controlling` latch |
+| Move/look math | `scene_edit_camera.cpp` | `updateSceneEditCamera`, `lookPending`, the `controlling` latch |
 | Convert to a view | `scene_edit_camera.cpp` | `sceneEditCameraView` |
+| Persisted view ↔ JSON | `scene_edit_camera.cpp` | `sceneEditCameraToJson`, `sceneEditCameraFromJson` |
 | Fly snapshot drain | `host.cppm` | the `onUpdate` `flyInput` drain |
 | Pointer-lock streaming (webview) | `editor/src/panels/ViewportPanel.tsx` | the fly `useEffect` |
 | Camera commands (engine) | `control_commands_scene.cpp` | `fly-input`, `get-camera`, `set-camera`, `focus` |
@@ -90,5 +105,6 @@ the Vulkan Y-flip, is built where it is used.
 ## Related
 
 - [Gizmo](../gizmo/) — manipulates through the same `CameraView`
+- [Play mode](../play-mode/) — the viewport renders through the scene camera during play, falling back to this one
 - [Selection](../selection/) — click-pick builds its ray from this camera
 - [Scene commands](../../tooling-and-control/scene-commands/) — `get-camera`/`set-camera`/`focus`

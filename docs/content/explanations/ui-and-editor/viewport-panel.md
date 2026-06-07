@@ -65,7 +65,9 @@ Holding the **right button** flies the [editor camera](../editor-camera/): the p
 pointer lock, accumulates relative deltas (`movementX/Y`) and the WASD/Space/Shift key
 state, and streams them over `fly-input` (~16ms cadence; deltas accumulate between sends,
 so nothing is lost). Releasing the button or pressing Escape (which exits pointer lock
-natively) ends the fly.
+natively) ends the fly. The six fly keys default to WASD/Space/Shift and are rebindable in
+[Editor Settings](../editor-settings/) (the `camera.fly*` commands, matched on the physical
+key code).
 
 ## In the code
 

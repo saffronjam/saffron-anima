@@ -40,11 +40,19 @@ A press that does not move is a click, and [ray-picks](../selection/) instead of
 
 ## Mode and space
 
-The operation (T/R/S) and the world/local space are **one** shared gizmo state on the engine, read and written through `get-gizmo`/`set-gizmo`. A single source of truth keeps the Topbar buttons, the keyboard shortcuts, and an external `se set-gizmo` in agreement.
+The operation (T/R/S), the world/local space, and the preserve-children flag are **one** shared gizmo state on the engine, read and written through `get-gizmo`/`set-gizmo`. A single source of truth keeps the Topbar buttons, the keyboard shortcuts, and an external `se set-gizmo` in agreement.
 
-- The **Topbar** has a T/R/S button group and a World/Local toggle. A click updates `store.gizmo` optimistically and fires `set-gizmo`.
-- **W/E/R** map to translate/rotate/scale, bound on the webview (gated off while a text field is focused so typing a value never retargets the gizmo).
+- The **Topbar** has a T/R/S button group, a World/Local toggle, and an anchor-icon preserve-children toggle. A click updates `store.gizmo` optimistically and fires `set-gizmo`.
+- **W/E/R** are the *default* translate/rotate/scale shortcuts, bound on the webview (gated off while a text field is focused so typing a value never retargets the gizmo). They are rebindable in [Editor Settings](../editor-settings/); the Topbar tooltips show whatever key is currently bound.
 - The reconcile poll's `get-gizmo` read folds any external change back into `store.gizmo`, so the Topbar stays correct no matter who set the mode.
+
+## Preserve children
+
+By default a parent's transform carries its whole subtree — that is what parenting means. Preserve children (Blender's *Affect Only Parents*, Maya's *Preserve Children*) inverts that for the moment you want to adjust the parent alone: with the toggle on, transforming a parent rebases each direct child's local TRS against the parent's new world matrix, so the children visually stay put.
+
+A drag freezes every direct child's world matrix at `begin` alongside the parent snapshot, and each applied frame rewrites the child locals from those frozen matrices — the same `local = world⁻¹ · childWorld` rebase [reparenting](../../scene-and-ecs/scene-hierarchy/) uses, so there is no per-frame drift. The Inspector path (`set-transform`) does the same around its one write. Grandchildren need no handling: they are relative to the rebased child and follow it.
+
+The rebase is TRS-only, like the reparent decompose: a rotated child under a non-uniformly scaled parent would need shear to hold its pose exactly, and `TransformComponent` cannot represent shear — keep parents you scale non-uniformly unrotated relative to their children (or parent through a unit-scale empty).
 
 ## In the code
 
@@ -52,8 +60,9 @@ The operation (T/R/S) and the world/local space are **one** shared gizmo state o
 |---|---|---|
 | Pointer forwarding | `editor/src/panels/ViewportPanel.tsx` | `gizmoPointer`, the `begin`/`drag`/`end` gesture, `DRAG_THRESHOLD_PX` |
 | The gizmo-pointer wrapper | `editor/src/control/client.ts` | `gizmoPointer`, `GizmoPointerPhase` |
-| T/R/S + world/local | `editor/src/panels/Topbar.tsx` | `selectOp`, `selectSpace` |
-| W/E/R shortcuts | `editor/src/app/useGizmoShortcuts.ts` | `useGizmoShortcuts`, `KEY_TO_OP` |
+| T/R/S + world/local + preserve children | `editor/src/panels/Topbar.tsx` | `selectOp`, `selectSpace`, `togglePreserveChildren` |
+| Child rebase (engine) | `scene_edit_gizmo.cpp`, `scene.cppm` | `rebasePreservedChildren`, `setLocalFromMatrix` |
+| W/E/R shortcuts | `editor/src/app/useGizmoShortcuts.ts` | `useGizmoShortcuts`, `GIZMO_COMMANDS`, `matchesBinding` |
 | Shared gizmo state | `editor/src/state/store.ts` | `gizmo`, `setGizmo` |
 | Mode commands (engine) | `control_commands_scene.cpp` | `get-gizmo`, `set-gizmo`, `gizmo-pointer` |
 | Overlay geometry (engine) | `engine/source/saffron/host/host.cppm` | `buildNativeGizmo`, `addLine`, `addQuad` |
@@ -63,6 +72,7 @@ The operation (T/R/S) and the world/local space are **one** shared gizmo state o
 ## Related
 
 - [Editor camera](../editor-camera/) — the eye the gizmo and scene share
+- [Play mode](../play-mode/) — the gizmo is hidden during play (its writes would be discarded with the play scene)
 - [Selection](../selection/) — the click-vs-drag split, and ray-pick on a non-drag click
 - [Viewport panel](../viewport-panel/) — where pointer phases are captured and forwarded
 - [Scene commands](../../tooling-and-control/scene-commands/) — `get-gizmo`/`set-gizmo`/`gizmo-pointer`

@@ -48,11 +48,14 @@ editor convention) the child's local TRS is rebased so its world transform does 
 
 $$ local' = parentWorld^{-1} \cdot childWorld $$
 
-The rebased matrix is decomposed back to translation/Euler/scale. The Euler angles come from
-`extractEulerAngleZYX`, not `glm::eulerAngles`: the engine composes rotations as `Rz * Ry * Rx`,
-and the quaternion-based extraction is numerically unstable at ±90° yaw — exactly the rotation an
-editor produces all day. The decompose is TRS-only; a sheared parent loses its shear in the round
-trip, which is accepted because `TransformComponent` cannot represent shear anyway.
+The rebased matrix is decomposed back to translation/Euler/scale by `setLocalFromMatrix`. The
+Euler angles come from `extractEulerAngleZYX`, not `glm::eulerAngles`: the engine composes
+rotations as `Rz * Ry * Rx`, and the quaternion-based extraction is numerically unstable at ±90°
+yaw — exactly the rotation an editor produces all day. The decompose is TRS-only; a sheared
+parent loses its shear in the round trip, which is accepted because `TransformComponent` cannot
+represent shear anyway. The same rebase serves the editor's
+[preserve-children mode](../../ui-and-editor/gizmo/#preserve-children), which holds each direct
+child's world pose while a parent alone is transformed.
 
 `destroyEntity` destroys the whole subtree: descendants are gathered through the children caches
 first (`registry.destroy` invalidates handles), the entity is detached from its parent's cache,
