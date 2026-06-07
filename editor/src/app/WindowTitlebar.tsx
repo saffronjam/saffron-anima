@@ -1,14 +1,28 @@
 /// Custom Tauri titlebar with editor view tabs.
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Box, File, Image as ImageIcon, Maximize2, Minus, Square, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  Box,
+  File,
+  House,
+  Image as ImageIcon,
+  Maximize2,
+  Minus,
+  Settings,
+  Square,
+  X,
+} from "lucide-react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent, ReactNode } from "react";
 import { useEditorStore, type ViewTab } from "../state/store";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 const appWindow = getCurrentWindow();
 const TAB_DRAG_THRESHOLD_PX = 4;
+/// Hidden dev-mode gesture: five Scene-tab clicks, each within this gap of the last.
+const DEV_GESTURE_CLICKS = 5;
+const DEV_GESTURE_WINDOW_MS = 600;
 
 interface TabDragState {
   id: string;
@@ -26,11 +40,31 @@ export function WindowTitlebar() {
   const [maximized, setMaximized] = useState(false);
   const [tabDrag, setTabDrag] = useState<TabDragState | null>(null);
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
+  const settleRef = useRef<Map<string, number> | null>(null);
   const tabs = useEditorStore((s) => s.viewTabs);
   const activeTabId = useEditorStore((s) => s.activeViewTabId);
   const setActiveViewTab = useEditorStore((s) => s.setActiveViewTab);
   const closeViewTab = useEditorStore((s) => s.closeViewTab);
   const moveViewTab = useEditorStore((s) => s.moveViewTab);
+  const setSettingsOpen = useEditorStore((s) => s.setSettingsOpen);
+  const devMode = useEditorStore((s) => s.devMode);
+  const setDevMode = useEditorStore((s) => s.setDevMode);
+  const devClickCount = useRef(0);
+  const devClickAt = useRef(0);
+
+  // Activate the Scene tab and track the hidden dev-mode gesture: five clicks in a
+  // row (each within DEV_GESTURE_WINDOW_MS of the last) toggle developer mode.
+  const activateSceneTab = (): void => {
+    setActiveViewTab("scene");
+    const now = Date.now();
+    devClickCount.current =
+      now - devClickAt.current > DEV_GESTURE_WINDOW_MS ? 1 : devClickCount.current + 1;
+    devClickAt.current = now;
+    if (devClickCount.current >= DEV_GESTURE_CLICKS) {
+      devClickCount.current = 0;
+      setDevMode(!devMode);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +117,48 @@ export function WindowTitlebar() {
 
     void appWindow.startDragging();
   };
+
+  // FLIP settle for a tab drop. The drop render reorders the DOM, clears the drag
+  // transforms, and re-enables the tabs' transitions all in one commit — left alone,
+  // the browser would transition each moved tab from `new slot + old drag transform`,
+  // a phantom slide from the wrong side. Before paint: suppress the transitions
+  // (style writes do not force a recalc), so the first rect read commits the
+  // transform removal without starting one and measures true final layout; then
+  // animate each tab that would jump from its pre-drop visual position into its
+  // slot via WAAPI. Neighbor tabs have zero diff (the drag preview already placed
+  // them at their final positions), so only the dragged tab settles, from under
+  // the cursor.
+  useLayoutEffect(() => {
+    const before = settleRef.current;
+    if (!before) {
+      return;
+    }
+    settleRef.current = null;
+    const nodes = [...tabRefs.current.entries()];
+    for (const [, node] of nodes) {
+      node.style.transition = "none";
+    }
+    const settles: [HTMLButtonElement, number][] = [];
+    for (const [id, node] of nodes) {
+      const left = before.get(id);
+      if (left === undefined) {
+        continue;
+      }
+      const diff = left - node.getBoundingClientRect().left;
+      if (Math.abs(diff) >= 0.5) {
+        settles.push([node, diff]);
+      }
+    }
+    for (const [, node] of nodes) {
+      node.style.transition = "";
+    }
+    for (const [node, diff] of settles) {
+      node.animate([{ transform: `translateX(${diff}px)` }, { transform: "none" }], {
+        duration: 150,
+        easing: "ease-out",
+      });
+    }
+  });
 
   const setTabRef = (id: string, node: HTMLButtonElement | null): void => {
     if (node) {
@@ -175,6 +251,13 @@ export function WindowTitlebar() {
     }
     const activate = !tabDrag.dragging;
     const nextIndex = tabDrag.previewIndex;
+    if (tabDrag.dragging) {
+      const lefts = new Map<string, number>();
+      for (const [id, node] of tabRefs.current) {
+        lefts.set(id, node.getBoundingClientRect().left);
+      }
+      settleRef.current = lefts;
+    }
     setTabDrag(null);
     if (activate) {
       setActiveViewTab(tab.id);
@@ -220,28 +303,40 @@ export function WindowTitlebar() {
         data-titlebar-control="true"
       >
         {tabs.map((tab) => (
-          <TitlebarTab
-            key={tab.id}
-            tab={tab}
-            active={tab.id === activeTabId}
-            dragging={tabDrag?.id === tab.id && tabDrag.dragging}
-            style={tabStyle(tab)}
-            setRef={(node) => setTabRef(tab.id, node)}
-            onActivate={() => setActiveViewTab(tab.id)}
-            onClose={() => closeViewTab(tab.id)}
-            onPointerDown={(event) => beginTabDrag(tab, event)}
-            onPointerMove={moveTabDrag}
-            onPointerUp={(event) => endTabDrag(tab, event)}
-            onPointerCancel={() => setTabDrag(null)}
-          />
+          <Fragment key={tab.id}>
+            <TitlebarTab
+              tab={tab}
+              active={tab.id === activeTabId}
+              dragging={tabDrag?.id === tab.id && tabDrag.dragging}
+              style={tabStyle(tab)}
+              setRef={(node) => setTabRef(tab.id, node)}
+              onActivate={() =>
+                tab.id === "scene" ? activateSceneTab() : setActiveViewTab(tab.id)
+              }
+              onClose={() => closeViewTab(tab.id)}
+              onPointerDown={(event) => beginTabDrag(tab, event)}
+              onPointerMove={moveTabDrag}
+              onPointerUp={(event) => endTabDrag(tab, event)}
+              onPointerCancel={() => setTabDrag(null)}
+            />
+            {tab.id === "scene" && devMode ? <DevModeChip /> : null}
+          </Fragment>
         ))}
       </div>
       <div className="min-w-0 flex-1 self-stretch" data-tauri-drag-region />
       <div
-        className="flex w-32 flex-none justify-end"
+        className="flex w-44 flex-none justify-end"
         data-tauri-drag-region="false"
         data-titlebar-control="true"
       >
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <TitlebarButton label="Editor settings" onClick={() => setSettingsOpen(true)}>
+              <Settings />
+            </TitlebarButton>
+          </TooltipTrigger>
+          <TooltipContent>Editor settings</TooltipContent>
+        </Tooltip>
         <TitlebarButton label="Minimize" onClick={minimize}>
           <Minus />
         </TitlebarButton>
@@ -340,9 +435,24 @@ function TitlebarTab({
   );
 }
 
+/// Status chip flagging that developer mode is on. Non-interactive; its tooltip
+/// carries the otherwise-hidden toggle gesture.
+function DevModeChip() {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="ml-2 flex h-5 select-none items-center self-center rounded-full bg-orange-500/15 px-2 text-[10px] font-medium uppercase tracking-wide text-orange-400">
+          Dev mode
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Developer mode on — click the Scene tab 5× to toggle</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function tabIcon(tab: ViewTab) {
   if (tab.kind === "scene") {
-    return Box;
+    return House;
   }
   if (tab.assetType === "mesh") {
     return Box;
@@ -373,7 +483,6 @@ function TitlebarButton({ children, label, onClick, variant = "default" }: Title
       variant="ghost"
       className={className}
       aria-label={label}
-      title={label}
       onClick={onClick}
     >
       {children}
