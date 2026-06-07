@@ -41,8 +41,13 @@ GPU_ENV := $(if $(NVIDIA_ICD),VK_ADD_DRIVER_FILES=$(NVIDIA_ICD))
 # literal $(MAKE) is always executed even in dry-run; via $(MK) it stays a real preview).
 MK := $(MAKE)
 
-# Tracked C++ sources we own; excludes the cmake third-party impl TUs and vendored code.
-CPP_LS := git -C "$(REPO)" ls-files '*.cppm' '*.cpp' | grep -vE '^(cmake/|third_party/)'
+# Tracked C++ sources we own; excludes the cmake third-party impl TUs, vendored code, and
+# generated serde (gen-control-dto owns its style — formatting it just fights the generator).
+CPP_LS := git -C "$(REPO)" ls-files '*.cppm' '*.cpp' | grep -vE '^(cmake/|third_party/)|\.generated\.cpp$$'
+
+# clang-tidy parallelism. The default (one per core) re-parses the heavy module/Vulkan
+# headers in every process at a few GB each, which OOMs a 32 GB machine at -j24.
+TIDY_JOBS ?= 4
 
 # Targets whose tools (clang, cargo, Vulkan, slang, the toolbox-linked engine binary)
 # live only in the toolbox. On the host these re-enter it; inside, they run directly.
@@ -148,7 +153,7 @@ format:
 lint:
 	@test -f "$(BUILD_DIR)/compile_commands.json" || { echo "build/debug not configured — run 'make engine' first (clang-tidy needs compile_commands.json)"; exit 1; }
 	cd "$(REPO)" && $(CPP_LS) | xargs -r clang-format --dry-run -Werror
-	run-clang-tidy -p "$(BUILD_DIR)" -quiet engine/source tools/se/source
+	run-clang-tidy -p "$(BUILD_DIR)" -quiet -j $(TIDY_JOBS) engine/source tools/se/source
 	cd "$(EDITOR)" && bun run lint
 
 ## prepare-for-commit: format everything, then run the linters

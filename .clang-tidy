@@ -2,10 +2,13 @@
 # CONVENTIONS.md. Run via `make lint` (run-clang-tidy -p build/debug). Checks that
 # fight the conventions (public-field structs, leading `void`, no `[[nodiscard]]`
 # noise) or that are notoriously noisy on Vulkan code are disabled.
+# bugprone-unchecked-optional-access is off: its dataflow analysis crashes
+# clang-tidy 21 while walking the imported module AST (render_graph.cppm).
 Checks: >
   -*,
   bugprone-*,
   -bugprone-easily-swappable-parameters,
+  -bugprone-unchecked-optional-access,
   performance-*,
   clang-analyzer-*,
   misc-*,

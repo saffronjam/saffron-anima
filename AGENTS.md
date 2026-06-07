@@ -29,6 +29,11 @@ everything DX11-specific and the heavy OOP.
   happens, back off briefly with a small random delay, re-read the affected file, and reconcile the
   edit. If the conflict reflects contradictory intent rather than a mechanical overlap, stop and ask the
   user how to proceed.
+- **Concurrent builds:** never share `build/debug` between two running agents — ninja races rewrite
+  the module `.pcm` files another compile is mmap-reading, which crashes clang with spurious Bus
+  errors and corrupts `.ninja_log`. If another agent is building, either wait it out or configure a
+  private dir (`cmake --preset debug -B build/<name>`) and point builds, e2e
+  (`SAFFRON_ENGINE_BIN=build/<name>/bin/SaffronEngine`), and clang-tidy (`-p build/<name>`) at it.
 
 ## Build — always in the `saffron-build` toolbox
 
