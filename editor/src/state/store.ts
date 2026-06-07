@@ -4,6 +4,7 @@
 import { create } from "zustand";
 import { client, type Client } from "../control/client";
 import type { ProjectInfo } from "../control/client";
+import { COMMANDS_BY_ID, isCommandId, type CommandId } from "../lib/keybindings";
 import type {
   AssetEntry,
   EntityListEntry,
@@ -34,6 +35,9 @@ export interface EngineStatus {
   error?: string;
 }
 
+/// The editor's play-mode state, mirrored from the engine.
+export type PlayState = "edit" | "playing" | "paused";
+
 export interface EditorState {
   entities: EntityListEntry[];
   selectedId: string | null;
@@ -63,6 +67,11 @@ export interface EditorState {
   engineStatus: EngineStatus;
   dragActive: boolean;
   gizmo: GizmoState;
+  /// Editor play mode, mirrored from the engine via the reconcile poll
+  /// (get-selection carries playState/playVersion; the poll dedups on the version).
+  /// The gizmo is hidden and save/load are locked while not "edit"; panels stay live
+  /// (writes discard on stop).
+  playState: PlayState;
   /// When true, the native viewport window is parked off-screen so an overlay
   /// (a modal dialog) can paint over the viewport rect — the reparented X11
   /// child always paints on top otherwise. The ViewportPanel reads this and skips
@@ -84,6 +93,18 @@ export interface EditorState {
   /// One-shot "jump the Inspector to this component" signal set by a subrow click;
   /// the Inspector consumes and clears it. Never gated on the poll's versions.
   focusComponent: string | null;
+  /// Keybinding OVERRIDES only (command id → key-string); commands absent here use
+  /// their registry default. Hydrated from appdata/settings.json at startup and
+  /// persisted back (deltas only) on every change.
+  keyBindings: Record<string, string>;
+  /// True while the Editor Settings modal is open; gates the global shortcut hook
+  /// (the dialog holds focus on non-text elements, so the text-entry guard alone
+  /// would let shortcuts fire underneath it).
+  settingsOpen: boolean;
+  /// Developer mode: a persisted, app-wide flag that gates experimental/diagnostic
+  /// UI flows (e.g. the project menu's Reload Project). Toggled by the hidden gesture
+  /// in the titlebar; read by any panel that wants a dev-only affordance.
+  devMode: boolean;
 
   setEntities(entities: EntityListEntry[]): void;
   /// Optimistically rename one entity's hierarchy row between polls (inline rename).
@@ -128,11 +149,26 @@ export interface EditorState {
   setPhase(phase: EnginePhase, error?: string): void;
   setDragActive(dragActive: boolean): void;
   setGizmo(patch: Partial<GizmoState>): void;
+  /// Optimistic play-state write (the reconcile poll repairs it from the engine).
+  setPlayState(playState: PlayState): void;
   setViewportHidden(viewportHidden: boolean): void;
   setNativeDialogOpen(nativeDialogOpen: boolean): void;
   toggleComponentSubrows(): void;
   toggleHideBones(): void;
   setFocusComponent(focusComponent: string | null): void;
+  /// Set one binding override and persist. A value equal to the registry default
+  /// removes the override instead, keeping settings.json delta-minimal.
+  setKeyBinding(id: CommandId, value: string): void;
+  /// Remove one override (back to the default) and persist.
+  resetKeyBinding(id: CommandId): void;
+  /// Remove every override and persist.
+  resetAllKeyBindings(): void;
+  /// Load-time hydration: replace the override map (unknown command ids dropped),
+  /// without writing back.
+  hydrateKeyBindings(overrides: Record<string, string>): void;
+  setSettingsOpen(settingsOpen: boolean): void;
+  /// Set developer mode and persist it (localStorage, like the view-preference toggles).
+  setDevMode(devMode: boolean): void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -155,12 +191,16 @@ export const useEditorStore = create<EditorState>((set) => ({
   uiFrameMs: 0,
   engineStatus: { running: false, phase: "idle" },
   dragActive: false,
-  gizmo: { op: "translate", space: "world" },
+  gizmo: { op: "translate", space: "world", preserveChildren: false },
+  playState: "edit",
   viewportHidden: false,
   nativeDialogOpen: false,
   showComponentSubrows: loadShowSubrows(),
   hideBones: loadHideBones(),
   focusComponent: null,
+  keyBindings: {},
+  settingsOpen: false,
+  devMode: loadDevMode(),
 
   setEntities: (entities) =>
     set((s) => {
@@ -361,6 +401,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     })),
   setDragActive: (dragActive) => set({ dragActive }),
   setGizmo: (patch) => set((s) => ({ gizmo: { ...s.gizmo, ...patch } })),
+  setPlayState: (playState) => set({ playState }),
   setViewportHidden: (viewportHidden) => set({ viewportHidden }),
   setNativeDialogOpen: (nativeDialogOpen) => set({ nativeDialogOpen }),
   toggleComponentSubrows: () =>
@@ -384,7 +425,65 @@ export const useEditorStore = create<EditorState>((set) => ({
       return { hideBones };
     }),
   setFocusComponent: (focusComponent) => set({ focusComponent }),
+  setKeyBinding: (id, value) =>
+    set((s) => {
+      const keyBindings = { ...s.keyBindings };
+      if (value === COMMANDS_BY_ID[id].default) {
+        delete keyBindings[id];
+      } else {
+        keyBindings[id] = value;
+      }
+      persistKeyBindings(keyBindings);
+      return { keyBindings };
+    }),
+  resetKeyBinding: (id) =>
+    set((s) => {
+      if (!(id in s.keyBindings)) {
+        return {};
+      }
+      const keyBindings = { ...s.keyBindings };
+      delete keyBindings[id];
+      persistKeyBindings(keyBindings);
+      return { keyBindings };
+    }),
+  resetAllKeyBindings: () => {
+    persistKeyBindings({});
+    set({ keyBindings: {} });
+  },
+  hydrateKeyBindings: (overrides) =>
+    set({
+      keyBindings: Object.fromEntries(Object.entries(overrides).filter(([id]) => isCommandId(id))),
+    }),
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  setDevMode: (devMode) =>
+    set(() => {
+      try {
+        localStorage.setItem(DEV_MODE_STORAGE_KEY, devMode ? "1" : "0");
+      } catch {
+        // Storage unavailable; the flag is then session-only.
+      }
+      return { devMode };
+    }),
 }));
+
+/// Fire-and-forget settings write; the in-memory state stays applied on rejection
+/// (the global shortcut hook has no panel to flash, so the failure goes to the console).
+function persistKeyBindings(keyBindings: Record<string, string>): void {
+  void client.saveEditorSettings({ keyBindings }).catch((err: unknown) => {
+    console.error("save editor settings rejected:", err);
+  });
+}
+
+/// Hydrate the keybinding overrides from appdata/settings.json (called once at app
+/// start). A missing or unreadable file leaves the registry defaults active.
+export async function loadEditorSettings(): Promise<void> {
+  try {
+    const settings = await client.loadEditorSettings();
+    useEditorStore.getState().hydrateKeyBindings(settings.keyBindings ?? {});
+  } catch {
+    // Defaults stay active.
+  }
+}
 
 /// Run a native file-dialog thunk (`open`/`save`) under the app-side dialog lock:
 /// no-op if one is already open (the re-entry guard that stops stacked pickers),
@@ -463,6 +562,39 @@ function loadExpanded(path: string): Set<string> {
   return new Set<string>();
 }
 
+/// Sidebar-width persistence, keyed by project path like the expand-state (the
+/// dock split ratios persist separately via react-resizable-panels' useDefaultLayout).
+const SIDEBAR_WIDTH_STORAGE_PREFIX = "saffron.layout.sidebarWidth:";
+
+export function persistSidebarWidth(path: string | undefined, width: number): void {
+  if (!path) {
+    return;
+  }
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_PREFIX + path, String(Math.round(width)));
+  } catch {
+    // Storage may be unavailable (private mode); the width is then session-only.
+  }
+}
+
+export function loadSidebarWidth(path: string | undefined): number | null {
+  if (!path) {
+    return null;
+  }
+  try {
+    const raw = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_PREFIX + path);
+    if (raw !== null) {
+      const width = Number(raw);
+      if (Number.isFinite(width)) {
+        return width;
+      }
+    }
+  } catch {
+    // Fall through to the default.
+  }
+  return null;
+}
+
 /// The component-subrows toggle is a view preference (one key, unlike the
 /// per-project expand-state); default off keeps the outliner clean.
 const SUBROWS_STORAGE_KEY = "saffron.showComponentSubrows";
@@ -480,6 +612,17 @@ const HIDE_BONES_STORAGE_KEY = "saffron.hideBones";
 function loadHideBones(): boolean {
   try {
     return localStorage.getItem(HIDE_BONES_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/// Developer mode persists app-wide (one key, not per-project), default off.
+const DEV_MODE_STORAGE_KEY = "saffron.devMode";
+
+function loadDevMode(): boolean {
+  try {
+    return localStorage.getItem(DEV_MODE_STORAGE_KEY) === "1";
   } catch {
     return false;
   }
@@ -526,6 +669,7 @@ export function startReconcile(client: Client): () => void {
   let knownSceneVersion = -1;
   let knownSelectionVersion = -1;
   let knownSelectedId: string | null = null;
+  let knownPlayVersion = -1;
 
   let lastTickAt = 0;
   let emaIntervalMs = 0;
@@ -685,6 +829,14 @@ export function startReconcile(client: Client): () => void {
       // in the Topbar); Topbar clicks set this optimistically, the poll confirms.
       live.setGizmo(gizmo);
 
+      // Mirror play state from the engine on a version change (a shell `se play`
+      // shows up here too); Topbar clicks set it optimistically, the poll confirms.
+      // The stop-driven sceneVersion bump rides the refreshHeavyState path below,
+      // snapping the tree/inspector back to the authored scene.
+      if (selection.playVersion !== knownPlayVersion) {
+        live.setPlayState(selection.playState as PlayState);
+      }
+
       const nextSelectedId = selection.entity ? selection.entity.id : null;
       const previousSceneVersion = knownSceneVersion;
       const sceneChanged = selection.sceneVersion !== knownSceneVersion;
@@ -708,6 +860,7 @@ export function startReconcile(client: Client): () => void {
       knownSceneVersion = selection.sceneVersion;
       knownSelectionVersion = selection.selectionVersion;
       knownSelectedId = nextSelectedId;
+      knownPlayVersion = selection.playVersion;
     } catch {
     } finally {
       fastInFlight = false;
