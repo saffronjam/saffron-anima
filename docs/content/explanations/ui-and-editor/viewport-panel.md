@@ -22,12 +22,15 @@ CSD-aware offset within the toplevel, tracked GTK-side) positions and sizes the 
 and the device-pixel size goes to the engine as `set-viewport-size` so the render matches
 the panel one-to-one.
 
-Two tiers keep the subsurface glued through dock drags without flooding the bridge:
+Two tiers keep the subsurface glued through dock drags without paying the engine's
+target-recreation cost per tick:
 
-- a **throttled live sync** (~50ms) on every geometry change — a `ResizeObserver` on the
-  host div fires during a drag, so the subsurface roughly follows;
-- a **debounced resize-end commit** (~150ms) that sends one final exact bounds, so it
-  lands precisely even if the throttle dropped the last frame.
+- a **throttled live sync** (~16ms) on every geometry change — a `ResizeObserver` on the
+  host div fires during a drag, and each tick moves and stretches the subsurface only
+  (the current frame scales into the new rect);
+- a **debounced resize-end commit** (~150ms) that sends one final exact bounds *and* the
+  engine render size, so the scene re-renders sharp at the settled rect — once per
+  gesture instead of per tick.
 
 ```ts
 const observer = new ResizeObserver(onGeometryChange);  // live sync + schedule end-commit

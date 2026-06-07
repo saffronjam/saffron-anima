@@ -11,6 +11,43 @@ subsurface stacked below its own transparent window. Panels, shadows, rounded co
 translucent overlays therefore blend over the live scene — something a native child window
 can never do, because window systems stack children opaquely on top ("airspace").
 
+## The pieces
+
+Four mechanisms carry the whole design; everything else is plumbing between them.
+
+**Shared memory.** A POSIX shm segment is a file-backed memory region: one process creates
+it by name (`shm_open` returns a file descriptor, `ftruncate` sizes it), and any process
+that `mmap`s that descriptor gets the *same physical pages* in its own address space. A
+write on one side is immediately a read on the other — no syscall, no copy, no message.
+The engine "publishes" a frame by `memcpy`ing pixels into the mapped region, and that is
+the last CPU copy in the pipeline: the editor hands the very same descriptor to the
+compositor as a `wl_shm_pool`, so the compositor samples the bytes the engine wrote.
+
+**The seqlock.** Two processes racing on the same pages need an ordering rule, and a lock
+would couple their frame rates. A seqlock is the lock-free alternative for one writer and
+many readers: the writer writes the payload first, then bumps a sequence counter behind a
+release fence. The fence guarantees that a reader observing the new counter value also
+observes the payload written before it. Torn frames are skipped, never displayed, and
+neither side ever waits for the other.
+
+**Surfaces and subsurfaces.** A Wayland `wl_surface` is a compositor-side rectangle with a
+pixel buffer attached; the compositor — not the application — blends all surfaces into the
+final image each refresh. A `wl_subsurface` glues one surface to a parent at an offset and
+a z-order, and crucially the z-order may be *below* the parent. That inversion is the trick
+the X11 reparent could never do: the engine's pixels sit under the UI's, so every
+translucent UI pixel blends over the scene in the compositor, for free. `wp_viewport`
+adds a crop/scale stage — the compositor samples the attached buffer at whatever
+destination size the surface declares, which is what lets an old frame stretch during a
+resize before the engine catches up.
+
+**DMA, for what comes next.** Today's transport still costs one GPU→CPU readback (the
+engine) and one CPU→GPU texture upload (the compositor) per frame. DMA — direct memory
+access — is hardware reading or writing memory without the CPU touching the bytes, and a
+*dma-buf* is a kernel handle (a file descriptor) to GPU memory that another process or
+device can import directly. Exporting the engine's render targets as dma-bufs would let
+the compositor's GPU sample them in place: zero copies, both transfers gone. That upgrade
+is scoped in `plans/dmabuf-viewport/`.
+
 ## How it works
 
 ```mermaid
@@ -44,8 +81,8 @@ bounds through a Tauri command.
 
 ## Load-bearing details
 
-Three Wayland behaviours shape the implementation; missing any of them looks like "no
-viewport at all" rather than an error.
+Each of these is the difference between a working viewport and one that is frozen,
+seamed, or absent — none of them fails with an error.
 
 - **Subsurface state is double-buffered on the parent.** Creation and `set_position` only
   take effect when the *toplevel* commits. A static transparent window may not be
@@ -56,6 +93,20 @@ viewport at all" rather than an error.
   loop — and with it the parent commits the subsurface needs. The window paints one
   near-invisible 2×2 dot in its draw handler so it always counts as visible, and clears
   its opaque region so the compositor blends below it.
+- **The page must resolve against a backdrop, not the desktop.** The page is transparent,
+  and not every pixel of it is opaque — panel borders are 10%-alpha hairlines, and a
+  webview repaint lags an interactive resize by a frame. A second subsurface below the
+  viewport subsurface stretches a single opaque theme-colored pixel (`wp_viewport` again)
+  over the whole window, so every translucent or unpainted page pixel blends against
+  theme-dark exactly as it would in an opaque app. Painting that backdrop from GTK under
+  the webview does not work: WebKit's GL blit *replaces* the pixels beneath its
+  allocation rather than blending over them.
+- **The segment can be replaced under the reader.** The engine recreates the shm segment
+  if a frame ever outgrows the slot capacity, and a restarted engine makes a fresh one —
+  same name, new inode. A mapping is per-inode, so a reader that keeps its old `mmap`
+  reads a frozen orphan forever. The capacity is floored at 4K so ordinary resizes never
+  trigger this (shm pages are sparse; unused capacity costs nothing), and the presenter
+  probes the inode every 250ms and remaps its pool + buffers when it changes.
 - **Frame callbacks pace, they do not certify.** A callback per commit proves cadence, not
   that those pixels reached glass. `wp_presentation` feedback (counted per second behind
   `SAFFRON_VIEWPORT_STATS=1`) reports `presented`/`discarded` plus the vblank delta — and
@@ -64,6 +115,16 @@ viewport at all" rather than an error.
 
 Because the engine never presents, nothing throttles its loop; the editor caps it via
 `SAFFRON_MAX_FPS` (default 500) so slots are not rewritten mid-read at thousands of fps.
+
+## Resizing in two tiers
+
+Changing the engine's render size recreates the whole offscreen chain (color, depth, and
+every post-process target) behind a device idle — far too expensive per drag tick. The
+panel therefore splits its bounds sync: live ticks (~16ms) only move and stretch the
+subsurface, applying the new position and `wp_viewport` destination to the
+already-attached buffer, so the viewport stays glued to the divider showing a scaled old
+frame. One debounced end commit (~150ms after the gesture settles) sends
+`set-viewport-size`, and the next frames arrive sharp at the final resolution.
 
 > [!NOTE]
 > On NVIDIA, WebKitGTK's default DMABUF renderer draws nothing under Wayland and its
@@ -95,6 +156,7 @@ engine smooths gizmo drag samples toward their target each rendered frame
 | Recorded readback + fence-only submit | `renderer.cppm` | `recordShmPublishCopy`, the `shmPublish` branches in `beginFrame`/`endFrame` |
 | Loop cap | `app.cppm` | `maxFpsFromEnv` |
 | Subsurface presenter | `editor/src-tauri/src/wayland_viewport.rs` | `install`, `run`, `ViewportShared`, `PresentationStats` |
+| Backdrop + segment remap | `editor/src-tauri/src/wayland_viewport.rs` | `backdrop_pixel_fd`, `stat_shm` |
 | Rect + park bridge | `editor/src-tauri/src/lib.rs` | `set_viewport_bounds`, `set_viewport_hidden`, `spawn_engine` |
 | Render size command | `control_commands_render.cpp` | `set-viewport-size` |
 

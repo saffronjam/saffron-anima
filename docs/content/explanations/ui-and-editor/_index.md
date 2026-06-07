@@ -14,7 +14,7 @@ Every editor operation rides the JSON-over-unix-socket [control protocol](../too
 | Page | Covers | Code |
 |---|---|---|
 | `tauri-editor-and-viewport-bridge` | Tauri/React shell, the one generic control passthrough, engine spawn env, auto-start + crash recovery | `editor/src/control/client.ts` · `App.tsx` · `LoadingOverlay.tsx` |
-| `viewport-compositing` | offscreen render → pipelined shm ring → wl_subsurface below the transparent toplevel, the load-bearing Wayland traps, control-plane input routing | `renderer_capture.cpp` · `wayland_viewport.rs` |
+| `viewport-compositing` | shm/seqlock/subsurface/dma-buf foundations, offscreen render → pipelined shm ring → wl_subsurface below the transparent toplevel, backdrop + segment-remap traps, two-tier resize | `renderer_capture.cpp` · `wayland_viewport.rs` |
 | `viewport-panel` | the transparent host div, two-tier bounds-sync over `set_viewport_bounds`, parking, gizmo + pointer-lock fly forwarding | `ViewportPanel.tsx` |
 | `editor-camera` | the engine `EditorCamera`, fly input streamed over `fly-input`, driven by `get-/set-camera` | `editor_camera.cpp` |
 | `gizmo` | the engine-rendered overlay gizmo, `gizmo-pointer`, the Topbar T/R/S + world/local | `Topbar.tsx` · `useGizmoShortcuts.ts` |
