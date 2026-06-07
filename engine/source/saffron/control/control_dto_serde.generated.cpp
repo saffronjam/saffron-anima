@@ -733,6 +733,16 @@ namespace se
                 out.scale = std::move(*parsed);
             }
         }
+
+        {
+            auto value = optionalField(params, "smooth", 4, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "smooth");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.smooth = std::move(*parsed);
+            }
+        }
         return out;
     }
 
@@ -845,6 +855,16 @@ namespace se
                 auto parsed = readBool(*value, "unlit");
                 if (!parsed) { return Err(std::move(parsed.error())); }
                 out.unlit = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "smooth", 8, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "smooth");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.smooth = std::move(*parsed);
             }
         }
         return out;
@@ -1212,6 +1232,22 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<StepParams>) -> Result<StepParams>
+    {
+        StepParams out;
+
+        {
+            auto value = optionalField(params, "frames", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readI32(*value, "frames");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.frames = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<AddEntityParams>) -> Result<AddEntityParams>
     {
         AddEntityParams out;
@@ -1395,6 +1431,16 @@ namespace se
                 auto parsed = readGizmoSpaceDto(*value, "space");
                 if (!parsed) { return Err(std::move(parsed.error())); }
                 out.space = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "preserveChildren", 2, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "preserveChildren");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.preserveChildren = std::move(*parsed);
             }
         }
         return out;
@@ -2078,6 +2124,8 @@ namespace se
         out["sceneVersion"] = value.sceneVersion;
         if (value.entity) { out["entity"] = dtoToJson(*value.entity); }
         else { out["entity"] = nullptr; }
+        out["playState"] = value.playState;
+        out["playVersion"] = value.playVersion;
         return out;
     }
 
@@ -2085,6 +2133,16 @@ namespace se
     {
         Json out = Json::object();
         out["selectionVersion"] = value.selectionVersion;
+        return out;
+    }
+
+    auto dtoToJson(const PlayStateResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["state"] = value.state;
+        out["playVersion"] = value.playVersion;
+        out["sceneVersion"] = value.sceneVersion;
+        out["hasPrimaryCamera"] = value.hasPrimaryCamera;
         return out;
     }
 
@@ -2124,6 +2182,7 @@ namespace se
         Json out = Json::object();
         out["op"] = dtoToJson(value.op);
         out["space"] = dtoToJson(value.space);
+        out["preserveChildren"] = value.preserveChildren;
         return out;
     }
 

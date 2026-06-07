@@ -530,6 +530,9 @@ export namespace se
         std::optional<Vec3> translation;
         std::optional<Vec3> rotation;
         std::optional<Vec3> scale;
+        /// Animate the fields toward the given values over ~25ms instead of snapping
+        /// (ignored when preserve-children must rebase the subtree on each write).
+        std::optional<bool> smooth;
     };
 
     struct SetMaterialParams
@@ -542,6 +545,9 @@ export namespace se
         std::optional<Vec3> emissive;
         std::optional<f32> emissiveStrength;
         std::optional<bool> unlit;
+        /// Animate numeric fields toward the given values over ~25ms instead of
+        /// snapping; texture/unlit still apply immediately.
+        std::optional<bool> smooth;
     };
 
     struct SetLightParams
@@ -615,6 +621,21 @@ export namespace se
         i32 selectionVersion;
         i32 sceneVersion;
         std::optional<EntityRef> entity;
+        std::string playState;
+        i32 playVersion;
+    };
+
+    struct PlayStateResult
+    {
+        std::string state;  // "edit" | "playing" | "paused"
+        i32 playVersion;
+        i32 sceneVersion;       // echoed so a stop reads as a scene change
+        bool hasPrimaryCamera;  // captured at enterPlay; false drives the editor warning
+    };
+
+    struct StepParams
+    {
+        std::optional<i32> frames;  // default 1
     };
 
     struct DeselectResult
@@ -675,12 +696,14 @@ export namespace se
     {
         GizmoOpDto op;
         GizmoSpaceDto space;
+        bool preserveChildren;
     };
 
     struct SetGizmoParams
     {
         std::optional<GizmoOpDto> op;
         std::optional<GizmoSpaceDto> space;
+        std::optional<bool> preserveChildren;
     };
 
     struct GizmoPointerParams
@@ -814,6 +837,7 @@ export namespace se
     auto dtoToJson(const InspectResult& value) -> Json;
     auto dtoToJson(const EnvironmentDto& value) -> Json;
     auto dtoToJson(const SelectionResult& value) -> Json;
+    auto dtoToJson(const PlayStateResult& value) -> Json;
     auto dtoToJson(const DeselectResult& value) -> Json;
     auto dtoToJson(const SetComponentFieldResult& value) -> Json;
     auto dtoToJson(const EditorCamera& value) -> Json;
@@ -868,4 +892,5 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<FlyInputParams>) -> Result<FlyInputParams>;
     auto parseDto(const Json& params, DtoTag<SetProbesParams>) -> Result<SetProbesParams>;
     auto parseDto(const Json& params, DtoTag<SetExposureParams>) -> Result<SetExposureParams>;
+    auto parseDto(const Json& params, DtoTag<StepParams>) -> Result<StepParams>;
 }
