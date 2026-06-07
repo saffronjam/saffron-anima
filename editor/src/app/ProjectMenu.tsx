@@ -13,22 +13,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-const JSON_FILTER = [{ name: "Saffron Project / Scene", extensions: ["json"] }];
-const MODEL_FILTER = [{ name: "Models", extensions: ["gltf", "glb", "obj", "smesh"] }];
-const TEXTURE_FILTER = [
-  { name: "Images", extensions: ["png", "jpg", "jpeg", "hdr", "tga", "bmp"] },
-];
-const PNG_FILTER = [{ name: "PNG image", extensions: ["png"] }];
+const JSON_FILTER = [{ name: "Saffron Project", extensions: ["json"] }];
 
 export function ProjectMenu() {
   const phase = useEditorStore((s) => s.engineStatus.phase);
-  const refreshAssets = useEditorStore((s) => s.refreshAssets);
   const resetSceneState = useEditorStore((s) => s.resetSceneState);
   const setProject = useEditorStore((s) => s.setProject);
   const project = useEditorStore((s) => s.project);
   const nativeDialogOpen = useEditorStore((s) => s.nativeDialogOpen);
+  const devMode = useEditorStore((s) => s.devMode);
+  const playState = useEditorStore((s) => s.playState);
 
   const ready = phase === "ready";
+  // Saving/loading/reloading are locked during play: open/reload swap the scene out
+  // from under the play duplicate (the engine rejects them with "stop play first"), and
+  // save is greyed too so play-mode tweaks are never mistaken for authored, saved state.
+  const editing = playState === "edit";
   const label = project?.displayName ?? "No project";
 
   const saveProject = async (): Promise<void> => {
@@ -59,23 +59,7 @@ export function ProjectMenu() {
     }
   };
 
-  const loadProject = async (): Promise<void> => {
-    const selection = await withNativeDialog(() => open({ multiple: false, filters: JSON_FILTER }));
-    if (typeof selection !== "string") {
-      return;
-    }
-    try {
-      const res = await client.openProject(selection);
-      setProject(res);
-      resetSceneState();
-      await rememberProject(res);
-      notify(`Loaded project: ${res.path}`);
-    } catch (err) {
-      notify(`Load project failed: ${errorText(err)}`);
-    }
-  };
-
-  const openProjectFolder = async (): Promise<void> => {
+  const openProject = async (): Promise<void> => {
     const selection = await withNativeDialog(() => open({ directory: true, multiple: false }));
     if (typeof selection !== "string") {
       return;
@@ -91,79 +75,14 @@ export function ProjectMenu() {
     }
   };
 
-  const saveScene = async (): Promise<void> => {
-    const path = await withNativeDialog(() =>
-      save({ defaultPath: "scene.json", filters: JSON_FILTER }),
-    );
-    if (!path) {
-      return;
-    }
+  const reloadProject = async (): Promise<void> => {
     try {
-      const res = await client.saveScene(path);
-      notify(`Saved scene: ${res.path}`);
-    } catch (err) {
-      notify(`Save scene failed: ${errorText(err)}`);
-    }
-  };
-
-  const loadScene = async (): Promise<void> => {
-    const selection = await withNativeDialog(() => open({ multiple: false, filters: JSON_FILTER }));
-    if (typeof selection !== "string") {
-      return;
-    }
-    try {
-      const res = await client.loadScene(selection);
+      const res = await client.reloadProject();
+      setProject(res);
       resetSceneState();
-      notify(`Loaded scene: ${res.path}`);
+      notify(`Reloaded project: ${res.path}`);
     } catch (err) {
-      notify(`Load scene failed: ${errorText(err)}`);
-    }
-  };
-
-  const importModel = async (): Promise<void> => {
-    const selection = await withNativeDialog(() =>
-      open({ multiple: false, filters: MODEL_FILTER }),
-    );
-    if (typeof selection !== "string") {
-      return;
-    }
-    try {
-      await client.importModel(selection);
-      await refreshAssets();
-      notify("Imported model");
-    } catch (err) {
-      notify(`Import model failed: ${errorText(err)}`);
-    }
-  };
-
-  const importTexture = async (): Promise<void> => {
-    const selection = await withNativeDialog(() =>
-      open({ multiple: false, filters: TEXTURE_FILTER }),
-    );
-    if (typeof selection !== "string") {
-      return;
-    }
-    try {
-      await client.importTexture(selection);
-      await refreshAssets();
-      notify("Imported texture");
-    } catch (err) {
-      notify(`Import texture failed: ${errorText(err)}`);
-    }
-  };
-
-  const screenshotViewport = async (): Promise<void> => {
-    const path = await withNativeDialog(() =>
-      save({ defaultPath: "viewport.png", filters: PNG_FILTER }),
-    );
-    if (!path) {
-      return;
-    }
-    try {
-      const res = await client.screenshot("viewport", path);
-      notify(res.pending ? `Screenshot queued: ${res.path}` : `Saved screenshot: ${res.path}`);
-    } catch (err) {
-      notify(`Screenshot failed: ${errorText(err)}`);
+      notify(`Reload project failed: ${errorText(err)}`);
     }
   };
 
@@ -177,33 +96,32 @@ export function ProjectMenu() {
             variant="ghost"
             disabled={!ready || nativeDialogOpen}
             className="max-w-48 justify-start px-1.5 text-muted-foreground"
-            title={label}
           >
             <span className="truncate">{label}</span>
             <ChevronDown />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-52">
-          <DropdownMenuItem onSelect={() => void saveProject()}>Save Project</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void saveProjectAs()}>
+          <DropdownMenuItem onSelect={() => void saveProject()} disabled={!editing}>
+            Save Project
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void saveProjectAs()} disabled={!editing}>
             Save Project As...
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void loadProject()}>Open Project...</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void openProjectFolder()}>
-            Open Project Folder...
+          <DropdownMenuItem onSelect={() => void openProject()} disabled={!editing}>
+            Open Project...
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => void saveScene()}>Save Scene...</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void loadScene()}>Load Scene...</DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => void importModel()}>Import Model...</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void importTexture()}>
-            Import Texture...
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => void screenshotViewport()}>
-            Screenshot Viewport...
-          </DropdownMenuItem>
+          {devMode ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => void reloadProject()}
+                disabled={!project || !editing}
+              >
+                Reload Project
+              </DropdownMenuItem>
+            </>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
