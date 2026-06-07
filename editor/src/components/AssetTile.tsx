@@ -1,14 +1,17 @@
 /// One asset catalog tile: a lazy thumbnail (mesh = its 3D render, texture = its
 /// image, else a lucide type icon), an in-place rename input, and an HTML5 drag
 /// SOURCE carrying `application/x-se-asset` (the React analog of the C++ `SE_ASSET`
-/// / `AssetDragPayload`). Double-click opens the View modal. Parity target:
+/// / `AssetDragPayload`). Double-click opens the View modal; the Delete key on a
+/// focused tile starts the same delete flow as the context menu. Parity target:
 /// `assetCatalogPanel` (editor_panels.cpp:226-325) + the `thumbnailFor` fallbacks.
 import { useEffect, useRef, useState } from "react";
 import { Box, Eye, File, Image as ImageIcon, Pencil, Trash } from "lucide-react";
 import { client } from "../control/client";
 import { getCachedThumbnailUrl, getThumbnailUrl, useEditorStore } from "../state/store";
+import { matchesBinding } from "../lib/keybindings";
 import type { AssetEntry } from "../protocol";
 import { cn } from "@/lib/utils";
+import { useOutsideCommit } from "../lib/useOutsideCommit";
 import { Input } from "@/components/ui/input";
 import {
   ContextMenu,
@@ -60,6 +63,36 @@ export function assetIdsFromPayload(payload: AssetDragPayload | null): string[] 
   return payload.id ? [payload.id] : [];
 }
 
+/// The DnD payload for dragging catalog FOLDERS (their full paths) — distinct from
+/// the asset payload so drop targets can route a folder move vs an asset move. A
+/// drag may carry both mimes at once (a mixed folder + asset multi-selection).
+export const FOLDER_DND_MIME = "application/x-se-folder";
+
+/// The folder paths carried by a drag payload (empty if it is not a folder drag).
+export function readFolderPayload(dt: DataTransfer): string[] {
+  const raw = dt.getData(FOLDER_DND_MIME);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as { path?: string; paths?: string[] };
+    if (Array.isArray(parsed.paths)) {
+      return parsed.paths.filter((p) => typeof p === "string" && p.length > 0);
+    }
+    if (typeof parsed.path === "string" && parsed.path.length > 0) {
+      return [parsed.path];
+    }
+  } catch {
+    // Malformed payload; treat as not-a-folder.
+  }
+  return [];
+}
+
+/// True when the drag in flight carries an asset or folder payload.
+export function isCatalogDrag(dt: DataTransfer): boolean {
+  return dt.types.includes(ASSET_DND_MIME) || dt.types.includes(FOLDER_DND_MIME);
+}
+
 function TypeIcon({ type }: { type: AssetEntry["type"] }) {
   const className = "size-7 text-muted-foreground";
   if (type === "mesh") {
@@ -77,11 +110,9 @@ export interface AssetTileProps {
   onView(entry: AssetEntry): void;
   onDelete(entry: AssetEntry): void;
   onSelect(entry: AssetEntry, event: React.MouseEvent): void;
-  getDragAssetIds(entry: AssetEntry): string[];
-  confirmingDelete?: boolean;
-  deleteBody?: string;
-  onConfirmDelete?(entry: AssetEntry): void;
-  onCancelDelete?(): void;
+  /// Write the drag payload (the panel owns selection, so it assembles the asset +
+  /// folder ids the drag carries).
+  onBeginDrag(entry: AssetEntry, event: React.DragEvent): void;
 }
 
 /// Render the grid thumbnail at 128 px (parity with editor_app.cppm:138) and
@@ -94,11 +125,7 @@ export function AssetTile({
   onView,
   onDelete,
   onSelect,
-  getDragAssetIds,
-  confirmingDelete = false,
-  deleteBody,
-  onConfirmDelete,
-  onCancelDelete,
+  onBeginDrag,
 }: AssetTileProps) {
   const [url, setUrl] = useState<string | null>(() =>
     getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE),
@@ -148,14 +175,6 @@ export function AssetTile({
       .catch(() => setDraft(entry.name));
   };
 
-  const onDragStart = (event: React.DragEvent<HTMLDivElement>): void => {
-    const ids = getDragAssetIds(entry);
-    const payload: AssetDragPayload =
-      ids.length > 1 ? { ids } : { id: entry.id, ids: [entry.id], type: entry.type };
-    event.dataTransfer.setData(ASSET_DND_MIME, JSON.stringify(payload));
-    event.dataTransfer.effectAllowed = "copyMove";
-  };
-
   const beginRename = (): void => {
     setDraft(entry.name);
     setEditing(true);
@@ -168,11 +187,23 @@ export function AssetTile({
           <div
             data-asset-tile-id={entry.id}
             data-asset-item="true"
+            // Focusable so a click lands keyboard focus on the tile and the Delete
+            // key can run the same delete flow as the context menu item.
+            tabIndex={0}
             // Editing disables the drag so a tile-drag never starts while typing.
             draggable={!editing}
-            onDragStart={onDragStart}
+            onDragStart={(event) => onBeginDrag(entry, event)}
             onClick={(event) => onSelect(entry, event)}
             onDoubleClick={() => onView(entry)}
+            onKeyDown={(event) => {
+              if (
+                !editing &&
+                matchesBinding(event, "assets.delete", useEditorStore.getState().keyBindings)
+              ) {
+                event.preventDefault();
+                onDelete(entry);
+              }
+            }}
             className={cn(
               "group flex w-[72px] cursor-grab flex-col gap-1 rounded-md border border-border bg-background p-1",
               "transition-colors hover:border-ring hover:bg-accent/40 active:cursor-grabbing",
@@ -211,7 +242,12 @@ export function AssetTile({
             )}
           </div>
         </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-32">
+        {/* No focus restore on close: it lands after the inline rename input takes
+            focus (the menu unmounts post-exit-animation) and would blur-commit it. */}
+        <ContextMenuContent
+          className="min-w-32"
+          onCloseAutoFocus={(event) => event.preventDefault()}
+        >
           <ContextMenuItem onSelect={() => onView(entry)}>
             <Eye />
             View
@@ -231,53 +267,6 @@ export function AssetTile({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      {confirmingDelete && onConfirmDelete && onCancelDelete ? (
-        <DeleteConfirm
-          title={`Delete ${entry.name}?`}
-          body={deleteBody ?? "This removes the catalog entry and imported file."}
-          onConfirm={() => onConfirmDelete(entry)}
-          onCancel={onCancelDelete}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-export function DeleteConfirm({
-  title,
-  body,
-  onConfirm,
-  onCancel,
-}: {
-  title: string;
-  body: string;
-  onConfirm(): void;
-  onCancel(): void;
-}) {
-  return (
-    <div
-      className="absolute left-0 top-full z-40 mt-1 w-56 rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg"
-      onPointerDown={(event) => event.stopPropagation()}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <p className="text-xs font-medium">{title}</p>
-      <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{body}</p>
-      <div className="mt-2 flex justify-end gap-1">
-        <button
-          type="button"
-          className="rounded-sm px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
-          onClick={onCancel}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="rounded-sm bg-destructive px-2 py-1 text-[11px] text-destructive-foreground hover:bg-destructive/90"
-          onClick={onConfirm}
-        >
-          Delete
-        </button>
-      </div>
     </div>
   );
 }
@@ -295,6 +284,7 @@ function RenameInput({ value, onChange, onCommit, onCancel }: RenameInputProps) 
     ref.current?.focus();
     ref.current?.select();
   }, []);
+  useOutsideCommit(ref, onCommit);
   return (
     <Input
       ref={ref}

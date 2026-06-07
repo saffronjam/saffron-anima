@@ -4,7 +4,7 @@
 import { X } from "lucide-react";
 import type { AssetMetadataDto } from "../protocol";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
@@ -45,39 +45,41 @@ export function AssetMetadataPanel({
   open: boolean;
   onClose(): void;
 }) {
+  if (!open) {
+    return null;
+  }
   return (
-    <div
-      className={cn(
-        "absolute inset-y-0 right-0 z-20 w-64 border-l border-border bg-background shadow-lg transition-transform duration-200 ease-out",
-        open ? "translate-x-0" : "translate-x-full",
-      )}
-      aria-hidden={!open}
-    >
+    // Fade, not slide: a slide-in overflows the grid's right edge mid-animation and
+    // flashes a horizontal scrollbar. The body scrolls inside its own ScrollArea so
+    // tall metadata never overflows the overlay into the grid's scroll context.
+    <div className="absolute inset-y-0 right-0 z-20 flex w-64 flex-col border-l border-border bg-background shadow-lg duration-200 ease-out animate-in fade-in">
       <div className="flex h-8 flex-none items-center justify-between border-b border-border px-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Details
         </span>
-        <Button type="button" size="icon-xs" variant="ghost" onClick={onClose} title="Close">
+        <Button type="button" size="icon-xs" variant="ghost" onClick={onClose} aria-label="Close">
           <X />
         </Button>
       </div>
-      {metadata ? (
-        <div className="flex flex-col gap-2.5 p-3">
-          <Row label="Filename" value={metadata.name} />
-          <Row label="Location" value={metadata.folder ?? "Root"} />
-          <Row label="Type" value={metadata.type} />
-          <Row label="Size" value={formatBytes(metadata.sizeBytes)} />
-          {metadata.vertexCount !== undefined ? (
-            <Row label="Vertices" value={metadata.vertexCount.toLocaleString()} />
-          ) : null}
-          {metadata.triangleCount !== undefined ? (
-            <Row label="Triangles" value={metadata.triangleCount.toLocaleString()} />
-          ) : null}
-          <Row label="Created" value={formatDate(metadata.createdAt)} />
-        </div>
-      ) : (
-        <p className="p-3 text-xs italic text-muted-foreground">Loading…</p>
-      )}
+      <ScrollArea className="min-h-0 flex-1">
+        {metadata ? (
+          <div className="flex flex-col gap-2.5 p-3">
+            <Row label="Filename" value={metadata.name} />
+            <Row label="Location" value={metadata.folder ?? "Root"} />
+            <Row label="Type" value={metadata.type} />
+            <Row label="Size" value={formatBytes(metadata.sizeBytes)} />
+            {metadata.vertexCount !== undefined ? (
+              <Row label="Vertices" value={metadata.vertexCount.toLocaleString()} />
+            ) : null}
+            {metadata.triangleCount !== undefined ? (
+              <Row label="Triangles" value={metadata.triangleCount.toLocaleString()} />
+            ) : null}
+            <Row label="Created" value={formatDate(metadata.createdAt)} />
+          </div>
+        ) : (
+          <p className="p-3 text-xs italic text-muted-foreground">Loading…</p>
+        )}
+      </ScrollArea>
     </div>
   );
 }

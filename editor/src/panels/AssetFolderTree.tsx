@@ -7,12 +7,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Folder, FolderPlus, Pen, Trash } from "lucide-react";
 import {
-  ASSET_DND_MIME,
-  DeleteConfirm,
   assetIdsFromPayload,
+  isCatalogDrag,
   readAssetPayload,
+  readFolderPayload,
 } from "../components/AssetTile";
+import { useOutsideCommit } from "../lib/useOutsideCommit";
+import { useEditorStore } from "../state/store";
+import { matchesBinding } from "../lib/keybindings";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import {
   ContextMenu,
@@ -87,23 +91,43 @@ export interface FolderTreeProps {
   /// renames on the grid tile instead).
   renamingFolder: string | null;
   renameInvalid: boolean;
-  /// The tree-initiated delete awaiting confirmation, with its prepared body text.
-  pendingDelete: { path: string; body: string } | null;
+  /// A tree-initiated creation: an inline name row under `parent` (null = root).
+  creatingIn: { parent: string | null } | null;
+  createInvalid: boolean;
   onNavigate(folder: string | null): void;
   onMoveAssets(assetIds: string[], folder: string | null): void;
+  onMoveFolders(paths: string[], parent: string | null): void;
   onNewFolder(parent: string | null): void;
   onStartRename(folder: string): void;
   onChangeRename(): void;
   onCommitRename(folder: string, name: string): void;
   onCancelRename(): void;
+  onChangeCreate(): void;
+  onCommitCreate(name: string): void;
+  onCancelCreate(): void;
   onDelete(folder: string): void;
-  onConfirmDelete(folder: string): void;
-  onCancelDelete(): void;
+}
+
+/// One row of the visible (expansion-respecting) DFS order, for arrow-key walks.
+interface VisibleRow {
+  path: string;
+  hasChildren: boolean;
+}
+
+function flattenVisible(nodes: FolderNode[], expanded: Set<string>, out: VisibleRow[]): void {
+  for (const node of nodes) {
+    out.push({ path: node.path, hasChildren: node.children.length > 0 });
+    if (node.children.length > 0 && expanded.has(node.path)) {
+      flattenVisible(node.children, expanded, out);
+    }
+  }
 }
 
 export function AssetFolderTree(props: FolderTreeProps) {
   const { folders, currentFolder } = props;
+  const creatingParent = props.creatingIn?.parent ?? null;
   const roots = useMemo(() => buildFolderTree(folders), [folders]);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   // The hovered asset-drop row, by folder path.
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -122,6 +146,20 @@ export function AssetFolderTree(props: FolderTreeProps) {
       return next.size === current.size ? current : next;
     });
   }, [currentFolder]);
+
+  // Reveal an inline creation row: its parent branch must be open to show it.
+  useEffect(() => {
+    if (!creatingParent) {
+      return;
+    }
+    setExpanded((current) => {
+      const next = new Set(current);
+      for (const path of folderAncestorPaths(creatingParent)) {
+        next.add(path);
+      }
+      return next.size === current.size ? current : next;
+    });
+  }, [creatingParent]);
 
   const toggleExpanded = (path: string): void => {
     setExpanded((current) => {
@@ -143,11 +181,86 @@ export function AssetFolderTree(props: FolderTreeProps) {
     setDropTarget,
   };
 
+  // Arrow-key walk over the visible rows: Up/Down move the selection, Right
+  // expands (then descends), Left collapses (then ascends, to Root at the top).
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.target instanceof HTMLInputElement) {
+      return;
+    }
+    const rows: VisibleRow[] = [];
+    flattenVisible(roots, expanded, rows);
+    if (rows.length === 0) {
+      return;
+    }
+    const index = rows.findIndex((row) => row.path === currentFolder);
+    const row = index >= 0 ? rows[index] : null;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const next = rows[Math.min(index + 1, rows.length - 1)];
+      props.onNavigate(next.path);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      props.onNavigate(index > 0 ? rows[index - 1].path : null);
+    } else if (event.key === "ArrowRight" && row) {
+      event.preventDefault();
+      if (row.hasChildren && !expanded.has(row.path)) {
+        toggleExpanded(row.path);
+      } else if (row.hasChildren && index + 1 < rows.length) {
+        props.onNavigate(rows[index + 1].path);
+      }
+    } else if (event.key === "ArrowLeft" && row) {
+      event.preventDefault();
+      if (row.hasChildren && expanded.has(row.path)) {
+        toggleExpanded(row.path);
+      } else {
+        const slash = row.path.lastIndexOf("/");
+        props.onNavigate(slash >= 0 ? row.path.slice(0, slash) : null);
+      }
+    }
+  };
+
   return (
-    <div className="p-1" role="tree" aria-label="Asset folders">
-      {roots.map((node) => (
-        <FolderRow key={node.path} node={node} depth={0} tree={tree} />
-      ))}
+    // The focusable surface is the whole sidebar (it owns the ScrollArea), so a
+    // click anywhere in the box — not just on a row — arms the arrow keys.
+    <div
+      ref={containerRef}
+      className="h-full min-h-0 outline-none"
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      onPointerDown={(event) => {
+        if (!(event.target instanceof HTMLInputElement)) {
+          containerRef.current?.focus();
+        }
+      }}
+    >
+      <ScrollArea className="h-full">
+        <div className="p-1" role="tree" aria-label="Asset folders">
+          {props.creatingIn && props.creatingIn.parent === null ? (
+            <NewFolderRow depth={0} tree={tree} />
+          ) : null}
+          {roots.map((node) => (
+            <FolderRow key={node.path} node={node} depth={0} tree={tree} />
+          ))}
+        </div>
+      </ScrollArea>
+    </div>
+  );
+}
+
+/// The inline name input for a tree-initiated folder creation, indented like a
+/// child row of its parent.
+function NewFolderRow({ depth, tree }: { depth: number; tree: TreeContext }) {
+  return (
+    <div className={rowClass} style={{ paddingLeft: depth * 14 + 4 }}>
+      <span className="size-4 flex-none" />
+      <Folder className="size-3.5 flex-none opacity-70" />
+      <FolderRenameInput
+        initial=""
+        invalid={tree.createInvalid}
+        onChange={tree.onChangeCreate}
+        onCommit={tree.onCommitCreate}
+        onCancel={tree.onCancelCreate}
+      />
     </div>
   );
 }
@@ -159,17 +272,17 @@ interface TreeContext extends FolderTreeProps {
   setDropTarget(target: string | null): void;
 }
 
-/// Drag-drop handlers making a row an asset-move target; `key` is the row's
+/// Drag-drop handlers making a row an asset/folder-move target; `key` is the row's
 /// highlight identity and `folder` the move destination.
 function dropHandlers(tree: TreeContext, key: string, folder: string | null) {
   return {
     onDragEnter: (event: React.DragEvent): void => {
-      if (event.dataTransfer.types.includes(ASSET_DND_MIME)) {
+      if (isCatalogDrag(event.dataTransfer)) {
         tree.setDropTarget(key);
       }
     },
     onDragOver: (event: React.DragEvent): void => {
-      if (event.dataTransfer.types.includes(ASSET_DND_MIME)) {
+      if (isCatalogDrag(event.dataTransfer)) {
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
         tree.setDropTarget(key);
@@ -182,18 +295,27 @@ function dropHandlers(tree: TreeContext, key: string, folder: string | null) {
     },
     onDrop: (event: React.DragEvent): void => {
       const ids = assetIdsFromPayload(readAssetPayload(event.dataTransfer));
-      if (ids.length === 0) {
+      const draggedFolders = readFolderPayload(event.dataTransfer);
+      if (ids.length === 0 && draggedFolders.length === 0) {
         return;
       }
       event.preventDefault();
       event.stopPropagation();
       tree.setDropTarget(null);
-      tree.onMoveAssets(ids, folder);
+      if (draggedFolders.length > 0) {
+        tree.onMoveFolders(draggedFolders, folder);
+      }
+      if (ids.length > 0) {
+        tree.onMoveAssets(ids, folder);
+      }
     },
   };
 }
 
-const rowClass = "flex w-full items-center gap-1 truncate rounded-md px-1 py-1 text-left text-xs";
+// outline-none: the tree container owns keyboard interaction; rows never show the
+// UA focus ring (selection is the bg highlight).
+const rowClass =
+  "flex w-full items-center gap-1 truncate rounded-md px-1 py-1 text-left text-xs outline-none";
 
 function rowStateClass(selected: boolean, dropActive: boolean): string {
   return cn(
@@ -208,7 +330,14 @@ function FolderRow({ node, depth, tree }: { node: FolderNode; depth: number; tre
   const expanded = tree.expanded.has(node.path);
   const hasChildren = node.children.length > 0;
   const renaming = tree.renamingFolder === node.path;
-  const confirmingDelete = tree.pendingDelete?.path === node.path;
+  const rowRef = useRef<HTMLButtonElement | null>(null);
+
+  // Keep the selection visible during arrow-key walks through a scrolled tree.
+  useEffect(() => {
+    if (selected) {
+      rowRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selected]);
 
   const row = renaming ? (
     <div className={rowClass} style={{ paddingLeft: depth * 14 + 4 }}>
@@ -223,14 +352,22 @@ function FolderRow({ node, depth, tree }: { node: FolderNode; depth: number; tre
     </div>
   ) : (
     <button
+      ref={rowRef}
       type="button"
       role="treeitem"
       aria-selected={selected}
       aria-expanded={hasChildren ? expanded : undefined}
       className={rowStateClass(selected, tree.dropTarget === node.path)}
       style={{ paddingLeft: depth * 14 + 4 }}
-      title={node.path}
       onClick={() => tree.onNavigate(node.path)}
+      // The configured delete key on the focused row runs the same delete as the
+      // context menu.
+      onKeyDown={(event) => {
+        if (matchesBinding(event, "assets.delete", useEditorStore.getState().keyBindings)) {
+          event.preventDefault();
+          tree.onDelete(node.path);
+        }
+      }}
       {...dropHandlers(tree, node.path, node.path)}
     >
       {hasChildren ? (
@@ -258,7 +395,12 @@ function FolderRow({ node, depth, tree }: { node: FolderNode; depth: number; tre
       <div className="relative" onContextMenu={(event) => event.stopPropagation()}>
         <ContextMenu>
           <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-          <ContextMenuContent className="min-w-36">
+          {/* No focus restore on close: it lands after the inline input takes focus
+              (the menu unmounts post-exit-animation) and would blur-cancel the edit. */}
+          <ContextMenuContent
+            className="min-w-36"
+            onCloseAutoFocus={(event) => event.preventDefault()}
+          >
             <ContextMenuItem onSelect={() => tree.onNewFolder(node.path)}>
               <FolderPlus />
               New Folder
@@ -278,15 +420,10 @@ function FolderRow({ node, depth, tree }: { node: FolderNode; depth: number; tre
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
-        {confirmingDelete && tree.pendingDelete ? (
-          <DeleteConfirm
-            title={`Delete ${node.name}?`}
-            body={tree.pendingDelete.body}
-            onConfirm={() => tree.onConfirmDelete(node.path)}
-            onCancel={tree.onCancelDelete}
-          />
-        ) : null}
       </div>
+      {tree.creatingIn?.parent === node.path ? (
+        <NewFolderRow depth={depth + 1} tree={tree} />
+      ) : null}
       {hasChildren && expanded
         ? node.children.map((child) => (
             <FolderRow key={child.path} node={child} depth={depth + 1} tree={tree} />
@@ -334,6 +471,8 @@ function FolderRenameInput({
       settledRef.current = false;
     }, 100);
   };
+
+  useOutsideCommit(inputRef, commit);
 
   return (
     <Input
