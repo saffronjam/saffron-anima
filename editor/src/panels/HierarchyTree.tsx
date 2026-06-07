@@ -2,8 +2,9 @@
 /// (`buildTree` over `parentId`). Rows indent by
 /// depth, show a twisty only when they have something to expand (child entities, or —
 /// behind the header toggle — the selected row's read-only component subrows), select
-/// on click, rename inline on double-click, and reparent by dragging one row onto
-/// another (`set-parent`); dropping onto self or a descendant is rejected before any
+/// on click, rename inline on double-click, delete on the Delete key, and reparent
+/// by dragging one row onto another (`set-parent`); dropping onto self or a
+/// descendant is rejected before any
 /// round trip, and a root strip at the bottom unparents. Expand-state lives outside
 /// the version-gated poll, so a scene mutation never collapses the tree.
 ///
@@ -13,6 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { useEditorStore, buildTree, reanchorPastBones, type TreeNode } from "../state/store";
+import { matchesBinding } from "../lib/keybindings";
 import { orderedComponentNames } from "./InspectorPanel";
 import type { EntityListEntry } from "../protocol";
 import { Input } from "@/components/ui/input";
@@ -241,6 +243,14 @@ function TreeRow({
                 }
               }}
               onDoubleClick={() => actions.onRenameStart(entity.id)}
+              // The configured delete key on the focused row (clicking focuses it)
+              // runs the same delete as the context menu item.
+              onKeyDown={(e) => {
+                if (matchesBinding(e, "hierarchy.delete", useEditorStore.getState().keyBindings)) {
+                  e.preventDefault();
+                  actions.onDelete(entity.id);
+                }
+              }}
               onDragStart={(e) => {
                 e.dataTransfer.setData(DND_MIME, entity.id);
                 e.dataTransfer.effectAllowed = "move";
