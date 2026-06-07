@@ -1,6 +1,7 @@
 +++
 title = 'Image-based lighting'
 weight = 9
+bookCollapseSection = true
 +++
 
 # Image-based lighting

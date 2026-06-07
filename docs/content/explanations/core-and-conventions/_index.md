@@ -1,6 +1,7 @@
 +++
 title = 'Core & conventions'
 weight = 1
+bookCollapseSection = true
 +++
 
 # Core & conventions

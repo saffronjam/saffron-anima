@@ -1,6 +1,7 @@
 +++
 title = 'Geometry & assets'
 weight = 5
+bookCollapseSection = true
 +++
 
 # Geometry & assets

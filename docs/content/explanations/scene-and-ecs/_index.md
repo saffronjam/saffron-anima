@@ -1,6 +1,7 @@
 +++
 title = 'Scene & ECS'
 weight = 6
+bookCollapseSection = true
 +++
 
 # Scene & ECS

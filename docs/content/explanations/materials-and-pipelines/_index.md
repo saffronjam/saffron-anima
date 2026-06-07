@@ -1,6 +1,7 @@
 +++
 title = 'Materials & pipelines'
 weight = 7
+bookCollapseSection = true
 +++
 
 # Materials & pipelines

@@ -1,6 +1,7 @@
 +++
 title = 'Frame & render graph'
 weight = 4
+bookCollapseSection = true
 +++
 
 # Frame & render graph

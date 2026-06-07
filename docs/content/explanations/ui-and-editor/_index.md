@@ -1,6 +1,7 @@
 +++
 title = 'UI & editor'
 weight = 14
+bookCollapseSection = true
 +++
 
 # UI & editor

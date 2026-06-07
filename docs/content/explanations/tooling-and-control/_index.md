@@ -1,6 +1,7 @@
 +++
 title = 'Tooling & control'
 weight = 15
+bookCollapseSection = true
 +++
 
 # Tooling & control

@@ -1,6 +1,7 @@
 +++
 title = 'Vulkan foundation'
 weight = 3
+bookCollapseSection = true
 +++
 
 # Vulkan foundation

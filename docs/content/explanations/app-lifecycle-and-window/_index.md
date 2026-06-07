@@ -1,6 +1,7 @@
 +++
 title = 'App lifecycle & window'
 weight = 2
+bookCollapseSection = true
 +++
 
 # App lifecycle & window

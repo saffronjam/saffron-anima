@@ -1,6 +1,7 @@
 +++
 title = 'Global illumination & ray tracing'
 weight = 12
+bookCollapseSection = true
 +++
 
 # Global illumination & ray tracing

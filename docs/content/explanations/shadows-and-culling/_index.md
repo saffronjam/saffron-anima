@@ -1,6 +1,7 @@
 +++
 title = 'Shadows & culling'
 weight = 10
+bookCollapseSection = true
 +++
 
 # Shadows & culling

@@ -1,6 +1,7 @@
 +++
 title = 'Screen-space & post'
 weight = 11
+bookCollapseSection = true
 +++
 
 # Screen-space & post

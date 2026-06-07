@@ -1,6 +1,7 @@
 +++
 title = 'Lighting & BRDF'
 weight = 8
+bookCollapseSection = true
 +++
 
 # Lighting & BRDF

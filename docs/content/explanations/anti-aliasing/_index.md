@@ -1,6 +1,7 @@
 +++
 title = 'Anti-aliasing'
 weight = 13
+bookCollapseSection = true
 +++
 
 # Anti-aliasing
