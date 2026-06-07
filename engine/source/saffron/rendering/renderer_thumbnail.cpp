@@ -37,6 +37,31 @@ import :Detail;
 
 namespace se
 {
+    // The highest MSAA count (≤8) valid for the thumbnail targets: the renderer's supported
+    // counts (framebuffer limits ∩ depth format) further intersected with the swapchain color
+    // format's own counts, which the thumbnail renders into. Thumbnails are tiny and rendered
+    // once, so always taking the maximum is cheap and hides geometry aliasing.
+    static auto thumbnailSampleCount(const Renderer& renderer) -> vk::SampleCountFlagBits
+    {
+        vk::SampleCountFlags supported = renderer.targets.supportedSampleCounts;
+        auto colorFmt = renderer.context.physicalDevice.getImageFormatProperties(
+            renderer.swapchain.format, vk::ImageType::e2D, vk::ImageTiling::eOptimal,
+            vk::ImageUsageFlagBits::eColorAttachment, {});
+        if (colorFmt.result == vk::Result::eSuccess)
+        {
+            supported = supported & colorFmt.value.sampleCounts;
+        }
+        for (vk::SampleCountFlagBits candidate :
+             { vk::SampleCountFlagBits::e8, vk::SampleCountFlagBits::e4, vk::SampleCountFlagBits::e2 })
+        {
+            if (supported & candidate)
+            {
+                return candidate;
+            }
+        }
+        return vk::SampleCountFlagBits::e1;
+    }
+
     // The minimal mesh-thumbnail pipeline (vertex input + a 2x mat4 push constant, no
     // descriptor sets). Color format matches the offscreen thumbnail image.
     auto newThumbnailPipeline(Renderer& renderer) -> Result<Ref<Pipeline>>
@@ -80,7 +105,7 @@ namespace se
         raster.frontFace = vk::FrontFace::eCounterClockwise;
         raster.lineWidth = 1.0f;
         vk::PipelineMultisampleStateCreateInfo multisample{};
-        multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
+        multisample.rasterizationSamples = thumbnailSampleCount(renderer);
         vk::PipelineDepthStencilStateCreateInfo depthStencil{};
         depthStencil.depthTestEnable = VK_TRUE;
         depthStencil.depthWriteEnable = VK_TRUE;
@@ -156,13 +181,26 @@ namespace se
             renderer.pipelines.thumbnail = *pipeline;
         }
 
-        auto colorImage = newColorImage(renderer, size, size, renderer.swapchain.format);
+        // Render multisampled and resolve into a 1x image; the resolve is what gets read back.
+        const vk::SampleCountFlagBits samples = thumbnailSampleCount(renderer);
+        const bool msaa = samples != vk::SampleCountFlagBits::e1;
+        auto colorImage = newColorImage(renderer, size, size, renderer.swapchain.format, false, samples);
         if (!colorImage)
         {
             return Err(colorImage.error());
         }
         Image color = std::move(*colorImage);
-        auto depthImage = newDepthImage(renderer, size, size);
+        Image resolve;
+        if (msaa)
+        {
+            auto resolveImage = newColorImage(renderer, size, size, renderer.swapchain.format);
+            if (!resolveImage)
+            {
+                return Err(resolveImage.error());
+            }
+            resolve = std::move(*resolveImage);
+        }
+        auto depthImage = newDepthImage(renderer, size, size, samples);
         if (!depthImage)
         {
             return Err(depthImage.error());
@@ -207,6 +245,13 @@ namespace se
         transitionImage(cmd, color.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
                         vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
                         vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite);
+        if (msaa)
+        {
+            transitionImage(cmd, resolve.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
+                            vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                            vk::AccessFlagBits2::eColorAttachmentWrite);
+        }
         transitionImage(cmd, depth.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
                         vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
                         vk::PipelineStageFlagBits2::eEarlyFragmentTests |
@@ -217,9 +262,15 @@ namespace se
         colorAttach.imageView = color.view;
         colorAttach.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
         colorAttach.loadOp = vk::AttachmentLoadOp::eClear;
-        colorAttach.storeOp = vk::AttachmentStoreOp::eStore;
+        colorAttach.storeOp = msaa ? vk::AttachmentStoreOp::eDontCare : vk::AttachmentStoreOp::eStore;
         colorAttach.clearValue =
             vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.12f, 0.12f, 0.14f, 1.0f } } };
+        if (msaa)
+        {
+            colorAttach.resolveMode = vk::ResolveModeFlagBits::eAverage;
+            colorAttach.resolveImageView = resolve.view;
+            colorAttach.resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+        }
         vk::RenderingAttachmentInfo depthAttach{};
         depthAttach.imageView = depth.view;
         depthAttach.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
@@ -248,7 +299,8 @@ namespace se
         }
         cmd.endRendering();
 
-        transitionImage(cmd, color.image, vk::ImageLayout::eColorAttachmentOptimal,
+        Image& result = msaa ? resolve : color;
+        transitionImage(cmd, result.image, vk::ImageLayout::eColorAttachmentOptimal,
                         vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                         vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
                         vk::AccessFlagBits2::eShaderSampledRead);
@@ -262,20 +314,20 @@ namespace se
         static_cast<void>(renderer.context.device.waitIdle());
         renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
 
-        // Take ownership of the color image as a sampled GpuTexture (no material set; the
+        // Take ownership of the resolved image as a sampled GpuTexture (no material set; the
         // editor reads thumbnails over the control plane). Null the Image's handles so it
-        // does not free them on scope exit.
+        // does not free them on scope exit; the multisampled color image frees normally.
         GpuTexture texture;
         texture.device = renderer.context.device;
         texture.allocator = renderer.context.allocator;
-        texture.image = color.image;
-        texture.view = color.view;
-        texture.alloc = color.alloc;
-        texture.extent = color.extent;
-        texture.format = color.format;
-        color.image = nullptr;
-        color.view = nullptr;
-        color.alloc = nullptr;
+        texture.image = result.image;
+        texture.view = result.view;
+        texture.alloc = result.alloc;
+        texture.extent = result.extent;
+        texture.format = result.format;
+        result.image = nullptr;
+        result.view = nullptr;
+        result.alloc = nullptr;
         return std::make_shared<GpuTexture>(std::move(texture));
     }
 
