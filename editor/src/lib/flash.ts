@@ -3,6 +3,7 @@
 /// `message` in a small inline banner anchored in its own sidebar/topbar region (never
 /// over the native viewport), and `flash(text)` clears itself after `ms`.
 import { useCallback, useRef, useState } from "react";
+import { toast } from "sonner";
 
 export interface Flash {
   message: string | null;
@@ -11,12 +12,6 @@ export interface Flash {
 }
 
 const DEFAULT_FLASH_MS = 4000;
-const NOTIFY_EVENT = "saffron:notify";
-
-export interface NotificationPayload {
-  message: string;
-  ms: number;
-}
 
 export function useFlash(): Flash {
   const [message, setMessage] = useState<string | null>(null);
@@ -44,26 +39,10 @@ export function useFlash(): Flash {
   return { message, flash, clear };
 }
 
+/// A bottom-right operation toast (Sonner), for results that have no panel of
+/// their own (save/load/import/screenshot).
 export function notify(message: string, ms = DEFAULT_FLASH_MS): void {
-  window.dispatchEvent(
-    new CustomEvent<NotificationPayload>(NOTIFY_EVENT, { detail: { message, ms } }),
-  );
-}
-
-export function subscribeNotifications(
-  handler: (payload: NotificationPayload) => void,
-): () => void {
-  const listener = (event: Event): void => {
-    if (!(event instanceof CustomEvent)) {
-      return;
-    }
-    const detail = event.detail as Partial<NotificationPayload>;
-    if (typeof detail.message === "string") {
-      handler({ message: detail.message, ms: detail.ms ?? DEFAULT_FLASH_MS });
-    }
-  };
-  window.addEventListener(NOTIFY_EVENT, listener);
-  return () => window.removeEventListener(NOTIFY_EVENT, listener);
+  toast(message, { duration: ms });
 }
 
 /// Normalize a rejected control call into a readable message. The Rust passthrough
