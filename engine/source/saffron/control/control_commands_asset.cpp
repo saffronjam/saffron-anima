@@ -364,6 +364,10 @@ namespace se
             reg, "new-project", "new-project {name, displayName?, root?}",
             [](EngineContext& ctx, const NewProjectParams& params) -> Result<ProjectInfoDto>
             {
+                if (ctx.sceneEdit.playState != PlayState::Edit)
+                {
+                    return Err("stop play first");
+                }
                 ProjectInfo project;
                 auto result =
                     createProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene, project,
@@ -382,18 +386,24 @@ namespace se
             reg, "open-project", "open-project {path}",
             [](EngineContext& ctx, const PathParams& params) -> Result<ProjectInfoDto>
             {
+                if (ctx.sceneEdit.playState != PlayState::Edit)
+                {
+                    return Err("stop play first");
+                }
                 if (params.path.empty())
                 {
                     return Err(std::string{ "missing 'path'" });
                 }
                 ProjectInfo project;
+                nlohmann::json editorCamera;
                 auto result = loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
-                                          project, params.path);
+                                          project, params.path, &editorCamera);
                 if (!result)
                 {
                     return Err(result.error());
                 }
                 applyProjectInfo(ctx, project);
+                sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
                 ctx.sceneEdit.sceneVersion += 1;
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
@@ -417,10 +427,10 @@ namespace se
                 {
                     return Err(imported.error());
                 }
-                Entity entity = spawnModel(ctx.sceneEdit.scene, "Mesh", *imported);
+                Entity entity = spawnModel(activeScene(ctx.sceneEdit), "Mesh", *imported);
                 ctx.sceneEdit.sceneVersion += 1;
                 setSelection(ctx.sceneEdit, entity);
-                EntityRef ref = entityRefDto(ctx.sceneEdit.scene, entity);
+                EntityRef ref = entityRefDto(activeScene(ctx.sceneEdit), entity);
                 return ImportModelResult{ ref.id, ref.name, WireUuid{ imported->mesh.value },
                                           WireUuid{ imported->albedoTexture.value } };
             });
@@ -594,7 +604,7 @@ namespace se
                 {
                     return Err(resolved.error());
                 }
-                return AssetUsagesResult{ collectAssetUsages(ctx.sceneEdit.scene, (*resolved)->id) };
+                return AssetUsagesResult{ collectAssetUsages(activeScene(ctx.sceneEdit), (*resolved)->id) };
             });
 
         registerCommand<AssetMetadataParams, AssetMetadataDto>(
@@ -657,6 +667,12 @@ namespace se
             reg, "delete-asset", "delete-asset {asset}",
             [](EngineContext& ctx, const DeleteAssetParams& params) -> Result<DeleteAssetResult>
             {
+                // Guarded rather than routed: delete clears component usages *and* drops the
+                // GPU ref the play scene renders from, so it must wait for edit.
+                if (ctx.sceneEdit.playState != PlayState::Edit)
+                {
+                    return Err("stop play first");
+                }
                 auto index = resolveAssetIndex(ctx, params.asset);
                 if (!index)
                 {
@@ -709,21 +725,22 @@ namespace se
                     assignId = (*resolved)->id;
                     assignName = (*resolved)->name;
                 }
+                Scene& scene = activeScene(ctx.sceneEdit);
                 if (params.slot == AssetSlotDto::Mesh)
                 {
-                    if (!hasComponent<MeshComponent>(ctx.sceneEdit.scene, *entity))
+                    if (!hasComponent<MeshComponent>(scene, *entity))
                     {
-                        addComponent<MeshComponent>(ctx.sceneEdit.scene, *entity);
+                        addComponent<MeshComponent>(scene, *entity);
                     }
-                    getComponent<MeshComponent>(ctx.sceneEdit.scene, *entity).mesh = assignId;
+                    getComponent<MeshComponent>(scene, *entity).mesh = assignId;
                 }
                 else if (params.slot == AssetSlotDto::Albedo)
                 {
-                    if (!hasComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity))
+                    if (!hasComponent<MaterialComponent>(scene, *entity))
                     {
-                        addComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity);
+                        addComponent<MaterialComponent>(scene, *entity);
                     }
-                    getComponent<MaterialComponent>(ctx.sceneEdit.scene, *entity).albedoTexture = assignId;
+                    getComponent<MaterialComponent>(scene, *entity).albedoTexture = assignId;
                 }
                 ctx.sceneEdit.sceneVersion += 1;
                 return AssignAssetResult{ WireUuid{ assignId.value }, assignName, params.slot };
@@ -749,6 +766,10 @@ namespace se
         registerCommand<PathParams, PathResult>(reg, "load-scene", "load-scene {path}",
                                                 [](EngineContext& ctx, const PathParams& params) -> Result<PathResult>
                                                 {
+                                                    if (ctx.sceneEdit.playState != PlayState::Edit)
+                                                    {
+                                                        return Err("stop play first");
+                                                    }
                                                     if (params.path.empty())
                                                     {
                                                         return Err(std::string{ "missing 'path'" });
@@ -790,8 +811,8 @@ namespace se
                                        : "project";
                     project.displayName = defaultDisplayName(project.name);
                 }
-                auto result =
-                    saveProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene, project, path);
+                auto result = saveProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
+                                          project, path, sceneEditCameraToJson(ctx.sceneEdit.camera));
                 if (!result)
                 {
                     return Err(result.error());
@@ -805,15 +826,51 @@ namespace se
             reg, "load-project", "load-project {path} — assets catalog + scene",
             [](EngineContext& ctx, const OptionalPathParams& params) -> Result<ProjectInfoDto>
             {
+                if (ctx.sceneEdit.playState != PlayState::Edit)
+                {
+                    return Err("stop play first");
+                }
                 const std::string path = params.path.value_or("project.json");
                 ProjectInfo project;
-                Result<void> result =
-                    loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene, project, path);
+                nlohmann::json editorCamera;
+                Result<void> result = loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
+                                                  project, path, &editorCamera);
                 if (!result)
                 {
                     return Err(result.error());
                 }
                 applyProjectInfo(ctx, project);
+                sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
+                ctx.sceneEdit.sceneVersion += 1;
+                setSelection(ctx.sceneEdit, Entity{ entt::null });
+                return projectDto(project);
+            });
+
+        // Closes the active project and loads it again from its own path — a clean reload
+        // (catalog + scene + GPU assets) without restarting the host process.
+        registerCommand<EmptyParams, ProjectInfoDto>(
+            reg, "reload-project", "reload-project — close and re-open the active project",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<ProjectInfoDto>
+            {
+                if (ctx.sceneEdit.playState != PlayState::Edit)
+                {
+                    return Err("stop play first");
+                }
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                const std::string path = ctx.sceneEdit.projectPath;
+                ProjectInfo project;
+                nlohmann::json editorCamera;
+                Result<void> result = loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
+                                                  project, path, &editorCamera);
+                if (!result)
+                {
+                    return Err(result.error());
+                }
+                applyProjectInfo(ctx, project);
+                sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
                 ctx.sceneEdit.sceneVersion += 1;
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
