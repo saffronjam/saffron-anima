@@ -308,6 +308,7 @@ export interface SetTransformParams {
   translation?: Vec3;
   rotation?: Vec3;
   scale?: Vec3;
+  smooth?: boolean;
 }
 
 export interface Vec3 {
@@ -325,6 +326,7 @@ export interface SetMaterialParams {
   emissive?: Vec3;
   emissiveStrength?: number;
   unlit?: boolean;
+  smooth?: boolean;
 }
 
 export interface Vec4 {
@@ -407,10 +409,23 @@ export interface SelectionResult {
   selectionVersion: number;
   sceneVersion: number;
   entity?: EntityRef;
+  playState: string;
+  playVersion: number;
 }
 
 export interface DeselectResult {
   selectionVersion: number;
+}
+
+export interface PlayStateResult {
+  state: string;
+  playVersion: number;
+  sceneVersion: number;
+  hasPrimaryCamera: boolean;
+}
+
+export interface StepParams {
+  frames?: number;
 }
 
 export interface AddEntityParams {
@@ -459,11 +474,13 @@ export interface SetCameraParams {
 export interface GizmoState {
   op: "translate" | "rotate" | "scale";
   space: "world" | "local";
+  preserveChildren: boolean;
 }
 
 export interface SetGizmoParams {
   op?: "translate" | "rotate" | "scale";
   space?: "world" | "local";
+  preserveChildren?: boolean;
 }
 
 export interface GizmoPointerParams {
@@ -727,6 +744,11 @@ export interface CommandParamsMap {
   "set-atmosphere": SetAtmosphereParams;
   "get-selection": EmptyParams;
   "deselect": EmptyParams;
+  "play": EmptyParams;
+  "pause": EmptyParams;
+  "step": StepParams;
+  "stop": EmptyParams;
+  "get-play-state": EmptyParams;
   "add-entity": AddEntityParams;
   "copy-entity": EntityParams;
   "rename-entity": RenameEntityParams;
@@ -760,6 +782,7 @@ export interface CommandParamsMap {
   "load-scene": PathParams;
   "save-project": OptionalPathParams;
   "load-project": OptionalPathParams;
+  "reload-project": EmptyParams;
   "screenshot": ScreenshotParams;
   "get-thumbnail": ThumbnailParams;
   "view-asset": ThumbnailParams;
@@ -803,6 +826,11 @@ export interface CommandResultMap {
   "set-atmosphere": EnvironmentDto;
   "get-selection": SelectionResult;
   "deselect": DeselectResult;
+  "play": PlayStateResult;
+  "pause": PlayStateResult;
+  "step": PlayStateResult;
+  "stop": PlayStateResult;
+  "get-play-state": PlayStateResult;
   "add-entity": EntityRef;
   "copy-entity": EntityRef;
   "rename-entity": EntityRef;
@@ -836,6 +864,7 @@ export interface CommandResultMap {
   "load-scene": PathResult;
   "save-project": ProjectInfoDto;
   "load-project": ProjectInfoDto;
+  "reload-project": ProjectInfoDto;
   "screenshot": ScreenshotResult;
   "get-thumbnail": ThumbnailResult;
   "view-asset": ThumbnailResult;

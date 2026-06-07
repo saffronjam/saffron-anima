@@ -49,6 +49,7 @@ export type {
   PickResult,
   PingParams,
   PingResult,
+  PlayStateResult,
   ProbeRef,
   QuitResult,
   RecaptureProbesResult,
@@ -87,6 +88,7 @@ export type {
   SetSsaoResult,
   SetSsgiResult,
   SetTransformParams,
+  StepParams,
   ThumbnailParams,
   ToggleParams,
   Vec3,
@@ -245,6 +247,8 @@ export interface Selection {
   entity: EntityRef | null;
   selectionVersion: number;
   sceneVersion: number;
+  playState: string;
+  playVersion: number;
 }
 
 type CompatCommandResultOverrides = {
