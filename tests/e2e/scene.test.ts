@@ -52,10 +52,10 @@ test("add-component / remove-component are observable via inspect", async () => 
 
 test("set-gizmo round-trips through get-gizmo", async () => {
   await engine.call("set-gizmo", { op: "rotate", space: "local" });
-  expect(await engine.call("get-gizmo")).toEqual({ op: "rotate", space: "local" });
+  expect(await engine.call("get-gizmo")).toEqual({ op: "rotate", space: "local", preserveChildren: false });
 
   await engine.call("set-gizmo", { op: "translate", space: "world" });
-  expect(await engine.call("get-gizmo")).toEqual({ op: "translate", space: "world" });
+  expect(await engine.call("get-gizmo")).toEqual({ op: "translate", space: "world", preserveChildren: false });
 });
 
 // Negative oracles: bad input must be REJECTED (ok:false), not silently accepted.

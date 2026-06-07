@@ -181,6 +181,79 @@ test("set-parent preserves world position, keeps the selection, and detaches cle
   expect(relisted.entities.find((e) => e.id === child.id)?.parentId).toBeUndefined();
 });
 
+test("preserve-children: set-transform on a parent rebases the child to hold its world pose", async () => {
+  const parent = await makeCube("pc-parent", { x: 5, y: 0, z: 0 });
+  const child = await makeCube("pc-child", { x: 2, y: 1, z: 0 });
+  await parentTo(child.id, parent.id);
+  const gizmo = await engine.call<{ preserveChildren: boolean }>("set-gizmo", {
+    preserveChildren: true,
+  });
+  expect(gizmo.preserveChildren).toBe(true);
+
+  // Child world (7,1,0). Parent moves to (9,0,0) at scale (4,1,2): the child's local
+  // must rebase to ((7-9)/4, 1, 0) with scale (1/4, 1, 1/2) for the world pose to hold.
+  await engine.call("set-transform", {
+    entity: parent.id,
+    translation: { x: 9, y: 0, z: 0 },
+    scale: { x: 4, y: 1, z: 2 },
+  });
+  const info = await engine.call<{
+    components: { Transform: { translation: Vec3; scale: Vec3 } };
+  }>("inspect", { entity: child.id });
+  const t = info.components.Transform.translation;
+  expect(t.x).toBeCloseTo(-0.5, 4);
+  expect(t.y).toBeCloseTo(1, 4);
+  expect(t.z).toBeCloseTo(0, 4);
+  const s = info.components.Transform.scale;
+  expect(s.x).toBeCloseTo(0.25, 4);
+  expect(s.y).toBeCloseTo(1, 4);
+  expect(s.z).toBeCloseTo(0.5, 4);
+
+  await engine.call("set-gizmo", { preserveChildren: false });
+});
+
+test("preserve-children: a gizmo drag on the parent leaves the child's world position fixed", async () => {
+  const parent = await makeCube("pg-parent", { x: 10, y: 0, z: 0 });
+  const child = await makeCube("pg-child", { x: 0, y: 2, z: 0 });
+  await parentTo(child.id, parent.id);
+  await engine.call("set-gizmo", { op: "translate", space: "world", preserveChildren: true });
+  await engine.call("select", { entity: parent.id });
+  await engine.call("focus", { entity: parent.id });
+  await engine.settle();
+
+  let beginX = 0;
+  for (let x = 0.02; x <= 0.5; x += 0.02) {
+    const r = await engine.call<{ hovered: string }>("gizmo-pointer", { phase: "hover", x, y: 0 });
+    if (r.hovered === "x") {
+      beginX = x;
+      break;
+    }
+  }
+  expect(beginX).toBeGreaterThan(0);
+  await engine.call("gizmo-pointer", { phase: "begin", x: beginX, y: 0 });
+  await engine.call("gizmo-pointer", { phase: "drag", x: beginX + 0.2, y: 0 });
+  await engine.call("gizmo-pointer", { phase: "end", x: beginX + 0.2, y: 0 });
+
+  // The parent moved along world +X; the child's local compensated so its drag-begin
+  // world position (parent 10 + local 0, y 2) is unchanged: parent.x + child.x == 10.
+  const parentT = (
+    await engine.call<{ components: { Transform: { translation: Vec3 } } }>("inspect", {
+      entity: parent.id,
+    })
+  ).components.Transform.translation;
+  const childT = (
+    await engine.call<{ components: { Transform: { translation: Vec3 } } }>("inspect", {
+      entity: child.id,
+    })
+  ).components.Transform.translation;
+  expect(parentT.x).toBeGreaterThan(10.05);
+  expect(parentT.x + childT.x).toBeCloseTo(10, 3);
+  expect(childT.y).toBeCloseTo(2, 3);
+  expect(childT.z).toBeCloseTo(0, 3);
+
+  await engine.call("set-gizmo", { preserveChildren: false });
+});
+
 test("the engine logged no validation errors", async () => {
   await engine.settle(500);
   expect(engine.validationErrors()).toEqual([]);
