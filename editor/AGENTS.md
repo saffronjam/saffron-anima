@@ -58,6 +58,20 @@ bun run tauri:dev  # launches the app; needs a Wayland session for the subsurfac
   `document.hasFocus()` and `phase === 'ready'`, keyed on the engine's `sceneVersion` /
   `selectionVersion` stamps. High-frequency edits (field scrubs, gizmo drags) use coalescers
   and set `dragActive` to block the poll from clobbering optimistic local state.
+- **UI affordances come from shadcn/ui, not raw HTML.** Use the primitives in
+  `src/components/ui/` instead of hand-rolling controls or falling back to native browser
+  widgets. In particular, tooltips are `Tooltip`/`TooltipTrigger asChild`/`TooltipContent`
+  (the `TooltipProvider` wraps the app in `App.tsx`) — never a `title=` attribute, which
+  the webview renders as an unstyled native tooltip. The only `title=` left in the tree is
+  the `DeleteConfirm` *prop* (a dialog heading). When the trigger is also another Radix
+  trigger, chain the `asChild` slots down to the real element
+  (`TooltipTrigger asChild > DropdownMenuTrigger asChild > Button`).
+- **A tooltip must add information.** Only tooltip an element whose meaning is not obvious
+  from what's on screen: a cryptic icon button (the hierarchy bone toggle), a keyboard
+  shortcut ("Scale (R)"), or why a control is disabled (RenderStatsPanel's RT toggles). No
+  tooltip that repeats the element's own visible text or adjacent labels, and none on
+  universally understood controls (window min/max/close, an X in a panel corner, back/forward
+  arrows) — give those an `aria-label` instead.
 
 The Rust bridge sets a per-PID socket under `$XDG_RUNTIME_DIR` and a per-PID shm segment,
 spawns `$SAFFRON_ENGINE_BIN` (default `build/debug/bin/SaffronEngine`) with

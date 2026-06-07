@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const PROJECT_JSON_FILTER = [{ name: "Saffron Project", extensions: ["json"] }];
 
@@ -144,16 +145,20 @@ export function ProjectStartupModal({
           <section className="min-h-0 min-w-0 rounded-md border border-border bg-card">
             <div className="flex h-9 items-center justify-between border-b border-border px-3">
               <span className="text-xs font-medium uppercase text-muted-foreground">Recent</span>
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                onClick={() => void refreshRecents()}
-                disabled={busy}
-                title="Refresh recent projects"
-              >
-                <RefreshCcw />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    onClick={() => void refreshRecents()}
+                    disabled={busy}
+                  >
+                    <RefreshCcw />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Refresh recent projects</TooltipContent>
+              </Tooltip>
             </div>
             <div className="max-h-[280px] overflow-auto p-2">
               {recents.length === 0 ? (
@@ -173,10 +178,7 @@ export function ProjectStartupModal({
                       <span className="block max-w-full truncate text-sm font-medium">
                         {project.displayName}
                       </span>
-                      <span
-                        className="block max-w-full truncate font-mono text-[11px] text-muted-foreground"
-                        title={project.path}
-                      >
+                      <span className="block max-w-full truncate font-mono text-[11px] text-muted-foreground">
                         {project.path}
                       </span>
                     </button>
@@ -243,16 +245,11 @@ export function ProjectStartupModal({
         </div>
 
         <DialogFooter className="min-w-0 items-center justify-between gap-3 sm:justify-between">
-          <span
-            className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
-            title={info?.userdataDir ?? ""}
-          >
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
             {info ? info.userdataDir : ""}
           </span>
           {status ? (
-            <span className="max-w-[320px] truncate text-xs text-destructive" title={status}>
-              {status}
-            </span>
+            <span className="max-w-[320px] truncate text-xs text-destructive">{status}</span>
           ) : null}
         </DialogFooter>
       </DialogContent>

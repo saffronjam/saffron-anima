@@ -77,13 +77,7 @@ export function CreateMenu() {
         <DropdownMenu>
           <PopoverAnchor asChild>
             <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={!ready}
-                title="Add entity"
-              >
+              <Button type="button" size="xs" variant="outline" disabled={!ready}>
                 <Plus />
                 <span>Add</span>
               </Button>
@@ -107,11 +101,7 @@ export function CreateMenu() {
           <NamedEmptyForm onCommit={createNamed} onCancel={() => setNamingOpen(false)} />
         </PopoverContent>
       </Popover>
-      {message ? (
-        <span className="truncate text-xs text-destructive" title={message}>
-          {message}
-        </span>
-      ) : null}
+      {message ? <span className="truncate text-xs text-destructive">{message}</span> : null}
     </div>
   );
 }

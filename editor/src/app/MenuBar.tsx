@@ -227,11 +227,7 @@ export function MenuBar() {
           </MenubarContent>
         </MenubarMenu>
       </Menubar>
-      {status ? (
-        <span className="truncate text-xs text-muted-foreground" title={status}>
-          {status}
-        </span>
-      ) : null}
+      {status ? <span className="truncate text-xs text-muted-foreground">{status}</span> : null}
     </div>
   );
 }

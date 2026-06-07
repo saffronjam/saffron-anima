@@ -126,9 +126,7 @@ export function AssetPicker({ value, assetType, onChange }: AssetPickerProps) {
           >
             <span className="flex min-w-0 items-center gap-1.5">
               {selected ? <AssetSwatch asset={selected} size={16} /> : null}
-              <span className="truncate" title={selected ? selected.name : "(none)"}>
-                {selected ? selected.name : "(none)"}
-              </span>
+              <span className="truncate">{selected ? selected.name : "(none)"}</span>
             </span>
             <ChevronsUpDown className="size-3 flex-none opacity-50" />
           </Button>
@@ -178,9 +176,7 @@ function PickerRow({ label, swatch, active, onSelect }: PickerRowProps) {
       )}
     >
       {swatch ?? <span className="size-4 flex-none" />}
-      <span className="min-w-0 flex-1 truncate" title={label}>
-        {label}
-      </span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
       {active ? <Check className="size-3 flex-none text-foreground" /> : null}
     </button>
   );

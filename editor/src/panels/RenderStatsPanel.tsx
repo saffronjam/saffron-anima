@@ -272,7 +272,6 @@ export function RenderStatsPanel() {
   );
 }
 
-
 /// Normalize a rejected control call into a readable message. The Rust passthrough
 /// rejects with the engine's error string (e.g. "ray tracing not supported …").
 function errorText(err: unknown): string {

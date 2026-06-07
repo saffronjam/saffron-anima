@@ -21,6 +21,7 @@ import type { EntityListEntry } from "../protocol";
 import { HierarchyTree, type TreeActions } from "./HierarchyTree";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 export function HierarchyPanel() {
@@ -92,30 +93,38 @@ export function HierarchyPanel() {
           Scene
         </span>
         <div className="flex items-center gap-1">
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-pressed={hideBones}
-            title="Hide skeleton bones in the tree"
-            className={cn(hideBones ? "bg-accent text-foreground" : "text-muted-foreground")}
-            onClick={toggleHideBones}
-          >
-            <Bone />
-          </Button>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-pressed={showComponentSubrows}
-            title="Show the selected entity's components as tree rows"
-            className={cn(
-              showComponentSubrows ? "bg-accent text-foreground" : "text-muted-foreground",
-            )}
-            onClick={toggleComponentSubrows}
-          >
-            <ListTree />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-pressed={hideBones}
+                className={cn(hideBones ? "bg-accent text-foreground" : "text-muted-foreground")}
+                onClick={toggleHideBones}
+              >
+                <Bone />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Hide skeleton bones in the tree</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-pressed={showComponentSubrows}
+                className={cn(
+                  showComponentSubrows ? "bg-accent text-foreground" : "text-muted-foreground",
+                )}
+                onClick={toggleComponentSubrows}
+              >
+                <ListTree />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Show the selected entity's components as tree rows</TooltipContent>
+          </Tooltip>
           <CreateMenu />
         </div>
       </div>

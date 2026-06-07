@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const NONE_UUID = "0";
 
@@ -50,18 +51,22 @@ export function ComboField({ value, options, onChange }: ComboFieldProps) {
   const isNone = value === NONE_UUID || value === "";
   return (
     <div className="flex items-center gap-1 rounded-sm border border-border bg-background py-0.5 pr-1 pl-1.5">
-      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground" title={value}>
+      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
         {isNone ? "(none)" : value}
       </span>
-      <button
-        type="button"
-        className="flex size-4 flex-none items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-30"
-        disabled={isNone}
-        title="Clear"
-        onClick={() => onChange(NONE_UUID)}
-      >
-        <X className="size-3" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="flex size-4 flex-none items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-30"
+            disabled={isNone}
+            onClick={() => onChange(NONE_UUID)}
+          >
+            <X className="size-3" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>Clear</TooltipContent>
+      </Tooltip>
     </div>
   );
 }
