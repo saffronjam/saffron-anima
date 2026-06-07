@@ -8,6 +8,7 @@ module;
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -328,17 +329,18 @@ namespace se
             return;
         }
         const glm::vec4 selectedColor{ 1.0f, 0.78f, 0.18f, 1.0f };
+        se::Scene& scene = se::activeScene(editor);
 
         se::forEach<se::TransformComponent>(
-            editor.scene,
+            scene,
             [&](se::Entity e, se::TransformComponent&)
             {
-                const BillboardKind kind = billboardKind(editor.scene, e);
+                const BillboardKind kind = billboardKind(scene, e);
                 if (kind == BillboardKind::None)
                 {
                     return;
                 }
-                const glm::vec3 position = se::worldTranslation(editor.scene, e);
+                const glm::vec3 position = se::worldTranslation(scene, e);
                 const se::GizmoProjection p = se::viewportProject(cam, width, height, position);
                 if (!p.visible)
                 {
@@ -355,7 +357,7 @@ namespace se
                 {
                     const glm::vec4 color = sel ? selectedColor : glm::vec4{ 0.45f, 0.85f, 1.0f, 0.9f };
                     addBulbIcon(vertices, p.pixel, color, width, height);
-                    const glm::vec3 forward = se::worldRotation(editor.scene, e) * glm::vec3{ 0.0f, 0.0f, -1.0f };
+                    const glm::vec3 forward = se::worldRotation(scene, e) * glm::vec3{ 0.0f, 0.0f, -1.0f };
                     const se::GizmoProjection tip = se::viewportProject(cam, width, height, position + forward * 0.6f);
                     if (tip.visible)
                     {
@@ -429,6 +431,7 @@ export namespace se
             {
                 se::runSceneSerializationSelfTest();
                 se::runSceneHierarchySelfTest();
+                se::runPlayModeSelfTest();
             }
 
             // Auto-load a selected project, then legacy root project.json; otherwise wait
@@ -446,6 +449,7 @@ export namespace se
             if (const char* selected = std::getenv("SAFFRON_PROJECT"); selected != nullptr && selected[0] != '\0')
             {
                 se::ProjectInfo project;
+                nlohmann::json editorCamera;
                 se::Result<void> result = {};
                 if (se::validProjectName(selected) && !std::filesystem::exists(se::projectJsonPath(selected)))
                 {
@@ -455,11 +459,12 @@ export namespace se
                 else
                 {
                     result = se::loadProject(state->assets, app.renderer, state->editor->registry, state->editor->scene,
-                                             project, selected);
+                                             project, selected, &editorCamera);
                 }
                 if (result)
                 {
                     applyProject(project);
+                    se::sceneEditCameraFromJson(state->editor->camera, editorCamera);
                 }
                 else
                 {
@@ -482,10 +487,12 @@ export namespace se
             else if (std::filesystem::exists(defaultProject))
             {
                 se::ProjectInfo project;
+                nlohmann::json editorCamera;
                 if (auto result = se::loadProject(state->assets, app.renderer, state->editor->registry,
-                                                  state->editor->scene, project, defaultProject))
+                                                  state->editor->scene, project, defaultProject, &editorCamera))
                 {
                     applyProject(project);
+                    se::sceneEditCameraFromJson(state->editor->camera, editorCamera);
                 }
                 else
                 {
@@ -517,6 +524,9 @@ export namespace se
                 {
                     se::pollControl(*state->control, app.window, app.renderer, *state->editor, state->assets);
                 }
+                // Control first, tick second: a play/pause/step command that arrives this
+                // frame takes effect this frame (a step runs its tick the same frame).
+                se::tickPlay(*state->editor, dt.seconds);
                 // Command-driven gizmo drags arrive at the webview's pointer rate (~60Hz);
                 // smooth toward the latest sample every frame so the drag renders fluidly.
                 {
@@ -524,6 +534,8 @@ export namespace se
                     se::stepNativeGizmoDrag(*state->editor, cam, se::viewportWidth(app.renderer),
                                             se::viewportHeight(app.renderer), dt.seconds);
                 }
+                // Smoothed edits (`set-material`/`set-transform smooth:1`) converge the same way.
+                se::stepEditSmoothing(*state->editor, dt.seconds);
                 // Fly-cam: the editor streams pointer-lock input over the control plane
                 // (fly-input command). Drain the accumulated look delta each frame so a
                 // burst of samples between frames is not lost.
@@ -538,23 +550,30 @@ export namespace se
             // the React/Tauri frontend, which drives this host over the control plane.
             layer.onUi = [state, &app]()
             {
+                se::SceneEditContext& editor = *state->editor;
+                se::Scene& live = se::activeScene(editor);
                 // The pickers + serde read the catalog through the scene (a borrowed
                 // pointer, valid only for this frame); also set on the control side.
-                state->editor->scene.catalog = &state->assets.catalog;
+                live.catalog = &state->assets.catalog;
                 // Publish mode: the editor owns the render size (set-viewport-size); the
                 // hidden SDL window's size is meaningless. Present mode tracks the window.
                 if (!state->shmPublish)
                 {
                     se::setViewportDesiredSize(app.renderer, app.window.width, app.window.height);
                 }
-                se::syncNativeGizmo(*state->editor);
-                se::CameraView cam = se::sceneEditCameraView(state->editor->camera);
+                se::syncNativeGizmo(editor);
+                se::CameraView cam = se::renderCameraView(editor);
                 const se::u32 viewWidth = se::viewportWidth(app.renderer);
                 const se::u32 viewHeight = se::viewportHeight(app.renderer);
                 if (viewWidth > 0 && viewHeight > 0)
                 {
-                    se::renderScene(app.renderer, state->editor->scene, state->assets, cam);
-                    se::submitNativeGizmo(*state->editor, app.renderer, cam, viewWidth, viewHeight);
+                    se::renderScene(app.renderer, live, state->assets, cam);
+                    // The gizmo + billboards are editor chrome: hidden inside the game view,
+                    // and the gizmo would write transforms the play duplicate swallows.
+                    if (editor.playState == se::PlayState::Edit)
+                    {
+                        se::submitNativeGizmo(editor, app.renderer, cam, viewWidth, viewHeight);
+                    }
                 }
             };
             se::attachLayer(app, std::move(layer));
