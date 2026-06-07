@@ -40,6 +40,7 @@ target_sources(SaffronEngineLib PRIVATE
     source/saffron/sceneedit/scene_edit_components.cpp
     source/saffron/sceneedit/scene_edit_camera.cpp
     source/saffron/sceneedit/scene_edit_gizmo.cpp
+    source/saffron/sceneedit/scene_edit_play.cpp
     source/saffron/control/control_dto_serde.generated.cpp
     source/saffron/control/control_commands_render.cpp
     source/saffron/control/control_commands_scene.cpp
