@@ -246,9 +246,11 @@ namespace se
         binding.binding = 0;
         binding.stride = sizeof(OverlayVertex);
         binding.inputRate = vk::VertexInputRate::eVertex;
-        std::array<vk::VertexInputAttributeDescription, 2> attributes{
+        std::array<vk::VertexInputAttributeDescription, 3> attributes{
             vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32Sfloat, offsetof(OverlayVertex, position) },
-            vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(OverlayVertex, color) }
+            vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32A32Sfloat,
+                                                 offsetof(OverlayVertex, color) },
+            vk::VertexInputAttributeDescription{ 2, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(OverlayVertex, edge) }
         };
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.setVertexBindingDescriptions(binding);

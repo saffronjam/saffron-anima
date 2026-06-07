@@ -8,6 +8,7 @@ module;
 #include <array>
 #include <functional>
 #include <string>
+#include <utility>
 
 export module Saffron.SceneEdit:Context;
 
@@ -192,6 +193,15 @@ export namespace se
     auto gizmoAxes(const glm::quat& worldRotation, NativeGizmoSpace space) -> std::array<glm::vec3, 3>;
     // The world-space axis for a single-axis handle (zero for plane/screen/uniform handles).
     auto handleAxis(NativeGizmoHandle handle, const std::array<glm::vec3, 3>& axes) -> glm::vec3;
+    // The projected corners of a two-axis translate plane handle (axes `first`/`second`),
+    // shared by the overlay drawing and the hit-test so they always agree.
+    auto gizmoPlaneCorners(const CameraView& cam, u32 width, u32 height, glm::vec3 position,
+                           const std::array<glm::vec3, 3>& axes, f32 axisLen, u32 first, u32 second)
+        -> std::array<GizmoProjection, 4>;
+    // An orthonormal basis spanning the plane perpendicular to `n` (the rotation ring
+    // plane), NaN-safe for any axis including world up. Shared by the ring drawing and
+    // hit-test so both walk identical circles.
+    auto ringBasis(glm::vec3 n) -> std::pair<glm::vec3, glm::vec3>;
     // Hit-tests the selected entity's gizmo at `mouse` (viewport pixels) for the active mode/space.
     auto hitNativeGizmo(SceneEditContext& editor, const CameraView& cam, u32 width, u32 height, glm::vec2 mouse)
         -> NativeGizmoHandle;

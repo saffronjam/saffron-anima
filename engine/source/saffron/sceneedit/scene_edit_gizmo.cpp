@@ -99,6 +99,19 @@ namespace se
         return !(hasNeg && hasPos);
     }
 
+    auto ringBasis(glm::vec3 n) -> std::pair<glm::vec3, glm::vec3>
+    {
+        glm::vec3 a = glm::cross(n, glm::vec3{ 0.0f, 1.0f, 0.0f });
+        // Test the raw cross product: normalizing a near-zero vector first yields NaN,
+        // and NaN < epsilon is false, so the fallback would never trigger.
+        if (glm::dot(a, a) < 0.0001f)
+        {
+            a = glm::cross(n, glm::vec3{ 1.0f, 0.0f, 0.0f });
+        }
+        a = glm::normalize(a);
+        return { a, glm::normalize(glm::cross(n, a)) };
+    }
+
     auto hitRotateRing(const CameraView& cam, u32 width, u32 height, glm::vec2 mouse, glm::vec3 origin,
                        const std::array<glm::vec3, 3>& axes, f32 radius) -> NativeGizmoHandle
     {
@@ -109,13 +122,7 @@ namespace se
         f32 best = 9.0f;
         for (u32 axis = 0; axis < 3; axis = axis + 1)
         {
-            const glm::vec3 n = axes[axis];
-            glm::vec3 a = glm::normalize(glm::cross(n, glm::vec3{ 0.0f, 1.0f, 0.0f }));
-            if (glm::length(a) < 0.001f)
-            {
-                a = glm::normalize(glm::cross(n, glm::vec3{ 1.0f, 0.0f, 0.0f }));
-            }
-            const glm::vec3 b = glm::normalize(glm::cross(n, a));
+            const auto [a, b] = ringBasis(axes[axis]);
             GizmoProjection prev{};
             for (u32 i = 0; i <= segments; i = i + 1)
             {
@@ -185,6 +192,22 @@ namespace se
         return glm::vec3{ 0.0f };
     }
 
+    auto gizmoPlaneCorners(const CameraView& cam, u32 width, u32 height, glm::vec3 position,
+                           const std::array<glm::vec3, 3>& axes, f32 axisLen, u32 first, u32 second)
+        -> std::array<GizmoProjection, 4>
+    {
+        constexpr f32 quadMin = 0.545f;
+        constexpr f32 quadMax = 0.755f;
+        return { viewportProject(cam, width, height,
+                                 position + axes[first] * axisLen * quadMin + axes[second] * axisLen * quadMin),
+                 viewportProject(cam, width, height,
+                                 position + axes[first] * axisLen * quadMin + axes[second] * axisLen * quadMax),
+                 viewportProject(cam, width, height,
+                                 position + axes[first] * axisLen * quadMax + axes[second] * axisLen * quadMax),
+                 viewportProject(cam, width, height,
+                                 position + axes[first] * axisLen * quadMax + axes[second] * axisLen * quadMin) };
+    }
+
     auto hitNativeGizmo(SceneEditContext& editor, const CameraView& cam, u32 width, u32 height, glm::vec2 mouse)
         -> NativeGizmoHandle
     {
@@ -229,8 +252,6 @@ namespace se
 
         if (editor.nativeGizmo.mode == NativeGizmoMode::Translate)
         {
-            constexpr f32 quadMin = 0.5f;
-            constexpr f32 quadMax = 0.8f;
             const std::array<std::pair<NativeGizmoHandle, std::pair<u32, u32>>, 3> planes{
                 std::pair{ NativeGizmoHandle::YZ, std::pair{ 1u, 2u } },
                 std::pair{ NativeGizmoHandle::XZ, std::pair{ 0u, 2u } },
@@ -238,20 +259,8 @@ namespace se
             };
             for (const auto& [handle, axisPair] : planes)
             {
-                const std::array<GizmoProjection, 4> corners{
-                    viewportProject(cam, width, height,
-                                    position + axes[axisPair.first] * axisLen * quadMin +
-                                        axes[axisPair.second] * axisLen * quadMin),
-                    viewportProject(cam, width, height,
-                                    position + axes[axisPair.first] * axisLen * quadMin +
-                                        axes[axisPair.second] * axisLen * quadMax),
-                    viewportProject(cam, width, height,
-                                    position + axes[axisPair.first] * axisLen * quadMax +
-                                        axes[axisPair.second] * axisLen * quadMax),
-                    viewportProject(cam, width, height,
-                                    position + axes[axisPair.first] * axisLen * quadMax +
-                                        axes[axisPair.second] * axisLen * quadMin)
-                };
+                const std::array<GizmoProjection, 4> corners =
+                    gizmoPlaneCorners(cam, width, height, position, axes, axisLen, axisPair.first, axisPair.second);
                 if (pointInConvexQuad(mouse, corners))
                 {
                     return handle;

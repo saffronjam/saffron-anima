@@ -73,13 +73,62 @@ namespace se
         {
             return;
         }
-        const glm::vec2 n = glm::vec2{ -delta.y, delta.x } / len * (thickness * 0.5f);
+        // The quad is widened 1px per side for the shader's analytic feather: edge.x
+        // interpolates the signed cross-edge coordinate (±1 at the nominal width, ±rim
+        // at the expanded rim where coverage reaches zero), edge.z carries the
+        // half-thickness so the falloff stays ~1px at any line width.
+        const se::f32 half = thickness * 0.5f;
+        const se::f32 ext = half + 1.0f;
+        const glm::vec2 n = glm::vec2{ -delta.y, delta.x } / len * ext;
+        const glm::vec4 edgePos{ ext / half, 0.0f, half, 0.0f };
+        const glm::vec4 edgeNeg{ -ext / half, 0.0f, half, 0.0f };
         const glm::vec2 a0 = se::pixelToNdc(aPx + n, width, height);
         const glm::vec2 a1 = se::pixelToNdc(aPx - n, width, height);
         const glm::vec2 b0 = se::pixelToNdc(bPx + n, width, height);
         const glm::vec2 b1 = se::pixelToNdc(bPx - n, width, height);
-        addTriangle(vertices, a0, b0, b1, color);
-        addTriangle(vertices, a0, b1, a1, color);
+        vertices.push_back(se::OverlayVertex{ a0, color, edgePos });
+        vertices.push_back(se::OverlayVertex{ b0, color, edgePos });
+        vertices.push_back(se::OverlayVertex{ b1, color, edgeNeg });
+        vertices.push_back(se::OverlayVertex{ a0, color, edgePos });
+        vertices.push_back(se::OverlayVertex{ b1, color, edgeNeg });
+        vertices.push_back(se::OverlayVertex{ a1, color, edgeNeg });
+    }
+
+    // A filled quad from 4 pixel-space corners (a convex loop), feathered analytically in
+    // both directions: each corner is pushed 1px outward along the quad's edge directions,
+    // and the vertices carry signed coords + half-extents for the shader's coverage alpha.
+    void addQuad(std::vector<se::OverlayVertex>& vertices, const std::array<glm::vec2, 4>& cornersPx, glm::vec4 color,
+                 se::u32 width, se::u32 height)
+    {
+        const glm::vec2 u = (cornersPx[3] - cornersPx[0] + cornersPx[2] - cornersPx[1]) * 0.5f;
+        const glm::vec2 v = (cornersPx[1] - cornersPx[0] + cornersPx[2] - cornersPx[3]) * 0.5f;
+        const se::f32 hu = glm::length(u) * 0.5f;
+        const se::f32 hv = glm::length(v) * 0.5f;
+        if (hu < 0.5f || hv < 0.5f)
+        {
+            return;
+        }
+        const glm::vec2 du = u / (hu * 2.0f);
+        const glm::vec2 dv = v / (hv * 2.0f);
+        const se::f32 eu = (hu + 1.0f) / hu;
+        const se::f32 ev = (hv + 1.0f) / hv;
+        // Corner order mirrors gizmoPlaneCorners: (min,min), (min,max), (max,max), (max,min).
+        const std::array<se::OverlayVertex, 4> quad{
+            se::OverlayVertex{ se::pixelToNdc(cornersPx[0] - du - dv, width, height), color,
+                               glm::vec4{ -eu, -ev, hu, hv } },
+            se::OverlayVertex{ se::pixelToNdc(cornersPx[1] - du + dv, width, height), color,
+                               glm::vec4{ -eu, ev, hu, hv } },
+            se::OverlayVertex{ se::pixelToNdc(cornersPx[2] + du + dv, width, height), color,
+                               glm::vec4{ eu, ev, hu, hv } },
+            se::OverlayVertex{ se::pixelToNdc(cornersPx[3] + du - dv, width, height), color,
+                               glm::vec4{ eu, -ev, hu, hv } }
+        };
+        vertices.push_back(quad[0]);
+        vertices.push_back(quad[1]);
+        vertices.push_back(quad[2]);
+        vertices.push_back(quad[0]);
+        vertices.push_back(quad[2]);
+        vertices.push_back(quad[3]);
     }
 
     void addBox(std::vector<se::OverlayVertex>& vertices, glm::vec2 centerPx, se::f32 size, glm::vec4 color,
@@ -204,32 +253,41 @@ namespace se
         const se::f32 axisLen = std::max(0.75f, distance * 0.22f);
         const std::array<se::NativeGizmoHandle, 3> handles{ se::NativeGizmoHandle::X, se::NativeGizmoHandle::Y,
                                                             se::NativeGizmoHandle::Z };
-        for (se::u32 i = 0; i < 3; i = i + 1)
+        // Rotate mode shows only the rings; the straight axis lines belong to translate/scale.
+        if (editor.nativeGizmo.mode != se::NativeGizmoMode::Rotate)
         {
-            const se::GizmoProjection end = se::viewportProject(cam, width, height, position + axes[i] * axisLen);
-            if (!end.visible)
+            for (se::u32 i = 0; i < 3; i = i + 1)
             {
-                continue;
+                const se::GizmoProjection end = se::viewportProject(cam, width, height, position + axes[i] * axisLen);
+                if (!end.visible)
+                {
+                    continue;
+                }
+                addLine(vertices, origin.pixel, end.pixel, 5.0f, se::axisColor(handles[i], editor.nativeGizmo), width,
+                        height);
+                addBox(vertices, end.pixel, editor.nativeGizmo.mode == se::NativeGizmoMode::Scale ? 12.0f : 8.0f,
+                       se::axisColor(handles[i], editor.nativeGizmo), width, height);
             }
-            addLine(vertices, origin.pixel, end.pixel, 5.0f, se::axisColor(handles[i], editor.nativeGizmo), width,
-                    height);
-            addBox(vertices, end.pixel, editor.nativeGizmo.mode == se::NativeGizmoMode::Scale ? 12.0f : 8.0f,
-                   se::axisColor(handles[i], editor.nativeGizmo), width, height);
         }
         if (editor.nativeGizmo.mode == se::NativeGizmoMode::Translate)
         {
-            const std::array<std::pair<se::NativeGizmoHandle, glm::vec3>, 3> planes{
-                std::pair{ se::NativeGizmoHandle::XY, axes[0] * axisLen * 0.26f + axes[1] * axisLen * 0.26f },
-                std::pair{ se::NativeGizmoHandle::YZ, axes[1] * axisLen * 0.26f + axes[2] * axisLen * 0.26f },
-                std::pair{ se::NativeGizmoHandle::XZ, axes[0] * axisLen * 0.26f + axes[2] * axisLen * 0.26f }
+            // The drawn quads are the exact hit-test geometry (gizmoPlaneCorners), so the
+            // plane handles always sit under the cursor that activates them.
+            const std::array<std::pair<se::NativeGizmoHandle, std::pair<se::u32, se::u32>>, 3> planes{
+                std::pair{ se::NativeGizmoHandle::XY, std::pair{ 0u, 1u } },
+                std::pair{ se::NativeGizmoHandle::YZ, std::pair{ 1u, 2u } },
+                std::pair{ se::NativeGizmoHandle::XZ, std::pair{ 0u, 2u } }
             };
-            for (const auto& [handle, offset] : planes)
+            for (const auto& [handle, axisPair] : planes)
             {
-                const se::GizmoProjection center = se::viewportProject(cam, width, height, position + offset);
-                if (center.visible)
+                const std::array<se::GizmoProjection, 4> corners =
+                    se::gizmoPlaneCorners(cam, width, height, position, axes, axisLen, axisPair.first, axisPair.second);
+                if (!corners[0].visible || !corners[1].visible || !corners[2].visible || !corners[3].visible)
                 {
-                    addBox(vertices, center.pixel, 18.0f, se::axisColor(handle, editor.nativeGizmo), width, height);
+                    continue;
                 }
+                addQuad(vertices, { corners[0].pixel, corners[1].pixel, corners[2].pixel, corners[3].pixel },
+                        se::axisColor(handle, editor.nativeGizmo), width, height);
             }
         }
         else if (editor.nativeGizmo.mode == se::NativeGizmoMode::Rotate)
@@ -238,13 +296,7 @@ namespace se
             const se::f32 radius = axisLen * 0.72f;
             for (se::u32 axis = 0; axis < 3; axis = axis + 1)
             {
-                const glm::vec3 n = axes[axis];
-                glm::vec3 a = glm::normalize(glm::cross(n, glm::vec3{ 0.0f, 1.0f, 0.0f }));
-                if (glm::length(a) < 0.001f)
-                {
-                    a = glm::normalize(glm::cross(n, glm::vec3{ 1.0f, 0.0f, 0.0f }));
-                }
-                const glm::vec3 b = glm::normalize(glm::cross(n, a));
+                const auto [a, b] = se::ringBasis(axes[axis]);
                 se::GizmoProjection prev{};
                 for (se::u32 i = 0; i <= segments; i = i + 1)
                 {

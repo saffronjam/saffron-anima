@@ -552,10 +552,16 @@ export namespace se
 
     // A single screen-space overlay vertex: NDC position + flat color. The editor
     // overlay (gizmo handles + entity billboards) builds a triangle list of these.
+    // `edge` drives analytic edge anti-aliasing (the overlay draws post-resolve, so
+    // scene MSAA can't touch it): xy are signed coordinates per feather direction
+    // (±1 at the nominal edge) and zw the matching half-extents in pixels; a
+    // non-positive half-extent disables that direction. Lines feather one direction
+    // (across the thickness), filled quads feather both.
     struct OverlayVertex
     {
         glm::vec2 position;  // clip-space NDC ([-1,1])
         glm::vec4 color;
+        glm::vec4 edge{ 0.0f, 0.0f, 0.0f, 0.0f };
     };
 
     // Per-frame editor overlay geometry, drawn into the post-tonemap scene color so it
@@ -1180,7 +1186,7 @@ export namespace se
         bool useDepthPrepass = false;
         bool useSkinning = true;              // gate for the GPU skinning path; off = skinned items never gather
         bool presentViewportOnly = false;     // native-viewport host: blit offscreen->swapchain, skip the ui pass
-        ShmPublish shmPublish;  // pipelined offscreen→shm publish; replaces present when enabled
+        ShmPublish shmPublish;                // pipelined offscreen→shm publish; replaces present when enabled
         f32 exposureEv = 0.0f;                // tonemap exposure in stops; the tonemap pass applies exp2(this)
         glm::mat4 prevViewProj{ 1.0f };       // last frame's camera viewProj, for TAA motion vectors
         bool prevViewProjValid = false;       // false until the first frame stores one
