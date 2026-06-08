@@ -51,10 +51,10 @@ TIDY_JOBS ?= 4
 
 # Targets whose tools (clang, cargo, Vulkan, slang, the toolbox-linked engine binary)
 # live only in the toolbox. On the host these re-enter it; inside, they run directly.
-TOOLBOX_TARGETS := check engine editor schema e2e run run-engine run-software run-wl-debug format lint prepare-for-commit
+TOOLBOX_TARGETS := check engine editor schema e2e run run-debug run-engine run-software run-wl-debug format lint prepare-for-commit
 
 .DEFAULT_GOAL := help
-.PHONY: help check engine editor schema e2e run run-engine run-software run-wl-debug run-docs format lint prepare-for-commit
+.PHONY: help check engine editor schema e2e run run-debug run-engine run-software run-wl-debug run-docs format lint prepare-for-commit
 
 ## help: list the available targets (default; runs on the host, no toolbox)
 help:
@@ -70,6 +70,7 @@ help:
 	@echo
 	@echo 'Run:'
 	@echo '  make run                - start the Tauri editor (it spawns the engine host)'
+	@echo '  make run-debug          - start the editor with in-editor developer mode pre-enabled'
 	@echo '  make run-engine         - start only the engine host (present-only, for debugging)'
 	@echo '  make run-software       - run the editor forcing the llvmpipe software GPU (control case)'
 	@echo '  make run-docs           - serve the Hugo docs site locally (http://localhost:1313/saffron-engine/)'
@@ -121,6 +122,10 @@ e2e:
 ## run: start the Tauri editor, which spawns build/debug/bin/SaffronEngine as a native child
 run:
 	cd "$(EDITOR)" && $(GPU_ENV) bun run tauri dev
+
+## run-debug: like run, but starts with the editor's developer mode pre-enabled
+run-debug:
+	cd "$(EDITOR)" && $(GPU_ENV) VITE_SAFFRON_DEV_MODE=1 bun run tauri dev
 
 ## run-software: run the editor on the llvmpipe software GPU (control case; ignores the NVIDIA ICD)
 run-software:

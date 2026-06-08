@@ -11,7 +11,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent, ReactNode } from "react";
 import { useEditorStore, type ViewTab } from "../state/store";
 import { Button } from "@/components/ui/button";
@@ -303,24 +303,20 @@ export function WindowTitlebar() {
         data-titlebar-control="true"
       >
         {tabs.map((tab) => (
-          <Fragment key={tab.id}>
-            <TitlebarTab
-              tab={tab}
-              active={tab.id === activeTabId}
-              dragging={tabDrag?.id === tab.id && tabDrag.dragging}
-              style={tabStyle(tab)}
-              setRef={(node) => setTabRef(tab.id, node)}
-              onActivate={() =>
-                tab.id === "scene" ? activateSceneTab() : setActiveViewTab(tab.id)
-              }
-              onClose={() => closeViewTab(tab.id)}
-              onPointerDown={(event) => beginTabDrag(tab, event)}
-              onPointerMove={moveTabDrag}
-              onPointerUp={(event) => endTabDrag(tab, event)}
-              onPointerCancel={() => setTabDrag(null)}
-            />
-            {tab.id === "scene" && devMode ? <DevModeChip /> : null}
-          </Fragment>
+          <TitlebarTab
+            key={tab.id}
+            tab={tab}
+            active={tab.id === activeTabId}
+            dragging={tabDrag?.id === tab.id && tabDrag.dragging}
+            style={tabStyle(tab)}
+            setRef={(node) => setTabRef(tab.id, node)}
+            onActivate={() => (tab.id === "scene" ? activateSceneTab() : setActiveViewTab(tab.id))}
+            onClose={() => closeViewTab(tab.id)}
+            onPointerDown={(event) => beginTabDrag(tab, event)}
+            onPointerMove={moveTabDrag}
+            onPointerUp={(event) => endTabDrag(tab, event)}
+            onPointerCancel={() => setTabDrag(null)}
+          />
         ))}
       </div>
       <div className="min-w-0 flex-1 self-stretch" data-tauri-drag-region />
@@ -432,21 +428,6 @@ function TitlebarTab({
         </span>
       ) : null}
     </button>
-  );
-}
-
-/// Status chip flagging that developer mode is on. Non-interactive; its tooltip
-/// carries the otherwise-hidden toggle gesture.
-function DevModeChip() {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="ml-2 flex h-5 select-none items-center self-center rounded-full bg-orange-500/15 px-2 text-[10px] font-medium uppercase tracking-wide text-orange-400">
-          Dev mode
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>Developer mode on — click the Scene tab 5× to toggle</TooltipContent>
-    </Tooltip>
   );
 }
 

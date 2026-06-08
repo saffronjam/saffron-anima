@@ -1,6 +1,6 @@
 /// Project-level file operations exposed from the topbar project selector.
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import { client, type ProjectInfo } from "../control/client";
 import { useEditorStore, withNativeDialog } from "../state/store";
 import { notify } from "../lib/flash";
@@ -22,6 +22,7 @@ export function ProjectMenu() {
   const project = useEditorStore((s) => s.project);
   const nativeDialogOpen = useEditorStore((s) => s.nativeDialogOpen);
   const devMode = useEditorStore((s) => s.devMode);
+  const setDevMode = useEditorStore((s) => s.setDevMode);
   const playState = useEditorStore((s) => s.playState);
 
   const ready = phase === "ready";
@@ -124,7 +125,25 @@ export function ProjectMenu() {
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      {devMode ? <DevModeChip onExit={() => setDevMode(false)} /> : null}
     </div>
+  );
+}
+
+/// Status chip flagging that developer mode is on; the X exits dev mode.
+function DevModeChip({ onExit }: { onExit: () => void }) {
+  return (
+    <span className="flex h-5 flex-none select-none items-center gap-1 rounded-full bg-orange-500/15 py-0 pl-2 pr-1 text-[10px] font-medium uppercase tracking-wide text-orange-400">
+      Dev mode
+      <button
+        type="button"
+        aria-label="Exit developer mode"
+        className="flex size-3.5 items-center justify-center rounded-full hover:bg-orange-500/25"
+        onClick={onExit}
+      >
+        <X className="size-3" />
+      </button>
+    </span>
   );
 }
 
