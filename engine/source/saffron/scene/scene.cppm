@@ -97,11 +97,33 @@ export namespace se
     {
         glm::vec4 baseColor{ 1.0f };
         Uuid albedoTexture;
+        Uuid metallicRoughnessTexture;  // glTF metallic-roughness map (rough=G, metal=B); modulates the factors
         f32 metallic = 0.0f;
         f32 roughness = 1.0f;
         glm::vec3 emissive{ 0.0f };
         f32 emissiveStrength = 1.0f;
         bool unlit = false;  // skip lighting (albedo * base color only) — a distinct PSO
+    };
+
+    // One material in a multi-material mesh; the same fields as MaterialComponent.
+    struct MaterialSlot
+    {
+        glm::vec4 baseColor{ 1.0f };
+        Uuid albedoTexture;
+        Uuid metallicRoughnessTexture;
+        f32 metallic = 0.0f;
+        f32 roughness = 1.0f;
+        glm::vec3 emissive{ 0.0f };
+        f32 emissiveStrength = 1.0f;
+        bool unlit = false;
+    };
+
+    // An ordered material table for a mesh with more than one source material; each
+    // Submesh.materialSlot indexes `slots`. Supersedes MaterialComponent when present.
+    // Single-material meshes keep using MaterialComponent instead.
+    struct MaterialSetComponent
+    {
+        std::vector<MaterialSlot> slots;
     };
 
     // A perspective camera; its view comes from the entity's TransformComponent.
@@ -183,7 +205,8 @@ export namespace se
         AssetType type = AssetType::Mesh;
         std::string path;  // relative to the asset root
         std::string folder;
-        bool hdr = false;  // texture: decode as linear float (.hdr); else sRGB RGBA8
+        bool hdr = false;     // texture: decode as linear float (.hdr); else sRGB RGBA8
+        bool linear = false;  // texture: upload as a linear RGBA8 format (metallic-roughness), not sRGB
     };
 
     struct AssetCatalog
@@ -783,6 +806,8 @@ export namespace se
     auto cameraComponentFromJson(CameraComponent& c, const nlohmann::json& j) -> Result<void>;
     auto materialComponentToJson(const MaterialComponent& c) -> nlohmann::json;
     auto materialComponentFromJson(MaterialComponent& c, const nlohmann::json& j) -> Result<void>;
+    auto materialSetComponentToJson(const MaterialSetComponent& c) -> nlohmann::json;
+    auto materialSetComponentFromJson(MaterialSetComponent& c, const nlohmann::json& j) -> Result<void>;
     auto directionalLightComponentToJson(const DirectionalLightComponent& c) -> nlohmann::json;
     auto directionalLightComponentFromJson(DirectionalLightComponent& c, const nlohmann::json& j) -> Result<void>;
     auto pointLightComponentToJson(const PointLightComponent& c) -> nlohmann::json;
