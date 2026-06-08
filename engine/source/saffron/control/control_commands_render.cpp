@@ -71,6 +71,34 @@ namespace se
         setAa(renderer, samples, fxaa, taa);
     }
 
+    auto profilerModeDto(ProfilerMode mode) -> ProfilerModeDto
+    {
+        switch (mode)
+        {
+        case ProfilerMode::Timestamps:
+            return ProfilerModeDto::Timestamps;
+        case ProfilerMode::PipelineStats:
+            return ProfilerModeDto::PipelineStats;
+        case ProfilerMode::Off:
+            break;
+        }
+        return ProfilerModeDto::Off;
+    }
+
+    auto profilerModeFromDto(ProfilerModeDto mode) -> ProfilerMode
+    {
+        switch (mode)
+        {
+        case ProfilerModeDto::Timestamps:
+            return ProfilerMode::Timestamps;
+        case ProfilerModeDto::PipelineStats:
+            return ProfilerMode::PipelineStats;
+        case ProfilerModeDto::Off:
+            break;
+        }
+        return ProfilerMode::Off;
+    }
+
     auto renderStatsDto(Renderer& renderer) -> RenderStatsDto
     {
         const RenderStats stats = renderStats(renderer);
@@ -80,6 +108,18 @@ namespace se
                                stats.frameMs,
                                stats.fps,
                                stats.gpuMs,
+                               stats.cpuFrameMs,
+                               stats.gpuMs,
+                               stats.cpuWaitMs,
+                               static_cast<i32>(stats.triangles),
+                               static_cast<i32>(stats.descriptorBinds),
+                               static_cast<i32>(stats.commandBuffers),
+                               static_cast<i32>(stats.queueSubmits),
+                               static_cast<i32>(stats.pipelinesCreated),
+                               stats.vramUsageBytes,
+                               stats.vramBudgetBytes,
+                               stats.softwareGpu,
+                               profilerModeDto(stats.profilerMode),
                                clusteredEnabled(renderer),
                                depthPrepassEnabled(renderer),
                                shadowsEnabled(renderer),
@@ -96,6 +136,106 @@ namespace se
                                true,
                                exposureEv(renderer),
                                aaModeDto(aaMode(renderer)) };
+    }
+
+    auto passTimingsDto(Renderer& renderer) -> RenderPassTimingsDto
+    {
+        RenderPassTimingsDto out;
+        for (const PassTiming& timing : passTimings(renderer))
+        {
+            out.passes.push_back(RenderPassTimingDto{ timing.name, timing.gpuMs });
+        }
+        out.gpuTotalMs = passTimingsTotalMs(renderer);
+        out.softwareGpu = softwareGpu(renderer);
+        out.profilerMode = profilerModeDto(profilerMode(renderer));
+        return out;
+    }
+
+    auto perfConfigDto(const PerfConfig& config) -> PerfConfigDto
+    {
+        return PerfConfigDto{ config.targetFps,      perfBudgetMs(config),  config.greenBudgetFrac,
+                              config.greenMedianMul, config.amberMedianMul, config.frozenMs,
+                              config.vramWarnFrac,   config.vramCritFrac };
+    }
+
+    auto frameHistoryDto(Renderer& renderer, i32 samples) -> FrameHistoryDto
+    {
+        const FrameHistoryStats stats = frameHistoryStats(renderer);
+        FrameHistoryDto out;
+        out.p50Ms = stats.p50Ms;
+        out.p95Ms = stats.p95Ms;
+        out.p99Ms = stats.p99Ms;
+        out.p999Ms = stats.p999Ms;
+        out.maxMs = stats.maxMs;
+        out.meanMs = stats.meanMs;
+        out.stddevMs = stats.stddevMs;
+        out.stutterCount = static_cast<i64>(stats.stutterCount);
+        out.sampleCount = static_cast<i32>(stats.sampleCount);
+        out.budgetMs = perfBudgetMs(perfConfig(renderer));
+        if (samples > 0)
+        {
+            for (const FrameSample& sample : frameSamples(renderer, static_cast<u32>(samples)))
+            {
+                out.samples.push_back(FrameSampleDto{ static_cast<i64>(sample.frameIndex), sample.cpuMs, sample.gpuMs,
+                                                      sample.cpuWaitMs });
+            }
+        }
+        return out;
+    }
+
+    auto alarmSeverityDto(AlarmSeverity severity) -> AlarmSeverityDto
+    {
+        switch (severity)
+        {
+        case AlarmSeverity::Warning:
+            return AlarmSeverityDto::Warning;
+        case AlarmSeverity::Critical:
+            return AlarmSeverityDto::Critical;
+        case AlarmSeverity::Info:
+            break;
+        }
+        return AlarmSeverityDto::Info;
+    }
+
+    auto alarmEventDto(const AlarmEvent& event) -> AlarmEventDto
+    {
+        return AlarmEventDto{ static_cast<i64>(event.seq),
+                              std::to_string(event.fingerprint),
+                              event.metric,
+                              event.pass,
+                              alarmSeverityDto(event.severity),
+                              event.kind == AlarmEventKind::Resolved ? AlarmStateDto::Resolved : AlarmStateDto::Firing,
+                              event.value,
+                              event.threshold,
+                              static_cast<i64>(event.sinceFrame),
+                              static_cast<i32>(event.count),
+                              event.durationMs };
+    }
+
+    auto drainAlarmsDto(Renderer& renderer, i64 since) -> DrainAlarmsResult
+    {
+        const AlarmDrain drain = drainAlarms(renderer, since < 0 ? 0 : static_cast<u64>(since));
+        DrainAlarmsResult out;
+        for (const AlarmEvent& event : drain.events)
+        {
+            out.events.push_back(alarmEventDto(event));
+        }
+        out.highWaterSeq = static_cast<i64>(drain.highWaterSeq);
+        out.oldestSeq = static_cast<i64>(drain.oldestSeq);
+        out.overflowed = drain.overflowed;
+        return out;
+    }
+
+    auto activeAlarmsDto(Renderer& renderer) -> ActiveAlarmsDto
+    {
+        ActiveAlarmsDto out;
+        for (const ActiveAlarm& alarm : activeAlarms(renderer))
+        {
+            out.alarms.push_back(ActiveAlarmDto{ std::to_string(alarm.fingerprint), alarm.metric, alarm.pass,
+                                                 alarmSeverityDto(alarm.severity), alarm.value, alarm.threshold,
+                                                 static_cast<i64>(alarm.sinceFrame), static_cast<i32>(alarm.count) });
+        }
+        return out;
     }
 
     auto renderStatsJson(Renderer& renderer) -> json
@@ -128,6 +268,79 @@ namespace se
             reg, "render-stats", "last frame's scene draw counters",
             [](EngineContext& ctx, const EmptyParams&) -> Result<RenderStatsDto>
             { return renderStatsDto(ctx.renderer); });
+
+        registerCommand<ProfilerSetModeParams, ProfilerModeResult>(
+            reg, "profiler.set-mode",
+            "profiler.set-mode {off|timestamps|pipeline-stats} — per-pass GPU timing + counters",
+            [](EngineContext& ctx, const ProfilerSetModeParams& params) -> Result<ProfilerModeResult>
+            {
+                setProfilerMode(ctx.renderer, profilerModeFromDto(params.mode.value_or(ProfilerModeDto::Off)));
+                return ProfilerModeResult{ profilerModeDto(profilerMode(ctx.renderer)),
+                                           profilerTimestampsSupported(ctx.renderer),
+                                           profilerPipelineStatsSupported(ctx.renderer), softwareGpu(ctx.renderer) };
+            });
+
+        registerCommand<EmptyParams, RenderPassTimingsDto>(
+            reg, "pass-timings", "last frame's per-pass GPU timings (needs profiler timestamps mode)",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<RenderPassTimingsDto>
+            { return passTimingsDto(ctx.renderer); });
+
+        registerCommand<FrameHistoryParams, FrameHistoryDto>(
+            reg, "frame-history", "frame-time percentiles + stutter count (+ optional recent samples)",
+            [](EngineContext& ctx, const FrameHistoryParams& params) -> Result<FrameHistoryDto>
+            { return frameHistoryDto(ctx.renderer, params.samples.value_or(0)); });
+
+        registerCommand<EmptyParams, PerfConfigDto>(reg, "get-perf-config",
+                                                    "the shared frame-budget / green-amber-red threshold config",
+                                                    [](EngineContext& ctx, const EmptyParams&) -> Result<PerfConfigDto>
+                                                    { return perfConfigDto(perfConfig(ctx.renderer)); });
+
+        registerCommand<SetPerfConfigParams, PerfConfigDto>(
+            reg, "set-perf-config", "set-perf-config {targetFps,...} — frame budget + green/amber/red thresholds",
+            [](EngineContext& ctx, const SetPerfConfigParams& params) -> Result<PerfConfigDto>
+            {
+                PerfConfig config = perfConfig(ctx.renderer);
+                if (params.targetFps)
+                {
+                    config.targetFps = *params.targetFps;
+                }
+                if (params.greenBudgetFrac)
+                {
+                    config.greenBudgetFrac = *params.greenBudgetFrac;
+                }
+                if (params.greenMedianMul)
+                {
+                    config.greenMedianMul = *params.greenMedianMul;
+                }
+                if (params.amberMedianMul)
+                {
+                    config.amberMedianMul = *params.amberMedianMul;
+                }
+                if (params.frozenMs)
+                {
+                    config.frozenMs = *params.frozenMs;
+                }
+                if (params.vramWarnFrac)
+                {
+                    config.vramWarnFrac = *params.vramWarnFrac;
+                }
+                if (params.vramCritFrac)
+                {
+                    config.vramCritFrac = *params.vramCritFrac;
+                }
+                setPerfConfig(ctx.renderer, config);
+                return perfConfigDto(perfConfig(ctx.renderer));
+            });
+
+        registerCommand<DrainAlarmsParams, DrainAlarmsResult>(
+            reg, "drain-alarms", "drain-alarms {since} — perf-alarm events with seq > since (non-blocking)",
+            [](EngineContext& ctx, const DrainAlarmsParams& params) -> Result<DrainAlarmsResult>
+            { return drainAlarmsDto(ctx.renderer, params.since.value_or(0)); });
+
+        registerCommand<EmptyParams, ActiveAlarmsDto>(
+            reg, "list-active-alarms", "currently firing perf alarms (the badge + row highlights)",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<ActiveAlarmsDto>
+            { return activeAlarmsDto(ctx.renderer); });
 
         registerCommand<SetAaParams, SetAaResult>(
             reg, "set-aa", "set-aa {off|fxaa|taa|msaa2|msaa4|msaa8} — anti-aliasing mode",
