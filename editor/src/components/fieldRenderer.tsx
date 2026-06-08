@@ -67,6 +67,7 @@ export const FIELD_HINTS: Record<string, FieldHint> = {
 
   "Material.baseColor": { kind: "color4" },
   "Material.albedoTexture": { kind: "uuid", asset: "texture" },
+  "Material.metallicRoughnessTexture": { kind: "uuid", asset: "texture" },
   "Material.metallic": { kind: "slider", min: 0, max: 1, step: 0.01 },
   "Material.roughness": { kind: "slider", min: 0, max: 1, step: 0.01 },
   "Material.emissive": { kind: "color3" },

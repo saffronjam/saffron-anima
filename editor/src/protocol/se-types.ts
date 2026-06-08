@@ -30,11 +30,16 @@ export interface Camera {
 export interface Material {
   baseColor: Vec4;
   albedoTexture: WireUuid;
+  metallicRoughnessTexture: WireUuid;
   metallic: number;
   roughness: number;
   emissive: Vec3;
   emissiveStrength: number;
   unlit: boolean;
+}
+
+export interface MaterialSet {
+  slots: Material[];
 }
 
 export interface DirectionalLight {
@@ -99,6 +104,7 @@ export interface Components {
   Mesh?: Mesh;
   Camera?: Camera;
   Material?: Material;
+  MaterialSet?: MaterialSet;
   DirectionalLight?: DirectionalLight;
   PointLight?: PointLight;
   SpotLight?: SpotLight;
@@ -114,6 +120,7 @@ export type ComponentBody =
   | Mesh
   | Camera
   | Material
+  | MaterialSet
   | DirectionalLight
   | PointLight
   | SpotLight
@@ -321,11 +328,13 @@ export interface SetMaterialParams {
   entity: WireUuid | string | number;
   baseColor?: Vec4;
   albedoTexture?: WireUuid;
+  metallicRoughnessTexture?: WireUuid;
   metallic?: number;
   roughness?: number;
   emissive?: Vec3;
   emissiveStrength?: number;
   unlit?: boolean;
+  slot?: number;
   smooth?: boolean;
 }
 
@@ -661,14 +670,14 @@ export interface DeleteAssetResult {
 
 export interface AssignAssetParams {
   entity: WireUuid | string | number;
-  slot: "mesh" | "albedo";
+  slot: "mesh" | "albedo" | "metallic-roughness";
   asset: WireUuid | string | number;
 }
 
 export interface AssignAssetResult {
   id: WireUuid;
   name: string;
-  slot: "mesh" | "albedo";
+  slot: "mesh" | "albedo" | "metallic-roughness";
 }
 
 export interface PathResult {

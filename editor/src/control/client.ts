@@ -148,8 +148,20 @@ export const client = {
   /// set-transform). `albedoTexture` is a string uuid the engine coerces to u64.
   /// `smooth` makes the engine animate numeric fields toward the values (~25ms)
   /// instead of snapping — sent only mid-drag; the release send omits it.
-  setMaterial(id: string, partial: Partial<Material>, smooth?: boolean): Promise<unknown> {
-    return call("set-material", { entity: id, ...partial, ...(smooth ? { smooth: true } : {}) });
+  /// `slot` targets one entry of the entity's MaterialSetComponent instead of its
+  /// MaterialComponent (direct write; numeric fields are not animated per slot).
+  setMaterial(
+    id: string,
+    partial: Partial<Material>,
+    smooth?: boolean,
+    slot?: number,
+  ): Promise<unknown> {
+    return call("set-material", {
+      entity: id,
+      ...partial,
+      ...(slot === undefined ? {} : { slot }),
+      ...(smooth ? { smooth: true } : {}),
+    });
   },
   addComponent(id: string, component: string): Promise<unknown> {
     return call("add-component", { entity: id, component });
@@ -267,7 +279,11 @@ export const client = {
   },
   /// Assign a mesh or albedo texture to an entity slot (adds the component if
   /// missing). The dedicated, minimal write for Mesh.mesh / Material.albedoTexture.
-  assignAsset(entity: string, slot: "mesh" | "albedo", asset: string): Promise<unknown> {
+  assignAsset(
+    entity: string,
+    slot: "mesh" | "albedo" | "metallic-roughness",
+    asset: string,
+  ): Promise<unknown> {
     return call("assign-asset", { entity, slot, asset });
   },
   /// Import a model from a filesystem path; the engine spawns + selects an entity
