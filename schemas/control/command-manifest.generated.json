@@ -16,6 +16,55 @@
       "fixture": "empty"
     },
     {
+      "name": "profiler.set-mode",
+      "params": "ProfilerSetModeParams",
+      "result": "ProfilerModeResult",
+      "status": "typed",
+      "fixture": "profiler-timestamps"
+    },
+    {
+      "name": "pass-timings",
+      "params": "EmptyParams",
+      "result": "RenderPassTimingsDto",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "frame-history",
+      "params": "FrameHistoryParams",
+      "result": "FrameHistoryDto",
+      "status": "typed",
+      "fixture": "frame-history-samples"
+    },
+    {
+      "name": "get-perf-config",
+      "params": "EmptyParams",
+      "result": "PerfConfigDto",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "set-perf-config",
+      "params": "SetPerfConfigParams",
+      "result": "PerfConfigDto",
+      "status": "typed",
+      "fixture": "perf-config-30"
+    },
+    {
+      "name": "drain-alarms",
+      "params": "DrainAlarmsParams",
+      "result": "DrainAlarmsResult",
+      "status": "typed",
+      "fixture": "alarms-since-0"
+    },
+    {
+      "name": "list-active-alarms",
+      "params": "EmptyParams",
+      "result": "ActiveAlarmsDto",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
       "name": "set-aa",
       "params": "SetAaParams",
       "result": "SetAaResult",

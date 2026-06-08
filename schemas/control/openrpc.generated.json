@@ -42,6 +42,132 @@
       }
     },
     {
+      "name": "profiler.set-mode",
+      "summary": "set the GPU profiler mode",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ProfilerSetModeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ProfilerModeResult"
+        }
+      }
+    },
+    {
+      "name": "pass-timings",
+      "summary": "last frame per-pass GPU timings",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/RenderPassTimingsDto"
+        }
+      }
+    },
+    {
+      "name": "frame-history",
+      "summary": "frame-time percentiles + stutter count",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FrameHistoryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FrameHistoryDto"
+        }
+      }
+    },
+    {
+      "name": "get-perf-config",
+      "summary": "shared frame-budget / threshold config",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PerfConfigDto"
+        }
+      }
+    },
+    {
+      "name": "set-perf-config",
+      "summary": "set the frame budget + thresholds",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetPerfConfigParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PerfConfigDto"
+        }
+      }
+    },
+    {
+      "name": "drain-alarms",
+      "summary": "drain perf-alarm events (seq cursor)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DrainAlarmsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DrainAlarmsResult"
+        }
+      }
+    },
+    {
+      "name": "list-active-alarms",
+      "summary": "currently firing perf alarms",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ActiveAlarmsDto"
+        }
+      }
+    },
+    {
       "name": "set-aa",
       "summary": "set anti-aliasing mode",
       "params": [
@@ -1430,6 +1556,66 @@
   ],
   "components": {
     "schemas": {
+      "ActiveAlarmDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ]
+          },
+          "value": {
+            "type": "number"
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "sinceFrame": {
+            "type": "integer"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "metric",
+          "pass",
+          "severity",
+          "value",
+          "threshold",
+          "sinceFrame",
+          "count"
+        ]
+      },
+      "ActiveAlarmsDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "alarms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActiveAlarmDto"
+            }
+          }
+        },
+        "required": [
+          "alarms"
+        ]
+      },
       "AddComponentResult": {
         "type": "object",
         "additionalProperties": false,
@@ -1461,6 +1647,67 @@
           }
         },
         "required": []
+      },
+      "AlarmEventDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "firing",
+              "resolved"
+            ]
+          },
+          "value": {
+            "type": "number"
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "sinceFrame": {
+            "type": "integer"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "durationMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "seq",
+          "fingerprint",
+          "metric",
+          "pass",
+          "severity",
+          "state",
+          "value",
+          "threshold",
+          "sinceFrame",
+          "count",
+          "durationMs"
+        ]
       },
       "AssetEntryDto": {
         "type": "object",
@@ -1870,6 +2117,43 @@
           "destroyed"
         ]
       },
+      "DrainAlarmsParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "type": "integer"
+          }
+        },
+        "required": []
+      },
+      "DrainAlarmsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmEventDto"
+            }
+          },
+          "highWaterSeq": {
+            "type": "integer"
+          },
+          "oldestSeq": {
+            "type": "integer"
+          },
+          "overflowed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "highWaterSeq",
+          "oldestSeq",
+          "overflowed"
+        ]
+      },
       "EditorCamera": {
         "type": "object",
         "additionalProperties": false,
@@ -2045,6 +2329,95 @@
         },
         "required": [
           "active"
+        ]
+      },
+      "FrameHistoryDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "p50Ms": {
+            "type": "number"
+          },
+          "p95Ms": {
+            "type": "number"
+          },
+          "p99Ms": {
+            "type": "number"
+          },
+          "p999Ms": {
+            "type": "number"
+          },
+          "maxMs": {
+            "type": "number"
+          },
+          "meanMs": {
+            "type": "number"
+          },
+          "stddevMs": {
+            "type": "number"
+          },
+          "stutterCount": {
+            "type": "integer"
+          },
+          "sampleCount": {
+            "type": "integer"
+          },
+          "budgetMs": {
+            "type": "number"
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FrameSampleDto"
+            }
+          }
+        },
+        "required": [
+          "p50Ms",
+          "p95Ms",
+          "p99Ms",
+          "p999Ms",
+          "maxMs",
+          "meanMs",
+          "stddevMs",
+          "stutterCount",
+          "sampleCount",
+          "budgetMs",
+          "samples"
+        ]
+      },
+      "FrameHistoryParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "samples": {
+            "type": "integer"
+          }
+        },
+        "required": []
+      },
+      "FrameSampleDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "frameIndex": {
+            "type": "integer"
+          },
+          "cpuMs": {
+            "type": "number"
+          },
+          "gpuMs": {
+            "type": "number"
+          },
+          "cpuWaitMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "frameIndex",
+          "cpuMs",
+          "gpuMs",
+          "cpuWaitMs"
         ]
       },
       "GizmoPointerParams": {
@@ -2265,6 +2638,46 @@
           "path"
         ]
       },
+      "PerfConfigDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "targetFps": {
+            "type": "number"
+          },
+          "budgetMs": {
+            "type": "number"
+          },
+          "greenBudgetFrac": {
+            "type": "number"
+          },
+          "greenMedianMul": {
+            "type": "number"
+          },
+          "amberMedianMul": {
+            "type": "number"
+          },
+          "frozenMs": {
+            "type": "number"
+          },
+          "vramWarnFrac": {
+            "type": "number"
+          },
+          "vramCritFrac": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "targetFps",
+          "budgetMs",
+          "greenBudgetFrac",
+          "greenMedianMul",
+          "amberMedianMul",
+          "frozenMs",
+          "vramWarnFrac",
+          "vramCritFrac"
+        ]
+      },
       "PickParams": {
         "type": "object",
         "additionalProperties": false,
@@ -2397,6 +2810,50 @@
           "dirty"
         ]
       },
+      "ProfilerModeResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "timestamps",
+              "pipeline-stats"
+            ]
+          },
+          "timestampsSupported": {
+            "type": "boolean"
+          },
+          "pipelineStatsSupported": {
+            "type": "boolean"
+          },
+          "softwareGpu": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mode",
+          "timestampsSupported",
+          "pipelineStatsSupported",
+          "softwareGpu"
+        ]
+      },
+      "ProfilerSetModeParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "timestamps",
+              "pipeline-stats"
+            ]
+          }
+        },
+        "required": []
+      },
       "ProjectInfoDto": {
         "type": "object",
         "additionalProperties": false,
@@ -2523,6 +2980,54 @@
           "name"
         ]
       },
+      "RenderPassTimingDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "gpuMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "gpuMs"
+        ]
+      },
+      "RenderPassTimingsDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "passes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RenderPassTimingDto"
+            }
+          },
+          "gpuTotalMs": {
+            "type": "number"
+          },
+          "softwareGpu": {
+            "type": "boolean"
+          },
+          "profilerMode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "timestamps",
+              "pipeline-stats"
+            ]
+          }
+        },
+        "required": [
+          "passes",
+          "gpuTotalMs",
+          "softwareGpu",
+          "profilerMode"
+        ]
+      },
       "RenderStatsDto": {
         "type": "object",
         "additionalProperties": false,
@@ -2544,6 +3049,47 @@
           },
           "gpuMs": {
             "type": "number"
+          },
+          "cpuFrameMs": {
+            "type": "number"
+          },
+          "gpuFrameMs": {
+            "type": "number"
+          },
+          "cpuWaitMs": {
+            "type": "number"
+          },
+          "triangles": {
+            "type": "integer"
+          },
+          "descriptorBinds": {
+            "type": "integer"
+          },
+          "commandBuffers": {
+            "type": "integer"
+          },
+          "queueSubmits": {
+            "type": "integer"
+          },
+          "pipelinesCreated": {
+            "type": "integer"
+          },
+          "vramUsageBytes": {
+            "type": "integer"
+          },
+          "vramBudgetBytes": {
+            "type": "integer"
+          },
+          "softwareGpu": {
+            "type": "boolean"
+          },
+          "profilerMode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "timestamps",
+              "pipeline-stats"
+            ]
           },
           "clustered": {
             "type": "boolean"
@@ -2609,6 +3155,18 @@
           "frameMs",
           "fps",
           "gpuMs",
+          "cpuFrameMs",
+          "gpuFrameMs",
+          "cpuWaitMs",
+          "triangles",
+          "descriptorBinds",
+          "commandBuffers",
+          "queueSubmits",
+          "pipelinesCreated",
+          "vramUsageBytes",
+          "vramBudgetBytes",
+          "softwareGpu",
+          "profilerMode",
           "clustered",
           "depthPrepass",
           "shadows",
@@ -3167,6 +3725,34 @@
         "required": [
           "entity"
         ]
+      },
+      "SetPerfConfigParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "targetFps": {
+            "type": "number"
+          },
+          "greenBudgetFrac": {
+            "type": "number"
+          },
+          "greenMedianMul": {
+            "type": "number"
+          },
+          "amberMedianMul": {
+            "type": "number"
+          },
+          "frozenMs": {
+            "type": "number"
+          },
+          "vramWarnFrac": {
+            "type": "number"
+          },
+          "vramCritFrac": {
+            "type": "number"
+          }
+        },
+        "required": []
       },
       "SetProbesParams": {
         "type": "object",

@@ -128,6 +128,32 @@ namespace se
             return Err(std::format("key '{}' is not a u32", key));
         }
 
+        auto readI64(const Json& value, std::string_view key) -> Result<i64>
+        {
+            if (!value.is_number_integer())
+            {
+                return Err(std::format("key '{}' is not an integer", key));
+            }
+            return value.get<i64>();
+        }
+
+        auto readU64(const Json& value, std::string_view key) -> Result<u64>
+        {
+            if (value.is_number_unsigned())
+            {
+                return value.get<u64>();
+            }
+            if (value.is_number_integer())
+            {
+                const i64 parsed = value.get<i64>();
+                if (parsed >= 0)
+                {
+                    return static_cast<u64>(parsed);
+                }
+            }
+            return Err(std::format("key '{}' is not a u64", key));
+        }
+
         auto readWireUuid(const Json& value, std::string_view key) -> Result<WireUuid>
         {
             if (value.is_number_unsigned())
@@ -390,6 +416,67 @@ namespace se
             return "";
         }
 
+        auto readProfilerModeDto(const Json& value, std::string_view key) -> Result<ProfilerModeDto>
+        {
+            auto text = readString(value, key);
+            if (!text) { return Err(std::move(text.error())); }
+            if (text == "off") { return ProfilerModeDto::Off; }
+            if (text == "timestamps") { return ProfilerModeDto::Timestamps; }
+            if (text == "pipeline-stats") { return ProfilerModeDto::PipelineStats; }
+            return Err(std::format("key '{}' has unknown value '{}'", key, *text));
+        }
+
+        auto ProfilerModeDtoName(ProfilerModeDto value) -> const char*
+        {
+            switch (value)
+            {
+            case ProfilerModeDto::Off: return "off";
+            case ProfilerModeDto::Timestamps: return "timestamps";
+            case ProfilerModeDto::PipelineStats: return "pipeline-stats";
+            }
+            return "";
+        }
+
+        auto readAlarmSeverityDto(const Json& value, std::string_view key) -> Result<AlarmSeverityDto>
+        {
+            auto text = readString(value, key);
+            if (!text) { return Err(std::move(text.error())); }
+            if (text == "info") { return AlarmSeverityDto::Info; }
+            if (text == "warning") { return AlarmSeverityDto::Warning; }
+            if (text == "critical") { return AlarmSeverityDto::Critical; }
+            return Err(std::format("key '{}' has unknown value '{}'", key, *text));
+        }
+
+        auto AlarmSeverityDtoName(AlarmSeverityDto value) -> const char*
+        {
+            switch (value)
+            {
+            case AlarmSeverityDto::Info: return "info";
+            case AlarmSeverityDto::Warning: return "warning";
+            case AlarmSeverityDto::Critical: return "critical";
+            }
+            return "";
+        }
+
+        auto readAlarmStateDto(const Json& value, std::string_view key) -> Result<AlarmStateDto>
+        {
+            auto text = readString(value, key);
+            if (!text) { return Err(std::move(text.error())); }
+            if (text == "firing") { return AlarmStateDto::Firing; }
+            if (text == "resolved") { return AlarmStateDto::Resolved; }
+            return Err(std::format("key '{}' has unknown value '{}'", key, *text));
+        }
+
+        auto AlarmStateDtoName(AlarmStateDto value) -> const char*
+        {
+            switch (value)
+            {
+            case AlarmStateDto::Firing: return "firing";
+            case AlarmStateDto::Resolved: return "resolved";
+            }
+            return "";
+        }
+
         template <typename T>
         auto readVector(const Json& value, std::string_view key) -> Result<std::vector<T>>
         {
@@ -504,6 +591,21 @@ namespace se
         return AssetTypeDtoName(value);
     }
 
+    auto dtoToJson(ProfilerModeDto value) -> Json
+    {
+        return ProfilerModeDtoName(value);
+    }
+
+    auto dtoToJson(AlarmSeverityDto value) -> Json
+    {
+        return AlarmSeverityDtoName(value);
+    }
+
+    auto dtoToJson(AlarmStateDto value) -> Json
+    {
+        return AlarmStateDtoName(value);
+    }
+
     auto parseDto(const Json& params, DtoTag<PingParams>) -> Result<PingParams>
     {
         PingParams out;
@@ -515,6 +617,130 @@ namespace se
     {
         EmptyParams out;
 
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<ProfilerSetModeParams>) -> Result<ProfilerSetModeParams>
+    {
+        ProfilerSetModeParams out;
+
+        {
+            auto value = optionalField(params, "mode", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readProfilerModeDto(*value, "mode");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.mode = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<FrameHistoryParams>) -> Result<FrameHistoryParams>
+    {
+        FrameHistoryParams out;
+
+        {
+            auto value = optionalField(params, "samples", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readI32(*value, "samples");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.samples = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<SetPerfConfigParams>) -> Result<SetPerfConfigParams>
+    {
+        SetPerfConfigParams out;
+
+        {
+            auto value = optionalField(params, "targetFps", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "targetFps");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.targetFps = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "greenBudgetFrac", 1, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "greenBudgetFrac");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.greenBudgetFrac = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "greenMedianMul", 2, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "greenMedianMul");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.greenMedianMul = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "amberMedianMul", 3, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "amberMedianMul");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.amberMedianMul = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "frozenMs", 4, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "frozenMs");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.frozenMs = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "vramWarnFrac", 5, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "vramWarnFrac");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.vramWarnFrac = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "vramCritFrac", 6, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "vramCritFrac");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.vramCritFrac = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<DrainAlarmsParams>) -> Result<DrainAlarmsParams>
+    {
+        DrainAlarmsParams out;
+
+        {
+            auto value = optionalField(params, "since", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readI64(*value, "since");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.since = std::move(*parsed);
+            }
+        }
         return out;
     }
 
@@ -1931,6 +2157,18 @@ namespace se
         out["frameMs"] = value.frameMs;
         out["fps"] = value.fps;
         out["gpuMs"] = value.gpuMs;
+        out["cpuFrameMs"] = value.cpuFrameMs;
+        out["gpuFrameMs"] = value.gpuFrameMs;
+        out["cpuWaitMs"] = value.cpuWaitMs;
+        out["triangles"] = value.triangles;
+        out["descriptorBinds"] = value.descriptorBinds;
+        out["commandBuffers"] = value.commandBuffers;
+        out["queueSubmits"] = value.queueSubmits;
+        out["pipelinesCreated"] = value.pipelinesCreated;
+        out["vramUsageBytes"] = value.vramUsageBytes;
+        out["vramBudgetBytes"] = value.vramBudgetBytes;
+        out["softwareGpu"] = value.softwareGpu;
+        out["profilerMode"] = dtoToJson(value.profilerMode);
         out["clustered"] = value.clustered;
         out["depthPrepass"] = value.depthPrepass;
         out["shadows"] = value.shadows;
@@ -1947,6 +2185,123 @@ namespace se
         out["hdr"] = value.hdr;
         out["exposureEv"] = value.exposureEv;
         out["aa"] = dtoToJson(value.aa);
+        return out;
+    }
+
+    auto dtoToJson(const ProfilerModeResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["mode"] = dtoToJson(value.mode);
+        out["timestampsSupported"] = value.timestampsSupported;
+        out["pipelineStatsSupported"] = value.pipelineStatsSupported;
+        out["softwareGpu"] = value.softwareGpu;
+        return out;
+    }
+
+    auto dtoToJson(const RenderPassTimingsDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["passes"] = dtoVectorToJson(value.passes);
+        out["gpuTotalMs"] = value.gpuTotalMs;
+        out["softwareGpu"] = value.softwareGpu;
+        out["profilerMode"] = dtoToJson(value.profilerMode);
+        return out;
+    }
+
+    auto dtoToJson(const RenderPassTimingDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["name"] = value.name;
+        out["gpuMs"] = value.gpuMs;
+        return out;
+    }
+
+    auto dtoToJson(const FrameHistoryDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["p50Ms"] = value.p50Ms;
+        out["p95Ms"] = value.p95Ms;
+        out["p99Ms"] = value.p99Ms;
+        out["p999Ms"] = value.p999Ms;
+        out["maxMs"] = value.maxMs;
+        out["meanMs"] = value.meanMs;
+        out["stddevMs"] = value.stddevMs;
+        out["stutterCount"] = value.stutterCount;
+        out["sampleCount"] = value.sampleCount;
+        out["budgetMs"] = value.budgetMs;
+        out["samples"] = dtoVectorToJson(value.samples);
+        return out;
+    }
+
+    auto dtoToJson(const FrameSampleDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["frameIndex"] = value.frameIndex;
+        out["cpuMs"] = value.cpuMs;
+        out["gpuMs"] = value.gpuMs;
+        out["cpuWaitMs"] = value.cpuWaitMs;
+        return out;
+    }
+
+    auto dtoToJson(const PerfConfigDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["targetFps"] = value.targetFps;
+        out["budgetMs"] = value.budgetMs;
+        out["greenBudgetFrac"] = value.greenBudgetFrac;
+        out["greenMedianMul"] = value.greenMedianMul;
+        out["amberMedianMul"] = value.amberMedianMul;
+        out["frozenMs"] = value.frozenMs;
+        out["vramWarnFrac"] = value.vramWarnFrac;
+        out["vramCritFrac"] = value.vramCritFrac;
+        return out;
+    }
+
+    auto dtoToJson(const DrainAlarmsResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["events"] = dtoVectorToJson(value.events);
+        out["highWaterSeq"] = value.highWaterSeq;
+        out["oldestSeq"] = value.oldestSeq;
+        out["overflowed"] = value.overflowed;
+        return out;
+    }
+
+    auto dtoToJson(const AlarmEventDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["seq"] = value.seq;
+        out["fingerprint"] = value.fingerprint;
+        out["metric"] = value.metric;
+        out["pass"] = value.pass;
+        out["severity"] = dtoToJson(value.severity);
+        out["state"] = dtoToJson(value.state);
+        out["value"] = value.value;
+        out["threshold"] = value.threshold;
+        out["sinceFrame"] = value.sinceFrame;
+        out["count"] = value.count;
+        out["durationMs"] = value.durationMs;
+        return out;
+    }
+
+    auto dtoToJson(const ActiveAlarmsDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["alarms"] = dtoVectorToJson(value.alarms);
+        return out;
+    }
+
+    auto dtoToJson(const ActiveAlarmDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["fingerprint"] = value.fingerprint;
+        out["metric"] = value.metric;
+        out["pass"] = value.pass;
+        out["severity"] = dtoToJson(value.severity);
+        out["value"] = value.value;
+        out["threshold"] = value.threshold;
+        out["sinceFrame"] = value.sinceFrame;
+        out["count"] = value.count;
         return out;
     }
 
