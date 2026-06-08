@@ -1,6 +1,7 @@
 +++
 title = 'Draw list'
 weight = 8
+math = true
 +++
 
 # Draw list
@@ -18,21 +19,31 @@ pass reads from the same prepared list instead of walking the registry again.
 ## Gather: ECS into DrawItem
 
 `renderScene` iterates every entity with a `TransformComponent` and a `MeshComponent`,
-resolves the mesh through [`loadMeshAsset`](../asset-server-and-catalog/), reads the optional
-`MaterialComponent`, and emits one `DrawItem`:
+resolves the mesh through [`loadMeshAsset`](../asset-server-and-catalog/), resolves its
+materials, and emits one `DrawItem`:
 
 ```cpp
-struct DrawItem
+struct SubmeshMaterial      // albedo + PBR factors for one submesh
 {
-    Ref<GpuMesh> mesh;
-    Ref<GpuTexture> texture;     // null => default white
-    glm::mat4 model, normalMatrix;
+    Ref<GpuTexture> texture;   // null => default white
     glm::vec4 baseColor;
     f32 metallic, roughness;
     glm::vec3 emissive; f32 emissiveStrength;
+};
+
+struct DrawItem
+{
+    Ref<GpuMesh> mesh;
+    glm::mat4 model, normalMatrix;
+    std::vector<SubmeshMaterial> submeshMaterials;  // one per submesh (clamped)
     Material material;           // selects the PSO variant (e.g. unlit)
 };
 ```
+
+`resolveEntityMaterials` builds `submeshMaterials` sized to the mesh's submeshes: a
+[`MaterialSetComponent`](../../scene-and-ecs/built-in-components/) is indexed by each
+submesh's `materialSlot`; a plain `MaterialComponent` applies to every submesh; a missing
+component falls back to the engine default. A single entry is reused for all submeshes.
 
 The same loop also accumulates the world-space scene bounds: it transforms each mesh's local
 AABB by its model matrix, and those bounds fit the
@@ -46,10 +57,17 @@ also collects lights, sets the shadow/cluster/SSAO camera state, and finally cal
 `submitDrawList` groups items into batches keyed on `(pipeline, mesh)`. The key omits the
 texture. Albedo is [bindless](../../materials-and-pipelines/bindless-textures/) — a
 per-instance index into one global texture array, carried in the instance data — so two
-items that differ only by texture still batch together. Each item becomes one `InstanceData`
-(model matrix, normal matrix, base color, bindless texture index, metallic/roughness,
-emissive). The buckets flatten into one contiguous instance array plus per-batch
-`(baseInstance, instanceCount)` ranges, written into the frame's instance SSBO.
+items that differ only by texture still batch together.
+
+Because each submesh can carry a different material, an item expands to one `InstanceData`
+per submesh (model matrix, normal matrix, base color, bindless texture index,
+metallic/roughness, emissive — the material differs per row). The buckets flatten
+**submesh-major**: for a batch of $N$ instances over a mesh with $S$ submeshes, the array
+holds submesh 0's $N$ rows, then submesh 1's $N$ rows, and so on. Drawing submesh $s$ then
+offsets `baseInstance` by $s \times N$, so the [shader](../../materials-and-pipelines/ubershader-and-specialization/)
+reads each instance's per-submesh material straight from the instance buffer with no shader
+or PSO change. The per-batch `(baseInstance, instanceCount)` range still records the logical
+$N$.
 
 The result is stored on the frame, not recorded immediately:
 
@@ -85,10 +103,11 @@ flowchart TD
 
 The shaded pass `recordSceneDrawList` binds the bindless, light, instance, IBL, and
 screen-space sets once, pushes the camera `viewProj`, then per batch binds its pipeline and
-mesh buffers and issues one `drawIndexed` per submesh with the batch's `instanceCount` and
-`baseInstance`. The depth, shadow, G-buffer, and motion passes are vertex-only variants of
-the same loop: they bind only the instance set, push a different matrix, and skip the
-material binds. All iterate `batch.mesh->submeshes` identically.
+mesh buffers. The shared `recordBatchSubmeshes` helper issues one `drawIndexed` per submesh
+with the batch's `instanceCount` and a `baseInstance` offset by `s * instanceCount` (the
+submesh-major layout above). The depth, shadow, G-buffer, and motion passes are vertex-only
+variants of the same loop: they bind only the instance set, push a different matrix, and skip
+the material binds. All go through `recordBatchSubmeshes`.
 
 ## Stats
 
@@ -103,16 +122,16 @@ batch show up as `batches = 1`.
 |---|---|---|
 | Gather ECS → items | `assets.cppm` | `renderScene` |
 | Bucket + store | `renderer_drawlist.cpp` | `submitDrawList`, `DrawBatch`, `SceneDrawList` |
+| Gather materials | `assets.cppm` | `resolveEntityMaterials`, `SubmeshMaterial` |
 | Per-instance data | `renderer_types.cppm` | `InstanceData` |
 | Instance buffer growth | `renderer_drawlist.cpp` | `ensureInstanceCapacity` |
-| Shaded replay | `renderer_drawlist.cpp` | `recordSceneDrawList` |
+| Shaded replay | `renderer_drawlist.cpp` | `recordSceneDrawList`, `recordBatchSubmeshes` |
 | Vertex-only replays | `renderer_drawlist.cpp` | `recordDepthPrepass`, `recordShadowDepth`, `recordGbuffer`, `recordMotion`, `recordPointShadow` |
 
 > [!NOTE]
-> The draw loop iterates `batch.mesh->submeshes` and ignores each submesh's `materialSlot`.
-> The material (PSO variant, base color, albedo) is per-`DrawItem`, i.e. per entity, so a
-> multi-submesh mesh draws every submesh with the same material. Per-submesh materials are
-> reserved, not wired; see [vertex layout](../mesh-and-vertex-layout/).
+> The PSO (the `unlit` flag) is chosen per batch from the entity, so a single mesh that mixes
+> unlit and lit submeshes is not supported. Imported models are always lit, and base
+> color / albedo / metallic / roughness / emissive still vary freely per submesh.
 
 ## Related
 

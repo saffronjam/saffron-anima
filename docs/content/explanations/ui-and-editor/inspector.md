@@ -54,6 +54,7 @@ A few fields skip the full-DTO write because the engine offers merge helpers for
 
 - `Transform` uses `set-transform` and `Material` uses `set-material`, sending only the changed field.
 - `Mesh.mesh` and `Material.albedoTexture` use the dedicated `assign-asset`.
+- `MaterialSet` renders one editor per slot and routes each field through `set-material` with the slot index.
 - Any other uuid field uses the single-field merge `set-component-field`.
 
 ## Smoothed drags, drag-local widgets

@@ -26,7 +26,7 @@ During play (see `play`/`pause`/`stop`/`step`), scene commands address the *runn
 | `remove-component` | `{entity, component}` | remove it (errors if not removable) |
 | `set-component` | `{entity, component, json}` | apply a serialized component body |
 | `set-transform` | `{entity, translation?, rotation?, scale?, smooth?:0\|1}` | merge over current; rotation is Euler radians `{x,y,z}`; `smooth` animates toward the values (~25ms, exact under preserve-children) |
-| `set-material` | `{entity, baseColor?:{x,y,z,w}, albedoTexture?:uuid, metallic?, roughness?, emissive?:{x,y,z}, emissiveStrength?, unlit?:0\|1, smooth?:0\|1}` | add/merge the Material; with `smooth`, numeric fields animate toward the values (~25ms) instead of snapping, texture/unlit apply immediately |
+| `set-material` | `{entity, baseColor?:{x,y,z,w}, albedoTexture?:uuid, metallicRoughnessTexture?:uuid, metallic?, roughness?, emissive?:{x,y,z}, emissiveStrength?, unlit?:0\|1, slot?, smooth?:0\|1}` | add/merge the Material; with `slot`, edit that slot of the entity's MaterialSet instead (direct write); with `smooth`, numeric fields animate toward the values (~25ms) instead of snapping, texture/unlit apply immediately |
 | `set-light` | `{entity?, direction?, color?, intensity?, ambient?}` | set the given (else first) directional light |
 | `select` | `{entity}` | set the editor selection |
 | `pick` | `{u=0.5, v=0.5}` | pick at viewport UV (0,0 = top-left): tests light/camera billboards first, then mesh ray-AABB; selects the hit. Returns `{hit, kind:"billboard"\|"mesh", id?, name?}` |
@@ -95,7 +95,7 @@ During play (see `play`/`pause`/`stop`/`step`), scene commands address the *runn
 | `move-asset` | `{asset:id\|name, folder?}` | move an asset into a virtual folder, or root when omitted |
 | `asset-usages` | `{asset:id\|name}` | list scene/environment slots that reference an asset |
 | `delete-asset` | `{asset:id\|name}` | delete the catalog entry and imported file, clearing references |
-| `assign-asset` | `{entity, slot:mesh\|albedo, id\|name}` | assign a catalog asset to the entity's Mesh/Material |
+| `assign-asset` | `{entity, slot:mesh\|albedo\|metallic-roughness, id\|name}` | assign a catalog asset to the entity's Mesh/Material slot |
 | `save-scene` | `{path}` | write the scene JSON |
 | `load-scene` | `{path}` | read a scene JSON (deselects) |
 | `save-project` | `{path?}` | save the active project, or save to `path` |

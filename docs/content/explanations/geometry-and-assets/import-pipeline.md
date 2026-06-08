@@ -38,21 +38,24 @@ The steps run in order:
 The on-disk asset is the baked `.smesh`. The source glTF/OBJ is read once and never
 referenced again.
 
-If the model carried an albedo, its bytes run through `registerTextureBytes`, and the
-returned texture id is reported on the `ImportResult` with the base color:
+Each imported material's albedo bytes run through `registerTextureBytes`, and the resulting
+slots are reported on the `ImportResult` as a material table (slot 0 mirrored into the legacy
+`baseColor`/`albedoTexture` fields):
 
 ```cpp
 struct ImportResult
 {
     Uuid mesh;
     glm::vec4 baseColor{ 1.0f };
-    Uuid albedoTexture;   // 0 == none
+    Uuid albedoTexture;            // 0 == none
+    std::vector<MaterialSlot> materials;  // the imported table
 };
 ```
 
 `importModel` does not spawn an entity or save the project; it only populates the catalog.
-Spawning is a separate step: `spawnModel` builds the entity with a `MeshComponent` and
-`MaterialComponent` from the `ImportResult`.
+Spawning is a separate step: `spawnModel` builds the entity with a `MeshComponent`, then
+`applyImportedMaterials` attaches either a `MaterialComponent` (one material) or a
+`MaterialSetComponent` (more than one) from the `ImportResult`.
 
 ## Importing a texture
 
@@ -88,13 +91,8 @@ asset.
 |---|---|---|
 | Model import | `assets.cppm` | `importModel`, `ImportResult` |
 | Texture import | `assets.cppm` | `importTexture`, `registerTextureBytes` |
-| Spawn from an import | `assets.cppm` | `spawnModel`, `spawnMesh` |
+| Spawn from an import | `assets.cppm` | `spawnModel`, `spawnMesh`, `applyImportedMaterials` |
 | Bake + upload it calls | `geometry.cppm`, `renderer_drawlist.cpp` | `saveMesh`, `uploadMesh`, `uploadTexture` |
-
-> [!NOTE]
-> Import keeps only the primary material and writes `materialSlot = 0` on every submesh (see
-> [model import](../gltf-and-obj-import/)). The `ImportResult` carries one base color and one
-> albedo id, applied to the whole mesh by `spawnModel`. Per-submesh materials are not wired.
 
 ## Related
 

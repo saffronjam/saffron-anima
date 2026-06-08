@@ -73,12 +73,13 @@ struct MeshComponent { Uuid mesh; };
 struct MaterialComponent
 {
     glm::vec4 baseColor{ 1.0f };
-    Uuid albedoTexture;            // 0 == none
+    Uuid albedoTexture;               // 0 == none
+    Uuid metallicRoughnessTexture;    // 0 == none; glTF MR map (rough=G, metal=B)
     f32 metallic = 0.0f;
     f32 roughness = 1.0f;
     glm::vec3 emissive{ 0.0f };
     f32 emissiveStrength = 1.0f;
-    bool unlit = false;            // skip lighting — a distinct PSO
+    bool unlit = false;               // skip lighting — a distinct PSO
 };
 ```
 
@@ -86,6 +87,23 @@ struct MaterialComponent
 the renderer binds its default white texture, so `baseColor` shows directly. `metallic` and
 `roughness` feed the [Cook-Torrance BRDF](../../lighting-and-brdf/cook-torrance-brdf/); `unlit`
 selects a separate [PSO permutation](../../materials-and-pipelines/ubershader-and-specialization/).
+`metallicRoughnessTexture` is glTF's packed map (roughness in G, metalness in B), sampled and
+multiplied into the scalar factors; it is a **linear** texture, unlike the sRGB albedo, and the
+default white (when none) leaves the factors unchanged.
+
+A mesh imported with more than one material instead carries a `MaterialSetComponent`: an ordered
+table of slots, each with the same fields as `MaterialComponent`. Every
+[`Submesh.materialSlot`](../../geometry-and-assets/mesh-and-vertex-layout/) indexes this table, so
+each submesh draws with its own material.
+
+```cpp
+struct MaterialSlot { /* same fields as MaterialComponent */ };
+struct MaterialSetComponent { std::vector<MaterialSlot> slots; };
+```
+
+An entity uses one or the other: single-material meshes (and hand-created entities) keep
+`MaterialComponent`; a multi-material import gets `MaterialSetComponent`. The
+[draw list](../../geometry-and-assets/draw-list/) reads whichever is present.
 
 ## Camera
 
@@ -141,7 +159,7 @@ the GPU light buffer.
 | Identity + transform | `scene.cppm` | `IdComponent`, `NameComponent`, `TransformComponent` |
 | Hierarchy | `scene.cppm` | `RelationshipComponent` |
 | Skeleton | `scene.cppm` | `SkinnedMeshComponent`, `BoneComponent` |
-| Renderables | `scene.cppm` | `MeshComponent`, `MaterialComponent` |
+| Renderables | `scene.cppm` | `MeshComponent`, `MaterialComponent`, `MaterialSetComponent` |
 | Camera | `scene.cppm` | `CameraComponent`, `primaryCamera` |
 | Lights | `scene.cppm` | `DirectionalLightComponent`, `PointLightComponent`, `SpotLightComponent` |
 | Where each is registered | `scene_edit_components.cpp` | `registerComponent<...>` |

@@ -36,12 +36,21 @@ Stable identity, created by `createEntity`. Not removable and not a registered r
 | Field | Type | Default |
 |---|---|---|
 | `baseColor` | `glm::vec4` | `{1,1,1,1}` |
-| `albedoTexture` | `Uuid` | `{0}` (0 = none → default white) |
+| `albedoTexture` | `Uuid` | `{0}` (0 = none → default white; sRGB) |
+| `metallicRoughnessTexture` | `Uuid` | `{0}` (0 = none; glTF map rough=G, metal=B; linear) |
 | `metallic` | `f32` | `0.0` |
 | `roughness` | `f32` | `1.0` |
 | `emissive` | `glm::vec3` | `{0,0,0}` |
 | `emissiveStrength` | `f32` | `1.0` |
 | `unlit` | `bool` | `false` (distinct PSO) |
+
+## `MaterialSetComponent`
+A mesh imported with more than one material carries this instead of `MaterialComponent`. Each
+[`Submesh.materialSlot`](../../explanations/geometry-and-assets/mesh-and-vertex-layout/) indexes `slots`.
+
+| Field | Type | Default |
+|---|---|---|
+| `slots` | `std::vector<MaterialSlot>` | `{}` (each slot has the `MaterialComponent` fields) |
 
 ## `CameraComponent`
 | Field | Type | Default |

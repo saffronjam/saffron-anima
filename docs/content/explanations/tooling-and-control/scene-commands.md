@@ -21,7 +21,7 @@ Most commands take an `{entity}` argument. `resolveEntity` accepts a UUID (numbe
 | `remove-component` | `{entity, component}` | Removes the named component. Errors if unknown or marked non-removable. |
 | `set-component` | `{entity, component, json}` | Applies a serialized component body via the registry's `deserialize`. |
 | `set-transform` | `{entity, translation?, rotation?, scale?}` | Merges the given fields over the current transform. Rotation is Euler XYZ radians. |
-| `set-material` | `{entity, baseColor?, albedoTexture?, metallic?, roughness?, emissive?, emissiveStrength?, unlit?}` | Adds Material if missing, then merges the given fields. |
+| `set-material` | `{entity, baseColor?, albedoTexture?, metallicRoughnessTexture?, metallic?, roughness?, emissive?, emissiveStrength?, unlit?, slot?}` | Adds Material if missing, then merges the given fields. With `slot`, edits that slot of the entity's MaterialSet instead. |
 | `set-light` | `{entity?, direction?, color?, intensity?, ambient?}` | Edits the directional light (the given entity, else the first one found). |
 | `select` | `{entity}` | Sets editor selection; returns `{id, name}`. |
 | `get-selection` | — | Returns the current selection as `{id, name}`, or `{id: null}` when nothing is selected. |

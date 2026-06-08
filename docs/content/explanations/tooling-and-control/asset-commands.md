@@ -21,9 +21,9 @@ The asset commands are the control-plane verbs that manage a project's assets: i
 | `move-asset` | `{asset, folder?}` | Moves an asset into a virtual folder, or back to root when `folder` is omitted. |
 | `asset-usages` | `{asset}` | Lists scene/environment slots that reference an asset. |
 | `delete-asset` | `{asset}` | Deletes the catalog entry and imported file, clears usages, and returns what was cleared. |
-| `assign-asset` | `{entity, slot, asset}` | Sets the entity's mesh or albedo slot to a catalog asset. |
+| `assign-asset` | `{entity, slot, asset}` | Sets the entity's mesh, albedo, or metallic-roughness slot to a catalog asset. |
 
-`import-model` is the only command that also spawns. It imports, bakes the `.smesh`, then `spawnModel`s an entity and selects it. `import-texture` adds to the catalog alone; the result is attached later with `assign-asset` or `set-material --albedoTexture`. `assign-asset` takes `slot: mesh|albedo`, resolves the asset by id or name, adds the target component if the entity lacks it, and writes the asset id into the slot.
+`import-model` is the only command that also spawns. It imports, bakes the `.smesh`, then `spawnModel`s an entity and selects it. `import-texture` adds to the catalog alone; the result is attached later with `assign-asset` or `set-material --albedoTexture`. `assign-asset` takes `slot: mesh|albedo|metallic-roughness`, resolves the asset by id or name, adds the target component if the entity lacks it, and writes the asset id into the slot.
 
 Folders are catalog metadata, not filesystem directories. They are saved in `project.json` next to the asset list so empty folders survive a reload. Renaming a folder updates the folder list and each catalog entry assigned to the old name. Deleting a folder only removes that virtual folder; assigned assets move back to root. `delete-asset` clears `Mesh.mesh`, `Material.albedoTexture`, and `SceneEnvironment.skyTexture` references before removing the entry and cache records.
 

@@ -57,7 +57,7 @@ struct Submesh
     u32 firstIndex = 0;
     u32 indexCount = 0;
     i32 vertexOffset = 0;   // signed, matching vkCmdDrawIndexed
-    u32 materialSlot = 0;   // reserved (0) until per-submesh materials
+    u32 materialSlot = 0;   // index into the entity's material table
 };
 static_assert(sizeof(Submesh) == 16, "Submesh must stay 16 bytes (baked directly into .smesh)");
 ```
@@ -75,9 +75,11 @@ one logical model can carry several draw ranges. The draw path loops every batch
 `mesh->submeshes` and issues one `drawIndexed` per submesh. A model with three glTF
 primitives becomes three draw calls against one bound buffer pair.
 
-A submesh does not select a material. `materialSlot` is reserved at 0 and the draw path
-ignores it; material comes from the per-entity
-[`MaterialComponent`](../../scene-and-ecs/built-in-components/), applied to the whole mesh.
+Each submesh selects a material through `materialSlot`. For a single-material mesh every
+submesh keeps slot 0 and the whole mesh draws with the entity's
+[`MaterialComponent`](../../scene-and-ecs/built-in-components/). A multi-material import
+instead carries a `MaterialSetComponent`, and the [draw list](../draw-list/) indexes its
+slots by `materialSlot` so each submesh gets its own material.
 
 ## In the code
 
@@ -88,13 +90,6 @@ ignores it; material comes from the per-entity
 | Normal regeneration | `geometry.cppm` | `generateNormals` |
 | GPU side | `renderer_types.cppm` | `GpuMesh` |
 | Per-submesh draw loop | `renderer_drawlist.cpp` | `recordSceneDrawList` |
-
-> [!NOTE]
-> `materialSlot` is reserved but not wired anywhere. Both importers write
-> `materialSlot = 0`, and the draw path keys material off the entity's `MaterialComponent`,
-> not the submesh. Multi-material meshes are a data-model seam, not a working feature. See
-> the [import](../gltf-and-obj-import/) and [draw-list](../draw-list/) pages for where it
-> stops.
 
 ## Related
 

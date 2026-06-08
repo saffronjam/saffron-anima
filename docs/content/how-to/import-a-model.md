@@ -21,7 +21,7 @@ Choose the one that fits:
    ```sh
    se import-model /path/to/model.gltf
    ```
-   `import-model` bakes the mesh to a project-local `.smesh`, uploads it, imports the primary material's albedo, adds catalog entries, then spawns an entity with the mesh + material.
+   `import-model` bakes the mesh to a project-local `.smesh`, uploads it, imports each material's albedo, adds catalog entries, then spawns an entity with the mesh + its material(s) — a `MaterialComponent` for one material, a `MaterialSet` for several.
 
 To import just a texture (assign it to a material later):
 ```sh
