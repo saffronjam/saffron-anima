@@ -55,6 +55,16 @@ struct RecentProjects {
     projects: Vec<RecentProject>,
 }
 
+/// Editor-wide settings persisted as deltas in appdata/settings.json: `key_bindings`
+/// holds only the commands the user changed (command id → key-string); defaults live
+/// in the frontend registry. An untyped map so adding commands never touches Rust.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorSettings {
+    #[serde(default)]
+    key_bindings: std::collections::HashMap<String, String>,
+}
+
 impl Default for EditorState {
     fn default() -> Self {
         Self {
@@ -122,6 +132,25 @@ fn write_recent_projects_file(recents: &RecentProjects) -> Result<(), String> {
     let text = serde_json::to_string_pretty(recents)
         .map_err(|err| format!("encode recent projects: {err}"))?;
     fs::write(recents_path(), text).map_err(|err| format!("write recent projects: {err}"))
+}
+
+fn settings_path() -> PathBuf {
+    app_data_dir().join("settings.json")
+}
+
+// A missing or corrupt settings file falls back to defaults (an empty delta map).
+fn read_settings_file() -> EditorSettings {
+    let Ok(text) = fs::read_to_string(settings_path()) else {
+        return EditorSettings::default();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn write_settings_file(settings: &EditorSettings) -> Result<(), String> {
+    ensure_app_dirs()?;
+    let text = serde_json::to_string_pretty(settings)
+        .map_err(|err| format!("encode editor settings: {err}"))?;
+    fs::write(settings_path(), text).map_err(|err| format!("write editor settings: {err}"))
 }
 
 fn configure_main_window(window: &tauri::WebviewWindow) {
@@ -233,8 +262,10 @@ fn teardown(state: &EditorState) {
 }
 
 // ONE generic passthrough: any `se` command reaches the engine with zero Rust changes.
+// Async so the blocking socket round trip runs on a worker, never the main thread
+// driving the webview event loop (a sync command would stall the UI during edit streams).
 #[tauri::command]
-fn control(
+async fn control(
     state: State<'_, EditorState>,
     cmd: String,
     params: Option<Value>,
@@ -274,7 +305,7 @@ struct ViewportBounds {
 }
 
 #[tauri::command]
-fn set_viewport_bounds(
+async fn set_viewport_bounds(
     window: tauri::WebviewWindow,
     state: State<'_, EditorState>,
     bounds: ViewportBounds,
@@ -350,6 +381,17 @@ fn list_recent_projects() -> Result<RecentProjects, String> {
     recents.projects.truncate(12);
     write_recent_projects_file(&recents)?;
     Ok(recents)
+}
+
+#[tauri::command]
+fn load_editor_settings() -> Result<EditorSettings, String> {
+    ensure_app_dirs()?;
+    Ok(read_settings_file())
+}
+
+#[tauri::command]
+fn save_editor_settings(settings: EditorSettings) -> Result<(), String> {
+    write_settings_file(&settings)
 }
 
 #[tauri::command]
@@ -489,7 +531,9 @@ pub fn run() {
             engine_alive,
             app_data_info,
             list_recent_projects,
-            remember_recent_project
+            remember_recent_project,
+            load_editor_settings,
+            save_editor_settings
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
