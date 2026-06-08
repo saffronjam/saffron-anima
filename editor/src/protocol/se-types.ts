@@ -157,6 +157,18 @@ export interface RenderStatsDto {
   frameMs: number;
   fps: number;
   gpuMs: number;
+  cpuFrameMs: number;
+  gpuFrameMs: number;
+  cpuWaitMs: number;
+  triangles: number;
+  descriptorBinds: number;
+  commandBuffers: number;
+  queueSubmits: number;
+  pipelinesCreated: number;
+  vramUsageBytes: number;
+  vramBudgetBytes: number;
+  softwareGpu: boolean;
+  profilerMode: "off" | "timestamps" | "pipeline-stats";
   clustered: boolean;
   depthPrepass: boolean;
   shadows: boolean;
@@ -173,6 +185,115 @@ export interface RenderStatsDto {
   hdr: boolean;
   exposureEv: number;
   aa: "off" | "fxaa" | "taa" | "msaa2" | "msaa4" | "msaa8";
+}
+
+export interface ProfilerSetModeParams {
+  mode?: "off" | "timestamps" | "pipeline-stats";
+}
+
+export interface ProfilerModeResult {
+  mode: "off" | "timestamps" | "pipeline-stats";
+  timestampsSupported: boolean;
+  pipelineStatsSupported: boolean;
+  softwareGpu: boolean;
+}
+
+export interface RenderPassTimingsDto {
+  passes: RenderPassTimingDto[];
+  gpuTotalMs: number;
+  softwareGpu: boolean;
+  profilerMode: "off" | "timestamps" | "pipeline-stats";
+}
+
+export interface RenderPassTimingDto {
+  name: string;
+  gpuMs: number;
+}
+
+export interface FrameHistoryParams {
+  samples?: number;
+}
+
+export interface FrameHistoryDto {
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  p999Ms: number;
+  maxMs: number;
+  meanMs: number;
+  stddevMs: number;
+  stutterCount: number;
+  sampleCount: number;
+  budgetMs: number;
+  samples: FrameSampleDto[];
+}
+
+export interface FrameSampleDto {
+  frameIndex: number;
+  cpuMs: number;
+  gpuMs: number;
+  cpuWaitMs: number;
+}
+
+export interface PerfConfigDto {
+  targetFps: number;
+  budgetMs: number;
+  greenBudgetFrac: number;
+  greenMedianMul: number;
+  amberMedianMul: number;
+  frozenMs: number;
+  vramWarnFrac: number;
+  vramCritFrac: number;
+}
+
+export interface SetPerfConfigParams {
+  targetFps?: number;
+  greenBudgetFrac?: number;
+  greenMedianMul?: number;
+  amberMedianMul?: number;
+  frozenMs?: number;
+  vramWarnFrac?: number;
+  vramCritFrac?: number;
+}
+
+export interface DrainAlarmsParams {
+  since?: number;
+}
+
+export interface DrainAlarmsResult {
+  events: AlarmEventDto[];
+  highWaterSeq: number;
+  oldestSeq: number;
+  overflowed: boolean;
+}
+
+export interface AlarmEventDto {
+  seq: number;
+  fingerprint: string;
+  metric: string;
+  pass: string;
+  severity: "info" | "warning" | "critical";
+  state: "firing" | "resolved";
+  value: number;
+  threshold: number;
+  sinceFrame: number;
+  count: number;
+  durationMs: number;
+}
+
+export interface ActiveAlarmsDto {
+  alarms: ActiveAlarmDto[];
+}
+
+export interface ActiveAlarmDto {
+  fingerprint: string;
+  metric: string;
+  pass: string;
+  severity: "info" | "warning" | "critical";
+  value: number;
+  threshold: number;
+  sinceFrame: number;
+  count: number;
 }
 
 export interface SetAaParams {
@@ -719,6 +840,13 @@ export interface QuitResult {
 export interface CommandParamsMap {
   "ping": PingParams;
   "render-stats": EmptyParams;
+  "profiler.set-mode": ProfilerSetModeParams;
+  "pass-timings": EmptyParams;
+  "frame-history": FrameHistoryParams;
+  "get-perf-config": EmptyParams;
+  "set-perf-config": SetPerfConfigParams;
+  "drain-alarms": DrainAlarmsParams;
+  "list-active-alarms": EmptyParams;
   "set-aa": SetAaParams;
   "set-clustered": ToggleParams;
   "set-ibl": ToggleParams;
@@ -801,6 +929,13 @@ export interface CommandParamsMap {
 export interface CommandResultMap {
   "ping": PingResult;
   "render-stats": RenderStatsDto;
+  "profiler.set-mode": ProfilerModeResult;
+  "pass-timings": RenderPassTimingsDto;
+  "frame-history": FrameHistoryDto;
+  "get-perf-config": PerfConfigDto;
+  "set-perf-config": PerfConfigDto;
+  "drain-alarms": DrainAlarmsResult;
+  "list-active-alarms": ActiveAlarmsDto;
   "set-aa": SetAaResult;
   "set-clustered": SetClusteredResult;
   "set-ibl": SetIblResult;
