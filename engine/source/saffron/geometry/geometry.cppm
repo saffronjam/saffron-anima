@@ -17,6 +17,7 @@ module;
 #include <format>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,7 +36,7 @@ export namespace se
     };
 
     // One drawIndexed range over the shared vertex+index buffers. vertexOffset is
-    // signed to match vkCmdDrawIndexed; materialSlot is reserved (0) until materials.
+    // signed to match vkCmdDrawIndexed; materialSlot indexes the model's material table.
     struct Submesh
     {
         u32 firstIndex = 0;
@@ -88,20 +89,31 @@ export namespace se
     inline constexpr u32 MeshFormatVersion = 1;
     inline constexpr u32 MeshFormatVersionSkinned = 2;
 
-    // The primary material extracted from a model: a base color factor and, if any,
-    // the encoded (png/jpg) albedo bytes (read from an external file or embedded).
+    // One material extracted from a model: the PBR factors and, if any, the encoded
+    // (png/jpg) albedo bytes (read from an external file or embedded). Metallic-roughness,
+    // normal, and emissive textures are not imported — the engine material has no slots.
     struct ImportedMaterial
     {
         glm::vec4 baseColor{ 1.0f };
+        f32 metallic = 0.0f;
+        f32 roughness = 1.0f;
+        glm::vec3 emissive{ 0.0f };
+        f32 emissiveStrength = 1.0f;
         std::vector<u8> albedoBytes;
         std::string albedoExt;  // "png" / "jpg"
         bool hasAlbedo = false;
+        // glTF metallic-roughness texture (roughness in G, metalness in B); a linear texture.
+        std::vector<u8> metallicRoughnessBytes;
+        std::string metallicRoughnessExt;
+        bool hasMetallicRoughness = false;
     };
 
     struct ImportedModel
     {
         Mesh mesh;
-        ImportedMaterial material;
+        // The material table; each Submesh.materialSlot indexes it. Always at least one
+        // entry (a default material when the source declares none).
+        std::vector<ImportedMaterial> materials;
         // Skin payload (glTF only): hasSkin gates all three. `skin` parallels
         // mesh.vertices; `nodes` is the source node forest; `skinDesc.joints` indexes
         // into `nodes` in glTF joint order — the single source of jointMatrices order.
@@ -305,6 +317,69 @@ namespace se
         }
     }
 
+    // Extract one glTF material's PBR factors + albedo bytes into the engine's material.
+    // Metallic-roughness/normal/emissive textures are intentionally skipped.
+    // Read a glTF texture view's encoded image bytes (embedded buffer view or external file).
+    // Returns false (leaving outBytes empty) when the view has no image or the bytes can't be
+    // read; a data: URI is logged and skipped. `label` names the slot in any warning.
+    auto readGltfTextureBytes(const cgltf_texture_view& view, const std::string& path, const char* label,
+                              std::vector<u8>& outBytes, std::string& outExt) -> bool
+    {
+        if (view.texture == nullptr || view.texture->image == nullptr)
+        {
+            return false;
+        }
+        const cgltf_image* image = view.texture->image;
+        if (image->buffer_view != nullptr)
+        {
+            const cgltf_buffer_view* bufferView = image->buffer_view;
+            const u8* bytes = static_cast<const u8*>(bufferView->buffer->data) + bufferView->offset;
+            outBytes.assign(bytes, bytes + bufferView->size);
+            outExt = extensionFromMime(image->mime_type != nullptr ? image->mime_type : "");
+            return !outBytes.empty();
+        }
+        if (image->uri != nullptr && std::strncmp(image->uri, "data:", 5) != 0)
+        {
+            std::string uri = image->uri;
+            uri.resize(cgltf_decode_uri(uri.data()));  // percent-decode (e.g. %20) in place
+            const std::string full = directoryOf(path) + "/" + uri;
+            if (Result<std::vector<u8>> bytes = readBinaryFile(full); bytes)
+            {
+                outBytes = std::move(*bytes);
+                outExt = extensionOf(uri);
+                return true;
+            }
+            return false;
+        }
+        if (image->uri != nullptr)
+        {
+            logWarn(std::format("cgltf: '{}' embeds its {} as a data: URI (not yet supported)", path, label));
+        }
+        return false;
+    }
+
+    auto extractGltfMaterial(const cgltf_material& src, const std::string& path) -> ImportedMaterial
+    {
+        ImportedMaterial material;
+        material.emissive = glm::vec3(src.emissive_factor[0], src.emissive_factor[1], src.emissive_factor[2]);
+        material.emissiveStrength = src.has_emissive_strength ? src.emissive_strength.emissive_strength : 1.0f;
+        if (!src.has_pbr_metallic_roughness)
+        {
+            return material;
+        }
+        const cgltf_pbr_metallic_roughness& pbr = src.pbr_metallic_roughness;
+        material.baseColor = glm::vec4(pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2],
+                                       pbr.base_color_factor[3]);
+        material.metallic = pbr.metallic_factor;
+        material.roughness = pbr.roughness_factor;
+        material.hasAlbedo =
+            readGltfTextureBytes(pbr.base_color_texture, path, "albedo", material.albedoBytes, material.albedoExt);
+        material.hasMetallicRoughness =
+            readGltfTextureBytes(pbr.metallic_roughness_texture, path, "metallic-roughness",
+                                 material.metallicRoughnessBytes, material.metallicRoughnessExt);
+        return material;
+    }
+
     auto importGltfModel(const std::string& path) -> Result<ImportedModel>
     {
         cgltf_options options{};
@@ -323,7 +398,10 @@ namespace se
         std::vector<VertexSkin> vertexSkins;  // parallel to mesh.vertices when skinned
         bool sawSkinnedPrimitive = false;
         bool sawUnskinnedPrimitive = false;
-        const cgltf_material* primaryMaterial = nullptr;
+        // Distinct source materials in first-seen order (keyed on the cgltf material
+        // pointer; a null key is a primitive with no material, which gets a default slot).
+        std::vector<const cgltf_material*> materialTable;
+        std::map<const cgltf_material*, u32> materialSlots;
         for (cgltf_size m = 0; m < data->meshes_count; m = m + 1)
         {
             const cgltf_mesh& gltfMesh = data->meshes[m];
@@ -376,10 +454,13 @@ namespace se
                 {
                     sawUnskinnedPrimitive = true;
                 }
-                if (primaryMaterial == nullptr && prim.material != nullptr)
+                auto [slotIt, inserted] =
+                    materialSlots.try_emplace(prim.material, static_cast<u32>(materialTable.size()));
+                if (inserted)
                 {
-                    primaryMaterial = prim.material;
+                    materialTable.push_back(prim.material);
                 }
+                const u32 materialSlot = slotIt->second;
 
                 const i32 vertexOffset = static_cast<i32>(mesh.vertices.size());
                 const u32 firstIndex = static_cast<u32>(mesh.indices.size());
@@ -440,50 +521,15 @@ namespace se
                 submesh.firstIndex = firstIndex;
                 submesh.indexCount = static_cast<u32>(mesh.indices.size()) - firstIndex;
                 submesh.vertexOffset = vertexOffset;
-                submesh.materialSlot = 0;
+                submesh.materialSlot = materialSlot;
                 mesh.submeshes.push_back(submesh);
             }
         }
-        ImportedMaterial material;
-        if (primaryMaterial != nullptr && primaryMaterial->has_pbr_metallic_roughness)
+        std::vector<ImportedMaterial> materials;
+        materials.reserve(materialTable.size());
+        for (const cgltf_material* src : materialTable)
         {
-            const cgltf_pbr_metallic_roughness& pbr = primaryMaterial->pbr_metallic_roughness;
-            material.baseColor = glm::vec4(pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2],
-                                           pbr.base_color_factor[3]);
-            const cgltf_texture_view& albedoView = pbr.base_color_texture;
-            if (albedoView.texture != nullptr && albedoView.texture->image != nullptr)
-            {
-                const cgltf_image* image = albedoView.texture->image;
-                if (image->buffer_view != nullptr)
-                {
-                    const cgltf_buffer_view* bufferView = image->buffer_view;
-                    const u8* src = static_cast<const u8*>(bufferView->buffer->data) + bufferView->offset;
-                    material.albedoBytes.assign(src, src + bufferView->size);
-                    std::string mime;
-                    if (image->mime_type != nullptr)
-                    {
-                        mime = image->mime_type;
-                    }
-                    material.albedoExt = extensionFromMime(mime);
-                    material.hasAlbedo = !material.albedoBytes.empty();
-                }
-                else if (image->uri != nullptr && std::strncmp(image->uri, "data:", 5) != 0)
-                {
-                    std::string uri = image->uri;
-                    uri.resize(cgltf_decode_uri(uri.data()));  // percent-decode (e.g. %20) in place
-                    const std::string full = directoryOf(path) + "/" + uri;
-                    if (Result<std::vector<u8>> bytes = readBinaryFile(full); bytes)
-                    {
-                        material.albedoBytes = std::move(*bytes);
-                        material.albedoExt = extensionOf(uri);
-                        material.hasAlbedo = true;
-                    }
-                }
-                else if (image->uri != nullptr)
-                {
-                    logWarn(std::format("cgltf: '{}' embeds its albedo as a data: URI (not yet supported)", path));
-                }
-            }
+            materials.push_back(src != nullptr ? extractGltfMaterial(*src, path) : ImportedMaterial{});
         }
         // Skin payload: only when the FIRST skin covers every triangle primitive (a
         // mixed skinned/unskinned model would deform unweighted vertices to the origin,
@@ -569,7 +615,7 @@ namespace se
             generateNormals(mesh);
         }
         model.mesh = std::move(mesh);
-        model.material = std::move(material);
+        model.materials = std::move(materials);
         return model;
     }
 
@@ -603,58 +649,91 @@ namespace se
         Mesh mesh;
         // De-duplicate (position, normal, texcoord) triples into unique vertices.
         std::map<std::array<int, 3>, u32> uniqueVertices;
+        std::optional<std::string> vertexError;
+        const auto resolveVertex = [&](const tinyobj::index_t& index) -> u32
+        {
+            const std::array<int, 3> key{ index.vertex_index, index.normal_index, index.texcoord_index };
+            if (auto it = uniqueVertices.find(key); it != uniqueVertices.end())
+            {
+                return it->second;
+            }
+            if (index.vertex_index < 0 ||
+                static_cast<std::size_t>(3 * index.vertex_index + 2) >= attrib.vertices.size())
+            {
+                vertexError = std::format("tinyobjloader: '{}' has an out-of-range vertex index", path);
+                return 0;
+            }
+            Vertex vertex;
+            vertex.position =
+                glm::vec3(attrib.vertices[3 * index.vertex_index + 0], attrib.vertices[3 * index.vertex_index + 1],
+                          attrib.vertices[3 * index.vertex_index + 2]);
+            if (index.normal_index >= 0 && static_cast<std::size_t>(3 * index.normal_index + 2) < attrib.normals.size())
+            {
+                vertex.normal =
+                    glm::vec3(attrib.normals[3 * index.normal_index + 0], attrib.normals[3 * index.normal_index + 1],
+                              attrib.normals[3 * index.normal_index + 2]);
+            }
+            if (index.texcoord_index >= 0 &&
+                static_cast<std::size_t>(2 * index.texcoord_index + 1) < attrib.texcoords.size())
+            {
+                // OBJ texture V origin is bottom-left; Vulkan samples top-left.
+                vertex.uv0 = glm::vec2(attrib.texcoords[2 * index.texcoord_index + 0],
+                                       1.0f - attrib.texcoords[2 * index.texcoord_index + 1]);
+            }
+            const u32 newIndex = static_cast<u32>(mesh.vertices.size());
+            mesh.vertices.push_back(vertex);
+            uniqueVertices.emplace(key, newIndex);
+            return newIndex;
+        };
+
+        // Group faces by material into slots in first-seen order; tinyobj triangulates by
+        // default, so each face is three indices and material_ids is one id per face.
+        // slotToObjMaterial[slot] is the tinyobj material index (-1 == no material).
+        std::vector<int> slotToObjMaterial;
+        std::map<int, u32> objMaterialToSlot;
+        std::vector<std::vector<u32>> indicesBySlot;
+        const auto slotFor = [&](int objMaterial) -> u32
+        {
+            const int normalized =
+                objMaterial >= 0 && static_cast<std::size_t>(objMaterial) < materials.size() ? objMaterial : -1;
+            auto [it, inserted] = objMaterialToSlot.try_emplace(normalized, static_cast<u32>(slotToObjMaterial.size()));
+            if (inserted)
+            {
+                slotToObjMaterial.push_back(normalized);
+                indicesBySlot.emplace_back();
+            }
+            return it->second;
+        };
         for (const tinyobj::shape_t& shape : shapes)
         {
-            const u32 firstIndex = static_cast<u32>(mesh.indices.size());
-            for (const tinyobj::index_t& index : shape.mesh.indices)
+            const std::size_t faceCount = shape.mesh.indices.size() / 3;
+            for (std::size_t f = 0; f < faceCount; f = f + 1)
             {
-                const std::array<int, 3> key{ index.vertex_index, index.normal_index, index.texcoord_index };
-                auto it = uniqueVertices.find(key);
-                if (it == uniqueVertices.end())
+                const int objMaterial = f < shape.mesh.material_ids.size() ? shape.mesh.material_ids[f] : -1;
+                std::vector<u32>& bucket = indicesBySlot[slotFor(objMaterial)];
+                for (std::size_t c = 0; c < 3; c = c + 1)
                 {
-                    if (index.vertex_index < 0 ||
-                        static_cast<std::size_t>(3 * index.vertex_index + 2) >= attrib.vertices.size())
-                    {
-                        return Err(std::format("tinyobjloader: '{}' has an out-of-range vertex index", path));
-                    }
-                    Vertex vertex;
-                    vertex.position = glm::vec3(attrib.vertices[3 * index.vertex_index + 0],
-                                                attrib.vertices[3 * index.vertex_index + 1],
-                                                attrib.vertices[3 * index.vertex_index + 2]);
-                    if (index.normal_index >= 0 &&
-                        static_cast<std::size_t>(3 * index.normal_index + 2) < attrib.normals.size())
-                    {
-                        vertex.normal = glm::vec3(attrib.normals[3 * index.normal_index + 0],
-                                                  attrib.normals[3 * index.normal_index + 1],
-                                                  attrib.normals[3 * index.normal_index + 2]);
-                    }
-                    if (index.texcoord_index >= 0 &&
-                        static_cast<std::size_t>(2 * index.texcoord_index + 1) < attrib.texcoords.size())
-                    {
-                        // OBJ texture V origin is bottom-left; Vulkan samples top-left.
-                        vertex.uv0 = glm::vec2(attrib.texcoords[2 * index.texcoord_index + 0],
-                                               1.0f - attrib.texcoords[2 * index.texcoord_index + 1]);
-                    }
-                    const u32 newIndex = static_cast<u32>(mesh.vertices.size());
-                    mesh.vertices.push_back(vertex);
-                    uniqueVertices.emplace(key, newIndex);
-                    mesh.indices.push_back(newIndex);
-                }
-                else
-                {
-                    mesh.indices.push_back(it->second);
+                    bucket.push_back(resolveVertex(shape.mesh.indices[f * 3 + c]));
                 }
             }
-
+        }
+        if (vertexError)
+        {
+            return Err(*vertexError);
+        }
+        for (u32 slot = 0; slot < indicesBySlot.size(); slot = slot + 1)
+        {
+            if (indicesBySlot[slot].empty())
+            {
+                continue;
+            }
             Submesh submesh;
-            submesh.firstIndex = firstIndex;
-            submesh.indexCount = static_cast<u32>(mesh.indices.size()) - firstIndex;
+            submesh.firstIndex = static_cast<u32>(mesh.indices.size());
+            submesh.indexCount = static_cast<u32>(indicesBySlot[slot].size());
             submesh.vertexOffset = 0;  // indices already reference the shared vertex array
-            submesh.materialSlot = 0;
-            if (submesh.indexCount > 0)
-            {
-                mesh.submeshes.push_back(submesh);
-            }
+            submesh.materialSlot = slot;
+            mesh.indices.insert(mesh.indices.end(), indicesBySlot[slot].begin(), indicesBySlot[slot].end());
+            mesh.submeshes.push_back(submesh);
         }
 
         if (mesh.vertices.empty())
@@ -666,39 +745,33 @@ namespace se
             generateNormals(mesh);
         }
 
-        int primaryMaterialId = -1;
-        for (const tinyobj::shape_t& shape : shapes)
+        ImportedModel model;
+        model.mesh = std::move(mesh);
+        model.materials.reserve(slotToObjMaterial.size());
+        for (int objMaterial : slotToObjMaterial)
         {
-            for (int id : shape.mesh.material_ids)
+            ImportedMaterial material;
+            if (objMaterial >= 0)
             {
-                if (id >= 0)
+                const tinyobj::material_t& mat = materials[static_cast<std::size_t>(objMaterial)];
+                material.baseColor = glm::vec4(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2], 1.0f);
+                material.metallic = mat.metallic;
+                material.roughness = mat.roughness;
+                material.emissive = glm::vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
+                if (!mat.diffuse_texname.empty())
                 {
-                    primaryMaterialId = id;
-                    break;
+                    const std::string full = baseDir + "/" + mat.diffuse_texname;
+                    if (Result<std::vector<u8>> bytes = readBinaryFile(full); bytes)
+                    {
+                        material.albedoBytes = std::move(*bytes);
+                        material.albedoExt = extensionOf(mat.diffuse_texname);
+                        material.hasAlbedo = true;
+                    }
                 }
             }
-            if (primaryMaterialId >= 0)
-            {
-                break;
-            }
+            model.materials.push_back(std::move(material));
         }
-        ImportedMaterial material;
-        if (primaryMaterialId >= 0 && static_cast<std::size_t>(primaryMaterialId) < materials.size())
-        {
-            const tinyobj::material_t& mat = materials[static_cast<std::size_t>(primaryMaterialId)];
-            material.baseColor = glm::vec4(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2], 1.0f);
-            if (!mat.diffuse_texname.empty())
-            {
-                const std::string full = baseDir + "/" + mat.diffuse_texname;
-                if (Result<std::vector<u8>> bytes = readBinaryFile(full); bytes)
-                {
-                    material.albedoBytes = std::move(*bytes);
-                    material.albedoExt = extensionOf(mat.diffuse_texname);
-                    material.hasAlbedo = true;
-                }
-            }
-        }
-        return ImportedModel{ std::move(mesh), std::move(material) };
+        return model;
     }
 
     auto importObj(const std::string& path) -> Result<Mesh>
