@@ -212,6 +212,8 @@ namespace se
             return nullptr;
         }
         renderer.pipelines.cache.emplace(key, *built);
+        // A non-zero count on a steady-state frame is the signature of a PSO-compile hitch.
+        renderer.stats.pipelinesCreated = renderer.stats.pipelinesCreated + 1;
         return *built;
     }
 

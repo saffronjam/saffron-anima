@@ -438,14 +438,22 @@ namespace se
 
         u32 drawCalls = 0;
         u32 drawnInstances = 0;
+        u32 triangles = 0;
         for (const DrawBatch& batch : batches)
         {
             drawCalls = drawCalls + static_cast<u32>(batch.mesh->submeshes.size());
             drawnInstances = drawnInstances + batch.instanceCount;
+            u32 meshIndices = 0;
+            for (const Submesh& submesh : batch.mesh->submeshes)
+            {
+                meshIndices = meshIndices + submesh.indexCount;
+            }
+            triangles = triangles + (meshIndices / 3) * batch.instanceCount;
         }
         renderer.stats.drawCalls = drawCalls;
         renderer.stats.batches = static_cast<u32>(batches.size());
         renderer.stats.instances = drawnInstances;
+        renderer.stats.triangles = triangles;
 
         SceneDrawList list;
         list.viewProj = viewProj;
@@ -485,15 +493,21 @@ namespace se
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 5, renderer.ddgi.meshSet, {});
         // Set 6 = the RT TLAS, set 7 = the ReSTIR radiance (only when RT is supported, so the
         // PSO layout has them). Both gated in-shader by their runtime flags.
+        u32 binds = 5;  // sets 0, 1 (light+instance), 3, 4, 5 bind once regardless of batch count
         if (renderer.context.rtSupported && renderer.rt.meshSets[renderer.frame.index])
         {
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 6,
                                    renderer.rt.meshSets[renderer.frame.index], {});
+            binds = binds + 1;
             if (renderer.restir.meshSet)
             {
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 7, renderer.restir.meshSet, {});
+                binds = binds + 1;
             }
         }
+        // Binds stay constant in the batch count (bindless textures + per-instance indices) —
+        // surfacing the count confirms the path is not O(draws).
+        renderer.stats.descriptorBinds = renderer.stats.descriptorBinds + binds;
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4), &list.viewProj);
         for (const DrawBatch& batch : list.batches)
         {
