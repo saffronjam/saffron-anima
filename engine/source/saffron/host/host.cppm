@@ -15,21 +15,26 @@ module;
 #include <cmath>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <unistd.h>
+
 export module Saffron.Host;
 
 import Saffron.Core;
+import Saffron.Signal;
 import Saffron.App;
 import Saffron.Window;
 import Saffron.Rendering;
 import Saffron.SceneEdit;
 import Saffron.Control;
 import Saffron.Scene;
+import Saffron.Script;
 import Saffron.Assets;
 
 namespace se
@@ -43,7 +48,11 @@ namespace se
         se::SceneEditContext* editor = nullptr;
         se::ControlContext* control = nullptr;
         se::AssetServer assets;
-        bool shmPublish = false;  // frames publish to shared memory; the editor owns the render size
+        se::ScriptHost script;                  // the Lua runtime; the Host is its only owner
+        se::SubscriptionId scriptSubscription;  // the onPlayStateChanged lifecycle hook
+        bool scriptVmActive = false;            // a VM exists (Playing/Paused); stop destroys it
+        bool scriptErrorPending = false;        // set inside simTick; drives the deferred pause
+        bool shmPublish = false;                // frames publish to shared memory; the editor owns the render size
     };
 
     enum class BillboardKind
@@ -407,6 +416,35 @@ export namespace se
             state->editor = se::newSceneEditContext();
             state->control = se::newControlContext();
             state->assets = se::newAssetServer(se::assetPath("assets"));
+
+            // Registered here, not in Saffron.Control: the handler needs the Lua
+            // schema reader, and the Host is the only TU that may import Script.
+            se::registerCommand<se::GetScriptSchemaParams, se::GetScriptSchemaResult>(
+                state->control->registry, "get-script-schema",
+                "get-script-schema {path} — a project script's declared fields (path relative to src/)",
+                [state](se::EngineContext&,
+                        const se::GetScriptSchemaParams& params) -> se::Result<se::GetScriptSchemaResult>
+                {
+                    if (params.path.empty() || params.path.find("..") != std::string::npos)
+                    {
+                        return se::Err(std::string{ "path must be relative to the project src/" });
+                    }
+                    const std::filesystem::path file =
+                        std::filesystem::path(state->editor->projectRoot) / "src" / params.path;
+                    auto schema = se::readScriptSchema(file.string());
+                    if (!schema)
+                    {
+                        return se::Err(schema.error());
+                    }
+                    se::GetScriptSchemaResult out;
+                    for (se::ScriptField& field : *schema)
+                    {
+                        out.fields.push_back(se::ScriptFieldDto{ std::move(field.name),
+                                                                 se::scriptFieldTypeName(field.type),
+                                                                 std::move(field.defaultValue) });
+                    }
+                    return out;
+                });
             // The editor is the headless native-viewport host: always present-only (no engine
             // panels), driven over the control plane.
             se::setPresentViewportOnly(app.renderer, true);
@@ -425,6 +463,48 @@ export namespace se
             // present-only host renders no inspector, so no draw lambdas / thumbnails.
             se::registerBuiltinComponents(state->editor->registry);
 
+            // Script lifecycle: the VM exists exactly while play is active — created on
+            // Edit->Playing, kept across pause/resume, destroyed on ->Edit. Scripts load
+            // from the project's src/ directory.
+            state->scriptSubscription = state->editor->onPlayStateChanged.subscribe(
+                [state](se::PlayState next)
+                {
+                    if (next == se::PlayState::Playing && !state->scriptVmActive)
+                    {
+                        const std::filesystem::path src = std::filesystem::path(state->editor->projectRoot) / "src";
+                        auto started = se::startScripts(state->script, se::activeScene(*state->editor),
+                                                        state->editor->registry, src.string());
+                        if (!started)
+                        {
+                            se::logError(std::format("script start failed: {}", started.error()));
+                            return false;
+                        }
+                        state->scriptVmActive = true;
+                        state->editor->scriptInstanceCount = static_cast<se::i32>(state->script.instances.size());
+                    }
+                    else if (next == se::PlayState::Edit && state->scriptVmActive)
+                    {
+                        se::stopScripts(state->script);
+                        state->scriptVmActive = false;
+                        state->editor->scriptInstanceCount = 0;
+                    }
+                    return false;
+                });
+            state->editor->simTick = [state](se::Scene& scene, se::f32 dt)
+            {
+                if (!state->scriptVmActive)
+                {
+                    return;
+                }
+                if (auto failure = se::tickScripts(state->script, scene, dt))
+                {
+                    se::logError(std::format("script error in '{}': {}", failure->script, failure->message));
+                    se::pushScriptError(*state->editor, failure->entityUuid, failure->script,
+                                        std::move(failure->message));
+                    state->scriptErrorPending = true;
+                }
+            };
+
             // Headless self-test entry point: pairs with SAFFRON_EXIT_AFTER_FRAMES for
             // CI-style runs; results land in the log.
             if (std::getenv("SAFFRON_SELFTEST") != nullptr)
@@ -432,6 +512,14 @@ export namespace se
                 se::runSceneSerializationSelfTest();
                 se::runSceneHierarchySelfTest();
                 se::runPlayModeSelfTest();
+                if (auto script = se::runScriptSelfTest(); !script)
+                {
+                    se::logError(script.error());
+                }
+                else
+                {
+                    se::logInfo("script self-test passed");
+                }
             }
 
             // Auto-load a selected project, then legacy root project.json; otherwise wait
@@ -516,10 +604,23 @@ export namespace se
                 se::setSelection(*state->editor, renderable);
             }
 
+            // When the Tauri editor spawns this host (NATIVE_VIEWPORT marker), exit if the editor
+            // dies however it dies — a crash or SIGKILL skips the editor's normal teardown and would
+            // otherwise leave this process orphaned. getppid() changing (the host is reparented away
+            // from the editor) is the parent-death signal; gated on the marker so a standalone/CLI/e2e
+            // run, whose parent is a shell, is never auto-killed.
+            const bool editorSpawned = std::getenv("SAFFRON_EDITOR_NATIVE_VIEWPORT") != nullptr;
+            const pid_t editorPid = editorSpawned ? getppid() : 0;
+
             se::Layer layer;
             layer.name = "HostLayer";
-            layer.onUpdate = [state, &app](se::TimeSpan dt)
+            layer.onUpdate = [state, &app, editorSpawned, editorPid](se::TimeSpan dt)
             {
+                if (editorSpawned && getppid() != editorPid)
+                {
+                    app.window.shouldClose = true;
+                    return;
+                }
                 if (state->control != nullptr)
                 {
                     se::pollControl(*state->control, app.window, app.renderer, *state->editor, state->assets);
@@ -527,6 +628,15 @@ export namespace se
                 // Control first, tick second: a play/pause/step command that arrives this
                 // frame takes effect this frame (a step runs its tick the same frame).
                 se::tickPlay(*state->editor, dt.seconds);
+                // A script error pauses play, but never from inside the tick (that would
+                // re-enter the play state machine); flip once here. A stepped tick can
+                // error while already paused — that pause rejection is fine to drop.
+                if (state->scriptErrorPending)
+                {
+                    state->scriptErrorPending = false;
+                    auto paused = se::pausePlay(*state->editor);
+                    static_cast<void>(paused);
+                }
                 // Command-driven gizmo drags arrive at the webview's pointer rate (~60Hz);
                 // smooth toward the latest sample every frame so the drag renders fluidly.
                 {
@@ -600,6 +710,12 @@ export namespace se
             }
             if (state->editor != nullptr)
             {
+                // Quit can land mid-play: tear the VM down first (it never touches the
+                // scene), detach the seams, then free the context.
+                se::stopScripts(state->script);
+                state->scriptVmActive = false;
+                state->editor->simTick = nullptr;
+                state->editor->onPlayStateChanged.unsubscribe(state->scriptSubscription);
                 se::destroySceneEditContext(state->editor);
                 state->editor = nullptr;
             }
