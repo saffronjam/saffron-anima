@@ -45,6 +45,13 @@ export function notify(message: string, ms = DEFAULT_FLASH_MS): void {
   toast(message, { duration: ms });
 }
 
+/// The error counterpart of `notify`: a bottom-right error toast for a failed operation
+/// (typically a rejected control call). Surface control failures here rather than in a
+/// hand-rolled per-component error banner.
+export function notifyError(message: string, ms = 8000): void {
+  toast.error(message, { duration: ms });
+}
+
 /// Normalize a rejected control call into a readable message. The Rust passthrough
 /// rejects with the engine's error string (e.g. "ray tracing not supported …").
 export function errorText(err: unknown): string {
