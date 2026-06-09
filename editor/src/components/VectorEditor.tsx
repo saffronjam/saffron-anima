@@ -9,7 +9,16 @@
 import { useRef } from "react";
 import { formatNumber } from "./NumberDrag";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { useScrubValue } from "@/lib/useScrubValue";
+
+/// Axis label colors matching the viewport gizmo (X red, Y green, Z blue): a dark
+/// tint behind a bright label.
+const AXIS_COLORS: Record<string, string> = {
+  x: "bg-red-950 text-red-400",
+  y: "bg-green-950 text-green-400",
+  z: "bg-blue-950 text-blue-400",
+};
 
 export interface VectorEditorProps {
   /// Ordered axis keys into the value record, e.g. ["x","y","z"] or ["x","y","z","w"].
@@ -70,13 +79,18 @@ export function VectorEditor({
       {axes.map((axis) => (
         <label
           key={axis}
-          className="flex min-w-0 flex-1 cursor-ew-resize items-center rounded-sm border border-border bg-background"
+          className="flex min-w-0 flex-1 cursor-ew-resize items-center overflow-hidden rounded-sm border border-border bg-background"
           onPointerDown={(event) => beginDrag(axis, event)}
           onPointerMove={updateDrag}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
         >
-          <span className="select-none px-1 text-[10px] font-semibold text-muted-foreground">
+          <span
+            className={cn(
+              "flex items-center self-stretch px-1 text-[10px] font-semibold select-none",
+              AXIS_COLORS[axis] ?? "bg-muted text-muted-foreground",
+            )}
+          >
             {axis.toUpperCase()}
           </span>
           <Input
