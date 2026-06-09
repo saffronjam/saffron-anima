@@ -8,7 +8,9 @@ module;
 #include <algorithm>
 #include <charconv>
 #include <cstdlib>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <string>
 
 module Saffron.Control;
@@ -97,6 +99,142 @@ namespace se
             break;
         }
         return ProfilerMode::Off;
+    }
+
+    auto captureModeFromDto(CaptureModeDto mode) -> CaptureMode
+    {
+        switch (mode)
+        {
+        case CaptureModeDto::Frames:
+            return CaptureMode::Frames;
+        case CaptureModeDto::Rolling:
+            return CaptureMode::Rolling;
+        case CaptureModeDto::Single:
+            break;
+        }
+        return CaptureMode::Single;
+    }
+
+    auto captureModeDto(CaptureMode mode) -> CaptureModeDto
+    {
+        switch (mode)
+        {
+        case CaptureMode::Frames:
+            return CaptureModeDto::Frames;
+        case CaptureMode::Rolling:
+            return CaptureModeDto::Rolling;
+        case CaptureMode::Single:
+            break;
+        }
+        return CaptureModeDto::Single;
+    }
+
+    auto profileLaneDto(ProfileLane lane) -> ProfileLaneDto
+    {
+        return lane == ProfileLane::Gpu ? ProfileLaneDto::Gpu : ProfileLaneDto::Cpu;
+    }
+
+    auto captureStateDto(CaptureState state) -> CaptureStateDto
+    {
+        switch (state)
+        {
+        case CaptureState::Arming:
+            return CaptureStateDto::Arming;
+        case CaptureState::Recording:
+            return CaptureStateDto::Recording;
+        case CaptureState::Ready:
+            return CaptureStateDto::Ready;
+        case CaptureState::Idle:
+            break;
+        }
+        return CaptureStateDto::Idle;
+    }
+
+    auto profileCaptureDto(const ProfileCapture& capture) -> ProfileCaptureDto
+    {
+        ProfileCaptureDto out;
+        out.spans.reserve(capture.spans.size());
+        for (const ProfileSpan& s : capture.spans)
+        {
+            ProfileSpanDto span{ s.name, profileLaneDto(s.lane), s.startNs, s.endNs, s.parentIndex, s.depth, {} };
+            if (s.hasStats)
+            {
+                span.pipelineStats = PipelineStatsDto{ s.stats.inputVertices,
+                                                       s.stats.vertexInvocations,
+                                                       s.stats.clippingInvocations,
+                                                       s.stats.clippingPrimitives,
+                                                       s.stats.fragmentInvocations,
+                                                       s.stats.computeInvocations,
+                                                       s.stats.pixels };
+            }
+            out.spans.push_back(std::move(span));
+        }
+        out.metadata = ProfileCaptureMetadataDto{ capture.meta.softwareGpu, capture.meta.correlated,
+                                                  capture.meta.deviceName,  capture.meta.timestampPeriod,
+                                                  capture.meta.targetFps,   profilerModeDto(capture.meta.mode),
+                                                  capture.meta.filter,      capture.meta.frameCount };
+        return out;
+    }
+
+    // Serialize a capture to Chrome Trace Event JSON: `M` (metadata) events name the two lanes,
+    // `X` (complete) events carry each span's microsecond ts/dur (the viewer derives nesting from
+    // time containment). The honesty flags + device facts ride in otherData so the file is
+    // self-documenting in chrome://tracing / Perfetto / speedscope.
+    auto toChromeTrace(const ProfileCapture& capture) -> std::string
+    {
+        const int cpuTid = 1;
+        const int gpuTid = 2;
+        json events = json::array();
+        events.push_back({ { "ph", "M" },
+                           { "pid", "SaffronEngine" },
+                           { "name", "process_name" },
+                           { "args", { { "name", "SaffronEngine" } } } });
+        events.push_back({ { "ph", "M" },
+                           { "pid", "SaffronEngine" },
+                           { "tid", cpuTid },
+                           { "name", "thread_name" },
+                           { "args", { { "name", "CPU render thread" } } } });
+        events.push_back({ { "ph", "M" },
+                           { "pid", "SaffronEngine" },
+                           { "tid", gpuTid },
+                           { "name", "thread_name" },
+                           { "args", { { "name", "GPU queue" } } } });
+        for (const ProfileSpan& s : capture.spans)
+        {
+            const double tsUs = static_cast<double>(s.startNs) / 1000.0;
+            const double durUs = s.endNs > s.startNs ? static_cast<double>(s.endNs - s.startNs) / 1000.0 : 0.0;
+            json args = { { "depth", s.depth } };
+            if (s.hasStats)
+            {
+                args["fragmentInvocations"] = s.stats.fragmentInvocations;
+                args["vertexInvocations"] = s.stats.vertexInvocations;
+                args["inputVertices"] = s.stats.inputVertices;
+                args["clippingInvocations"] = s.stats.clippingInvocations;
+                args["clippingPrimitives"] = s.stats.clippingPrimitives;
+                args["computeInvocations"] = s.stats.computeInvocations;
+                args["pixels"] = s.stats.pixels;
+            }
+            events.push_back({ { "ph", "X" },
+                               { "pid", "SaffronEngine" },
+                               { "tid", s.lane == ProfileLane::Gpu ? gpuTid : cpuTid },
+                               { "name", s.name },
+                               { "ts", tsUs },
+                               { "dur", durUs },
+                               { "args", std::move(args) } });
+        }
+        json doc;
+        doc["traceEvents"] = std::move(events);
+        doc["displayTimeUnit"] = "ns";
+        doc["otherData"] = { { "softwareGpu", capture.meta.softwareGpu },
+                             { "correlated", capture.meta.correlated },
+                             { "deviceName", capture.meta.deviceName },
+                             { "mode", profilerModeDto(capture.meta.mode) == ProfilerModeDto::Timestamps
+                                           ? "timestamps"
+                                           : "pipeline-stats" },
+                             { "targetFps", capture.meta.targetFps },
+                             { "frameCount", capture.meta.frameCount },
+                             { "filter", capture.meta.filter } };
+        return doc.dump();
     }
 
     auto renderStatsDto(Renderer& renderer) -> RenderStatsDto
@@ -284,6 +422,68 @@ namespace se
             reg, "pass-timings", "last frame's per-pass GPU timings (needs profiler timestamps mode)",
             [](EngineContext& ctx, const EmptyParams&) -> Result<RenderPassTimingsDto>
             { return passTimingsDto(ctx.renderer); });
+
+        registerCommand<CaptureStartParams, CaptureStartResult>(
+            reg, "profiler.capture-start",
+            "profiler.capture-start {mode,frames,filter,includeCpu,includePipelineStats} — arm a capture",
+            [](EngineContext& ctx, const CaptureStartParams& params) -> Result<CaptureStartResult>
+            {
+                const CaptureMode mode = captureModeFromDto(params.mode.value_or(CaptureModeDto::Single));
+                const u32 frames = static_cast<u32>(std::max(1, params.frames.value_or(60)));
+                const u32 id =
+                    startProfileCapture(ctx.renderer, mode, frames, params.filter.value_or(std::string{}),
+                                        params.includeCpu.value_or(true), params.includePipelineStats.value_or(false));
+                return CaptureStartResult{ id, true };
+            });
+
+        registerCommand<EmptyParams, CaptureStopResult>(
+            reg, "profiler.capture-stop",
+            "profiler.capture-stop — finish + return the armed capture (inline single, file for frames:N)",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<CaptureStopResult>
+            {
+                const CaptureMode mode = profileCaptureMode(ctx.renderer);
+                const ProfileCapture capture = stopProfileCapture(ctx.renderer);
+                CaptureStopResult out;
+                out.ready = capture.meta.frameCount > 0;
+                out.mode = captureModeDto(mode);
+                out.frameCount = capture.meta.frameCount;
+                out.pending = false;
+                // The structured spans always come back inline so the editor can render any
+                // capture. The Chrome-Trace *string* rides inline for a small single-frame
+                // capture; for a multi-frame one it is written to a file (path returned) to keep
+                // the wire payload bounded.
+                out.capture = profileCaptureDto(capture);
+                out.inlined = mode == CaptureMode::Single || !out.ready;
+                if (out.inlined)
+                {
+                    out.chromeTrace = out.ready ? toChromeTrace(capture) : std::string{};
+                }
+                else
+                {
+                    const std::filesystem::path file =
+                        std::filesystem::temp_directory_path() /
+                        std::format("saffron-profile-{}.json", static_cast<int>(::getpid()));
+                    std::ofstream stream(file, std::ios::binary | std::ios::trunc);
+                    if (stream)
+                    {
+                        stream << toChromeTrace(capture);
+                    }
+                    out.path = file.string();
+                }
+                return out;
+            });
+
+        registerCommand<EmptyParams, CaptureStatusResult>(
+            reg, "profiler.capture-status",
+            "profiler.capture-status — non-destructive capture progress (poll until ready, then stop)",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<CaptureStatusResult>
+            {
+                return CaptureStatusResult{ captureStateDto(profileCaptureState(ctx.renderer)),
+                                            profileCaptureCapturedFrames(ctx.renderer),
+                                            profileCaptureTargetFrames(ctx.renderer),
+                                            captureModeDto(profileCaptureMode(ctx.renderer)),
+                                            profileStatsSupported(ctx.renderer) };
+            });
 
         registerCommand<FrameHistoryParams, FrameHistoryDto>(
             reg, "frame-history", "frame-time percentiles + stutter count (+ optional recent samples)",

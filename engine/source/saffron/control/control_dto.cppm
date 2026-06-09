@@ -136,6 +136,27 @@ export namespace se
         PipelineStats,
     };
 
+    enum class ProfileLaneDto
+    {
+        Cpu,
+        Gpu,
+    };
+
+    enum class CaptureModeDto
+    {
+        Single,
+        Frames,
+        Rolling,
+    };
+
+    enum class CaptureStateDto
+    {
+        Idle,
+        Arming,
+        Recording,
+        Ready,
+    };
+
     enum class AlarmSeverityDto
     {
         Info,
@@ -228,6 +249,90 @@ export namespace se
         bool timestampsSupported;
         bool pipelineStatsSupported;
         bool softwareGpu;
+    };
+
+    // Raw pipeline-statistics counts for one pass; the editor derives overdraw
+    // (fragmentInvocations / pixels), culling (clippingPrimitives / clippingInvocations), and
+    // vertex reuse (vertexInvocations / inputVertices). Present only for PipelineStats captures.
+    struct PipelineStatsDto
+    {
+        u64 inputVertices;
+        u64 vertexInvocations;
+        u64 clippingInvocations;
+        u64 clippingPrimitives;
+        u64 fragmentInvocations;
+        u64 computeInvocations;
+        u64 pixels;
+    };
+
+    struct ProfileSpanDto
+    {
+        std::string name;
+        ProfileLaneDto lane;
+        u64 startNs;
+        u64 endNs;
+        i32 parentIndex;
+        u32 depth;
+        std::optional<PipelineStatsDto> pipelineStats;
+    };
+
+    struct ProfileCaptureMetadataDto
+    {
+        bool softwareGpu;
+        bool correlated;
+        std::string deviceName;
+        f32 timestampPeriod;
+        f32 targetFps;
+        ProfilerModeDto mode;
+        std::string filter;
+        u32 frameCount;
+    };
+
+    struct ProfileCaptureDto
+    {
+        std::vector<ProfileSpanDto> spans;
+        ProfileCaptureMetadataDto metadata;
+    };
+
+    struct CaptureStartParams
+    {
+        std::optional<CaptureModeDto> mode;
+        std::optional<i32> frames;
+        std::optional<std::string> filter;
+        std::optional<bool> includeCpu;
+        std::optional<bool> includePipelineStats;
+    };
+
+    struct CaptureStartResult
+    {
+        u32 captureId;
+        bool ack;
+    };
+
+    // A finished capture. A small `single` capture comes back inline (`capture` + `chromeTrace`);
+    // a multi-frame capture is written to `path` (`chromeTrace`/`capture` empty) and `pending`
+    // marks a deferred write. `ready` is false when no capture was armed.
+    struct CaptureStopResult
+    {
+        bool ready;
+        CaptureModeDto mode;
+        u32 frameCount;
+        bool inlined;
+        ProfileCaptureDto capture;
+        std::string chromeTrace;
+        std::string path;
+        bool pending;
+    };
+
+    // Non-destructive capture progress: lets the editor poll the recorder for the live frame
+    // count and drain (capture-stop) only once `state` reaches `ready`.
+    struct CaptureStatusResult
+    {
+        CaptureStateDto state;
+        u32 capturedFrames;
+        u32 targetFrames;
+        CaptureModeDto mode;
+        bool pipelineStatsSupported;
     };
 
     struct FrameSampleDto
@@ -953,6 +1058,9 @@ export namespace se
     auto dtoToJson(ScreenshotTargetDto value) -> Json;
     auto dtoToJson(AssetTypeDto value) -> Json;
     auto dtoToJson(ProfilerModeDto value) -> Json;
+    auto dtoToJson(ProfileLaneDto value) -> Json;
+    auto dtoToJson(CaptureModeDto value) -> Json;
+    auto dtoToJson(CaptureStateDto value) -> Json;
     auto dtoToJson(AlarmSeverityDto value) -> Json;
     auto dtoToJson(AlarmStateDto value) -> Json;
     auto dtoToJson(const Vec3& value) -> Json;
@@ -963,6 +1071,13 @@ export namespace se
     auto dtoToJson(const RenderPassTimingDto& value) -> Json;
     auto dtoToJson(const RenderPassTimingsDto& value) -> Json;
     auto dtoToJson(const ProfilerModeResult& value) -> Json;
+    auto dtoToJson(const PipelineStatsDto& value) -> Json;
+    auto dtoToJson(const ProfileSpanDto& value) -> Json;
+    auto dtoToJson(const ProfileCaptureMetadataDto& value) -> Json;
+    auto dtoToJson(const ProfileCaptureDto& value) -> Json;
+    auto dtoToJson(const CaptureStartResult& value) -> Json;
+    auto dtoToJson(const CaptureStopResult& value) -> Json;
+    auto dtoToJson(const CaptureStatusResult& value) -> Json;
     auto dtoToJson(const FrameSampleDto& value) -> Json;
     auto dtoToJson(const FrameHistoryDto& value) -> Json;
     auto dtoToJson(const PerfConfigDto& value) -> Json;
@@ -1029,6 +1144,7 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<Vec4>) -> Result<Vec4>;
     auto parseDto(const Json& params, DtoTag<SetAaParams>) -> Result<SetAaParams>;
     auto parseDto(const Json& params, DtoTag<ProfilerSetModeParams>) -> Result<ProfilerSetModeParams>;
+    auto parseDto(const Json& params, DtoTag<CaptureStartParams>) -> Result<CaptureStartParams>;
     auto parseDto(const Json& params, DtoTag<FrameHistoryParams>) -> Result<FrameHistoryParams>;
     auto parseDto(const Json& params, DtoTag<SetPerfConfigParams>) -> Result<SetPerfConfigParams>;
     auto parseDto(const Json& params, DtoTag<DrainAlarmsParams>) -> Result<DrainAlarmsParams>;

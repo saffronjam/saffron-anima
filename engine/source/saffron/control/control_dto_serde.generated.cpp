@@ -437,6 +437,69 @@ namespace se
             return "";
         }
 
+        auto readProfileLaneDto(const Json& value, std::string_view key) -> Result<ProfileLaneDto>
+        {
+            auto text = readString(value, key);
+            if (!text) { return Err(std::move(text.error())); }
+            if (text == "cpu") { return ProfileLaneDto::Cpu; }
+            if (text == "gpu") { return ProfileLaneDto::Gpu; }
+            return Err(std::format("key '{}' has unknown value '{}'", key, *text));
+        }
+
+        auto ProfileLaneDtoName(ProfileLaneDto value) -> const char*
+        {
+            switch (value)
+            {
+            case ProfileLaneDto::Cpu: return "cpu";
+            case ProfileLaneDto::Gpu: return "gpu";
+            }
+            return "";
+        }
+
+        auto readCaptureModeDto(const Json& value, std::string_view key) -> Result<CaptureModeDto>
+        {
+            auto text = readString(value, key);
+            if (!text) { return Err(std::move(text.error())); }
+            if (text == "single") { return CaptureModeDto::Single; }
+            if (text == "frames") { return CaptureModeDto::Frames; }
+            if (text == "rolling") { return CaptureModeDto::Rolling; }
+            return Err(std::format("key '{}' has unknown value '{}'", key, *text));
+        }
+
+        auto CaptureModeDtoName(CaptureModeDto value) -> const char*
+        {
+            switch (value)
+            {
+            case CaptureModeDto::Single: return "single";
+            case CaptureModeDto::Frames: return "frames";
+            case CaptureModeDto::Rolling: return "rolling";
+            }
+            return "";
+        }
+
+        auto readCaptureStateDto(const Json& value, std::string_view key) -> Result<CaptureStateDto>
+        {
+            auto text = readString(value, key);
+            if (!text) { return Err(std::move(text.error())); }
+            if (text == "idle") { return CaptureStateDto::Idle; }
+            if (text == "arming") { return CaptureStateDto::Arming; }
+            if (text == "recording") { return CaptureStateDto::Recording; }
+            if (text == "ready") { return CaptureStateDto::Ready; }
+            return Err(std::format("key '{}' has unknown value '{}'", key, *text));
+        }
+
+        auto CaptureStateDtoName(CaptureStateDto value) -> const char*
+        {
+            switch (value)
+            {
+            case CaptureStateDto::Idle: return "idle";
+            case CaptureStateDto::Arming: return "arming";
+            case CaptureStateDto::Recording: return "recording";
+            case CaptureStateDto::Ready: return "ready";
+            }
+            return "";
+        }
+
         auto readAlarmSeverityDto(const Json& value, std::string_view key) -> Result<AlarmSeverityDto>
         {
             auto text = readString(value, key);
@@ -596,6 +659,21 @@ namespace se
         return ProfilerModeDtoName(value);
     }
 
+    auto dtoToJson(ProfileLaneDto value) -> Json
+    {
+        return ProfileLaneDtoName(value);
+    }
+
+    auto dtoToJson(CaptureModeDto value) -> Json
+    {
+        return CaptureModeDtoName(value);
+    }
+
+    auto dtoToJson(CaptureStateDto value) -> Json
+    {
+        return CaptureStateDtoName(value);
+    }
+
     auto dtoToJson(AlarmSeverityDto value) -> Json
     {
         return AlarmSeverityDtoName(value);
@@ -631,6 +709,62 @@ namespace se
                 auto parsed = readProfilerModeDto(*value, "mode");
                 if (!parsed) { return Err(std::move(parsed.error())); }
                 out.mode = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<CaptureStartParams>) -> Result<CaptureStartParams>
+    {
+        CaptureStartParams out;
+
+        {
+            auto value = optionalField(params, "mode", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readCaptureModeDto(*value, "mode");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.mode = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "frames", 1, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readI32(*value, "frames");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.frames = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "filter", 2, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readString(*value, "filter");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.filter = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "includeCpu", 3, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "includeCpu");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.includeCpu = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "includePipelineStats", 4, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "includePipelineStats");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.includePipelineStats = std::move(*parsed);
             }
         }
         return out;
@@ -2213,6 +2347,87 @@ namespace se
         Json out = Json::object();
         out["name"] = value.name;
         out["gpuMs"] = value.gpuMs;
+        return out;
+    }
+
+    auto dtoToJson(const CaptureStartResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["captureId"] = value.captureId;
+        out["ack"] = value.ack;
+        return out;
+    }
+
+    auto dtoToJson(const CaptureStopResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["ready"] = value.ready;
+        out["mode"] = dtoToJson(value.mode);
+        out["frameCount"] = value.frameCount;
+        out["inlined"] = value.inlined;
+        out["capture"] = dtoToJson(value.capture);
+        out["chromeTrace"] = value.chromeTrace;
+        out["path"] = value.path;
+        out["pending"] = value.pending;
+        return out;
+    }
+
+    auto dtoToJson(const ProfileCaptureDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["spans"] = dtoVectorToJson(value.spans);
+        out["metadata"] = dtoToJson(value.metadata);
+        return out;
+    }
+
+    auto dtoToJson(const ProfileSpanDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["name"] = value.name;
+        out["lane"] = dtoToJson(value.lane);
+        out["startNs"] = value.startNs;
+        out["endNs"] = value.endNs;
+        out["parentIndex"] = value.parentIndex;
+        out["depth"] = value.depth;
+        if (value.pipelineStats) { out["pipelineStats"] = dtoToJson(*value.pipelineStats); }
+        return out;
+    }
+
+    auto dtoToJson(const PipelineStatsDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["inputVertices"] = value.inputVertices;
+        out["vertexInvocations"] = value.vertexInvocations;
+        out["clippingInvocations"] = value.clippingInvocations;
+        out["clippingPrimitives"] = value.clippingPrimitives;
+        out["fragmentInvocations"] = value.fragmentInvocations;
+        out["computeInvocations"] = value.computeInvocations;
+        out["pixels"] = value.pixels;
+        return out;
+    }
+
+    auto dtoToJson(const ProfileCaptureMetadataDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["softwareGpu"] = value.softwareGpu;
+        out["correlated"] = value.correlated;
+        out["deviceName"] = value.deviceName;
+        out["timestampPeriod"] = value.timestampPeriod;
+        out["targetFps"] = value.targetFps;
+        out["mode"] = dtoToJson(value.mode);
+        out["filter"] = value.filter;
+        out["frameCount"] = value.frameCount;
+        return out;
+    }
+
+    auto dtoToJson(const CaptureStatusResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["state"] = dtoToJson(value.state);
+        out["capturedFrames"] = value.capturedFrames;
+        out["targetFrames"] = value.targetFrames;
+        out["mode"] = dtoToJson(value.mode);
+        out["pipelineStatsSupported"] = value.pipelineStatsSupported;
         return out;
     }
 
