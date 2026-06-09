@@ -37,6 +37,13 @@ NVIDIA_ICD := $(firstword $(wildcard /run/host/usr/share/vulkan/icd.d/nvidia_icd
 # present (the real X11 session) and falls back to software if it can't (e.g. headless).
 GPU_ENV := $(if $(NVIDIA_ICD),VK_ADD_DRIVER_FILES=$(NVIDIA_ICD))
 
+# Webview render path on NVIDIA. 1 (default) = the hardware GL path (GPU-composited UI;
+# lib.rs auto-sets __NV_DISABLE_EXPLICIT_SYNC=1 so it doesn't hit the wp_linux_drm_syncobj
+# crash). 0/empty = the safe software (Mesa llvmpipe) path. Set inside the recipe so it
+# survives the toolbox boundary; override with `make run WEBVIEW_HW=0` (or `make run-software`).
+WEBVIEW_HW ?= 1
+WEBVIEW_ENV := $(if $(filter-out 0,$(WEBVIEW_HW)),SAFFRON_WEBVIEW_HW=1)
+
 # Recursive make, aliased so it is NOT force-run under `make -n` (a recipe line with the
 # literal $(MAKE) is always executed even in dry-run; via $(MK) it stays a real preview).
 MK := $(MAKE)
@@ -48,6 +55,14 @@ CPP_LS := git -C "$(REPO)" ls-files '*.cppm' '*.cpp' | grep -vE '^(cmake/|third_
 # clang-tidy parallelism. The default (one per core) re-parses the heavy module/Vulkan
 # headers in every process at a few GB each, which OOMs a 32 GB machine at -j24.
 TIDY_JOBS ?= 4
+
+# Engine build parallelism. A single `ninja -jN` serializes module producers before their
+# consumers via dyndep, so its own .pcm files never race — verified clean across 7 full
+# module-DAG rebuilds at -j8 (clean build ~1m35s vs ~8min at -j1). The Bus-error/ICE the
+# old -j1 default guarded against is actually the TWO-ninja-in-one-dir hazard (each rewrites
+# the other's mmap'd BMIs); see the concurrent-builds rule in AGENTS.md. So: one build at a
+# time per dir, parallel within it. Drop to ENGINE_JOBS=1 only if a future clang regresses.
+ENGINE_JOBS ?= 8
 
 # Targets whose tools (clang, cargo, Vulkan, slang, the toolbox-linked engine binary)
 # live only in the toolbox. On the host these re-enter it; inside, they run directly.
@@ -63,7 +78,7 @@ help:
 	@echo
 	@echo 'Build & verify:'
 	@echo '  make check              - full reproducible gate (tools/ci/check.sh)'
-	@echo '  make engine             - cmake configure + build the engine binary (-j1)'
+	@echo '  make engine             - cmake configure + build the engine binary (-j$(ENGINE_JOBS); override ENGINE_JOBS)'
 	@echo '  make editor             - build the TypeScript/Tauri frontend (bun run build)'
 	@echo '  make schema             - control-schema contract test (live se vs schemas/control)'
 	@echo '  make e2e                - end-to-end control-plane/rendering tests (bun test, headless)'
@@ -102,10 +117,16 @@ else
 check:
 	"$(REPO)tools/ci/check.sh"
 
-## engine: configure + build the C++26 engine binary SaffronEngine (-j1 avoids a clang module-BMI ICE)
+## engine: configure + build the C++26 engine binary SaffronEngine (parallel; override with ENGINE_JOBS=1)
+# A flock serializes concurrent `make engine` on the same BUILD_DIR. Parallel compilation
+# WITHIN one ninja is safe; what corrupts the module .pcm files (Bus error + a trashed
+# .ninja_log) is TWO ninja processes writing one dir at once. The lock makes a second build
+# WAIT for the first instead of racing it — the rule from AGENTS.md, now enforced not advised.
+# It is per-BUILD_DIR, so private dirs (cmake --preset debug -B build/<name>) never contend.
 engine:
-	cmake --preset debug
-	cmake --build "$(BUILD_DIR)" -j1
+	@mkdir -p "$(BUILD_DIR)"
+	@flock -n "$(BUILD_DIR)/.build.lock" true 2>/dev/null || echo '==> another build holds $(BUILD_DIR); waiting for it to finish…'
+	flock "$(BUILD_DIR)/.build.lock" sh -ec 'cmake --preset debug && cmake --build "$(BUILD_DIR)" -j$(ENGINE_JOBS)'
 
 ## editor: gen @saffron/protocol + tsc + vite build of the frontend
 editor:
@@ -121,11 +142,11 @@ e2e:
 
 ## run: start the Tauri editor, which spawns build/debug/bin/SaffronEngine as a native child
 run:
-	cd "$(EDITOR)" && $(GPU_ENV) bun run tauri dev
+	cd "$(EDITOR)" && $(GPU_ENV) $(WEBVIEW_ENV) bun run tauri dev
 
 ## run-debug: like run, but starts with the editor's developer mode pre-enabled
 run-debug:
-	cd "$(EDITOR)" && $(GPU_ENV) VITE_SAFFRON_DEV_MODE=1 bun run tauri dev
+	cd "$(EDITOR)" && $(GPU_ENV) $(WEBVIEW_ENV) VITE_SAFFRON_DEV_MODE=1 bun run tauri dev
 
 ## run-software: run the editor on the llvmpipe software GPU (control case; ignores the NVIDIA ICD)
 run-software:

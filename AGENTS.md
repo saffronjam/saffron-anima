@@ -31,7 +31,9 @@ everything DX11-specific and the heavy OOP.
   user how to proceed.
 - **Concurrent builds:** never share `build/debug` between two running agents — ninja races rewrite
   the module `.pcm` files another compile is mmap-reading, which crashes clang with spurious Bus
-  errors and corrupts `.ninja_log`. If another agent is building, either wait it out or configure a
+  errors and corrupts `.ninja_log`. This is a *two separate ninja processes* hazard, not a `-jN` one:
+  a single `ninja -jN` is safe (dyndep builds each module's BMI before its consumers), so the engine
+  build runs parallel by default. If another agent is building, either wait it out or configure a
   private dir (`cmake --preset debug -B build/<name>`) and point builds, e2e
   (`SAFFRON_ENGINE_BIN=build/<name>/bin/SaffronEngine`), and clang-tidy (`-p build/<name>`) at it.
 
@@ -44,11 +46,18 @@ directory is shared, so files edited outside are seen inside.
 ```sh
 toolbox run -c saffron-build bash -lc '
   cmake --preset debug             # first time / after CMake changes
-  cmake --build build/debug -j1    # -j1: parallel intermittently hits a clang module-BMI ICE
+  cmake --build build/debug -j8    # one ninja at any -jN is safe; the .pcm race needs TWO ninja procs
   ./build/debug/bin/SaffronEngine  # the present-only viewport host
 '
 ```
 
+- **Env vars must be set *inside* the toolbox invocation, never as a host-side prefix.** A `make`
+  target runs inside `toolbox run`, and the host environment does not cross that boundary — so
+  `FOO=1 make run` sets `FOO` only in the host shell and the recipe never sees it (it silently
+  no-ops, which looks like the flag had no effect). Set the var inside the command
+  (`toolbox run -c saffron-build bash -lc 'export FOO=1; …'`) or bake it into the recipe / a `make`
+  variable (e.g. the `WEBVIEW_HW` knob the `Makefile` expands into the `run` recipe). **Never suggest
+  a host-side `ENV=… make …`.**
 - The toolbox provides clang 21 + libc++ (ships the `std` module), CMake + Ninja, the Vulkan 1.4 SDK,
   SDL3, and Slang. `CMakePresets.json` (`debug`/`release`) pins clang++, `-stdlib=libc++`, lld, Ninja.
 - **`import std` gotchas:** needs the experimental CMake gate (set in the root `CMakeLists.txt`) +
@@ -123,16 +132,17 @@ Json     → Core
 Window   → {Core, Signal}
 Geometry → Core
 Scene    → {Core, Json}
+Script   → {Core, Scene}                          (Lua 5.5 + LuaBridge3; only Host may import it)
 Rendering→ {Core, Window, Geometry}              partitions :Types :Detail :RenderGraph
 Assets   → {Core, Json, Geometry, Rendering, Scene}
 SceneEdit→ {Core, Signal, Scene, Json}            partition :Context
 Control  → {Core, Json, Window, Rendering, Scene, SceneEdit, Assets}   partition :Command
 App      → {Core, Window, Rendering}
-Host     → {Core, App, Window, Rendering, SceneEdit, Control, Scene, Assets}   (the SaffronEngine exe)
+Host     → {Core, App, Window, Rendering, SceneEdit, Control, Scene, Script, Assets}   (the SaffronEngine exe)
 ```
 
 - `core`/`signal`/`app` use `import std`; `window` uses `import std` + the SDL3 **C** header (safe).
-- Modules wrapping heavy **C++** third-party headers (`rendering`, `scene`, `geometry`, `json`,
+- Modules wrapping heavy **C++** third-party headers (`rendering`, `scene`, `script`, `geometry`, `json`,
   `assets`, `sceneedit`, `control`, `host`) use classic `#include` in the global module fragment and
   **do NOT `import std`** (mixing breaks the TU). They are still consumed normally by the `import std`
   modules — the BMI carries the std types.
@@ -218,7 +228,9 @@ a feature — follow and update a matching plan rather than starting cold.
   shadows (directional/spot/point/contact/ray-traced), DDGI + voxel GI + SSGI + ReSTIR, GTAO, TAA, motion
   vectors, tonemap, MSAA/FXAA; bindless + instanced rendering with an übershader/PSO cache; the render
   graph; entt scene + registry-driven JSON project format; glTF/OBJ import + asset catalog; the control
-  plane + `se` CLI; the Tauri editor.
+  plane + `se` CLI; the Tauri editor; per-entity Lua scripting (Lua 5.5 + LuaBridge3 behind
+  `Saffron.Script`: ScriptComponent slots, script-declared fields + overrides, Inspector UI, project
+  `src/` scaffold).
 - **Not yet:** transient render-graph resources (graph-created images + aliasing) + async compute;
   GPU-driven culling (MDI / mesh shaders); `Saffron.Physics` (Jolt); scene-graph parenting; undo/redo;
   hardware GPU in the toolbox.
