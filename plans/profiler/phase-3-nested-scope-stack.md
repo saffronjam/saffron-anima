@@ -1,6 +1,6 @@
 # Phase 3 — nested GPU scope stack
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 Generalize the **flat** per-pass GPU timing list into a **tree**. Today the timestamp path records a
 `std::vector<std::string>` of pass names and a parallel `std::vector<PassTiming{name; gpuMs}>`

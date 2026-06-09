@@ -109,15 +109,15 @@ phases also `bun run check`; capture phases also `make e2e`); delete a phase fil
 
 | Phase | What | Status |
 |---|---|---|
-| [1 — debug-utils pass labels](phase-1-debug-utils-labels.md) | `vkCmdBeginDebugUtilsLabelEXT` around every pass body, mode-independent; instant RenderDoc/Nsight readability | NOT STARTED |
-| [2 — CPU phase + per-pass scopes](phase-2-cpu-scopes.md) | integer-ID RAII `steady_clock` markers around the frame-lifecycle phases and each pass body; a per-frame CPU-span ring | NOT STARTED |
-| [3 — nested GPU scope stack](phase-3-nested-scope-stack.md) | flat per-pass list → a `{name, parentIndex, depth}` tree; bigger pool cap; sub-pass scopes inside the scene pass | NOT STARTED |
-| [4 — CPU↔GPU correlation](phase-4-calibrated-timestamps.md) | `VK_EXT_calibrated_timestamps`: map GPU spans onto the CPU clock; one merged timeline; graceful GPU-only fallback | NOT STARTED |
-| [5 — capture commands + Chrome-Trace](phase-5-capture-commands-and-trace.md) | the `ProfileSpan`/`ProfileCaptureDto` model, the bounded capture state machine, `capture-start`/`capture-stop`, the engine Chrome-Trace serializer, codegen + `se` dump | NOT STARTED |
-| [6 — editor store + Profiler tab](phase-6-editor-store-and-tab.md) | the `captureState`/`capture` Zustand slice, the typed client wrappers, the new `profiler` `BottomTab` + an empty panel shell | NOT STARTED |
-| [7 — Profiler panel & views](phase-7-profiler-panel-views.md) | capture controls (Start/Stop + window selector + Download), the sortable table (default), the flame-chart/timeline, the aggregate icicle, cross-highlight | NOT STARTED |
-| [8 — pipeline statistics](phase-8-pipeline-statistics.md) | decode the wired-but-unimplemented `PipelineStats` mode into per-pass overdraw / culling / vertex-reuse / compute-invocation columns | NOT STARTED |
-| [9 — Perfetto export + docs/e2e](phase-9-perfetto-export-and-docs.md) | client-side Perfetto-protobuf export + Open-in-Perfetto, the docs concept pages, and the e2e capture-contract test | NOT STARTED |
+| [1 — debug-utils pass labels](phase-1-debug-utils-labels.md) | `vkCmdBeginDebugUtilsLabelEXT` around every pass body, mode-independent; instant RenderDoc/Nsight readability | COMPLETED |
+| [2 — CPU phase + per-pass scopes](phase-2-cpu-scopes.md) | integer-ID RAII `steady_clock` markers around the frame-lifecycle phases and each pass body; a per-frame CPU-span ring | COMPLETED |
+| [3 — nested GPU scope stack](phase-3-nested-scope-stack.md) | flat per-pass list → a `{name, parentIndex, depth}` tree; bigger pool cap; sub-pass scopes inside the scene pass | COMPLETED |
+| [4 — CPU↔GPU correlation](phase-4-calibrated-timestamps.md) | `VK_EXT_calibrated_timestamps`: map GPU spans onto the CPU clock; one merged timeline; graceful GPU-only fallback | COMPLETED |
+| [5 — capture commands + Chrome-Trace](phase-5-capture-commands-and-trace.md) | the `ProfileSpan`/`ProfileCaptureDto` model, the bounded capture state machine, `capture-start`/`capture-stop`, the engine Chrome-Trace serializer, codegen + `se` dump | COMPLETED |
+| [6 — editor store + Profiler tab](phase-6-editor-store-and-tab.md) | the `captureState`/`capture` Zustand slice, the typed client wrappers, the new `profiler` `BottomTab` + an empty panel shell | COMPLETED |
+| [7 — Profiler panel & views](phase-7-profiler-panel-views.md) | capture controls (Start/Stop + window selector + Download), the sortable table (default), the flame-chart/timeline, the aggregate icicle, cross-highlight | COMPLETED |
+| [8 — pipeline statistics](phase-8-pipeline-statistics.md) | decode the wired-but-unimplemented `PipelineStats` mode into per-pass overdraw / culling / vertex-reuse / compute-invocation columns | COMPLETED |
+| [9 — Perfetto export + docs/e2e](phase-9-perfetto-export-and-docs.md) | client-side Perfetto-protobuf export + Open-in-Perfetto, the docs concept pages, and the e2e capture-contract test | COMPLETED |
 
 ## Sequencing
 

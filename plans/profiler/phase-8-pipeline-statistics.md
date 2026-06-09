@@ -1,6 +1,6 @@
 # Phase 8 — pipeline statistics
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 Finish the lane that is already declared but never decoded. `ProfilerMode::PipelineStats`
 (`renderer_types.cppm:561`) exists, `GpuProfiler.pipelineStatsSupported` is set from the

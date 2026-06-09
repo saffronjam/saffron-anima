@@ -1,6 +1,6 @@
 # Phase 6 — editor store + Profiler tab
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 Give the editor the typed plumbing for captures and a home to put them — the `captureState`/`capture`
 Zustand slice, the typed client wrappers for the Phase 5 commands, and the new **`profiler` dock tab**

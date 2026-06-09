@@ -1,6 +1,6 @@
 # Phase 4 — CPU↔GPU correlation
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 The single highest-value upgrade in the plan: map resolved GPU timestamp spans onto the CPU
 `steady_clock` so a capture is **one merged CPU+GPU timeline** instead of two disconnected axes. Without

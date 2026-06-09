@@ -1,6 +1,6 @@
 # Phase 1 — debug-utils pass labels
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 The cheapest, most independent win: make every render-graph pass *named* in external capture tools.
 Today a RenderDoc or Nsight capture of `SaffronEngine` shows an anonymous wall of `vkCmdDraw*` /

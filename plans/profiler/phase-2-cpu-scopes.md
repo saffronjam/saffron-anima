@@ -1,6 +1,6 @@
 # Phase 2 — CPU phase + per-pass scopes
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 Turn the two EMA scalars the engine has today — `cpuFrameMs` and `cpuWaitMs`
 (`renderer_types.cppm:589-590`) — into a real **per-phase and per-pass CPU timeline**. Phase 1 of

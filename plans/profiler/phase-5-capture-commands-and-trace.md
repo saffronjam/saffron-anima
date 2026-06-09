@@ -1,6 +1,6 @@
 # Phase 5 — capture commands + Chrome-Trace
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 The wire seam. Phases 2–4 gave the engine a nested, CPU↔GPU-correlated span set per frame; this phase
 defines the **span data model**, a **bounded capture state machine**, the two control commands that arm

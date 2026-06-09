@@ -1,6 +1,6 @@
 # Phase 7 — Profiler panel & views
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 The visible profiler. Fill the `ProfilerPanel` shell from Phase 6 with the **capture controls** and the
 **three views** — a sortable per-pass table (the default landing), a time-ordered flame chart / two-lane

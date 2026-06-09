@@ -1,6 +1,6 @@
 # Phase 9 — Perfetto export + docs/e2e
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 Close the loop. Add the second export format (Perfetto protobuf) and the "Open in Perfetto" deep-link,
 write the docs concept pages, wire the alarm deep-link to the new tab, and add the e2e capture-contract
