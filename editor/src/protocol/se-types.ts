@@ -42,6 +42,15 @@ export interface MaterialSet {
   slots: Material[];
 }
 
+export interface ScriptSlot {
+  scriptPath: string;
+  overrides: Record<string, unknown>;
+}
+
+export interface Script {
+  scripts: ScriptSlot[];
+}
+
 export interface DirectionalLight {
   direction: Vec3;
   color: Vec3;
@@ -105,6 +114,7 @@ export interface Components {
   Camera?: Camera;
   Material?: Material;
   MaterialSet?: MaterialSet;
+  Script?: Script;
   DirectionalLight?: DirectionalLight;
   PointLight?: PointLight;
   SpotLight?: SpotLight;
@@ -121,6 +131,7 @@ export type ComponentBody =
   | Camera
   | Material
   | MaterialSet
+  | Script
   | DirectionalLight
   | PointLight
   | SpotLight
@@ -626,6 +637,57 @@ export interface StepParams {
   frames?: number;
 }
 
+export interface ScriptStatusResult {
+  state: string;
+  instances: number;
+  errorHighWater: number;
+}
+
+export interface DrainScriptErrorsParams {
+  since?: number;
+}
+
+export interface DrainScriptErrorsResult {
+  events: ScriptErrorDto[];
+  highWaterSeq: number;
+  oldestSeq: number;
+  overflowed: boolean;
+}
+
+export interface ScriptErrorDto {
+  seq: number;
+  entity: WireUuid;
+  script: string;
+  message: string;
+  tick: number;
+}
+
+export interface GetScriptSchemaParams {
+  path: string;
+}
+
+export interface GetScriptSchemaResult {
+  fields: ScriptFieldDto[];
+}
+
+export interface ScriptFieldDto {
+  name: string;
+  type: string;
+  defaultValue: unknown;
+}
+
+export interface SetScriptOverrideParams {
+  entity: WireUuid | string | number;
+  slot: number;
+  name: string;
+  value: unknown;
+}
+
+export interface SetScriptOverrideResult {
+  scriptPath: string;
+  overrides: unknown;
+}
+
 export interface AddEntityParams {
   preset?: "empty" | "cube" | "model" | "point-light" | "spot-light" | "directional-light" | "camera" | "reflection-probe";
 }
@@ -757,6 +819,14 @@ export interface NewProjectParams {
   name?: string;
   displayName?: string;
   root?: string;
+}
+
+export interface CreateScriptParams {
+  name: string;
+}
+
+export interface CreateScriptResult {
+  path: string;
 }
 
 export interface PathParams {
@@ -957,6 +1027,10 @@ export interface CommandParamsMap {
   "step": StepParams;
   "stop": EmptyParams;
   "get-play-state": EmptyParams;
+  "get-script-status": EmptyParams;
+  "drain-script-errors": DrainScriptErrorsParams;
+  "get-script-schema": GetScriptSchemaParams;
+  "set-script-override": SetScriptOverrideParams;
   "add-entity": AddEntityParams;
   "copy-entity": EntityParams;
   "rename-entity": RenameEntityParams;
@@ -973,6 +1047,7 @@ export interface CommandParamsMap {
   "set-exposure": SetExposureParams;
   "get-project": EmptyParams;
   "new-project": NewProjectParams;
+  "create-script": CreateScriptParams;
   "open-project": PathParams;
   "import-model": PathParams;
   "import-texture": PathParams;
@@ -1049,6 +1124,10 @@ export interface CommandResultMap {
   "step": PlayStateResult;
   "stop": PlayStateResult;
   "get-play-state": PlayStateResult;
+  "get-script-status": ScriptStatusResult;
+  "drain-script-errors": DrainScriptErrorsResult;
+  "get-script-schema": GetScriptSchemaResult;
+  "set-script-override": SetScriptOverrideResult;
   "add-entity": EntityRef;
   "copy-entity": EntityRef;
   "rename-entity": EntityRef;
@@ -1065,6 +1144,7 @@ export interface CommandResultMap {
   "set-exposure": SetExposureResult;
   "get-project": ProjectInfoDto;
   "new-project": ProjectInfoDto;
+  "create-script": CreateScriptResult;
   "open-project": ProjectInfoDto;
   "import-model": ImportModelResult;
   "import-texture": ImportTextureResult;
