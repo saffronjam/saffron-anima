@@ -12,6 +12,7 @@ target_sources(SaffronEngineLib
             source/saffron/window/window.cppm
             source/saffron/geometry/geometry.cppm
             source/saffron/scene/scene.cppm
+            source/saffron/script/script.cppm
             source/saffron/rendering/render_graph.cppm
             source/saffron/rendering/renderer_types.cppm
             source/saffron/rendering/renderer_detail.cppm
@@ -36,6 +37,7 @@ target_sources(SaffronEngineLib PRIVATE
     source/saffron/rendering/renderer_textures.cpp
     source/saffron/rendering/renderer_thumbnail.cpp
     source/saffron/scene/scene_component_serde.generated.cpp
+    source/saffron/script/script_runtime.cpp
     source/saffron/sceneedit/scene_edit_context.cpp
     source/saffron/sceneedit/scene_edit_components.cpp
     source/saffron/sceneedit/scene_edit_camera.cpp
