@@ -210,6 +210,74 @@ export interface RenderPassTimingDto {
   gpuMs: number;
 }
 
+export interface CaptureStartParams {
+  mode?: "single" | "frames" | "rolling";
+  frames?: number;
+  filter?: string;
+  includeCpu?: boolean;
+  includePipelineStats?: boolean;
+}
+
+export interface CaptureStartResult {
+  captureId: number;
+  ack: boolean;
+}
+
+export interface CaptureStopResult {
+  ready: boolean;
+  mode: "single" | "frames" | "rolling";
+  frameCount: number;
+  inlined: boolean;
+  capture: ProfileCaptureDto;
+  chromeTrace: string;
+  path: string;
+  pending: boolean;
+}
+
+export interface ProfileCaptureDto {
+  spans: ProfileSpanDto[];
+  metadata: ProfileCaptureMetadataDto;
+}
+
+export interface ProfileSpanDto {
+  name: string;
+  lane: "cpu" | "gpu";
+  startNs: number;
+  endNs: number;
+  parentIndex: number;
+  depth: number;
+  pipelineStats?: PipelineStatsDto;
+}
+
+export interface PipelineStatsDto {
+  inputVertices: number;
+  vertexInvocations: number;
+  clippingInvocations: number;
+  clippingPrimitives: number;
+  fragmentInvocations: number;
+  computeInvocations: number;
+  pixels: number;
+}
+
+export interface ProfileCaptureMetadataDto {
+  softwareGpu: boolean;
+  correlated: boolean;
+  deviceName: string;
+  timestampPeriod: number;
+  targetFps: number;
+  mode: "off" | "timestamps" | "pipeline-stats";
+  filter: string;
+  frameCount: number;
+}
+
+export interface CaptureStatusResult {
+  state: "idle" | "arming" | "recording" | "ready";
+  capturedFrames: number;
+  targetFrames: number;
+  mode: "single" | "frames" | "rolling";
+  pipelineStatsSupported: boolean;
+}
+
 export interface FrameHistoryParams {
   samples?: number;
 }
@@ -842,6 +910,9 @@ export interface CommandParamsMap {
   "render-stats": EmptyParams;
   "profiler.set-mode": ProfilerSetModeParams;
   "pass-timings": EmptyParams;
+  "profiler.capture-start": CaptureStartParams;
+  "profiler.capture-stop": EmptyParams;
+  "profiler.capture-status": EmptyParams;
   "frame-history": FrameHistoryParams;
   "get-perf-config": EmptyParams;
   "set-perf-config": SetPerfConfigParams;
@@ -931,6 +1002,9 @@ export interface CommandResultMap {
   "render-stats": RenderStatsDto;
   "profiler.set-mode": ProfilerModeResult;
   "pass-timings": RenderPassTimingsDto;
+  "profiler.capture-start": CaptureStartResult;
+  "profiler.capture-stop": CaptureStopResult;
+  "profiler.capture-status": CaptureStatusResult;
   "frame-history": FrameHistoryDto;
   "get-perf-config": PerfConfigDto;
   "set-perf-config": PerfConfigDto;
