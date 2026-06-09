@@ -6,9 +6,11 @@ module;
 #define VULKAN_HPP_NO_SMART_HANDLE
 #include <vulkan/vulkan.hpp>
 
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -120,16 +122,39 @@ export namespace se
 
     void addPass(RenderGraph& graph, RgPass pass);
 
-    /// Optional per-pass GPU timestamp capture for executeRenderGraph. When `pool` is set,
-    /// the graph writes a begin/end timestamp pair around each pass body (slots 2i, 2i+1)
-    /// and appends the pass name to `names`, until `capacity` slots are used. Owned by the
-    /// renderer's profiler; the graph only records into it (the "no pass writes a query by
-    /// hand" analogue of barrier derivation).
+    /// One recorded GPU scope: its name and nesting (depth + the enclosing scope's index in
+    /// the same list, or -1). Kept flat-and-tagged, not a literal tree — async compute makes a
+    /// single nested wall-clock tree ambiguous, so the consumer decodes the tree at read-back.
+    /// The i-th record owns query slots 2i (begin) and 2i+1 (end).
+    struct ScopeRecord
+    {
+        std::string name;
+        i32 parentIndex = -1;  ///< enclosing scope's record index, or -1 at top level
+        u32 depth = 0;
+        i32 statsSlot = -1;  ///< pipeline-stats query slot (top-level passes only), or -1
+        u64 pixels = 0;      ///< render-area pixels at stats time, for the overdraw ratio
+    };
+
+    /// The GPU timestamp recorder for executeRenderGraph and pass-body sub-scopes. A GpuScope
+    /// grabs the next free query-slot pair on enter (begin) and exit (end), pushing a
+    /// ScopeRecord so the nesting *is* the hierarchy. `pool`/`capacity`/`records` are set per
+    /// frame by the renderer; `nextSlot`/`openScope`/`depth` are the transient recording cursor,
+    /// reset each frame. A null pool disables recording. The renderer owns it; the graph and
+    /// pass bodies only record into it (the "no pass writes a query by hand" analogue).
     struct RgTimestamps
     {
-        vk::QueryPool pool;                         ///< null => timestamp capture disabled
-        u32 capacity = 0;                           ///< total timestamp slots in the pool (2 per pass)
-        std::vector<std::string>* names = nullptr;  ///< receives one name per timed pass, in order
+        vk::QueryPool pool;                           ///< null => timestamp capture disabled
+        u32 capacity = 0;                             ///< total query slots in the pool (2 per scope)
+        std::vector<ScopeRecord>* records = nullptr;  ///< receives one record per scope, in begin order
+        u32 nextSlot = 0;                             ///< next free query slot (begin = nextSlot, end = +1)
+        i32 openScope = -1;                           ///< innermost open scope's record index, or -1
+        u32 depth = 0;                                ///< current nesting depth
+        // Pipeline-statistics queries (PipelineStats mode): one per top-level pass, bracketing
+        // the pass body *inside* the rendering scope (a stats query cannot straddle
+        // beginRendering/endRendering, unlike a timestamp). Null pool => no stats queries.
+        vk::QueryPool statsPool;  ///< null => no pipeline-stats queries
+        u32 statsCapacity = 0;    ///< total stats query slots
+        u32 nextStatsSlot = 0;    ///< next free stats slot
     };
 
     /// VK_EXT_debug_utils command-buffer label entry points, resolved by the renderer and
@@ -143,13 +168,101 @@ export namespace se
         PFN_vkCmdEndDebugUtilsLabelEXT end = nullptr;
     };
 
+    /// A recorded CPU span: a [startNs, endNs) interval on the render thread for one
+    /// lifecycle phase or pass, with its nesting (depth + the index of the enclosing span
+    /// in the same buffer, or -1). steady_clock ns; the origin is arbitrary but shared
+    /// within a frame, so spans are directly comparable. Phase 4 maps these onto the GPU axis.
+    struct CpuSpan
+    {
+        u32 marker = 0;  ///< index into CpuMarkerRegistry::names
+        u64 startNs = 0;
+        u64 endNs = 0;
+        u32 depth = 0;
+        i32 parent = -1;  ///< enclosing span index in the same buffer, or -1 at top level
+    };
+
+    /// Interns scope names to stable integer ids so a CpuSpan stays string-free. Lifecycle
+    /// phase names and pass names recur every frame, so the table grows once and then holds;
+    /// lookup is an allocation-free linear scan (the set is a few dozen short names).
+    struct CpuMarkerRegistry
+    {
+        std::vector<std::string> names;  ///< id -> name; the index is the marker id
+    };
+
+    /// One frame-in-flight's CPU-span sink plus the open-scope cursor. Recording is on the
+    /// single render thread, so the "currently open" parent/depth live here, not in a
+    /// thread_local. Plain host memory: readable at end of frame with no GPU sync.
+    struct CpuSpanBuffer
+    {
+        std::vector<CpuSpan> spans;
+        i32 openParent = -1;  ///< index of the innermost open span, or -1
+        u32 openDepth = 0;    ///< current nesting depth
+
+        void reset()
+        {
+            spans.clear();
+            openParent = -1;
+            openDepth = 0;
+        }
+    };
+
+    /// What a CpuScope writes into: the persistent name registry plus this frame's buffer.
+    /// A null buffer means recording is disabled and every scope is a cheap no-op — the CPU
+    /// analogue of an unarmed RgTimestamps.
+    struct CpuRecorder
+    {
+        CpuMarkerRegistry* registry = nullptr;
+        CpuSpanBuffer* buffer = nullptr;
+    };
+
+    /// RAII steady_clock span. Opens on construct, closes on destruct; nesting is derived
+    /// from the recorder's buffer cursor. Records nothing (and reads no clock) when the
+    /// recorder is inactive, so an `Off` profiler pays only a branch. Non-movable — always a
+    /// named local at the seam it measures.
+    struct CpuScope
+    {
+        CpuScope(const CpuRecorder* recorder, std::string_view name);
+        ~CpuScope();
+        CpuScope(const CpuScope&) = delete;
+        auto operator=(const CpuScope&) -> CpuScope& = delete;
+        CpuScope(CpuScope&&) = delete;
+        auto operator=(CpuScope&&) -> CpuScope& = delete;
+
+        CpuSpanBuffer* buffer = nullptr;  ///< null => inactive
+        i32 index = -1;                   ///< this span's slot in buffer->spans
+        i32 prevParent = -1;              ///< openParent to restore on close
+    };
+
+    /// RAII GPU timestamp scope: writes a begin timestamp on construct and an end timestamp on
+    /// destruct into the recorder's pool, pushing a ScopeRecord whose parent/depth come from the
+    /// recorder's open-scope cursor. Inactive (a no-op) when the recorder is null, has no pool,
+    /// or the pool is full — so overflow past the scope cap truncates gracefully. Non-movable:
+    /// a named local bracketing the command range it measures. Pass bodies open sub-scopes on
+    /// the same recorder, nesting under their enclosing pass scope.
+    struct GpuScope
+    {
+        GpuScope() = default;
+        GpuScope(RgTimestamps* recorder, vk::CommandBuffer cmd, std::string_view name);
+        ~GpuScope();
+        GpuScope(const GpuScope&) = delete;
+        auto operator=(const GpuScope&) -> GpuScope& = delete;
+        GpuScope(GpuScope&&) = delete;
+        auto operator=(GpuScope&&) -> GpuScope& = delete;
+
+        RgTimestamps* recorder = nullptr;  ///< null => inactive
+        vk::CommandBuffer cmd;
+        u32 beginSlot = 0;     ///< this scope's begin query slot (end = beginSlot + 1)
+        i32 prevParent = -1;   ///< openScope to restore on close
+        i32 recordIndex = -1;  ///< this scope's index in records (for the caller's stats query), or -1
+    };
+
     /// Derive and emit each pass's barriers from its declared usage, then record the
     /// pass body inside its rendering scope. Resolves cross-frame layouts on exit. When
-    /// `timestamps` is non-null and armed, brackets each pass body with GPU timestamps;
-    /// when `labels` carries resolved entry points, also brackets it with a debug-utils
-    /// marker region.
-    void executeRenderGraph(RenderGraph& graph, vk::CommandBuffer cmd, const RgTimestamps* timestamps = nullptr,
-                            const RgDebugLabels* labels = nullptr);
+    /// `timestamps` is non-null and armed, brackets each pass body with a GPU scope (and the
+    /// pass body may open child scopes on the same recorder); `labels` (when resolved) adds a
+    /// debug-utils marker region; `cpu` (when active) records a per-pass CPU span.
+    void executeRenderGraph(RenderGraph& graph, vk::CommandBuffer cmd, RgTimestamps* timestamps = nullptr,
+                            const RgDebugLabels* labels = nullptr, const CpuRecorder* cpu = nullptr);
 }
 
 namespace se
@@ -308,6 +421,95 @@ namespace se
         graph.passes.push_back(std::move(pass));
     }
 
+    auto cpuScopeNowNs() -> u64
+    {
+        return static_cast<u64>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+    }
+
+    // Map a scope name to its stable id, interning it on first sight. Linear scan over the
+    // few dozen names; allocation-free once a name is known (only a new name grows the table).
+    auto cpuMarkerId(CpuMarkerRegistry& registry, std::string_view name) -> u32
+    {
+        for (u32 i = 0; i < registry.names.size(); i = i + 1)
+        {
+            if (std::string_view{ registry.names[i] } == name)
+            {
+                return i;
+            }
+        }
+        registry.names.emplace_back(name);
+        return static_cast<u32>(registry.names.size() - 1);
+    }
+
+    CpuScope::CpuScope(const CpuRecorder* recorder, std::string_view name)
+    {
+        if (recorder == nullptr || recorder->buffer == nullptr || recorder->registry == nullptr)
+        {
+            return;
+        }
+        buffer = recorder->buffer;
+        const u32 marker = cpuMarkerId(*recorder->registry, name);
+        index = static_cast<i32>(buffer->spans.size());
+        prevParent = buffer->openParent;
+        CpuSpan span;
+        span.marker = marker;
+        span.depth = buffer->openDepth;
+        span.parent = buffer->openParent;
+        span.startNs = cpuScopeNowNs();
+        buffer->spans.push_back(span);
+        buffer->openParent = index;
+        buffer->openDepth = buffer->openDepth + 1;
+    }
+
+    CpuScope::~CpuScope()
+    {
+        if (buffer == nullptr)
+        {
+            return;
+        }
+        buffer->spans[static_cast<u32>(index)].endNs = cpuScopeNowNs();
+        buffer->openParent = prevParent;
+        buffer->openDepth = buffer->openDepth - 1;
+    }
+
+    GpuScope::GpuScope(RgTimestamps* rec, vk::CommandBuffer commandBuffer, std::string_view name)
+    {
+        // Inactive unless the recorder is armed and a begin/end slot pair is still free. Once
+        // full, every later scope is inactive too (nextSlot only grows), so the recorded set is
+        // a begin-order prefix of the full tree — parents always precede their children.
+        if (rec == nullptr || !rec->pool || rec->nextSlot + 1 >= rec->capacity)
+        {
+            return;
+        }
+        recorder = rec;
+        cmd = commandBuffer;
+        beginSlot = rec->nextSlot;
+        rec->nextSlot = rec->nextSlot + 2;
+        prevParent = rec->openScope;
+        recordIndex = static_cast<i32>(rec->records->size());
+        ScopeRecord record;
+        record.name = name;
+        record.parentIndex = rec->openScope;
+        record.depth = rec->depth;
+        rec->records->push_back(std::move(record));
+        rec->openScope = recordIndex;
+        rec->depth = rec->depth + 1;
+        cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eTopOfPipe, rec->pool, beginSlot);
+    }
+
+    GpuScope::~GpuScope()
+    {
+        if (recorder == nullptr)
+        {
+            return;
+        }
+        cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, recorder->pool, beginSlot + 1);
+        recorder->openScope = prevParent;
+        recorder->depth = recorder->depth - 1;
+    }
+
     // Bright-ish, stable RGBA from a pass name (FNV-1a) so a pass group reads as one colour
     // across captures. Cosmetic — RenderDoc/Nsight honour VkDebugUtilsLabelEXT::color.
     void beginPassLabel(const RgDebugLabels& labels, vk::CommandBuffer cmd, const std::string& name)
@@ -327,12 +529,10 @@ namespace se
         labels.begin(static_cast<VkCommandBuffer>(cmd), &label);
     }
 
-    void executeRenderGraph(RenderGraph& graph, vk::CommandBuffer cmd, const RgTimestamps* timestamps,
-                            const RgDebugLabels* labels)
+    void executeRenderGraph(RenderGraph& graph, vk::CommandBuffer cmd, RgTimestamps* timestamps,
+                            const RgDebugLabels* labels, const CpuRecorder* cpu)
     {
-        const bool timing = timestamps != nullptr && static_cast<bool>(timestamps->pool);
         const bool labelling = labels != nullptr && labels->begin != nullptr;
-        u32 timed = 0;  // index of the next pass to time (begin slot = 2*timed)
 
         for (RgPass& pass : graph.passes)
         {
@@ -343,12 +543,29 @@ namespace se
                 beginPassLabel(*labels, cmd, pass.name);
             }
 
-            // Time this pass only while a begin/end slot pair is still free. The begin
-            // timestamp brackets the pass's barriers + body; the end follows its scope.
-            const bool timeThisPass = timing && (2 * timed + 1) < timestamps->capacity;
-            if (timeThisPass)
+            // CPU span for the cost of recording this pass on the render thread — nested
+            // under the caller's open scope, paired with the pass's GPU span by name.
+            const CpuScope passScope(cpu, pass.name);
+
+            // Top-level GPU scope for the pass (its barriers + body). The body may open child
+            // scopes on the same recorder, which nest under this one. No-op when timing is off
+            // or the pool is full.
+            const GpuScope gpuScope(timestamps, cmd, pass.name);
+
+            // One pipeline-statistics query per top-level pass (PipelineStats mode), recorded
+            // against the pass's scope. Issued inside the rendering scope below (graphics) or
+            // around the body (compute) — it must not straddle beginRendering/endRendering.
+            const bool statsThisPass = timestamps != nullptr && static_cast<bool>(timestamps->statsPool) &&
+                                       gpuScope.recordIndex >= 0 &&
+                                       timestamps->nextStatsSlot < timestamps->statsCapacity;
+            u32 statsSlot = 0;
+            if (statsThisPass)
             {
-                cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eTopOfPipe, timestamps->pool, 2 * timed);
+                statsSlot = timestamps->nextStatsSlot;
+                timestamps->nextStatsSlot = timestamps->nextStatsSlot + 1;
+                ScopeRecord& rec = (*timestamps->records)[static_cast<u32>(gpuScope.recordIndex)];
+                rec.statsSlot = static_cast<i32>(statsSlot);
+                rec.pixels = static_cast<u64>(pass.renderArea.width) * pass.renderArea.height;
             }
 
             std::vector<vk::ImageMemoryBarrier2> imageBarriers;
@@ -432,28 +649,41 @@ namespace se
                 cmd.setViewport(0, viewport);
                 cmd.setScissor(0, scissor);
 
+                if (statsThisPass)
+                {
+                    cmd.beginQuery(timestamps->statsPool, statsSlot, vk::QueryControlFlags{});
+                }
                 if (pass.execute)
                 {
                     pass.execute(cmd);
                 }
+                if (statsThisPass)
+                {
+                    cmd.endQuery(timestamps->statsPool, statsSlot);
+                }
                 cmd.endRendering();
             }
-            else if (pass.execute)
+            else
             {
-                pass.execute(cmd);
-            }
-
-            if (timeThisPass)
-            {
-                cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, timestamps->pool, 2 * timed + 1);
-                timestamps->names->push_back(pass.name);
-                timed = timed + 1;
+                if (statsThisPass)
+                {
+                    cmd.beginQuery(timestamps->statsPool, statsSlot, vk::QueryControlFlags{});
+                }
+                if (pass.execute)
+                {
+                    pass.execute(cmd);
+                }
+                if (statsThisPass)
+                {
+                    cmd.endQuery(timestamps->statsPool, statsSlot);
+                }
             }
 
             if (labelling)
             {
                 labels->end(static_cast<VkCommandBuffer>(cmd));
             }
+            // gpuScope + passScope close here, writing the pass's end timestamp / CPU span end.
         }
 
         for (RgResourceState& r : graph.resources)

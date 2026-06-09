@@ -44,9 +44,10 @@ export namespace se
     // array indexed per-instance; lavapipe + desktop GPUs allow far more, this is plenty.
     inline constexpr u32 MaxBindlessTextures = 1024;
 
-    // Upper bound on render-graph passes the GPU profiler times per frame. Each pass takes
-    // two timestamp slots (begin + end); passes past this cap are simply not timed.
-    inline constexpr u32 MaxProfiledPasses = 64;
+    // Upper bound on GPU scopes the profiler times per frame — top-level passes plus any
+    // opt-in sub-scopes nested inside them. Each scope takes two timestamp slots (begin +
+    // end); scopes past this cap are simply not timed (the recorder truncates gracefully).
+    inline constexpr u32 MaxProfiledScopes = 128;
 
     struct FrameData
     {
@@ -561,13 +562,38 @@ export namespace se
         PipelineStats,  ///< Timestamps plus per-pass pipeline-statistics (deepest, heaviest)
     };
 
-    // One render-graph pass's measured GPU time for a frame. `gpuMs` is the wall-clock
-    // span between the pass's begin/end timestamps — relative, since adjacent passes can
-    // overlap on the GPU, so the per-pass numbers do not cleanly sum to the frame total.
+    // Raw pipeline-statistics counts for one pass (VK_QUERY_TYPE_PIPELINE_STATISTICS), recorded
+    // only in PipelineStats mode. The consumer derives the optimization ratios: overdraw
+    // (fragmentInvocations / pixels), culling efficiency (clippingPrimitives /
+    // clippingInvocations), and vertex reuse (vertexInvocations / inputVertices);
+    // computeInvocations sizes the GI/lighting compute passes.
+    struct PipelineStats
+    {
+        u64 inputVertices = 0;
+        u64 vertexInvocations = 0;
+        u64 clippingInvocations = 0;
+        u64 clippingPrimitives = 0;
+        u64 fragmentInvocations = 0;
+        u64 computeInvocations = 0;
+        u64 pixels = 0;  // render-area pixels for the overdraw ratio (0 for compute / no query)
+    };
+
+    // One GPU scope's measured time for a frame, plus its place in the scope tree. `gpuMs`
+    // is the wall-clock span between the scope's begin/end timestamps — relative, since
+    // sibling scopes can overlap on the GPU, so the per-scope numbers do not cleanly sum to
+    // the frame total. `startNs`/`endNs` are frame-relative (from the earliest begin), so a
+    // consumer can lay the scopes onto one timeline; `parentIndex`/`depth` give the tree.
+    // `stats` is populated only for top-level passes captured in PipelineStats mode.
     struct PassTiming
     {
         std::string name;
         f32 gpuMs = 0.0f;
+        u64 startNs = 0;       // frame-relative begin (GPU clock, ticks→ns)
+        u64 endNs = 0;         // frame-relative end
+        i32 parentIndex = -1;  // enclosing scope's index in this list, or -1 at top level
+        u32 depth = 0;
+        bool hasStats = false;
+        PipelineStats stats;
     };
 
     // Per-frame scene draw counters + CPU/GPU frame breakdown, refreshed each frame and
@@ -598,19 +624,132 @@ export namespace se
     // read-back. Each frame writes begin/end timestamps around every graph pass; the pool
     // is read back MaxFramesInFlight frames later (after that slot's fence has signalled),
     // so the read is always non-blocking.
+    // VK_EXT_calibrated_timestamps state: the offset that projects a GPU tick onto the CPU
+    // steady_clock axis (hostNs = deviceTick * timestampPeriod + deviceToHostNsOffset),
+    // re-sampled periodically to track clock drift. `correlated` is false until a sample lands
+    // (or stays false forever when the extension/host domain is absent) — the read-back then
+    // keeps GPU spans on their own frame-relative axis.
+    struct GpuCalibration
+    {
+        bool available = false;        // extension present + a host domain matching steady_clock
+        VkTimeDomainEXT hostDomain{};  // the host clock domain (CLOCK_MONOTONIC = steady_clock)
+        i64 deviceToHostNsOffset = 0;  // additive ns offset, device-ns -> host-ns
+        u64 maxDeviationNs = 0;        // sample confidence; larger = looser correlation
+        bool correlated = false;       // a valid offset has been sampled this session
+        u64 lastCalibratedSerial = 0;  // frameSerial of the last (re)calibration
+    };
+
     struct GpuProfiler
     {
         ProfilerMode mode = ProfilerMode::Off;
         bool poolsReady = false;
+        bool subScopes = false;  // opt-in: instrument pass interiors as nested sub-scopes
+        GpuCalibration calibration;
         std::array<vk::QueryPool, MaxFramesInFlight> timestampPools{};
-        // Pass names recorded into slot i this cycle, consumed when slot i is read back.
-        std::array<std::vector<std::string>, MaxFramesInFlight> recordedNames{};
-        std::vector<PassTiming> lastTimings;  // last completed read-back
+        // Pipeline-statistics pools (parallel to the timestamp pools), allocated only when
+        // pipelineStatsSupported. One query slot per top-level pass; read back in the same slot.
+        std::array<vk::QueryPool, MaxFramesInFlight> statsPools{};
+        // Scope records written into slot i this cycle, consumed when slot i is read back.
+        std::array<std::vector<ScopeRecord>, MaxFramesInFlight> recordedScopes{};
+        RgTimestamps scopeRecorder;           // per-frame recorder; pool/records rebound each frame
+        std::vector<PassTiming> lastTimings;  // last completed read-back (the scope tree, flat)
         f32 lastGpuTotalMs = 0.0f;            // raw span of the last read-back
         f32 timestampPeriod = 1.0f;           // ns per timestamp tick (device limit)
         u64 timestampMask = ~0ull;            // graphics-queue timestampValidBits mask
         bool timestampsSupported = false;     // validBits != 0 && timestampComputeAndGraphics
         bool pipelineStatsSupported = false;  // pipelineStatisticsQuery device feature present
+    };
+
+    // The CPU side of the profiler: a persistent name registry plus one span buffer per
+    // frame-in-flight, mirroring GpuProfiler's slot discipline. CpuScope records into the
+    // current slot while a profiler mode is active; the spans are plain host memory, read at
+    // end of frame with no GPU deferral. Phase 4 maps these onto the GPU timestamp axis.
+    struct CpuProfiler
+    {
+        CpuMarkerRegistry registry;
+        std::array<CpuSpanBuffer, MaxFramesInFlight> buffers{};
+    };
+
+    // The merged span record the whole profiler stack speaks: a CPU phase/pass span (Phase 2)
+    // or a GPU scope (Phase 3) projected onto the CPU axis (Phase 4). Kept flat-and-tagged;
+    // `parentIndex`/`depth` decode the tree, `lane` separates the two timelines. Stored as a
+    // capture's `spans[]`, serialized to Chrome-Trace / the editor's ProfileCaptureDto.
+    enum class ProfileLane
+    {
+        Cpu,
+        Gpu,
+    };
+
+    struct ProfileSpan
+    {
+        std::string name;
+        ProfileLane lane = ProfileLane::Cpu;
+        u64 startNs = 0;
+        u64 endNs = 0;
+        i32 parentIndex = -1;  ///< enclosing span index in this capture, or -1 at top level
+        u32 depth = 0;
+        bool hasStats = false;  ///< pipeline-statistics present (PipelineStats-mode GPU passes)
+        PipelineStats stats;
+    };
+
+    // Self-documenting capture metadata: the honesty flags (softwareGpu/correlated) plus the
+    // device + clock facts a downloaded trace needs to be interpreted on its own.
+    struct ProfileCaptureMeta
+    {
+        bool softwareGpu = false;
+        bool correlated = false;
+        std::string deviceName;
+        f32 timestampPeriod = 1.0f;
+        f32 targetFps = 60.0f;
+        ProfilerMode mode = ProfilerMode::Off;
+        std::string filter;
+        u32 frameCount = 0;
+    };
+
+    struct ProfileCapture
+    {
+        std::vector<ProfileSpan> spans;
+        ProfileCaptureMeta meta;
+    };
+
+    // Bounded capture: single frame (the default snapshot), a fixed N-frame window, or rolling
+    // (a recent window; v1 records it forward like frames). Hard-capped so the span buffer
+    // cannot OOM.
+    enum class CaptureMode
+    {
+        Single,
+        Frames,
+        Rolling,
+    };
+
+    inline constexpr u32 MaxCaptureFrames = 256;
+
+    // The capture state machine driven by profiler.capture-start/stop. `Arming` warms up for the
+    // GPU read-back delay so every recorded frame reflects the arm-time settings; `Recording`
+    // copies each finalized frame's merged spans; `Ready` holds the result until it is drained.
+    enum class CaptureState
+    {
+        Idle,
+        Arming,
+        Recording,
+        Ready,
+    };
+
+    struct CaptureRecorder
+    {
+        CaptureState state = CaptureState::Idle;
+        CaptureMode mode = CaptureMode::Single;
+        u32 targetFrames = 1;                        // frames to record before going Ready
+        u32 capturedFrames = 0;                      // frames copied so far
+        u32 warmup = 0;                              // Arming frames left (covers the read-back delay)
+        std::string filter;                          // pass-name prefix, carried into metadata (a view hint)
+        bool includeCpu = true;                      // include the CPU lane
+        bool includeStats = false;                   // request PipelineStats mode (if supported)
+        ProfilerMode priorMode = ProfilerMode::Off;  // restored on stop
+        bool priorSubScopes = false;                 // restored on stop
+        u32 captureId = 0;                           // id of the in-flight / last capture
+        u32 nextCaptureId = 1;
+        ProfileCapture capture;  // accumulates while Recording
     };
 
     // Frames kept in the rolling history ring (≈8–17 s at 60–120 Hz). Percentiles and
@@ -773,6 +912,14 @@ export namespace se
         PFN_vkGetAccelerationStructureDeviceAddressKHR getAccelAddress = nullptr;
     };
 
+    // VK_EXT_calibrated_timestamps entry points, resolved when the device extension is present.
+    // Null => the profiler cannot correlate GPU spans onto the CPU clock (graceful fallback).
+    struct CalibratedTimestampsDispatch
+    {
+        PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT getDomains = nullptr;
+        PFN_vkGetCalibratedTimestampsEXT getTimestamps = nullptr;
+    };
+
     struct VulkanContext
     {
         vkb::Instance vkbInstance;  // vk-bootstrap keeps the bits we need for clean teardown
@@ -786,7 +933,8 @@ export namespace se
         VmaAllocator allocator = nullptr;
         bool rtSupported = false;  // KHR acceleration_structure + ray_query present + enabled
         RtDispatch rt;
-        RgDebugLabels debugLabels;  // VK_EXT_debug_utils pass markers; null when the ext is absent
+        RgDebugLabels debugLabels;                  // VK_EXT_debug_utils pass markers; null when the ext is absent
+        CalibratedTimestampsDispatch calibratedTs;  // VK_EXT_calibrated_timestamps; null when absent
     };
 
     // The surface swapchain + its per-image sync, recreated as a unit on resize.
@@ -1382,6 +1530,8 @@ export namespace se
         f32 frameMs = 0.0f;                   // EMA-smoothed frame-to-frame CPU time, updated in endFrame
         u64 lastFrameNs = 0;                  // steady_clock stamp of the previous endFrame; 0 until one lands
         GpuProfiler profiler;                 // per-pass GPU timestamps + capability flags (opt-in)
+        CpuProfiler cpuProfiler;              // per-phase + per-pass CPU spans (opt-in, same gate)
+        CaptureRecorder captureRecorder;      // bounded profiler capture state machine (request-scoped)
         f32 cpuFrameMs = 0.0f;                // EMA render-thread busy time (beginFrame→endFrame minus waits)
         f32 cpuWaitMs = 0.0f;                 // EMA time blocked on fences this frame
         f32 gpuFrameMs = 0.0f;                // EMA GPU frame time (timestamp span)
@@ -1662,6 +1812,21 @@ export namespace se
     // span. Empty until a timestamps-mode frame has been recorded and read back.
     auto passTimings(const Renderer& renderer) -> std::vector<PassTiming>;
     auto passTimingsTotalMs(const Renderer& renderer) -> f32;
+
+    // Bounded profiler capture (request-scoped, driven by profiler.capture-start/stop). Start
+    // arms the recorder (forcing Timestamps mode + sub-scopes for the duration, restored on
+    // stop) and returns its id; the engine then copies each finalized frame's merged spans into
+    // the capture until it reaches the frame count. Stop finalizes and returns the result; an
+    // empty (not-ready) capture is returned when nothing was recorded.
+    auto startProfileCapture(Renderer& renderer, CaptureMode mode, u32 frames, std::string filter, bool includeCpu,
+                             bool includeStats) -> u32;
+    auto profileStatsSupported(const Renderer& renderer) -> bool;
+    auto profileCaptureState(const Renderer& renderer) -> CaptureState;
+    auto profileCaptureReady(const Renderer& renderer) -> bool;
+    auto profileCaptureMode(const Renderer& renderer) -> CaptureMode;
+    auto profileCaptureCapturedFrames(const Renderer& renderer) -> u32;
+    auto profileCaptureTargetFrames(const Renderer& renderer) -> u32;
+    auto stopProfileCapture(Renderer& renderer) -> ProfileCapture;
 
     // Frame-time history (always recorded, independent of the profiler mode). The summary
     // is computed on demand over the ring; `frameSamples` returns up to `maxSamples` of the
