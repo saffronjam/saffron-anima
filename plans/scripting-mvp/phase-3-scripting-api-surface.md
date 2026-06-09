@@ -1,6 +1,6 @@
 # Phase 3 — the scripting API surface
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 

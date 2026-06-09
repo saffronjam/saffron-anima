@@ -1,6 +1,6 @@
 # Phase 1 — Lua runtime + `Saffron.Script` module (the spike)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 

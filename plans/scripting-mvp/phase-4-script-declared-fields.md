@@ -1,6 +1,6 @@
 # Phase 4 — script-declared editable fields
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 

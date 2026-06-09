@@ -20,7 +20,12 @@ appdata/userdata/<project-name>/
   assets/
     models/
     textures/
+  src/            Lua scripts (ScriptComponent slot paths resolve here)
 ```
+
+The `src/` folder is ensured on create and on load (with a starter `example.lua` when absent);
+its contents are plain files, never catalog entries — see
+[Script components](../../scripting/script-components-and-runtime/).
 
 The project name is the stable folder-safe id. `displayName` is stored separately in the
 project file and is what the editor shows to users.

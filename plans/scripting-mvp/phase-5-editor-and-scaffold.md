@@ -1,6 +1,6 @@
 # Phase 5 — editor Inspector + project scaffold
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 

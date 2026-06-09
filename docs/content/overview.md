@@ -113,4 +113,5 @@ mechanics and the build.
 | Anti-aliasing | MSAA, FXAA, mode switching | [link](../explanations/anti-aliasing/) |
 | UI & editor | the Tauri/React editor, the in-webview canvas + shm frame transport, the gizmo, the inspector, thumbnails | [link](../explanations/ui-and-editor/) |
 | Tooling & control | the unix-socket control plane and the `se` CLI | [link](../explanations/tooling-and-control/) |
+| Scripting | the embedded Lua 5.5 VM, sandboxing, script errors as values | [link](../explanations/scripting/) |
 | Architecture | the module DAG, the build, the coding conventions | [link](../explanations/architecture-and-conventions/) |

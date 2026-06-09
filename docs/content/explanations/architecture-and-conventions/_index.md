@@ -1,6 +1,6 @@
 +++
 title = 'Architecture & conventions'
-weight = 16
+weight = 17
 bookCollapseSection = true
 +++
 

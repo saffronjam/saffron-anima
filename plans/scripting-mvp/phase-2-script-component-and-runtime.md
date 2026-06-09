@@ -1,6 +1,6 @@
 # Phase 2 — ScriptComponent + per-entity runtime
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 
