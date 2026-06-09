@@ -32,6 +32,39 @@ FetchContent_Declare(nlohmann_json
 
 FetchContent_MakeAvailable(EnTT glm VulkanMemoryAllocator vk-bootstrap nlohmann_json)
 
+# --- Lua 5.5.0 (built from source; ships no CMake) ----------------------------
+# Lua's tarball provides only a Makefile, so we populate the sources and compile
+# the core + stdlib into one static lib. lua.c / luac.c are the CLI front-ends
+# (each has main()) and are excluded. Vendored because CMake 3.31's FindLua
+# predates 5.5. Compiled as C so the error model stays setjmp/longjmp; lua_static
+# is the project's only C target, so C is enabled here rather than in project().
+enable_language(C)
+FetchContent_Declare(lua
+    URL https://www.lua.org/ftp/lua-5.5.0.tar.gz
+    URL_HASH SHA256=57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d)
+FetchContent_MakeAvailable(lua)
+
+file(GLOB lua_sources CONFIGURE_DEPENDS ${lua_SOURCE_DIR}/src/*.c)
+list(REMOVE_ITEM lua_sources
+    ${lua_SOURCE_DIR}/src/lua.c        # standalone interpreter main()
+    ${lua_SOURCE_DIR}/src/luac.c)      # bytecode compiler main()
+
+add_library(lua_static STATIC ${lua_sources})
+target_include_directories(lua_static PUBLIC ${lua_SOURCE_DIR}/src)
+# LUA_USE_POSIX (not LUA_USE_LINUX) avoids the dl/readline pull-in that only the
+# excluded lua.c front-end needs.
+target_compile_definitions(lua_static PRIVATE LUA_USE_POSIX)
+set_target_properties(lua_static PROPERTIES C_STANDARD 99 POSITION_INDEPENDENT_CODE ON)
+
+# --- LuaBridge3 (header-only C++ <-> Lua bindings; supports Lua 5.5) ----------
+# SYSTEM keeps its headers out of our warning set (Expected.h trips
+# -Wdeprecated-declarations under C++26).
+FetchContent_Declare(LuaBridge3
+    GIT_REPOSITORY https://github.com/kunitoki/LuaBridge3.git
+    GIT_TAG 3.0-rc12 GIT_SHALLOW ON         # pin a specific rc, do not track master
+    SYSTEM)
+FetchContent_MakeAvailable(LuaBridge3)
+
 # --- VMA implementation TU ----------------------------------------------------
 # VMA is header-only; one translation unit must define VMA_IMPLEMENTATION.
 add_library(vma STATIC ${CMAKE_SOURCE_DIR}/cmake/vma_impl.cpp)
@@ -76,7 +109,9 @@ target_link_libraries(saffron_third_party INTERFACE
     stb
     cgltf
     tinyobjloader
-    nanosvg)
+    nanosvg
+    lua_static
+    LuaBridge)
 # The engine bans exceptions; make nlohmann/json turn would-be throws into abort()
 # so any stray .at()/operator[] on missing keys fails loudly instead of throwing.
 # GLM_FORCE_DEPTH_ZERO_TO_ONE makes glm::perspective emit Vulkan's [0,1] clip depth.
