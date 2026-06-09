@@ -12,7 +12,7 @@
 /// Lives in the side docks (inspector / environment); the popover anchors there.
 import { useEffect, useState } from "react";
 import { Box, Check, ChevronsUpDown, File, Image as ImageIcon } from "lucide-react";
-import { getThumbnailUrl, useEditorStore } from "../state/store";
+import { getCachedThumbnailUrl, getThumbnailUrl, useEditorStore } from "../state/store";
 import { readAssetPayload } from "./AssetTile";
 import type { AssetEntry } from "../protocol";
 import { cn } from "@/lib/utils";
@@ -27,12 +27,14 @@ const NONE_UUID = "0";
 export type PickerAssetKind = "mesh" | "texture";
 
 /// A small thumbnail swatch fetched at 64 px and shown at the given CSS size; falls
-/// back to a lucide type icon while loading or on failure.
+/// back to a lucide type icon while loading or on failure. Seeds from the shared
+/// cache so a warm-cache mount paints the image on the first frame (the popover
+/// remounts its rows on every open).
 function AssetSwatch({ asset, size }: { asset: AssetEntry; size: number }) {
-  const [url, setUrl] = useState<string | null>(null);
+  const [url, setUrl] = useState<string | null>(() => getCachedThumbnailUrl(asset.id, 64));
   useEffect(() => {
     let cancelled = false;
-    setUrl(null);
+    setUrl(getCachedThumbnailUrl(asset.id, 64));
     void getThumbnailUrl(asset.id, 64)
       .then((resolved) => {
         if (!cancelled) {
@@ -83,6 +85,17 @@ export function AssetPicker({ value, assetType, onChange }: AssetPickerProps) {
 
   const options = assets.filter((a) => a.type === assetType);
   const isNone = value === NONE_UUID || value === "";
+
+  // Warm the thumbnail cache while the popover is closed, so the first open
+  // paints images instead of fallback icons (the shared cache dedupes, so this
+  // costs nothing once fetched).
+  useEffect(() => {
+    for (const asset of assets) {
+      if (asset.type === assetType) {
+        void getThumbnailUrl(asset.id, 64).catch(() => {});
+      }
+    }
+  }, [assets, assetType]);
   const selected = isNone ? null : (options.find((a) => a.id === value) ?? null);
 
   const pick = (id: string): void => {
