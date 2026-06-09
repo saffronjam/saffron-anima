@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -25,6 +26,11 @@ struct EditorState {
     engine: Mutex<Option<Child>>,
     socket_path: String,
     viewport: Arc<wayland_viewport::ViewportShared>,
+    /// The latest profiler trace bytes, served on the loopback port below so Perfetto can fetch
+    /// them itself (`?url=`). Replaced on each "Open in Perfetto"; None until the first.
+    trace: Arc<Mutex<Option<Vec<u8>>>>,
+    /// The loopback port the trace server bound, or None if it could not start.
+    trace_port: Option<u16>,
 }
 
 const MAIN_WINDOW_WIDTH: f64 = 1600.0;
@@ -67,12 +73,101 @@ struct EditorSettings {
 
 impl Default for EditorState {
     fn default() -> Self {
+        let trace: Arc<Mutex<Option<Vec<u8>>>> = Arc::default();
+        let trace_port = start_trace_server(Arc::clone(&trace));
         Self {
             engine: Mutex::new(None),
             socket_path: socket_path(),
             viewport: Arc::default(),
+            trace,
+            trace_port,
         }
     }
+}
+
+// The path the trace is served on; everything else 404s (see serve_trace_conn).
+const TRACE_PATH: &str = "/trace.perfetto-trace";
+
+// A loopback HTTP server that serves the most-recent profiler trace with permissive CORS, so
+// Perfetto (opened with `?url=`) fetches and loads it itself — the `postMessage` handoff it
+// documents cannot cross the webview -> desktop-browser process boundary, but a plain GET can.
+// Bound on :9001 because Perfetto's own CSP only allows loopback fetches from that port (its
+// trace_processor httpd port); an ephemeral fallback keeps downloads working if :9001 is taken,
+// though auto-import then can't pass the CSP. The toolbox shares the host network namespace, so a
+// 127.0.0.1 bind is reachable from the host browser. The accept loop runs for the app's lifetime.
+fn start_trace_server(trace: Arc<Mutex<Option<Vec<u8>>>>) -> Option<u16> {
+    let listener = TcpListener::bind("127.0.0.1:9001")
+        .or_else(|_| TcpListener::bind("127.0.0.1:0"))
+        .ok()?;
+    let port = listener.local_addr().ok()?.port();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let trace = Arc::clone(&trace);
+            thread::spawn(move || {
+                let _ = serve_trace_conn(stream, &trace);
+            });
+        }
+    });
+    Some(port)
+}
+
+fn serve_trace_conn(mut stream: TcpStream, trace: &Mutex<Option<Vec<u8>>>) -> std::io::Result<()> {
+    // Read the request head (up to the blank line); the body, if any, is irrelevant for GET.
+    let mut head = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        let n = stream.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        head.extend_from_slice(&chunk[..n]);
+        if head.windows(4).any(|w| w == b"\r\n\r\n") || head.len() > 16384 {
+            break;
+        }
+    }
+    let request_line = String::from_utf8_lossy(&head);
+    let mut tokens = request_line.split_whitespace();
+    let method = tokens.next().unwrap_or("");
+    let path = tokens.next().unwrap_or("");
+    // `Allow-Private-Network` is required for Chromium's Private Network Access: a secure public
+    // origin (ui.perfetto.dev) fetching a loopback address sends a preflight that this must echo,
+    // or the request is blocked ("Failed to fetch") before it ever reaches us.
+    const CORS: &str = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, HEAD, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nAccess-Control-Allow-Private-Network: true\r\nAccess-Control-Max-Age: 86400\r\n";
+
+    if method.eq_ignore_ascii_case("OPTIONS") {
+        let resp = format!("HTTP/1.1 204 No Content\r\n{CORS}Content-Length: 0\r\nConnection: close\r\n\r\n");
+        stream.write_all(resp.as_bytes())?;
+        return stream.flush();
+    }
+
+    // Serve bytes only on the trace path; every other path (notably Perfetto's `/status` probe on
+    // :9001) gets a 404 so it doesn't mistake this for a live trace_processor RPC server.
+    if path != TRACE_PATH {
+        let resp =
+            format!("HTTP/1.1 404 Not Found\r\n{CORS}Content-Length: 0\r\nConnection: close\r\n\r\n");
+        stream.write_all(resp.as_bytes())?;
+        return stream.flush();
+    }
+
+    let body = trace.lock().ok().and_then(|guard| guard.clone());
+    match body {
+        Some(bytes) => {
+            let header = format!(
+                "HTTP/1.1 200 OK\r\n{CORS}Content-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            );
+            stream.write_all(header.as_bytes())?;
+            if !method.eq_ignore_ascii_case("HEAD") {
+                stream.write_all(&bytes)?;
+            }
+        }
+        None => {
+            let resp =
+                format!("HTTP/1.1 404 Not Found\r\n{CORS}Content-Length: 0\r\nConnection: close\r\n\r\n");
+            stream.write_all(resp.as_bytes())?;
+        }
+    }
+    stream.flush()
 }
 
 // Per-PID socket in XDG_RUNTIME_DIR so two editor instances get distinct engines/sockets.
@@ -172,7 +267,7 @@ fn control_request_with_params(
     let mut stream = UnixStream::connect(socket_path)
         .map_err(|err| format!("control socket unavailable: {err}"))?;
     stream
-        .set_read_timeout(Some(Duration::from_millis(1000)))
+        .set_read_timeout(Some(Duration::from_millis(5000)))
         .map_err(|err| format!("set read timeout: {err}"))?;
     let mut request = json!({ "id": 1, "cmd": command, "params": params }).to_string();
     request.push('\n');
@@ -405,6 +500,47 @@ fn remember_recent_project(project: RecentProject) -> Result<RecentProjects, Str
     Ok(recents)
 }
 
+// Write client-generated bytes (a profiler trace) to a user-chosen path. The webview cannot
+// `<a download>` a blob, so the editor picks a path via the save dialog and hands the bytes here.
+#[tauri::command]
+fn write_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    fs::write(&path, bytes).map_err(|err| format!("write {path}: {err}"))
+}
+
+// Stash trace bytes on the loopback server and return the URL Perfetto should fetch. The caller
+// then opens `ui.perfetto.dev/#!/?url=<this>` so the trace loads with no manual download/drag.
+#[tauri::command]
+fn serve_trace(state: State<EditorState>, bytes: Vec<u8>) -> Result<String, String> {
+    let port = state.trace_port.ok_or("trace server failed to start")?;
+    *state.trace.lock().map_err(|_| "trace lock poisoned")? = Some(bytes);
+    Ok(format!("http://127.0.0.1:{port}{TRACE_PATH}"))
+}
+
+// Open a URL in the OS default browser. `window.open`/postMessage do not work from the Tauri
+// webview, so "Open in Perfetto" hands ui.perfetto.dev to the desktop browser instead. No single
+// opener is guaranteed present — running inside a toolbox the container has no xdg-utils, so the
+// host handler is reached via `flatpak-spawn --host` — so try the common handlers in turn and
+// succeed on the first that spawns.
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let candidates: &[&[&str]] = &[
+        &["flatpak-spawn", "--host", "xdg-open"],
+        &["xdg-open"],
+        &["gio", "open"],
+        &["gnome-open"],
+        &["kde-open"],
+    ];
+    let mut last_err = String::from("no opener found");
+    for argv in candidates {
+        let (program, pre) = argv.split_first().expect("candidate is non-empty");
+        match std::process::Command::new(program).args(pre).arg(&url).spawn() {
+            Ok(_) => return Ok(()),
+            Err(err) => last_err = format!("{program}: {err}"),
+        }
+    }
+    Err(format!("open {url}: {last_err}"))
+}
+
 // Spawn the engine + poll readiness on a background thread, emitting engine-phase /
 // viewport-error events. React drives the actual attach (it owns the viewport rect).
 fn auto_start(handle: &AppHandle) -> Result<(), String> {
@@ -533,7 +669,10 @@ pub fn run() {
             list_recent_projects,
             remember_recent_project,
             load_editor_settings,
-            save_editor_settings
+            save_editor_settings,
+            write_file,
+            open_external,
+            serve_trace
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
