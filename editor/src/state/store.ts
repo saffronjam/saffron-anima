@@ -6,6 +6,7 @@ import { client, type Client } from "../control/client";
 import type { ProjectInfo } from "../control/client";
 import { COMMANDS_BY_ID, isCommandId, type CommandId } from "../lib/keybindings";
 import { routeAlarmToasts } from "../lib/alarmToasts";
+import { resetScriptErrorToasts, routeScriptErrorToasts } from "../lib/scriptErrorToasts";
 import { appendFrameSamples } from "../lib/frameSeries";
 import type {
   ActiveAlarmDto,
@@ -604,7 +605,17 @@ export const useEditorStore = create<EditorState>((set) => ({
       },
     })),
   setDragActive: (dragActive) => set({ dragActive }),
-  setGizmo: (patch) => set((s) => ({ gizmo: { ...s.gizmo, ...patch } })),
+  // Keeps the object identity when the patch changes nothing, so the reconcile
+  // poll confirming an unchanged gizmo doesn't re-render every subscriber.
+  setGizmo: (patch) =>
+    set((s) => {
+      const gizmo = { ...s.gizmo, ...patch };
+      return gizmo.op === s.gizmo.op &&
+        gizmo.space === s.gizmo.space &&
+        gizmo.preserveChildren === s.gizmo.preserveChildren
+        ? {}
+        : { gizmo };
+    }),
   setPlayState: (playState) => set({ playState }),
   setViewportHidden: (viewportHidden) => set({ viewportHidden }),
   setNativeDialogOpen: (nativeDialogOpen) => set({ nativeDialogOpen }),
@@ -985,6 +996,9 @@ export function startReconcile(client: Client): () => void {
   let lastMetricsFetchAt = 0;
   // Alarm cursor (Last-Event-ID): only advances, so a missed poll just catches up.
   let alarmSince = 0;
+  // Script-error cursor, same protocol; the toast dedup resets per play session.
+  let scriptErrorSince = 0;
+  let lastPlayStateForScripts: PlayState = "edit";
   let pendingRefresh: {
     selectedId: string | null;
     sceneChanged: boolean;
@@ -1109,6 +1123,24 @@ export function startReconcile(client: Client): () => void {
         routeAlarmToasts(drained.events, performance.now());
       }
       alarmSince = Math.max(alarmSince, drained.highWaterSeq);
+
+      // Contained script errors pause play engine-side; surface the traceback here.
+      // Drained while play is active (a pause keeps the state visible until stop).
+      const playState = useEditorStore.getState().playState;
+      if (playState !== "edit") {
+        if (lastPlayStateForScripts === "edit") {
+          resetScriptErrorToasts(); // fresh session: the engine cleared its ring
+        }
+        const scriptErrors = await client.drainScriptErrors(scriptErrorSince);
+        if (stopped) {
+          return;
+        }
+        if (scriptErrors.events.length > 0) {
+          routeScriptErrorToasts(scriptErrors.events);
+        }
+        scriptErrorSince = Math.max(scriptErrorSince, scriptErrors.highWaterSeq);
+      }
+      lastPlayStateForScripts = playState;
 
       const active = await client.listActiveAlarms();
       if (stopped) {
