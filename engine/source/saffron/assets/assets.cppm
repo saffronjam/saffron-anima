@@ -13,11 +13,13 @@ module;
 #include <cctype>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -441,6 +443,128 @@ export namespace se
         return {};
     }
 
+    // Every project carries a src/ for Lua scripts; ScriptComponent slots resolve
+    // their paths against it. Idempotent: the folder is ensured on create AND on
+    // load (pre-existing projects gain it on open), the example only when absent.
+    inline constexpr std::string_view StarterScript =
+        R"(-- example.lua: attach to an entity's Script component, then press Play.
+-- Orbits the entity in the x/y plane around where it was authored.
+local Example = {}
+
+Example.properties = {
+  speed = 1.0,  -- radians/second, editable in the Inspector
+  radius = 2.0,
+}
+
+function Example.on_create(self)
+  -- Center one radius left of the authored spot, so the orbit starts exactly
+  -- on the entity's position instead of teleporting to the circle.
+  local p = self.entity:get_position()
+  self.center = { x = p.x - self.radius, y = p.y, z = p.z }
+  self.angle = 0
+end
+
+function Example.on_update(self, dt)
+  self.angle = self.angle + self.speed * dt
+  local x = self.center.x + math.cos(self.angle) * self.radius
+  local y = self.center.y + math.sin(self.angle) * self.radius
+  self.entity:set_position(x, y, self.center.z)
+end
+
+return Example
+)";
+
+    void ensureScriptSrc(const std::filesystem::path& root)
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(root / "src", ec);
+        if (ec)
+        {
+            logWarn(std::format("project src/ not created: {}", ec.message()));
+            return;
+        }
+        const std::filesystem::path example = root / "src" / "example.lua";
+        if (!std::filesystem::exists(example))
+        {
+            std::ofstream out(example);
+            out << StarterScript;
+        }
+    }
+
+    // The file stem as a Lua identifier for the boilerplate's class table:
+    // non-identifier characters become underscores, the first letter upper-cases,
+    // and a leading digit gets a prefix ("turret-2" -> Turret_2).
+    auto scriptClassName(const std::string& stem) -> std::string
+    {
+        std::string name;
+        for (const char c : stem)
+        {
+            if ((std::isalnum(static_cast<unsigned char>(c)) != 0) || c == '_')
+            {
+                name.push_back(c);
+            }
+            else
+            {
+                name.push_back('_');
+            }
+        }
+        if (name.empty() || std::isdigit(static_cast<unsigned char>(name.front())) != 0)
+        {
+            name.insert(0, "Script");
+        }
+        name.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(name.front())));
+        return name;
+    }
+
+    /// Create <root>/src/<name>.lua with the class-table boilerplate the runtime
+    /// expects (a `.lua` suffix is appended when missing; subfolders are allowed,
+    /// `..` is not). Errs when the file already exists. Returns the src/-relative
+    /// path a ScriptSlot stores.
+    auto createProjectScript(const std::string& root, std::string name) -> Result<std::string>
+    {
+        if (name.empty() || name.find("..") != std::string::npos || name.front() == '/')
+        {
+            return Err(std::format("invalid script name '{}'", name));
+        }
+        if (!name.ends_with(".lua"))
+        {
+            name += ".lua";
+        }
+        const std::filesystem::path file = std::filesystem::path(root) / "src" / name;
+        if (std::filesystem::exists(file))
+        {
+            return Err(std::format("'{}' already exists", name));
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(file.parent_path(), ec);
+        if (ec)
+        {
+            return Err(std::format("cannot create '{}': {}", file.parent_path().string(), ec.message()));
+        }
+        const std::string className = scriptClassName(file.stem().string());
+        std::ofstream out(file);
+        if (!out)
+        {
+            return Err(std::format("cannot write '{}'", file.string()));
+        }
+        out << std::format(R"(local {0} = {{}}
+
+{0}.properties = {{
+  -- speed = 1.0, -- declared fields show up in the Inspector
+}}
+
+function {0}.on_create(self)
+end
+
+function {0}.on_update(self, dt)
+end
+
+return {0}
+)",
+                           className);
+        return name;
+    }
+
     // Loads a project file: replaces the catalog + scene. Clears the GPU caches (after a
     // device idle) so stale Refs are dropped and assets re-resolve from the new catalog.
     // The saved editor-camera block (if any) lands in `editorCamera` for the caller —
@@ -472,6 +596,7 @@ export namespace se
         clearAssetCaches(assets);
         project = projectInfoFromPath(path, doc);
         setAssetRoot(assets, (std::filesystem::path(project.root) / "assets").string());
+        ensureScriptSrc(project.root);
         catalogFromJson(assets.catalog, doc.value("assets", nlohmann::json::array()));
         catalogFoldersFromJson(assets.catalog, doc.value("assetFolders", nlohmann::json::array()));
         // Older projects have no renderSettings block; the current settings stay.
@@ -510,6 +635,7 @@ export namespace se
         assets.catalog.byId.clear();
         clearAssetCaches(assets);
         setAssetRoot(assets, (root / "assets").string());
+        ensureScriptSrc(root);
         project = std::move(next);
         return saveProject(assets, renderer, reg, scene, project, project.path);
     }

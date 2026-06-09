@@ -403,6 +403,22 @@ namespace se
                 return projectDto(project);
             });
 
+        registerCommand<CreateScriptParams, CreateScriptResult>(
+            reg, "create-script", "create-script {name} — boilerplate .lua under the project src/",
+            [](EngineContext& ctx, const CreateScriptParams& params) -> Result<CreateScriptResult>
+            {
+                if (!ctx.sceneEdit.projectLoaded)
+                {
+                    return Err(std::string{ "no project loaded" });
+                }
+                auto created = createProjectScript(ctx.sceneEdit.projectRoot, params.name);
+                if (!created)
+                {
+                    return Err(created.error());
+                }
+                return CreateScriptResult{ std::move(*created) };
+            });
+
         registerCommand<PathParams, ProjectInfoDto>(
             reg, "open-project", "open-project {path}",
             [](EngineContext& ctx, const PathParams& params) -> Result<ProjectInfoDto>
