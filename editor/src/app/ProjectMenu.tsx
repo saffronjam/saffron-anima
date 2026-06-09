@@ -1,4 +1,5 @@
 /// Project-level file operations exposed from the topbar project selector.
+import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, X } from "lucide-react";
 import { client, type ProjectInfo } from "../control/client";
@@ -76,6 +77,19 @@ export function ProjectMenu() {
     }
   };
 
+  // Opens the project root (project.json, src/ scripts, assets/) in VS Code via the
+  // dedicated Rust command — `code` may live on the host, not in the toolbox.
+  const openInVsCode = async (): Promise<void> => {
+    if (!project) {
+      return;
+    }
+    try {
+      await invoke("open_in_vscode", { path: project.root });
+    } catch (err) {
+      notify(`Open in VS Code failed: ${errorText(err)}`);
+    }
+  };
+
   const reloadProject = async (): Promise<void> => {
     try {
       const res = await client.reloadProject();
@@ -111,6 +125,9 @@ export function ProjectMenu() {
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void openProject()} disabled={!editing}>
             Open Project...
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void openInVsCode()} disabled={!project}>
+            Open in VS Code
           </DropdownMenuItem>
           {devMode ? (
             <>

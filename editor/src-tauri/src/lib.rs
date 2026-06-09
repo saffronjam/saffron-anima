@@ -516,6 +516,29 @@ fn serve_trace(state: State<EditorState>, bytes: Vec<u8>) -> Result<String, Stri
     Ok(format!("http://127.0.0.1:{port}{TRACE_PATH}"))
 }
 
+// Open the project root in VS Code. `code` lives on the host, not in the toolbox, so
+// `flatpak-spawn --host` is tried first (same reasoning as open_external). Runs exactly
+// `code <path>` — no shell, no argument interpolation.
+#[tauri::command]
+fn open_in_vscode(path: String) -> Result<(), String> {
+    // Engine-reported project paths are relative to the engine's cwd (the repo
+    // root); `code` spawns with this process's cwd, so make the path absolute.
+    let absolute = {
+        let p = PathBuf::from(&path);
+        if p.is_absolute() { p } else { repo_root().join(p) }
+    };
+    let candidates: &[&[&str]] = &[&["flatpak-spawn", "--host", "code"], &["code"]];
+    let mut last_err = String::from("vs code not found");
+    for argv in candidates {
+        let (program, pre) = argv.split_first().expect("candidate is non-empty");
+        match std::process::Command::new(program).args(pre).arg(&absolute).spawn() {
+            Ok(_) => return Ok(()),
+            Err(err) => last_err = format!("{program}: {err}"),
+        }
+    }
+    Err(format!("open {path} in vs code: {last_err}"))
+}
+
 // Open a URL in the OS default browser. `window.open`/postMessage do not work from the Tauri
 // webview, so "Open in Perfetto" hands ui.perfetto.dev to the desktop browser instead. No single
 // opener is guaranteed present — running inside a toolbox the container has no xdg-utils, so the
@@ -625,24 +648,44 @@ fn install_stderr_noise_filter() {
 }
 
 pub fn run() {
-    // WebKitGTK's default DMABUF renderer renders NOTHING on NVIDIA Wayland, and the
-    // non-DMABUF fallback loses transparency (an opaque page would hide the subsurface).
-    // Steering WebKit onto Mesa's software EGL keeps a transparent, working webview; the
-    // engine still renders on the hardware ICD. Gated on NVIDIA so AMD/Intel keep the
-    // fast DMABUF path. Explicit values in the environment win.
+    // The webview render path on NVIDIA Wayland. The hardware DMABUF path crashes by default:
+    // WebKit enables explicit sync (wp_linux_drm_syncobj) on its EGL render surface, but a
+    // non-dmabuf wl_shm buffer reaches that surface and Mutter fatally rejects it — "Protocol
+    // error 2 (unsupported_buffer): Explicit Sync only supported on dmabuf buffers" — tearing
+    // down the whole shared Wayland connection (our SHM viewport subsurface is innocent but
+    // rides the same connection, so it dies too). This is NOT fixed by a newer driver (it
+    // reproduces on 590/595+), by WebKitGTK (WONTFIX'd auto-disabling DMABUF on NVIDIA), or by
+    // Mutter (spec-required to reject). So by default we steer WebKit onto Mesa's software EGL:
+    // a clean transparent webview, fill-rate bound; the engine still renders on the hardware ICD.
+    //
+    // SAFFRON_WEBVIEW_HW=1 takes the hardware path instead, with NVIDIA explicit sync disabled
+    // (__NV_DISABLE_EXPLICIT_SYNC=1) so it no longer crashes. That trades the crash for possible
+    // stale-frame ghosting (regions not clearing until hovered) — whether that is tolerable for
+    // this UI-over-viewport overlay is a visual judgement, so it stays opt-in. Env values win;
+    // AMD/Intel always take the hardware DMABUF path.
     #[cfg(target_os = "linux")]
-    if nvidia_present() {
-        if std::env::var_os("__EGL_VENDOR_LIBRARY_FILENAMES").is_none() {
-            unsafe {
-                std::env::set_var(
-                    "__EGL_VENDOR_LIBRARY_FILENAMES",
-                    "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
-                )
-            };
+    {
+        let hardware = !nvidia_present() || std::env::var_os("SAFFRON_WEBVIEW_HW").is_some();
+        if !hardware {
+            if std::env::var_os("__EGL_VENDOR_LIBRARY_FILENAMES").is_none() {
+                unsafe {
+                    std::env::set_var(
+                        "__EGL_VENDOR_LIBRARY_FILENAMES",
+                        "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+                    )
+                };
+            }
+            if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none() {
+                unsafe { std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1") };
+            }
+        } else if nvidia_present() && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
+            // Without this the NVIDIA hardware path crashes on the explicit-sync protocol error.
+            unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
         }
-        if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none() {
-            unsafe { std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1") };
-        }
+        eprintln!(
+            "[saffron] webview render path: {}",
+            if hardware { "hardware" } else { "software (Mesa llvmpipe)" }
+        );
     }
 
     // WebKitGTK's EGL init on NVIDIA prints Mesa GPU-probe chatter to stderr before
@@ -672,6 +715,7 @@ pub fn run() {
             save_editor_settings,
             write_file,
             open_external,
+            open_in_vscode,
             serve_trace
         ])
         .setup(|app| {

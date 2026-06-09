@@ -98,3 +98,13 @@ spawns `$SAFFRON_ENGINE_BIN` (default `build/debug/bin/SaffronEngine`) with
 `SAFFRON_VIEWPORT_SHM` + `SAFFRON_MAX_FPS` (and the NVIDIA `VK_ICD_FILENAMES` guard), and
 presents via `wayland_viewport.rs`. A watchdog flips the UI to an error overlay if the
 engine dies.
+
+The bridge also picks the **webview render path** in `run()` (`lib.rs`), logging it at startup
+(`[saffron] webview render path: …`). On NVIDIA it defaults to **hardware** GL, setting
+`__NV_DISABLE_EXPLICIT_SYNC=1` so it dodges the `wp_linux_drm_syncobj_surface_v1` "unsupported
+buffer" crash (WebKit enables explicit sync on its EGL surface, then a non-dmabuf buffer reaches
+it and Mutter fatally rejects it — a driver/WebKit/Mutter interaction *not* fixed by newer drivers,
+only sidestepped by disabling explicit sync; the lone tradeoff is possible stale-frame ghosting).
+`SAFFRON_WEBVIEW_HW` toggles this; `make run` sets it via the `Makefile`'s `WEBVIEW_HW` knob (`=0`
+for the software/Mesa-llvmpipe fallback), because a host-side `SAFFRON_WEBVIEW_HW=1 make run` would
+**not** cross the toolbox boundary into the recipe (see the root `AGENTS.md` toolbox-env rule).
