@@ -1630,6 +1630,74 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<DrainScriptErrorsParams>) -> Result<DrainScriptErrorsParams>
+    {
+        DrainScriptErrorsParams out;
+
+        {
+            auto value = optionalField(params, "since", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readI64(*value, "since");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.since = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<GetScriptSchemaParams>) -> Result<GetScriptSchemaParams>
+    {
+        GetScriptSchemaParams out;
+
+        {
+            auto value = requiredField(params, "path", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readString(**value, "path");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.path = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<SetScriptOverrideParams>) -> Result<SetScriptOverrideParams>
+    {
+        SetScriptOverrideParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "slot", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readI32(**value, "slot");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.slot = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "name", 2, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readString(**value, "name");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.name = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "value", 3, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readJson(**value, "value");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.value = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<AddEntityParams>) -> Result<AddEntityParams>
     {
         AddEntityParams out;
@@ -2022,6 +2090,20 @@ namespace se
                 if (!parsed) { return Err(std::move(parsed.error())); }
                 out.root = std::move(*parsed);
             }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<CreateScriptParams>) -> Result<CreateScriptParams>
+    {
+        CreateScriptParams out;
+
+        {
+            auto value = requiredField(params, "name", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readString(**value, "name");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.name = std::move(*parsed);
         }
         return out;
     }
@@ -2738,6 +2820,60 @@ namespace se
         return out;
     }
 
+    auto dtoToJson(const ScriptStatusResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["state"] = value.state;
+        out["instances"] = value.instances;
+        out["errorHighWater"] = value.errorHighWater;
+        return out;
+    }
+
+    auto dtoToJson(const DrainScriptErrorsResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["events"] = dtoVectorToJson(value.events);
+        out["highWaterSeq"] = value.highWaterSeq;
+        out["oldestSeq"] = value.oldestSeq;
+        out["overflowed"] = value.overflowed;
+        return out;
+    }
+
+    auto dtoToJson(const ScriptErrorDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["seq"] = value.seq;
+        out["entity"] = dtoToJson(value.entity);
+        out["script"] = value.script;
+        out["message"] = value.message;
+        out["tick"] = value.tick;
+        return out;
+    }
+
+    auto dtoToJson(const GetScriptSchemaResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["fields"] = dtoVectorToJson(value.fields);
+        return out;
+    }
+
+    auto dtoToJson(const ScriptFieldDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["name"] = value.name;
+        out["type"] = value.type;
+        out["defaultValue"] = value.defaultValue;
+        return out;
+    }
+
+    auto dtoToJson(const SetScriptOverrideResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["scriptPath"] = value.scriptPath;
+        out["overrides"] = value.overrides;
+        return out;
+    }
+
     auto dtoToJson(const SetComponentFieldResult& value) -> Json
     {
         Json out = Json::object();
@@ -2845,6 +2981,13 @@ namespace se
         out["path"] = value.path;
         out["name"] = value.name;
         out["displayName"] = value.displayName;
+        return out;
+    }
+
+    auto dtoToJson(const CreateScriptResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["path"] = value.path;
         return out;
     }
 

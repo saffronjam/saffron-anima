@@ -414,6 +414,76 @@ export namespace se
         bool overflowed;
     };
 
+    struct ScriptStatusResult
+    {
+        std::string state;   // "edit" | "playing" | "paused"
+        i32 instances;       // live script instances (0 in edit)
+        i64 errorHighWater;  // last assigned script-error seq
+    };
+
+    struct ScriptErrorDto
+    {
+        i64 seq;
+        WireUuid entity;  // 0 when the failure has no owning entity
+        std::string script;
+        std::string message;  // the Lua error + traceback
+        i64 tick;             // the play tick the error fired on
+    };
+
+    struct DrainScriptErrorsParams
+    {
+        std::optional<i64> since;
+    };
+
+    struct DrainScriptErrorsResult
+    {
+        std::vector<ScriptErrorDto> events;
+        i64 highWaterSeq;
+        i64 oldestSeq;
+        bool overflowed;
+    };
+
+    struct GetScriptSchemaParams
+    {
+        std::string path;  // relative to the project src/, e.g. "turret.lua"
+    };
+
+    struct ScriptFieldDto
+    {
+        std::string name;
+        std::string type;  // "number" | "bool" | "string" | "vec3"
+        Json defaultValue;
+    };
+
+    struct GetScriptSchemaResult
+    {
+        std::vector<ScriptFieldDto> fields;
+    };
+
+    struct SetScriptOverrideParams
+    {
+        EntitySelector entity;
+        i32 slot;          // index into the ScriptComponent slot list
+        std::string name;  // the declared field name
+        Json value;        // null clears the override (the default applies again)
+    };
+
+    struct SetScriptOverrideResult
+    {
+        std::string scriptPath;
+        Json overrides;  // the slot's overrides after the write
+    };
+
+    struct CreateScriptParams
+    {
+        std::string name;  // src/-relative; ".lua" appended when missing
+    };
+
+    struct CreateScriptResult
+    {
+        std::string path;  // the src/-relative path a ScriptSlot stores
+    };
+
     struct ActiveAlarmDto
     {
         std::string fingerprint;
@@ -1085,6 +1155,13 @@ export namespace se
     auto dtoToJson(const DrainAlarmsResult& value) -> Json;
     auto dtoToJson(const ActiveAlarmDto& value) -> Json;
     auto dtoToJson(const ActiveAlarmsDto& value) -> Json;
+    auto dtoToJson(const ScriptStatusResult& value) -> Json;
+    auto dtoToJson(const ScriptErrorDto& value) -> Json;
+    auto dtoToJson(const DrainScriptErrorsResult& value) -> Json;
+    auto dtoToJson(const ScriptFieldDto& value) -> Json;
+    auto dtoToJson(const GetScriptSchemaResult& value) -> Json;
+    auto dtoToJson(const SetScriptOverrideResult& value) -> Json;
+    auto dtoToJson(const CreateScriptResult& value) -> Json;
     auto dtoToJson(const SetAaResult& value) -> Json;
     auto dtoToJson(const SetClusteredResult& value) -> Json;
     auto dtoToJson(const SetIblResult& value) -> Json;
@@ -1148,6 +1225,10 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<FrameHistoryParams>) -> Result<FrameHistoryParams>;
     auto parseDto(const Json& params, DtoTag<SetPerfConfigParams>) -> Result<SetPerfConfigParams>;
     auto parseDto(const Json& params, DtoTag<DrainAlarmsParams>) -> Result<DrainAlarmsParams>;
+    auto parseDto(const Json& params, DtoTag<DrainScriptErrorsParams>) -> Result<DrainScriptErrorsParams>;
+    auto parseDto(const Json& params, DtoTag<GetScriptSchemaParams>) -> Result<GetScriptSchemaParams>;
+    auto parseDto(const Json& params, DtoTag<SetScriptOverrideParams>) -> Result<SetScriptOverrideParams>;
+    auto parseDto(const Json& params, DtoTag<CreateScriptParams>) -> Result<CreateScriptParams>;
     auto parseDto(const Json& params, DtoTag<ToggleParams>) -> Result<ToggleParams>;
     auto parseDto(const Json& params, DtoTag<SetViewportSizeParams>) -> Result<SetViewportSizeParams>;
     auto parseDto(const Json& params, DtoTag<SetGiParams>) -> Result<SetGiParams>;

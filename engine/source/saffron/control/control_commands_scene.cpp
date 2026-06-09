@@ -967,6 +967,79 @@ namespace se
             [](EngineContext& ctx, const EmptyParams&) -> Result<PlayStateResult>
             { return playStateResultDto(ctx.sceneEdit); });
 
+        registerCommand<EmptyParams, ScriptStatusResult>(
+            reg, "get-script-status", "get-script-status — play state, live script instances, error high-water",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<ScriptStatusResult>
+            {
+                return ScriptStatusResult{ playStateName(ctx.sceneEdit.playState), ctx.sceneEdit.scriptInstanceCount,
+                                           ctx.sceneEdit.scriptErrorSeq };
+            });
+
+        registerCommand<SetScriptOverrideParams, SetScriptOverrideResult>(
+            reg, "set-script-override",
+            "set-script-override {entity, slot, name, value} — write one per-instance script field "
+            "override (a null value clears it)",
+            [](EngineContext& ctx, const SetScriptOverrideParams& params) -> Result<SetScriptOverrideResult>
+            {
+                auto entity = resolveEntity(ctx, params.entity);
+                if (!entity)
+                {
+                    return Err(entity.error());
+                }
+                Scene& scene = activeScene(ctx.sceneEdit);
+                if (!hasComponent<ScriptComponent>(scene, *entity))
+                {
+                    return Err(std::string{ "entity has no Script component" });
+                }
+                ScriptComponent& component = getComponent<ScriptComponent>(scene, *entity);
+                if (params.slot < 0 || static_cast<std::size_t>(params.slot) >= component.scripts.size())
+                {
+                    return Err(std::format("slot {} out of range ({} slot(s))", params.slot, component.scripts.size()));
+                }
+                ScriptSlot& slot = component.scripts[static_cast<std::size_t>(params.slot)];
+                if (!slot.overrides.is_object())
+                {
+                    slot.overrides = nlohmann::json::object();
+                }
+                if (params.value.is_null())
+                {
+                    slot.overrides.erase(params.name);
+                }
+                else
+                {
+                    slot.overrides[params.name] = params.value;
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return SetScriptOverrideResult{ slot.scriptPath, slot.overrides };
+            });
+
+        registerCommand<DrainScriptErrorsParams, DrainScriptErrorsResult>(
+            reg, "drain-script-errors", "drain-script-errors {since} — script errors with seq > since (non-blocking)",
+            [](EngineContext& ctx, const DrainScriptErrorsParams& params) -> Result<DrainScriptErrorsResult>
+            {
+                const i64 since = params.since.value_or(0);
+                DrainScriptErrorsResult out;
+                out.highWaterSeq = ctx.sceneEdit.scriptErrorSeq;
+                out.oldestSeq = 0;
+                if (!ctx.sceneEdit.scriptErrors.empty())
+                {
+                    out.oldestSeq = ctx.sceneEdit.scriptErrors.front().seq;
+                }
+                // The ring drops its oldest entries; a cursor older than what survives
+                // means the caller missed events.
+                out.overflowed = out.oldestSeq > 0 && since + 1 < out.oldestSeq;
+                for (const ScriptError& event : ctx.sceneEdit.scriptErrors)
+                {
+                    if (event.seq <= since)
+                    {
+                        continue;
+                    }
+                    out.events.push_back(ScriptErrorDto{ event.seq, WireUuid{ event.entityUuid }, event.script,
+                                                         event.message, event.tick });
+                }
+                return out;
+            });
+
         registerCommand<AddEntityParams, EntityRef>(
             reg, "add-entity",
             "add-entity {preset=empty|cube|model|point-light|spot-light|directional-light|camera|reflection-probe}",
