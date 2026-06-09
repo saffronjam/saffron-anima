@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -198,6 +200,42 @@ namespace
                 std::printf("  %-28s  %8.3f ms\n", p.value("name", "").c_str(), p.value("gpuMs", 0.0));
             }
             std::printf("  %-28s  %8.3f ms\n", "total (span)", result.value("gpuTotalMs", 0.0));
+            return;
+        }
+        if (cmd == "profiler.capture-start")
+        {
+            std::printf("armed capture id=%llu  (stop with: se profiler.capture-stop)\n",
+                        static_cast<unsigned long long>(result.value("captureId", 0ULL)));
+            return;
+        }
+        if (cmd == "profiler.capture-stop")
+        {
+            if (!result.value("ready", false))
+            {
+                std::printf("no capture ready (arm one with: se profiler.capture-start)\n");
+                return;
+            }
+            const auto meta = result.value("capture", json::object()).value("metadata", json::object());
+            std::printf("captured %u frame(s), %zu spans  [%s%s]\n", result.value("frameCount", 0u),
+                        result.value("capture", json::object()).value("spans", json::array()).size(),
+                        meta.value("correlated", false) ? "correlated" : "uncorrelated",
+                        meta.value("softwareGpu", false) ? ", software-gpu" : "");
+            std::string path = result.value("path", std::string{});
+            if (path.empty())
+            {
+                // Inline capture: write the Chrome-Trace JSON to a temp file the user can open.
+                const std::string trace = result.value("chromeTrace", std::string{});
+                if (!trace.empty())
+                {
+                    path = (std::filesystem::temp_directory_path() / "saffron-profile.json").string();
+                    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+                    stream << trace;
+                }
+            }
+            if (!path.empty())
+            {
+                std::printf("trace: %s  (open in chrome://tracing or ui.perfetto.dev)\n", path.c_str());
+            }
             return;
         }
         if (cmd == "frame-history")
