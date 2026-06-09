@@ -17,6 +17,7 @@ import type {
   GizmoState,
   InspectResult,
   PerfConfigDto,
+  ProfileCaptureDto,
   RenderPassTimingsDto,
   RenderStats,
 } from "../protocol";
@@ -30,13 +31,23 @@ const METRICS_RANGE_STORAGE_KEY = "saffron.metricsRangeSec";
 const METRICS_BUCKET_STORAGE_KEY = "saffron.metricsBucketMs";
 const METRICS_WINDOW_LEGACY_KEY = "saffron.metricsWindowSec"; // migrated once into the range key
 const METRICS_REFRESH_STORAGE_KEY = "saffron.metricsRefreshMs";
+const CAPTURE_WINDOW_STORAGE_KEY = "saffron.captureWindowFrames";
+const CAPTURE_STATS_STORAGE_KEY = "saffron.captureIncludeStats";
 
 export type EnginePhase = "idle" | "starting" | "attaching" | "ready" | "error";
 /// The active left-bottom dock tab. Tree rows switch it (the Environment sentinel
 /// selects-and-switches); the tab strip itself stays clickable as before.
-export type BottomTab = "inspector" | "environment" | "stats";
+export type BottomTab = "inspector" | "environment" | "render";
+
+/// The performance tools openable into the right sidebar from the Topbar wrench menu.
+export type RightTool = "stats" | "profiler";
+
+/// The profiler capture lifecycle, mirrored from the engine's recorder. On-demand: a
+/// capture is armed by a button, never polled on the metrics lane.
+export type CaptureState = "idle" | "arming" | "recording" | "ready";
 export type ViewTab =
   | { id: "scene"; kind: "scene"; title: "Scene"; closable: false }
+  | { id: "flamegraph"; kind: "flamegraph"; title: "Flame graph"; closable: true }
   | {
       id: string;
       kind: "asset";
@@ -70,6 +81,10 @@ export interface EditorState {
   assetFolders: string[];
   viewTabs: ViewTab[];
   activeViewTabId: string;
+  /// Performance tools open in the right sidebar (order = tab order); empty ⇒ the sidebar is
+  /// closed. Session-only — opened from the Topbar wrench menu.
+  rightTools: RightTool[];
+  activeRightTool: RightTool | null;
   environment: Environment | null;
   renderStats: RenderStats | null;
   /// Performance-telemetry slices (phases 1-4), filled by the gated metrics poll only
@@ -91,6 +106,18 @@ export interface EditorState {
   metricsRefreshMs: number;
   /// Pause the metrics lane (freeze the dashboard). Session-only; alarms catch up on resume.
   metricsPaused: boolean;
+  /// Profiler capture (phases 5-7), request-scoped and kept OUT of the metrics lane. The
+  /// last completed capture, its lifecycle state, and the in-flight frame progress.
+  captureState: CaptureState;
+  captureProgress: { current: number; total: number };
+  capture: ProfileCaptureDto | null;
+  /// Window length to capture (frames); persisted preference, default 1 (single-frame snapshot).
+  captureWindowFrames: number;
+  /// Request pipeline-statistics (overdraw / cull / vertex-reuse) in the capture; persisted,
+  /// default off (the heaviest mode). The engine drops it gracefully when unsupported.
+  captureIncludeStats: boolean;
+  /// The pass name highlighted across the Profiler sub-views (Phase 7 cross-highlight).
+  selectedPass: string | null;
   project: ProjectInfo | null;
   /// Client-side reconcile-poll rate (Hz), an EMA over the actual tick interval.
   /// This is the WEBVIEW poll cadence, NOT the engine frame rate (the engine's own
@@ -168,9 +195,16 @@ export interface EditorState {
   /// poll on a sceneVersion change and eagerly after an import/rename.
   refreshAssets(): Promise<void>;
   openAssetTab(asset: AssetEntry): void;
+  /// Open (or focus) the Flame graph main tab.
+  openFlameTab(): void;
   closeViewTab(id: string): void;
   setActiveViewTab(id: string): void;
   moveViewTab(id: string, index: number): void;
+  /// Open (or focus) a performance tool in the right sidebar.
+  openRightTool(tool: RightTool): void;
+  /// Close a right-sidebar tool; reassigns the active tool (or closes the sidebar).
+  closeRightTool(tool: RightTool): void;
+  setActiveRightTool(tool: RightTool): void;
   setEnvironment(environment: Environment | null): void;
   setRenderStats(renderStats: RenderStats | null): void;
   setPerfConfig(perfConfig: PerfConfigDto | null): void;
@@ -187,6 +221,14 @@ export interface EditorState {
   setMetricsRefreshMs(metricsRefreshMs: number): void;
   /// Pause/resume the metrics lane.
   setMetricsPaused(metricsPaused: boolean): void;
+  /// Profiler capture setters (request-scoped; no metrics-lane coupling).
+  setCaptureState(captureState: CaptureState): void;
+  setCaptureProgress(current: number, total: number): void;
+  setCapture(capture: ProfileCaptureDto | null): void;
+  /// Set + persist the capture window length (frames).
+  setCaptureWindowFrames(captureWindowFrames: number): void;
+  setCaptureIncludeStats(captureIncludeStats: boolean): void;
+  setSelectedPass(selectedPass: string | null): void;
   setProject(project: ProjectInfo | null): void;
   setPollRateHz(pollRateHz: number): void;
   setUiFrameStats(frameRateHz: number, frameMs: number): void;
@@ -233,6 +275,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   assetFolders: [],
   viewTabs: [{ id: "scene", kind: "scene", title: "Scene", closable: false }],
   activeViewTabId: "scene",
+  rightTools: [],
+  activeRightTool: null,
   environment: null,
   renderStats: null,
   perfConfig: null,
@@ -244,6 +288,12 @@ export const useEditorStore = create<EditorState>((set) => ({
   metricsBucketMs: loadMetricsBucketMs(),
   metricsRefreshMs: loadMetricsRefreshMs(),
   metricsPaused: false,
+  captureState: "idle",
+  captureProgress: { current: 0, total: 0 },
+  capture: null,
+  captureWindowFrames: loadCaptureWindowFrames(),
+  captureIncludeStats: loadCaptureIncludeStats(),
+  selectedPass: null,
   project: null,
   pollRateHz: 0,
   uiFrameRateHz: 0,
@@ -386,6 +436,19 @@ export const useEditorStore = create<EditorState>((set) => ({
             ],
       };
     }),
+  openFlameTab: () =>
+    set((s) => {
+      const existing = s.viewTabs.some((tab) => tab.id === "flamegraph");
+      return {
+        activeViewTabId: "flamegraph",
+        viewTabs: existing
+          ? s.viewTabs
+          : [
+              ...s.viewTabs,
+              { id: "flamegraph", kind: "flamegraph", title: "Flame graph", closable: true },
+            ],
+      };
+    }),
   closeViewTab: (id) =>
     set((s) => {
       if (id === "scene") {
@@ -416,6 +479,26 @@ export const useEditorStore = create<EditorState>((set) => ({
         viewTabs: [...without.slice(0, nextIndex), moving, ...without.slice(nextIndex)],
       };
     }),
+  openRightTool: (tool) =>
+    set((s) => ({
+      rightTools: s.rightTools.includes(tool) ? s.rightTools : [...s.rightTools, tool],
+      activeRightTool: tool,
+    })),
+  closeRightTool: (tool) =>
+    set((s) => {
+      const index = s.rightTools.indexOf(tool);
+      if (index < 0) {
+        return {};
+      }
+      const rightTools = s.rightTools.filter((t) => t !== tool);
+      const activeRightTool =
+        s.activeRightTool === tool
+          ? (rightTools[Math.max(0, index - 1)] ?? null)
+          : s.activeRightTool;
+      return { rightTools, activeRightTool };
+    }),
+  setActiveRightTool: (tool) =>
+    set((s) => (s.rightTools.includes(tool) ? { activeRightTool: tool } : {})),
   setEnvironment: (environment) => set({ environment }),
   setRenderStats: (renderStats) => set({ renderStats }),
   setPerfConfig: (perfConfig) => set({ perfConfig }),
@@ -458,6 +541,28 @@ export const useEditorStore = create<EditorState>((set) => ({
       return { metricsRefreshMs };
     }),
   setMetricsPaused: (metricsPaused) => set({ metricsPaused }),
+  setCaptureState: (captureState) => set({ captureState }),
+  setCaptureProgress: (current, total) => set({ captureProgress: { current, total } }),
+  setCapture: (capture) => set({ capture }),
+  setCaptureWindowFrames: (captureWindowFrames) =>
+    set(() => {
+      try {
+        localStorage.setItem(CAPTURE_WINDOW_STORAGE_KEY, String(captureWindowFrames));
+      } catch {
+        // Storage unavailable; the preference is then session-only.
+      }
+      return { captureWindowFrames };
+    }),
+  setCaptureIncludeStats: (captureIncludeStats) =>
+    set(() => {
+      try {
+        localStorage.setItem(CAPTURE_STATS_STORAGE_KEY, captureIncludeStats ? "1" : "0");
+      } catch {
+        // Storage unavailable; the preference is then session-only.
+      }
+      return { captureIncludeStats };
+    }),
+  setSelectedPass: (selectedPass) => set({ selectedPass }),
   // Rehydrate the persisted expand-state when a project (path) becomes current.
   setProject: (project) =>
     set({
@@ -694,6 +799,38 @@ export function loadSidebarWidth(path: string | undefined): number | null {
   return null;
 }
 
+/// Right-sidebar (perf tools) width persistence, mirroring the left sidebar.
+const RIGHT_SIDEBAR_WIDTH_STORAGE_PREFIX = "saffron.layout.rightSidebarWidth:";
+
+export function persistRightSidebarWidth(path: string | undefined, width: number): void {
+  if (!path) {
+    return;
+  }
+  try {
+    localStorage.setItem(RIGHT_SIDEBAR_WIDTH_STORAGE_PREFIX + path, String(Math.round(width)));
+  } catch {
+    // Storage may be unavailable (private mode); the width is then session-only.
+  }
+}
+
+export function loadRightSidebarWidth(path: string | undefined): number | null {
+  if (!path) {
+    return null;
+  }
+  try {
+    const raw = localStorage.getItem(RIGHT_SIDEBAR_WIDTH_STORAGE_PREFIX + path);
+    if (raw !== null) {
+      const width = Number(raw);
+      if (Number.isFinite(width)) {
+        return width;
+      }
+    }
+  } catch {
+    // Fall through to the default.
+  }
+  return null;
+}
+
 /// The component-subrows toggle is a view preference (one key, unlike the
 /// per-project expand-state); default off keeps the outliner clean.
 const SUBROWS_STORAGE_KEY = "saffron.showComponentSubrows";
@@ -781,6 +918,32 @@ function loadMetricsRefreshMs(): number {
     // Fall through to the default.
   }
   return 1000;
+}
+
+/// The capture window length (frames); default 1 (single-frame snapshot). Presets are
+/// 1/8/64/256, clamped to the engine's [1, 256] capture cap.
+function loadCaptureWindowFrames(): number {
+  try {
+    const raw = localStorage.getItem(CAPTURE_WINDOW_STORAGE_KEY);
+    if (raw !== null) {
+      const value = Number(raw);
+      if (Number.isFinite(value) && value >= 1 && value <= 256) {
+        return Math.floor(value);
+      }
+    }
+  } catch {
+    // Fall through to the default.
+  }
+  return 1;
+}
+
+/// Whether captures request pipeline statistics; default off (the heaviest mode).
+function loadCaptureIncludeStats(): boolean {
+  try {
+    return localStorage.getItem(CAPTURE_STATS_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 /// The outliner's bone filter: drop rows flagged `bone` and re-anchor every surviving
@@ -962,7 +1125,7 @@ export function startReconcile(client: Client): () => void {
         useEditorStore.getState().setPerfConfig(config);
       }
 
-      if (useEditorStore.getState().bottomTab === "stats") {
+      if (useEditorStore.getState().rightTools.includes("stats")) {
         const history = await client.frameHistory(FRAME_HISTORY_SAMPLES);
         if (stopped) {
           return;
