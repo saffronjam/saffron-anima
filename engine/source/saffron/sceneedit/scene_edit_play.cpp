@@ -92,6 +92,8 @@ namespace se
         ctx.hadPrimaryCamera = primaryCamera(play).valid;
         const u64 selectedUuid = selectedUuidIn(ctx, ctx.scene);
         dropSmoothing(ctx);
+        ctx.playTick = 0;
+        ctx.scriptErrors.clear();  // each session drains fresh; seq stays monotonic for cursors
         ctx.playScene.emplace(std::move(play));
         publishTransition(ctx, PlayState::Playing);
         // Re-resolve the selection into the duplicate by uuid: the old handle indexes the
@@ -191,9 +193,24 @@ namespace se
             dt = PlayFixedStep;
         }
         dt = std::min(dt, PlayMaxDelta);
+        ctx.playTick += 1;
         // The simulation seam: physics, scripting, and animation advance *ctx.playScene
-        // here. v1 has none of them; world transforms refresh inside renderScene.
-        static_cast<void>(dt);
+        // here. The Host points simTick at the script runtime.
+        if (ctx.simTick)
+        {
+            ctx.simTick(activeScene(ctx), dt);
+        }
+    }
+
+    void pushScriptError(SceneEditContext& ctx, u64 entityUuid, std::string script, std::string message)
+    {
+        ctx.scriptErrorSeq += 1;
+        if (ctx.scriptErrors.size() >= ScriptErrorRingCap)
+        {
+            ctx.scriptErrors.erase(ctx.scriptErrors.begin());
+        }
+        ctx.scriptErrors.push_back(
+            ScriptError{ ctx.scriptErrorSeq, entityUuid, std::move(script), std::move(message), ctx.playTick });
     }
 
     void runPlayModeSelfTest()

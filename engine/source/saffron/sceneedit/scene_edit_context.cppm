@@ -154,6 +154,20 @@ export namespace se
     auto playStateName(PlayState state) -> const char*;  // "edit"|"playing"|"paused"
     auto playStateFromName(const std::string& name) -> PlayState;
 
+    // One contained script failure, kept in a bounded ring on the context so the
+    // editor drains it over a normal scene command (Control never imports the Lua
+    // runtime). entityUuid is 0 when the failure has no owning entity.
+    struct ScriptError
+    {
+        i64 seq = 0;
+        u64 entityUuid = 0;
+        std::string script;
+        std::string message;
+        i64 tick = 0;  // the play tick the error fired on
+    };
+
+    inline constexpr std::size_t ScriptErrorRingCap = 256;
+
     inline constexpr f32 PlayFixedStep = 1.0f / 60.0f;  // the deterministic `step` tick
     inline constexpr f32 PlayMaxDelta = 1.0f / 3.0f;    // dt clamp so a hitch never spikes the simulation
 
@@ -191,7 +205,18 @@ export namespace se
         i32 stepFrames = 0;                            // pending single-step ticks, granted only while Paused
         bool hadPrimaryCamera = false;                 // captured at enterPlay; false drives the editor warning
         SubscriberList<PlayState> onPlayStateChanged;  // the physics/scripting lifecycle seam
+
+        // The simulation seam: tickPlay invokes this with the active (play) scene and
+        // the clamped dt. The Host points it at the script runtime; std-only here.
+        std::function<void(Scene&, f32)> simTick;
+        i64 playTick = 0;                       // ticks run since enterPlay (error timestamps)
+        i32 scriptInstanceCount = 0;            // live script instances; set by the Host wiring
+        std::vector<ScriptError> scriptErrors;  // bounded ring, oldest dropped at ScriptErrorRingCap
+        i64 scriptErrorSeq = 0;                 // last assigned ScriptError.seq (drain high-water)
     };
+
+    // Append to the bounded script-error ring, stamping seq + the current play tick.
+    void pushScriptError(SceneEditContext& ctx, u64 entityUuid, std::string script, std::string message);
 
     // The scene every consumer addresses: the play duplicate while playing/paused, the
     // authored scene in Edit. Nothing else may branch on playState to pick a scene.
