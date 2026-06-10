@@ -40,14 +40,17 @@ namespace se
 {
     // Issues one instanced drawIndexed per submesh of a batch. The frame's instance
     // buffer is laid out submesh-major (see submitDrawList), so submesh s reads its rows
-    // by offsetting baseInstance by s * instanceCount.
+    // by offsetting baseInstance by s * instanceCount. A skinned batch draws the deformed
+    // buffer, whose vertices for this instance start at deformedVertexOffset, so its
+    // submesh vertex offsets are shifted by that base.
     void recordBatchSubmeshes(vk::CommandBuffer cmd, const DrawBatch& batch)
     {
         const auto& submeshes = batch.mesh->submeshes;
         for (u32 s = 0; s < submeshes.size(); s = s + 1)
         {
             const Submesh& submesh = submeshes[s];
-            cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex, submesh.vertexOffset,
+            const i32 vertexOffset = static_cast<i32>(batch.deformedVertexOffset) + submesh.vertexOffset;
+            cmd.drawIndexed(submesh.indexCount, batch.instanceCount, submesh.firstIndex, vertexOffset,
                             batch.baseInstance + s * batch.instanceCount);
         }
     }
@@ -135,9 +138,15 @@ namespace se
         VmaAllocation vertexAlloc = nullptr;
         VmaAllocation indexAlloc = nullptr;
         VmaAllocation skinAlloc = nullptr;
-        if (!makeDeviceBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertexBuffer, vertexAlloc) ||
+        // A skinned mesh's vertex + skin streams are also read as storage buffers by the
+        // compute skinning pre-pass (skin.slang), so they carry STORAGE usage too.
+        const VkBufferUsageFlags vertexUsage =
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | (skin.empty() ? 0 : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!makeDeviceBuffer(vertexBytes, vertexUsage, vertexBuffer, vertexAlloc) ||
             !makeDeviceBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indexBuffer, indexAlloc) ||
-            (!skin.empty() && !makeDeviceBuffer(skinBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, skinBuffer, skinAlloc)))
+            (!skin.empty() &&
+             !makeDeviceBuffer(skinBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               skinBuffer, skinAlloc)))
         {
             if (vertexBuffer != VK_NULL_HANDLE)
             {
@@ -284,6 +293,41 @@ namespace se
         return {};
     }
 
+    // Ensures the frame's deformed-vertex buffer holds at least `vertexCount` base-layout
+    // Vertex elements; same grow-only policy (starts 4096, doubles, never shrinks). The
+    // compute skinning pass writes it and the scene pass draws it as a static stream.
+    auto ensureDeformedCapacity(Renderer& renderer, u32 frame, u32 vertexCount) -> Result<void>
+    {
+        if (renderer.skinning.deformedBuffers[frame] && renderer.skinning.deformedCapacity[frame] >= vertexCount)
+        {
+            return {};
+        }
+        u32 capacity = renderer.skinning.deformedCapacity[frame];
+        if (capacity == 0)
+        {
+            capacity = 4096;
+        }
+        while (capacity < vertexCount)
+        {
+            capacity = capacity * 2;
+        }
+        Result<Ref<Buffer>> buffer =
+            makeDeviceVertexStorageBuffer(renderer, static_cast<vk::DeviceSize>(capacity) * sizeof(Vertex));
+        if (!buffer)
+        {
+            return Err(buffer.error());
+        }
+        renderer.skinning.deformedBuffers[frame] = *buffer;
+        renderer.skinning.deformedCapacity[frame] = capacity;
+        if (capacity > renderer.skinning.peakVertices)
+        {
+            renderer.skinning.peakVertices = capacity;
+            logInfo(std::format("skinning: deformed-vertex buffer grew to {} vertices ({} KiB)", capacity,
+                                capacity * sizeof(Vertex) / 1024));
+        }
+        return {};
+    }
+
     void submitDrawList(Renderer& renderer, const glm::mat4& viewProj, const std::vector<DrawItem>& items)
     {
         submitDrawList(renderer, viewProj, items, std::vector<glm::mat4>{});
@@ -302,11 +346,15 @@ namespace se
         // Bucket items by (pipeline, mesh); each bucket becomes one instanced draw. The
         // albedo is bindless — a per-instance index into the global texture array — so
         // items differing only by texture batch together. First-seen order preserved.
+        // Skinned items never merge: each is deformed once by the compute pre-pass into its
+        // own slice of the frame's deformed-vertex buffer, then drawn as a lone static
+        // instance reading that slice (the scene PSO is the ordinary non-skinned variant).
         struct Bucket
         {
             Ref<Pipeline> pipeline;
             Ref<GpuMesh> mesh;
             bool skinned = false;
+            u32 jointOffset = 0;  // skinned only: base of this instance's joints in the palette
             // Per logical instance: one InstanceData row per mesh submesh, in submesh order.
             std::vector<std::vector<InstanceData>> instances;
         };
@@ -323,23 +371,29 @@ namespace se
             {
                 continue;  // a skinned draw needs the mesh's VertexSkin stream
             }
-            auto pipeline = requestMeshPipeline(renderer, item.material, item.skinned);
+            // Skinned meshes draw the deformed buffer as a static stream, so they resolve
+            // to the non-skinned PSO; the deform happens in the compute pre-pass.
+            auto pipeline = requestMeshPipeline(renderer, item.material, false);
             if (!pipeline)
             {
                 continue;
             }
             Bucket* bucket = nullptr;
-            for (Bucket& candidate : buckets)
+            if (!item.skinned)
             {
-                if (candidate.pipeline.get() == pipeline.get() && candidate.mesh.get() == item.mesh.get())
+                for (Bucket& candidate : buckets)
                 {
-                    bucket = &candidate;
-                    break;
+                    if (!candidate.skinned && candidate.pipeline.get() == pipeline.get() &&
+                        candidate.mesh.get() == item.mesh.get())
+                    {
+                        bucket = &candidate;
+                        break;
+                    }
                 }
             }
             if (bucket == nullptr)
             {
-                buckets.push_back(Bucket{ pipeline, item.mesh, item.skinned, {} });
+                buckets.push_back(Bucket{ pipeline, item.mesh, item.skinned, item.jointOffset, {} });
                 bucket = &buckets.back();
             }
             // One row per submesh; a single material entry covers every submesh (clamped).
@@ -385,8 +439,13 @@ namespace se
 
         // Flatten submesh-major: lay every instance's submesh-s row contiguously, so a
         // submesh draws all instances at once by offsetting baseInstance by s * instanceCount.
+        // Skinned batches carry instanceCount == 1 + a deformed-buffer base vertex; the
+        // running cursor concatenates each skinned instance's full vertex array.
         std::vector<InstanceData> instances;
         std::vector<DrawBatch> batches;
+        std::vector<SkinDispatch> dispatches;
+        std::vector<Ref<GpuMesh>> dispatchMeshes;  // parallel to dispatches: the mesh each set binds
+        u32 deformedCursor = 0;
         for (Bucket& bucket : buckets)
         {
             if (bucket.instances.empty())
@@ -400,6 +459,14 @@ namespace se
             batch.skinned = bucket.skinned;
             batch.baseInstance = static_cast<u32>(instances.size());
             batch.instanceCount = static_cast<u32>(bucket.instances.size());
+            if (bucket.skinned)
+            {
+                batch.deformedVertexOffset = deformedCursor;
+                dispatches.push_back(
+                    SkinDispatch{ vk::DescriptorSet{}, bucket.mesh->vertexCount, bucket.jointOffset, deformedCursor });
+                dispatchMeshes.push_back(bucket.mesh);
+                deformedCursor = deformedCursor + bucket.mesh->vertexCount;
+            }
             for (u32 s = 0; s < submeshCount; s = s + 1)
             {
                 for (const std::vector<InstanceData>& rows : bucket.instances)
@@ -436,6 +503,70 @@ namespace se
                                jointBytes);
         }
 
+        // The compute skinning work: size the frame's deformed-vertex buffer to the
+        // concatenated skinned vertices, then allocate one descriptor set per skinned
+        // instance from the frame's pool (reset wholesale each frame) and wire its static +
+        // skin streams (binding 0/1), the joint palette (2), and the deformed output (3).
+        // Both buffers must exist before the sets are written, so this runs after the
+        // palette upload above. The graph then dispatches these in the skin pass.
+        if (!dispatches.empty() && !renderer.instancing.jointBuffers[frame])
+        {
+            // A skinned instance with no joint palette this frame can't be deformed; drop the
+            // dispatches so the skin pass is skipped (the batches then read undeformed bind pose).
+            logWarn(std::string{ "skinning: skinned instances present but no joint palette uploaded; skipping" });
+            dispatches.clear();
+        }
+        if (!dispatches.empty())
+        {
+            if (Result<void> ok = ensureDeformedCapacity(renderer, frame, deformedCursor); !ok)
+            {
+                logError(ok.error());
+                return;
+            }
+            if (dispatches.size() > SkinMaxSetsPerFrame)
+            {
+                logWarn(std::format("skinning: {} skinned instances exceed the {}-set frame budget; clamping",
+                                    dispatches.size(), SkinMaxSetsPerFrame));
+                dispatches.resize(SkinMaxSetsPerFrame);
+                dispatchMeshes.resize(SkinMaxSetsPerFrame);
+            }
+            static_cast<void>(renderer.context.device.resetDescriptorPool(renderer.skinning.pools[frame]));
+            const vk::Buffer palette = renderer.instancing.jointBuffers[frame]->buffer;
+            const vk::DeviceSize paletteSize = renderer.instancing.jointBuffers[frame]->size;
+            const vk::Buffer deformed = renderer.skinning.deformedBuffers[frame]->buffer;
+            const vk::DeviceSize deformedSize = renderer.skinning.deformedBuffers[frame]->size;
+            for (std::size_t i = 0; i < dispatches.size(); i = i + 1)
+            {
+                vk::DescriptorSetAllocateInfo setAlloc{};
+                setAlloc.descriptorPool = renderer.skinning.pools[frame];
+                setAlloc.setSetLayouts(renderer.skinning.setLayout);
+                auto allocated = checked(renderer.context.device.allocateDescriptorSets(setAlloc), "allocate skinSet");
+                if (!allocated)
+                {
+                    logError(allocated.error());
+                    dispatches.clear();
+                    break;
+                }
+                const Ref<GpuMesh>& mesh = dispatchMeshes[i];
+                dispatches[i].set = (*allocated)[0];
+                std::array<vk::DescriptorBufferInfo, 4> infos{
+                    vk::DescriptorBufferInfo{ mesh->vertexBuffer, 0, VK_WHOLE_SIZE },
+                    vk::DescriptorBufferInfo{ mesh->skinBuffer, 0, VK_WHOLE_SIZE },
+                    vk::DescriptorBufferInfo{ palette, 0, paletteSize },
+                    vk::DescriptorBufferInfo{ deformed, 0, deformedSize }
+                };
+                std::array<vk::WriteDescriptorSet, 4> writes{};
+                for (u32 b = 0; b < writes.size(); b = b + 1)
+                {
+                    writes[b].dstSet = dispatches[i].set;
+                    writes[b].dstBinding = b;
+                    writes[b].descriptorType = vk::DescriptorType::eStorageBuffer;
+                    writes[b].setBufferInfo(infos[b]);
+                }
+                renderer.context.device.updateDescriptorSets(writes, {});
+            }
+        }
+
         u32 drawCalls = 0;
         u32 drawnInstances = 0;
         u32 triangles = 0;
@@ -458,6 +589,7 @@ namespace se
         SceneDrawList list;
         list.viewProj = viewProj;
         list.batches = std::move(batches);
+        list.skinDispatches = std::move(dispatches);
         list.liveTextures = std::move(liveTextures);
         list.lightSet = renderer.lighting.lightSets[frame];
         list.instanceSet = renderer.instancing.sets[frame];
@@ -513,10 +645,17 @@ namespace se
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, batch.pipeline->pipeline);
             vk::DeviceSize offset = 0;
-            cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
-            if (batch.skinned)
+            // Skinned batches draw the compute-deformed buffer as the single binding-0
+            // stream (the deformedVertexOffset shifts each drawIndexed); unskinned batches
+            // bind the mesh's static stream. Neither binds a second VertexSkin stream — the
+            // scene PSO is the non-skinned variant.
+            if (batch.skinned && renderer.skinning.deformedBuffers[renderer.frame.index])
             {
-                cmd.bindVertexBuffers(1, batch.mesh->skinBuffer, offset);
+                cmd.bindVertexBuffers(0, renderer.skinning.deformedBuffers[renderer.frame.index]->buffer, offset);
+            }
+            else
+            {
+                cmd.bindVertexBuffers(0, batch.mesh->vertexBuffer, offset);
             }
             cmd.bindIndexBuffer(batch.mesh->indexBuffer, 0, vk::IndexType::eUint32);
             recordBatchSubmeshes(cmd, batch);

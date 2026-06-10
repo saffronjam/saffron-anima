@@ -648,6 +648,8 @@ namespace se
         for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
         {
             renderer.instancing.buffers[i].reset();  // RAII frees the SSBO before the allocator
+            renderer.instancing.jointBuffers[i].reset();
+            renderer.skinning.deformedBuffers[i].reset();
             renderer.lighting.lightListBuffers[i].reset();
             renderer.lighting.clusterBuffers[i].reset();
             if (renderer.lighting.lightBuffers[i] != VK_NULL_HANDLE)
@@ -694,6 +696,17 @@ namespace se
         if (renderer.descriptors.fxaaSetLayout)
         {
             renderer.context.device.destroyDescriptorSetLayout(renderer.descriptors.fxaaSetLayout);
+        }
+        if (renderer.skinning.setLayout)
+        {
+            renderer.context.device.destroyDescriptorSetLayout(renderer.skinning.setLayout);
+        }
+        for (vk::DescriptorPool pool : renderer.skinning.pools)
+        {
+            if (pool)
+            {
+                renderer.context.device.destroyDescriptorPool(pool);
+            }
         }
         if (renderer.descriptors.linearSampler)
         {
@@ -2064,6 +2077,54 @@ namespace se
             addPass(graph, std::move(cull));
         }
 
+        // Compute skinning pre-pass: deform each skinned mesh-instance once into the frame's
+        // deformed-vertex buffer, which the scene pass then draws as a static stream. Placed
+        // here (right after light-cull, before any geometry pass) so later passes that read
+        // the deformed buffer also see it. The graph derives the compute-write→vertex-input
+        // barrier from the StorageWriteCompute here + the scene pass's VertexInputRead. The
+        // static/skin/palette reads need no barrier: the meshes were uploaded long ago, and
+        // the host-written palette is covered by the submit's implicit host-write dependency.
+        RgResource deformedBuffer{};
+        const bool doSkin = !renderer.frame.sceneDrawList.skinDispatches.empty() && renderer.pipelines.skin &&
+                            renderer.skinning.deformedBuffers[f];
+        if (doSkin)
+        {
+            deformedBuffer = importBuffer(graph, renderer.skinning.deformedBuffers[f]->buffer);
+            RgPass skinPass;
+            skinPass.name = "skin";
+            skinPass.kind = RgPassKind::Compute;
+            skinPass.accesses = { RgAccess{ deformedBuffer, RgUsage::StorageWriteCompute } };
+            skinPass.execute = [&renderer](vk::CommandBuffer cmd)
+            {
+                const std::vector<SkinDispatch>& dispatches = renderer.frame.sceneDrawList.skinDispatches;
+                if (dispatches.empty())
+                {
+                    return;
+                }
+                cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.skin->pipeline);
+                for (const SkinDispatch& d : dispatches)
+                {
+                    if (!d.set)
+                    {
+                        continue;
+                    }
+                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.skin->layout, 0, d.set,
+                                           {});
+                    struct SkinPush
+                    {
+                        u32 vertexCount;
+                        u32 jointOffset;
+                        u32 deformedOffset;
+                        u32 pad;
+                    } push{ d.vertexCount, d.jointOffset, d.deformedOffset, 0 };
+                    cmd.pushConstants(renderer.pipelines.skin->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                      sizeof(push), &push);
+                    cmd.dispatch((d.vertexCount + 63) / 64, 1, 1);
+                }
+            };
+            addPass(graph, std::move(skinPass));
+        }
+
         // Optional depth pre-pass: lay down scene depth first, so the scene pass loads it
         // and shades only the front-most fragments. The graph derives the depth WAW
         // barrier (pre-pass write → scene write) from the two declared depth usages.
@@ -2593,6 +2654,12 @@ namespace se
         if (doCull)
         {
             scene.accesses = { RgAccess{ clusterBuffer, RgUsage::StorageReadFragment } };
+        }
+        // The scene pass draws the compute-deformed vertices as a vertex stream; declaring
+        // the read makes the graph wait the vertex-input stage on the skin compute write.
+        if (doSkin)
+        {
+            scene.accesses.push_back(RgAccess{ deformedBuffer, RgUsage::VertexInputRead });
         }
         if (renderer.graph.hasAo)
         {

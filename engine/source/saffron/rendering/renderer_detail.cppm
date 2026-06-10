@@ -1274,6 +1274,30 @@ export namespace se
         return std::make_shared<Buffer>(std::move(buffer));
     }
 
+    // A device-local buffer usable as both a storage buffer (the compute skinning pass
+    // writes it) and a vertex stream (the scene pass draws it) — the deformed-vertex
+    // buffer for the frame.
+    auto makeDeviceVertexStorageBuffer(Renderer& renderer, vk::DeviceSize bytes) -> Result<Ref<Buffer>>
+    {
+        VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        info.size = bytes;
+        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        VmaAllocationCreateInfo alloc{};
+        alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        VkBuffer raw = VK_NULL_HANDLE;
+        VmaAllocation allocation = nullptr;
+        if (vmaCreateBuffer(renderer.context.allocator, &info, &alloc, &raw, &allocation, nullptr) != VK_SUCCESS)
+        {
+            return Err(std::string{ "makeDeviceVertexStorageBuffer: vmaCreateBuffer failed" });
+        }
+        Buffer buffer;
+        buffer.allocator = renderer.context.allocator;
+        buffer.buffer = vk::Buffer{ raw };
+        buffer.alloc = allocation;
+        buffer.size = bytes;
+        return std::make_shared<Buffer>(std::move(buffer));
+    }
+
     // Builds a compute pipeline from a SPIR-V module (entry "computeMain") + a single
     // descriptor set layout, optionally with a compute-stage push constant of the given
     // size. Returned as a Ref<Pipeline> (move-only RAII).
@@ -2736,6 +2760,40 @@ export namespace se
         }
         renderer.descriptors.fxaaSetLayout = *fxaaLayout;
 
+        // Compute skinning set: in-vertices (0), in-skins (1), joint palette (2), out-vertices (3).
+        std::array<vk::DescriptorSetLayoutBinding, 4> skinBindings{};
+        for (u32 b = 0; b < skinBindings.size(); b = b + 1)
+        {
+            skinBindings[b].binding = b;
+            skinBindings[b].descriptorType = vk::DescriptorType::eStorageBuffer;
+            skinBindings[b].descriptorCount = 1;
+            skinBindings[b].stageFlags = vk::ShaderStageFlagBits::eCompute;
+        }
+        vk::DescriptorSetLayoutCreateInfo skinLayoutInfo{};
+        skinLayoutInfo.setBindings(skinBindings);
+        auto skinLayout = checked(renderer.context.device.createDescriptorSetLayout(skinLayoutInfo), "skinSetLayout");
+        if (!skinLayout)
+        {
+            return Err(skinLayout.error());
+        }
+        renderer.skinning.setLayout = *skinLayout;
+
+        // One per-frame pool, reset wholesale each frame; sized for SkinMaxSetsPerFrame
+        // per-instance sets (4 storage buffers each).
+        for (u32 fi = 0; fi < MaxFramesInFlight; fi = fi + 1)
+        {
+            vk::DescriptorPoolSize skinPoolSize{ vk::DescriptorType::eStorageBuffer, 4 * SkinMaxSetsPerFrame };
+            vk::DescriptorPoolCreateInfo skinPoolInfo{};
+            skinPoolInfo.maxSets = SkinMaxSetsPerFrame;
+            skinPoolInfo.setPoolSizes(skinPoolSize);
+            auto skinPool = checked(renderer.context.device.createDescriptorPool(skinPoolInfo), "skinPool");
+            if (!skinPool)
+            {
+                return Err(skinPool.error());
+            }
+            renderer.skinning.pools[fi] = *skinPool;
+        }
+
         std::array<vk::DescriptorPoolSize, 5> poolSizes{
             vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 1024 },
             vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, 4 * MaxFramesInFlight + 8 },
@@ -2949,6 +3007,16 @@ export namespace se
             return Err(cull.error());
         }
         renderer.pipelines.cull = *cull;
+
+        // Compute skinning pre-pass: deforms each skinned mesh-instance once into the
+        // frame's deformed-vertex buffer (push constant: vertexCount, jointOffset,
+        // deformedOffset, pad = 16 B).
+        Result<Ref<Pipeline>> skin = newComputePipeline(renderer, "shaders/skin.spv", renderer.skinning.setLayout, 16);
+        if (!skin)
+        {
+            return Err(skin.error());
+        }
+        renderer.pipelines.skin = *skin;
 
         // Tonemap: a compute pipeline + a set binding the offscreen color as a storage
         // image (read+written in place). beginFrameGraph adds the pass every frame; the
