@@ -7,6 +7,7 @@ struct Instance
 {
     float4x4 model;
     float4x4 normalMatrix;
+    float4x4 prevModel;
     float4 baseColor;
     uint4 texture;
     float4 pbr;

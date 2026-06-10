@@ -142,6 +142,7 @@ struct Instance
 {
     float4x4 model;
     float4x4 normalMatrix;
+    float4x4 prevModel;  // last frame's world matrix (TAA object-motion reprojection)
     float4 baseColor;
     uint4 texture;    // x = bindless albedo index
     float4 pbr;       // x = metallic, y = roughness
