@@ -863,7 +863,7 @@ export interface AssetList {
 export interface AssetEntryDto {
   id: WireUuid;
   name: string;
-  type: "mesh" | "texture" | "other";
+  type: "mesh" | "texture" | "other" | "animation";
   path: string;
   folder?: string;
 }
@@ -918,7 +918,7 @@ export interface AssetMetadataParams {
 export interface AssetMetadataDto {
   id: WireUuid;
   name: string;
-  type: "mesh" | "texture" | "other";
+  type: "mesh" | "texture" | "other" | "animation";
   path: string;
   folder?: string;
   sizeBytes: number;

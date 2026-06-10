@@ -85,7 +85,7 @@ const enumWireNames = new Map<string, Record<string, string>>([
   ["GiModeDto", { Off: "off", Ddgi: "ddgi" }],
   ["AssetSlotDto", { Mesh: "mesh", Albedo: "albedo", MetallicRoughness: "metallic-roughness" }],
   ["ScreenshotTargetDto", { Viewport: "viewport", Window: "window" }],
-  ["AssetTypeDto", { Mesh: "mesh", Texture: "texture", Other: "other" }],
+  ["AssetTypeDto", { Mesh: "mesh", Texture: "texture", Other: "other", Animation: "animation" }],
   ["ProfilerModeDto", { Off: "off", Timestamps: "timestamps", PipelineStats: "pipeline-stats" }],
   ["ProfileLaneDto", { Cpu: "cpu", Gpu: "gpu" }],
   ["CaptureModeDto", { Single: "single", Frames: "frames", Rolling: "rolling" }],
@@ -1339,7 +1339,7 @@ function tsType(type: string): string {
     case "ScreenshotTargetDto":
       return '"viewport" | "window"';
     case "AssetTypeDto":
-      return '"mesh" | "texture" | "other"';
+      return '"mesh" | "texture" | "other" | "animation"';
     case "ProfilerModeDto":
       return '"off" | "timestamps" | "pipeline-stats"';
     case "ProfileLaneDto":
@@ -2172,6 +2172,28 @@ namespace se
                 c.scripts.push_back(std::move(s));
             }
         }
+        return {};
+    }
+
+    auto animationPlayerComponentToJson(const AnimationPlayerComponent& c) -> nlohmann::json
+    {
+        const char* wrap = c.wrap == AnimationPlayerComponent::Wrap::Once       ? "once"
+                           : c.wrap == AnimationPlayerComponent::Wrap::PingPong ? "pingpong"
+                                                                                : "loop";
+        return nlohmann::json{ { "clip", uuidToJson(c.clip.value) }, { "time", c.time }, { "speed", c.speed },
+                               { "wrap", wrap }, { "playing", c.playing } };
+    }
+
+    auto animationPlayerComponentFromJson(AnimationPlayerComponent& c, const nlohmann::json& j) -> Result<void>
+    {
+        c.clip = Uuid{ jsonU64Or(j, "clip", 0) };
+        c.time = jsonF32Or(j, "time", 0.0f);
+        c.speed = jsonF32Or(j, "speed", 1.0f);
+        const std::string wrap = jsonStringOr(j, "wrap", std::string{ "loop" });
+        c.wrap = wrap == "once"       ? AnimationPlayerComponent::Wrap::Once
+                 : wrap == "pingpong" ? AnimationPlayerComponent::Wrap::PingPong
+                                      : AnimationPlayerComponent::Wrap::Loop;
+        c.playing = jsonBoolOr(j, "playing", false);
         return {};
     }
 

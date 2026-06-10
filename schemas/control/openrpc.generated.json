@@ -1886,7 +1886,8 @@
             "enum": [
               "mesh",
               "texture",
-              "other"
+              "other",
+              "animation"
             ]
           },
           "path": {
@@ -1940,7 +1941,8 @@
             "enum": [
               "mesh",
               "texture",
-              "other"
+              "other",
+              "animation"
             ]
           },
           "path": {

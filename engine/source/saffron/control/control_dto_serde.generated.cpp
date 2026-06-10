@@ -402,6 +402,7 @@ namespace se
             if (text == "mesh") { return AssetTypeDto::Mesh; }
             if (text == "texture") { return AssetTypeDto::Texture; }
             if (text == "other") { return AssetTypeDto::Other; }
+            if (text == "animation") { return AssetTypeDto::Animation; }
             return Err(std::format("key '{}' has unknown value '{}'", key, *text));
         }
 
@@ -412,6 +413,7 @@ namespace se
             case AssetTypeDto::Mesh: return "mesh";
             case AssetTypeDto::Texture: return "texture";
             case AssetTypeDto::Other: return "other";
+            case AssetTypeDto::Animation: return "animation";
             }
             return "";
         }

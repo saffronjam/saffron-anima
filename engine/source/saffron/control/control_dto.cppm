@@ -127,6 +127,7 @@ export namespace se
         Mesh,
         Texture,
         Other,
+        Animation,
     };
 
     enum class ProfilerModeDto

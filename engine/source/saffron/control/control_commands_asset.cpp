@@ -67,6 +67,10 @@ namespace se
             {
                 return AssetTypeDto::Other;
             }
+            if (type == AssetType::Animation)
+            {
+                return AssetTypeDto::Animation;
+            }
             return AssetTypeDto::Mesh;
         }
 
