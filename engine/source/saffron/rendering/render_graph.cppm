@@ -32,6 +32,7 @@ export namespace se
         StorageReadFragment,    ///< storage buffer read by a fragment shader
         StorageImageRWCompute,  ///< image read+written in place by a compute shader (GENERAL)
         SampledReadCompute,     ///< image sampled in a compute shader (SHADER_READ_ONLY)
+        VertexInputRead,        ///< buffer read as a vertex stream (the compute-skinned deformed buffer)
     };
 
     enum class RgPassKind
@@ -306,6 +307,9 @@ namespace se
         case RgUsage::SampledReadCompute:
             return { vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead,
                      vk::ImageLayout::eShaderReadOnlyOptimal, false };
+        case RgUsage::VertexInputRead:
+            return { vk::PipelineStageFlagBits2::eVertexAttributeInput, vk::AccessFlagBits2::eVertexAttributeRead,
+                     vk::ImageLayout::eUndefined, false };
         }
         return { vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone, vk::ImageLayout::eUndefined,
                  false };
