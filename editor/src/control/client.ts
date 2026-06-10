@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ActiveAlarmsDto,
+  AnimationStateResult,
   AssetList,
   AssetUsagesResult,
   CaptureStartParams,
@@ -30,6 +31,7 @@ import type {
   FrameHistoryDto,
   GizmoState,
   InspectResult,
+  ListClipsResult,
   Material,
   PerfConfigDto,
   PlayStateResult,
@@ -223,6 +225,41 @@ export const client = {
   },
   getPlayState(): Promise<PlayStateResult> {
     return call("get-play-state");
+  },
+
+  // --- animation ---
+  /// The animation clips in the project catalog (the rig's available clips).
+  listClips(entity: string): Promise<ListClipsResult> {
+    return call("list-clips", { entity });
+  },
+  /// The rig's playhead, clip, wrap, speed, and the animationVersion stamp.
+  getAnimationState(entity: string): Promise<AnimationStateResult> {
+    return call("get-animation-state", { entity });
+  },
+  /// Play a clip (previews in Edit too); `blend` cross-fades/inertializes from the current clip.
+  playAnimation(
+    entity: string,
+    clip: string,
+    opts?: { speed?: number; loop?: boolean; blend?: number },
+  ): Promise<AnimationStateResult> {
+    return call("play-animation", { entity, clip, ...opts });
+  },
+  pauseAnimation(entity: string): Promise<AnimationStateResult> {
+    return call("pause-animation", { entity });
+  },
+  /// Set the playhead (previews in Edit). Works in Play, Paused, and Edit-preview alike.
+  seekAnimation(entity: string, time: number): Promise<AnimationStateResult> {
+    return call("seek-animation", { entity, time });
+  },
+  setAnimationLoop(
+    entity: string,
+    wrap: "once" | "loop" | "pingpong",
+  ): Promise<AnimationStateResult> {
+    return call("set-animation-loop", { entity, wrap });
+  },
+  /// Clear the Edit preview and stop, reverting the rig to its rest pose.
+  stopPreview(entity: string): Promise<AnimationStateResult> {
+    return call("stop-preview", { entity });
   },
 
   // --- scripting ---

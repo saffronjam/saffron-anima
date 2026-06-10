@@ -623,6 +623,7 @@ export interface SelectionResult {
   entity?: EntityRef;
   playState: string;
   playVersion: number;
+  animationVersion: number;
 }
 
 export interface DeselectResult {
@@ -634,10 +635,58 @@ export interface PlayStateResult {
   playVersion: number;
   sceneVersion: number;
   hasPrimaryCamera: boolean;
+  animationVersion: number;
 }
 
 export interface StepParams {
   frames?: number;
+}
+
+export interface AnimationStateParams {
+  entity: WireUuid | string | number;
+}
+
+export interface AnimationStateResult {
+  clip: WireUuid;
+  clipName: string;
+  duration: number;
+  time: number;
+  playing: boolean;
+  wrap: string;
+  speed: number;
+  animationVersion: number;
+}
+
+export interface ListClipsParams {
+  entity: WireUuid | string | number;
+}
+
+export interface ListClipsResult {
+  clips: AnimationClipDto[];
+}
+
+export interface AnimationClipDto {
+  id: WireUuid;
+  name: string;
+  duration: number;
+}
+
+export interface PlayAnimationParams {
+  entity: WireUuid | string | number;
+  clip: WireUuid | string | number;
+  speed?: number;
+  loop?: boolean;
+  blend?: number;
+}
+
+export interface SeekAnimationParams {
+  entity: WireUuid | string | number;
+  time: number;
+}
+
+export interface SetAnimationLoopParams {
+  entity: WireUuid | string | number;
+  wrap: string;
 }
 
 export interface ScriptStatusResult {
@@ -1038,6 +1087,13 @@ export interface CommandParamsMap {
   "step": StepParams;
   "stop": EmptyParams;
   "get-play-state": EmptyParams;
+  "get-animation-state": AnimationStateParams;
+  "list-clips": ListClipsParams;
+  "play-animation": PlayAnimationParams;
+  "pause-animation": AnimationStateParams;
+  "seek-animation": SeekAnimationParams;
+  "set-animation-loop": SetAnimationLoopParams;
+  "stop-preview": AnimationStateParams;
   "get-script-status": EmptyParams;
   "drain-script-errors": DrainScriptErrorsParams;
   "get-script-schema": GetScriptSchemaParams;
@@ -1136,6 +1192,13 @@ export interface CommandResultMap {
   "step": PlayStateResult;
   "stop": PlayStateResult;
   "get-play-state": PlayStateResult;
+  "get-animation-state": AnimationStateResult;
+  "list-clips": ListClipsResult;
+  "play-animation": AnimationStateResult;
+  "pause-animation": AnimationStateResult;
+  "seek-animation": AnimationStateResult;
+  "set-animation-loop": AnimationStateResult;
+  "stop-preview": AnimationStateResult;
   "get-script-status": ScriptStatusResult;
   "drain-script-errors": DrainScriptErrorsResult;
   "get-script-schema": GetScriptSchemaResult;
