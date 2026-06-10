@@ -43,6 +43,10 @@ export type BottomTab = "inspector" | "environment" | "render";
 /// The performance tools openable into the right sidebar from the Topbar wrench menu.
 export type RightTool = "stats" | "profiler";
 
+/// The tools openable into the bottom dock from the Topbar. A parallel, independent
+/// slice to the right-tools model; `'timeline'` is the only member until more land.
+export type BottomTool = "timeline";
+
 /// The profiler capture lifecycle, mirrored from the engine's recorder. On-demand: a
 /// capture is armed by a button, never polled on the metrics lane.
 export type CaptureState = "idle" | "arming" | "recording" | "ready";
@@ -86,6 +90,10 @@ export interface EditorState {
   /// closed. Session-only — opened from the Topbar wrench menu.
   rightTools: RightTool[];
   activeRightTool: RightTool | null;
+  /// Tools open in the bottom dock (order = tab order); empty ⇒ the dock is closed.
+  /// Session-only — opened from the Topbar timeline button. Parallel to rightTools.
+  bottomTools: BottomTool[];
+  activeBottomTool: BottomTool | null;
   environment: Environment | null;
   renderStats: RenderStats | null;
   /// Performance-telemetry slices (phases 1-4), filled by the gated metrics poll only
@@ -206,6 +214,11 @@ export interface EditorState {
   /// Close a right-sidebar tool; reassigns the active tool (or closes the sidebar).
   closeRightTool(tool: RightTool): void;
   setActiveRightTool(tool: RightTool): void;
+  /// Open (or focus) a tool in the bottom dock.
+  openBottomTool(tool: BottomTool): void;
+  /// Close a bottom-dock tool; reassigns the active tool (or closes the dock).
+  closeBottomTool(tool: BottomTool): void;
+  setActiveBottomTool(tool: BottomTool): void;
   setEnvironment(environment: Environment | null): void;
   setRenderStats(renderStats: RenderStats | null): void;
   setPerfConfig(perfConfig: PerfConfigDto | null): void;
@@ -278,6 +291,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   activeViewTabId: "scene",
   rightTools: [],
   activeRightTool: null,
+  bottomTools: [],
+  activeBottomTool: null,
   environment: null,
   renderStats: null,
   perfConfig: null,
@@ -500,6 +515,26 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   setActiveRightTool: (tool) =>
     set((s) => (s.rightTools.includes(tool) ? { activeRightTool: tool } : {})),
+  openBottomTool: (tool) =>
+    set((s) => ({
+      bottomTools: s.bottomTools.includes(tool) ? s.bottomTools : [...s.bottomTools, tool],
+      activeBottomTool: tool,
+    })),
+  closeBottomTool: (tool) =>
+    set((s) => {
+      const index = s.bottomTools.indexOf(tool);
+      if (index < 0) {
+        return {};
+      }
+      const bottomTools = s.bottomTools.filter((t) => t !== tool);
+      const activeBottomTool =
+        s.activeBottomTool === tool
+          ? (bottomTools[Math.max(0, index - 1)] ?? null)
+          : s.activeBottomTool;
+      return { bottomTools, activeBottomTool };
+    }),
+  setActiveBottomTool: (tool) =>
+    set((s) => (s.bottomTools.includes(tool) ? { activeBottomTool: tool } : {})),
   setEnvironment: (environment) => set({ environment }),
   setRenderStats: (renderStats) => set({ renderStats }),
   setPerfConfig: (perfConfig) => set({ perfConfig }),
@@ -834,6 +869,38 @@ export function loadRightSidebarWidth(path: string | undefined): number | null {
       const width = Number(raw);
       if (Number.isFinite(width)) {
         return width;
+      }
+    }
+  } catch {
+    // Fall through to the default.
+  }
+  return null;
+}
+
+/// Bottom-dock (timeline) height persistence, mirroring the right-sidebar width.
+const BOTTOM_DOCK_HEIGHT_STORAGE_PREFIX = "saffron.layout.bottomDockHeight:";
+
+export function persistBottomDockHeight(path: string | undefined, height: number): void {
+  if (!path) {
+    return;
+  }
+  try {
+    localStorage.setItem(BOTTOM_DOCK_HEIGHT_STORAGE_PREFIX + path, String(Math.round(height)));
+  } catch {
+    // Storage may be unavailable (private mode); the height is then session-only.
+  }
+}
+
+export function loadBottomDockHeight(path: string | undefined): number | null {
+  if (!path) {
+    return null;
+  }
+  try {
+    const raw = localStorage.getItem(BOTTOM_DOCK_HEIGHT_STORAGE_PREFIX + path);
+    if (raw !== null) {
+      const height = Number(raw);
+      if (Number.isFinite(height)) {
+        return height;
       }
     }
   } catch {
