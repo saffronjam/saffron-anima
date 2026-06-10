@@ -55,6 +55,18 @@ return Mover
 `,
   );
   writeFileSync(
+    join(srcDir, "player.lua"),
+    `local Player = {}
+function Player.on_update(self, dt)
+  if se.is_key_pressed("w") then
+    local p = self.entity:get_position()
+    self.entity:set_position(p.x + dt, p.y, p.z)
+  end
+end
+return Player
+`,
+  );
+  writeFileSync(
     join(srcDir, "first.lua"),
     `local First = {}
 function First.on_update(self, dt)
@@ -188,6 +200,27 @@ test("a script slot moves its entity during play; stop restores the authored sce
   const after = await engine.call<Inspect>("inspect", { entity: cube.id });
   expect(after.components.Transform.translation).toEqual({ x: 1, y: 2, z: 3 }); // the discard is the restore
   expect((await engine.call<ScriptStatus>("get-script-status")).instances).toBe(0);
+  await engine.call("destroy-entity", { entity: cube.id });
+});
+
+test("script input exposes held keys to Lua", async () => {
+  const cube = await engine.call<Ref>("add-entity", { args: ["cube"] });
+  await engine.call("set-transform", { entity: cube.id, translation: { x: 1, y: 2, z: 3 } });
+  await attachScripts(cube.id, ["player.lua"]);
+
+  await engine.call("script-input", { keys: ["w"] });
+  await engine.call("play");
+  await engine.settle(300);
+  const moved = await engine.call<Inspect>("inspect", { entity: cube.id });
+  expect(moved.components.Transform.translation.x).toBeGreaterThan(1.05);
+
+  await engine.call("script-input", { keys: [] });
+  const stoppedAt = (await engine.call<Inspect>("inspect", { entity: cube.id })).components.Transform.translation.x;
+  await engine.settle(300);
+  const stopped = await engine.call<Inspect>("inspect", { entity: cube.id });
+  expect(stopped.components.Transform.translation.x).toBeCloseTo(stoppedAt);
+
+  await engine.call("stop");
   await engine.call("destroy-entity", { entity: cube.id });
 });
 

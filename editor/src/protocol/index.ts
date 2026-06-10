@@ -86,6 +86,8 @@ export type {
   Script,
   ScriptErrorDto,
   ScriptFieldDto,
+  ScriptInputParams,
+  ScriptInputResult,
   ScriptSlot,
   ScriptStatusResult,
   DrainScriptErrorsResult,

@@ -81,6 +81,32 @@ function eventToUv(el: HTMLElement, event: PointerEvent): Uv {
   };
 }
 
+function scriptKeyFromEvent(event: KeyboardEvent): string | null {
+  if (event.metaKey) {
+    return null;
+  }
+  if (event.key === " ") {
+    return "space";
+  }
+  if (event.key === "Shift") {
+    return "shift";
+  }
+  if (event.key === "Control") {
+    return "control";
+  }
+  if (event.key === "Alt") {
+    return "alt";
+  }
+  return event.key.toLowerCase();
+}
+
+function targetOwnsTextInput(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return target.closest("input, textarea, select, [contenteditable='true']") !== null;
+}
+
 export function ViewportPanel() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const attachedRef = useRef(false);
@@ -88,6 +114,7 @@ export function ViewportPanel() {
   const setSelectedId = useEditorStore((s) => s.setSelectedId);
   const setDragActive = useEditorStore((s) => s.setDragActive);
   const viewportHidden = useEditorStore((s) => s.viewportHidden);
+  const playState = useEditorStore((s) => s.playState);
 
   // Coalescers stream the hover and drag phases to the engine at >= GIZMO_STREAM_MS
   // apart, buffering only the latest NDC so a burst of pointermove collapses to one
@@ -251,6 +278,74 @@ export function ViewportPanel() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const pressed = new Set<string>();
+    let lastSent = "";
+
+    const send = (): void => {
+      const keys = [...pressed].sort();
+      const fingerprint = keys.join("\0");
+      if (fingerprint === lastSent) {
+        return;
+      }
+      lastSent = fingerprint;
+      void client.scriptInput(keys).catch(() => {});
+    };
+
+    const clear = (): void => {
+      if (pressed.size === 0 && lastSent === "") {
+        return;
+      }
+      pressed.clear();
+      send();
+    };
+
+    if (playState === "edit") {
+      clear();
+      return clear;
+    }
+
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (targetOwnsTextInput(event.target)) {
+        return;
+      }
+      const key = scriptKeyFromEvent(event);
+      if (key === null) {
+        return;
+      }
+      const size = pressed.size;
+      pressed.add(key);
+      if (pressed.size !== size) {
+        send();
+      }
+    };
+
+    const onKeyUp = (event: KeyboardEvent): void => {
+      const key = scriptKeyFromEvent(event);
+      if (key !== null && pressed.delete(key)) {
+        send();
+      }
+    };
+
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState !== "visible") {
+        clear();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", clear);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      clear();
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", clear);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [playState]);
 
   // RMB fly-cam: hold RMB over the viewport to fly. Pointer lock gives relative
   // mouse deltas (movementX/Y), which accumulate and stream with the WASD/Space/

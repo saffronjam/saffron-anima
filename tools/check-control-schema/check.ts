@@ -285,6 +285,8 @@ async function paramsForFixture(fixture: string, state: { cubeId: string }): Pro
       return { phase: "hover", x: 0, y: 0 };
     case "fly-idle":
       return { active: false };
+    case "script-input-w":
+      return { keys: ["w"] };
     case "viewport-size":
       return { width: 1280, height: 720 };
     case "exposure-zero":

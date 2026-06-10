@@ -52,6 +52,7 @@ Module functions, available as `se.*` inside every script:
 | Function | Returns | Notes |
 |---|---|---|
 | `se.log(message)` | — | writes to the engine log under the `script` subsystem |
+| `se.is_key_pressed(key)` | boolean | true while the editor reports the normalized key held for the play session, such as `"w"`, `"space"`, or `"arrowup"` |
 | `se.get_entity_by_name(name)` | entity handle | first match in iteration order — names are not unique; an invalid handle when absent, so check `:valid()` |
 | `se.primary_camera()` | entity handle | the first primary `CameraComponent` entity; moving its transform is "move camera". Invalid when the scene has none (the viewport falls back to the fly-cam) |
 
@@ -79,7 +80,7 @@ or any access outside a script callback — is a logged no-op, never a crash.
 | The per-entity runtime | `script_runtime.cpp` | `startScripts`, `tickScripts`, `stopScripts`, `ScriptHost` |
 | The tick + lifecycle seams | `scene_edit_context.cppm` | `SceneEditContext::simTick`, `onPlayStateChanged`, `pushScriptError` |
 | The Host wiring | `host.cppm` | `HostState::script`, the `onPlayStateChanged` subscriber |
-| Status + error drain commands | `control_commands_scene.cpp` | `get-script-status`, `drain-script-errors` |
+| Status, input, and error drain commands | `control_commands_scene.cpp` | `get-script-status`, `script-input`, `drain-script-errors` |
 | The Inspector slot UI | `ScriptSlots.tsx` | `ScriptSlots` |
 | The src/ scaffold + starter script | `assets.cppm` | `ensureScriptSrc`, `StarterScript` |
 | New-script boilerplate (`create-script`) | `assets.cppm`; `control_commands_asset.cpp` | `createProjectScript` |

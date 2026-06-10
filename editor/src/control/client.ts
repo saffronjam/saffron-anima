@@ -535,6 +535,9 @@ export const client = {
   }): Promise<{ active: boolean }> {
     return call("fly-input", input);
   },
+  scriptInput(keys: string[]): Promise<{ keys: string[] }> {
+    return call("script-input", { keys });
+  },
 
   // --- engine lifecycle + presenter (dedicated Rust commands, NOT the passthrough) ---
   startEngine(): Promise<void> {
