@@ -1521,8 +1521,13 @@ return {0}
             shadowViewProj = lightProj * lightView;
         }
         setDirectionalShadow(renderer, shadowViewProj, castShadow);
-        // RT: hand the frame's instance transforms + meshes to the renderer for the per-frame
-        // TLAS build (used by ray-query shadows when enabled + supported).
+        // RT: hand the frame's STATIC instance transforms + meshes to the renderer for the
+        // per-frame TLAS build (used by ray-query shadows when enabled + supported). Skinned
+        // instances ride the draw list instead: submitDrawList records each one's deformed
+        // offset for a per-frame refit BLAS the TLAS references with an identity transform (the
+        // deformed vertices are already in world space). The static BLAS is object-space, so it
+        // carries item.model; a skinned mesh's static BLAS would freeze the bind pose, hence the
+        // split here.
         {
             std::vector<glm::mat4> rtModels;
             std::vector<Ref<GpuMesh>> rtMeshes;
@@ -1532,7 +1537,7 @@ return {0}
             {
                 if (it.skinned)
                 {
-                    continue;  // the BLAS holds bind-pose geometry; skinned occluders are v1-excluded
+                    continue;  // skinned RT instances come from the draw list's deformed-offset entries
                 }
                 rtModels.push_back(it.model);
                 rtMeshes.push_back(it.mesh);
