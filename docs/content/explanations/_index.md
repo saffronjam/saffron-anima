@@ -41,4 +41,5 @@ around this spine.
 | [UI & editor](ui-and-editor/) | the Tauri/React editor, viewport compositing, gizmo, inspector, thumbnails |
 | [Tooling & control](tooling-and-control/) | control plane and the `se` CLI |
 | [Scripting](scripting/) | the embedded Lua 5.5 VM, sandboxing, script errors as values |
+| [Animation](animation/) | skeletal clips, the decomposed pose + blend layer, clip sampling |
 | [Architecture & conventions](architecture-and-conventions/) | module DAG, build, coding style |
