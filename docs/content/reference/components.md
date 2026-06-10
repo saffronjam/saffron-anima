@@ -61,6 +61,7 @@ A mesh imported with more than one material carries this instead of `MaterialCom
 | `primary` | `bool` | `true` (scene renders through the first primary) |
 | `showModel` | `bool` | `true` (editor-only camera model) |
 | `showFrustum` | `bool` | `true` (editor-only frustum overlay) |
+| `frustumMaxDistance` | `f32` | `25.0` (editor-only frustum display cap) |
 
 ## `DirectionalLightComponent`
 | Field | Type | Default |

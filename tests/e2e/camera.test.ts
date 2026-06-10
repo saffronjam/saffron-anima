@@ -68,6 +68,7 @@ test("scene camera editor helpers default on and roundtrip", async () => {
   const created = await engine.call<Inspect>("inspect", { entity: camera.id });
   expect(created.components.Camera.showModel).toBe(true);
   expect(created.components.Camera.showFrustum).toBe(true);
+  expect(created.components.Camera.frustumMaxDistance).toBeCloseTo(25, 4);
 
   await engine.call("set-component-field", {
     entity: camera.id,
@@ -81,11 +82,18 @@ test("scene camera editor helpers default on and roundtrip", async () => {
     field: "showFrustum",
     value: false,
   });
+  await engine.call("set-component-field", {
+    entity: camera.id,
+    component: "Camera",
+    field: "frustumMaxDistance",
+    value: 8,
+  });
   await engine.call("save-project", { path: `${projectDir}/project.json` });
 
   await engine.call("load-project", { path: `${projectDir}/project.json` });
   const loaded = await engine.call<Inspect>("inspect", { entity: camera.id });
   expect(loaded.components.Camera.showModel).toBe(false);
   expect(loaded.components.Camera.showFrustum).toBe(false);
+  expect(loaded.components.Camera.frustumMaxDistance).toBeCloseTo(8, 4);
   expect(engine.validationErrors()).toEqual([]);
 });

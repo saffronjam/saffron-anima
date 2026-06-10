@@ -19,8 +19,9 @@ Each mode draws only its own handles: translate shows the three axis lines plus 
 
 Light billboards are drawn the same way. Camera entities use editor-only helpers instead: a
 system camera model is appended to the edit-mode draw list, and the overlay draws a dark-orange
-frustum from the camera FOV and near/far planes. The `CameraComponent` can hide either helper
-with `showModel` or `showFrustum`; play mode renders neither one.
+frustum from the camera FOV and near/far planes, capped by `frustumMaxDistance`. The
+`CameraComponent` can hide either helper with `showModel` or `showFrustum`; play mode renders
+neither one.
 
 ## The gizmo-pointer command
 

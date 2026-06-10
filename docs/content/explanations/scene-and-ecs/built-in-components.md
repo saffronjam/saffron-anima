@@ -116,6 +116,7 @@ struct CameraComponent
     bool primary = true;   // scene renders through the first primary camera
     bool showModel = true;
     bool showFrustum = true;
+    f32 frustumMaxDistance = 25.0f;
 };
 ```
 
@@ -123,9 +124,9 @@ The camera's view comes from the entity's `TransformComponent`, not the componen
 `primaryCamera` inverts the transform's model matrix. The component carries only projection
 parameters. The scene renders through the first camera flagged `primary`.
 
-`showModel` and `showFrustum` control editor helpers only. In edit mode, the host draws the
-system camera model and dark-orange frustum from the camera's transform, FOV, and clip planes.
-Play mode does not render either helper.
+`showModel`, `showFrustum`, and `frustumMaxDistance` control editor helpers only. In edit
+mode, the host draws the system camera model and a dark-orange frustum capped by
+`frustumMaxDistance`. Play mode does not render either helper.
 
 ## Light types
 

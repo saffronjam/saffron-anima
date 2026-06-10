@@ -27,6 +27,7 @@ export interface Camera {
   primary: boolean;
   showModel: boolean;
   showFrustum: boolean;
+  frustumMaxDistance: number;
 }
 
 export interface Material {

@@ -387,6 +387,58 @@ namespace se
             });
     }
 
+    auto clipOverlayLine(glm::vec4& a, glm::vec4& b) -> bool
+    {
+        auto clipPlane = [&](auto distance) -> bool
+        {
+            const se::f32 da = distance(a);
+            const se::f32 db = distance(b);
+            if (da >= 0.0f && db >= 0.0f)
+            {
+                return true;
+            }
+            if (da < 0.0f && db < 0.0f)
+            {
+                return false;
+            }
+            const se::f32 t = da / (da - db);
+            const glm::vec4 p = a + (b - a) * t;
+            if (da < 0.0f)
+            {
+                a = p;
+            }
+            else
+            {
+                b = p;
+            }
+            return true;
+        };
+        return clipPlane([](glm::vec4 p) { return p.x + p.w; }) && clipPlane([](glm::vec4 p) { return p.w - p.x; }) &&
+               clipPlane([](glm::vec4 p) { return p.y + p.w; }) && clipPlane([](glm::vec4 p) { return p.w - p.y; }) &&
+               clipPlane([](glm::vec4 p) { return p.z; }) && clipPlane([](glm::vec4 p) { return p.w - p.z; });
+    }
+
+    auto clipToPixel(glm::vec4 clip, se::u32 width, se::u32 height) -> glm::vec2
+    {
+        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        return glm::vec2{ (ndc.x * 0.5f + 0.5f) * static_cast<se::f32>(width),
+                          (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<se::f32>(height) };
+    }
+
+    void addClippedOverlayLine(std::vector<se::OverlayVertex>& vertices, const glm::mat4& viewProjection,
+                               glm::vec3 aWorld, glm::vec3 bWorld, se::f32 thickness, glm::vec4 color, se::u32 width,
+                               se::u32 height)
+    {
+        glm::vec4 aClip = viewProjection * glm::vec4(aWorld, 1.0f);
+        glm::vec4 bClip = viewProjection * glm::vec4(bWorld, 1.0f);
+        if (std::abs(aClip.w) < 0.0001f || std::abs(bClip.w) < 0.0001f || !clipOverlayLine(aClip, bClip))
+        {
+            return;
+        }
+        addLine(vertices, clipToPixel(aClip, width, height), clipToPixel(bClip, width, height), thickness, color, width,
+                height);
+    }
+
     void buildSceneEditCameraFrustums(se::SceneEditContext& editor, const se::CameraView& cam, se::u32 width,
                                       se::u32 height, std::vector<se::OverlayVertex>& vertices)
     {
@@ -402,6 +454,7 @@ namespace se
         };
         se::Scene& scene = se::activeScene(editor);
         const se::f32 aspect = static_cast<se::f32>(width) / static_cast<se::f32>(height);
+        const glm::mat4 viewProjection = se::cameraProjection(cam, aspect) * cam.view;
 
         se::forEach<se::TransformComponent, se::CameraComponent>(
             scene,
@@ -412,7 +465,8 @@ namespace se
                     return;
                 }
                 const se::f32 nearPlane = std::max(camera.nearPlane, 0.001f);
-                const se::f32 farPlane = std::max(camera.farPlane, nearPlane + 0.001f);
+                const se::f32 maxDistance = std::max(camera.frustumMaxDistance, nearPlane + 0.001f);
+                const se::f32 farPlane = std::min(std::max(camera.farPlane, nearPlane + 0.001f), maxDistance);
                 const se::f32 halfFov = glm::radians(std::clamp(camera.fov, 1.0f, 179.0f)) * 0.5f;
                 const se::f32 nearY = std::tan(halfFov) * nearPlane;
                 const se::f32 nearX = nearY * aspect;
@@ -425,20 +479,15 @@ namespace se
                     glm::vec3{ -farX, -farY, -farPlane },    glm::vec3{ -farX, farY, -farPlane },
                     glm::vec3{ farX, farY, -farPlane },      glm::vec3{ farX, -farY, -farPlane }
                 };
-                std::array<se::GizmoProjection, 8> projected{};
+                std::array<glm::vec3, 8> world{};
                 for (se::u32 i = 0; i < local.size(); i = i + 1)
                 {
-                    const glm::vec3 world = glm::vec3(model * glm::vec4(local[i], 1.0f));
-                    projected[i] = se::viewportProject(cam, width, height, world);
+                    world[i] = glm::vec3(model * glm::vec4(local[i], 1.0f));
                 }
                 for (const auto& edge : Edges)
                 {
-                    const se::GizmoProjection& a = projected[edge.first];
-                    const se::GizmoProjection& b = projected[edge.second];
-                    if (a.visible && b.visible)
-                    {
-                        addLine(vertices, a.pixel, b.pixel, 2.0f, FrustumColor, width, height);
-                    }
+                    addClippedOverlayLine(vertices, viewProjection, world[edge.first], world[edge.second], 2.0f,
+                                          FrustumColor, width, height);
                 }
             });
     }

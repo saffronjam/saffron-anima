@@ -140,7 +140,8 @@ namespace se
     {
         return nlohmann::json{ { "fov", c.fov }, { "near", c.nearPlane },
                                { "far", c.farPlane }, { "primary", c.primary },
-                               { "showModel", c.showModel }, { "showFrustum", c.showFrustum } };
+                               { "showModel", c.showModel }, { "showFrustum", c.showFrustum },
+                               { "frustumMaxDistance", c.frustumMaxDistance } };
     }
 
     auto cameraComponentFromJson(CameraComponent& c, const nlohmann::json& j) -> Result<void>
@@ -151,6 +152,7 @@ namespace se
         c.primary = jsonBoolOr(j, "primary", true);
         c.showModel = jsonBoolOr(j, "showModel", true);
         c.showFrustum = jsonBoolOr(j, "showFrustum", true);
+        c.frustumMaxDistance = jsonF32Or(j, "frustumMaxDistance", 25.0f);
         return {};
     }
 

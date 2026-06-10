@@ -4790,6 +4790,9 @@
           },
           "showFrustum": {
             "type": "boolean"
+          },
+          "frustumMaxDistance": {
+            "type": "number"
           }
         },
         "required": [
@@ -4798,7 +4801,8 @@
           "far",
           "primary",
           "showModel",
-          "showFrustum"
+          "showFrustum",
+          "frustumMaxDistance"
         ]
       },
       "Material": {

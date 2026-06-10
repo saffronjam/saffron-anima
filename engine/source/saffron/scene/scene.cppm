@@ -151,6 +151,7 @@ export namespace se
         bool primary = true;  // the scene renders through the first primary camera
         bool showModel = true;
         bool showFrustum = true;
+        f32 frustumMaxDistance = 25.0f;
     };
 
     // A directional light; the scene shades through the first one. direction points

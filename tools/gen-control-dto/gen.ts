@@ -1420,6 +1420,7 @@ export interface Camera {
   primary: boolean;
   showModel: boolean;
   showFrustum: boolean;
+  frustumMaxDistance: number;
 }
 
 export interface Material {
@@ -1675,8 +1676,9 @@ function componentSchemas(): Record<string, unknown> {
         primary: { type: "boolean" },
         showModel: { type: "boolean" },
         showFrustum: { type: "boolean" },
+        frustumMaxDistance: { type: "number" },
       },
-      required: ["fov", "near", "far", "primary", "showModel", "showFrustum"],
+      required: ["fov", "near", "far", "primary", "showModel", "showFrustum", "frustumMaxDistance"],
     },
     Material: {
       type: "object",
@@ -2063,7 +2065,8 @@ namespace se
     {
         return nlohmann::json{ { "fov", c.fov }, { "near", c.nearPlane },
                                { "far", c.farPlane }, { "primary", c.primary },
-                               { "showModel", c.showModel }, { "showFrustum", c.showFrustum } };
+                               { "showModel", c.showModel }, { "showFrustum", c.showFrustum },
+                               { "frustumMaxDistance", c.frustumMaxDistance } };
     }
 
     auto cameraComponentFromJson(CameraComponent& c, const nlohmann::json& j) -> Result<void>
@@ -2074,6 +2077,7 @@ namespace se
         c.primary = jsonBoolOr(j, "primary", true);
         c.showModel = jsonBoolOr(j, "showModel", true);
         c.showFrustum = jsonBoolOr(j, "showFrustum", true);
+        c.frustumMaxDistance = jsonF32Or(j, "frustumMaxDistance", 25.0f);
         return {};
     }
 
