@@ -1,6 +1,6 @@
 # Phase 2 — glTF clip import → `.sanim` + `AssetType::Animation`
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 
