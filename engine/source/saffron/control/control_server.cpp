@@ -144,6 +144,7 @@ namespace se
         registerRenderCommands(reg);
         registerSceneCommands(reg);
         registerAssetCommands(reg);
+        registerAnimationCommands(reg);
     }
 
     auto controlSocketPath() -> std::string

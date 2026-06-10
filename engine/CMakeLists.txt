@@ -49,6 +49,7 @@ target_sources(SaffronEngineLib PRIVATE
     source/saffron/control/control_commands_render.cpp
     source/saffron/control/control_commands_scene.cpp
     source/saffron/control/control_commands_asset.cpp
+    source/saffron/control/control_commands_animation.cpp
     source/saffron/control/control_server.cpp)
 
 target_compile_features(SaffronEngineLib PUBLIC cxx_std_26)

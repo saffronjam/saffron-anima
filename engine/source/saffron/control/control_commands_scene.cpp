@@ -88,7 +88,8 @@ namespace se
     auto playStateResultDto(const SceneEditContext& editor) -> PlayStateResult
     {
         return PlayStateResult{ playStateName(editor.playState), static_cast<i32>(editor.playVersion),
-                                static_cast<i32>(editor.sceneVersion), editor.hadPrimaryCamera };
+                                static_cast<i32>(editor.sceneVersion), editor.hadPrimaryCamera,
+                                static_cast<i32>(editor.animationVersion) };
     }
 
     auto normalizeScriptKey(std::string key) -> std::string
@@ -892,9 +893,11 @@ namespace se
             [](EngineContext& ctx, const EmptyParams&) -> Result<SelectionResult>
             {
                 SelectionResult out{ static_cast<i32>(ctx.sceneEdit.selectionVersion),
-                                     static_cast<i32>(ctx.sceneEdit.sceneVersion), std::nullopt,
+                                     static_cast<i32>(ctx.sceneEdit.sceneVersion),
+                                     std::nullopt,
                                      playStateName(ctx.sceneEdit.playState),
-                                     static_cast<i32>(ctx.sceneEdit.playVersion) };
+                                     static_cast<i32>(ctx.sceneEdit.playVersion),
+                                     static_cast<i32>(ctx.sceneEdit.animationVersion) };
                 const Entity sel = ctx.sceneEdit.selected;
                 if (sel.handle != entt::null && valid(activeScene(ctx.sceneEdit), sel))
                 {

@@ -367,6 +367,48 @@ const commands: CommandDef[] = [
     summary: "current play state",
   },
   {
+    name: "get-animation-state",
+    params: "AnimationStateParams",
+    result: "AnimationStateResult",
+    summary: "a rig's playhead, clip, wrap, and speed",
+  },
+  {
+    name: "list-clips",
+    params: "ListClipsParams",
+    result: "ListClipsResult",
+    summary: "the animation clips in the project catalog",
+  },
+  {
+    name: "play-animation",
+    params: "PlayAnimationParams",
+    result: "AnimationStateResult",
+    summary: "play a clip on a rig (previews in Edit too)",
+  },
+  {
+    name: "pause-animation",
+    params: "AnimationStateParams",
+    result: "AnimationStateResult",
+    summary: "stop advancing time, keep the pose shown",
+  },
+  {
+    name: "seek-animation",
+    params: "SeekAnimationParams",
+    result: "AnimationStateResult",
+    summary: "set the playhead (previews in Edit)",
+  },
+  {
+    name: "set-animation-loop",
+    params: "SetAnimationLoopParams",
+    result: "AnimationStateResult",
+    summary: "set the wrap mode (once|loop|pingpong)",
+  },
+  {
+    name: "stop-preview",
+    params: "AnimationStateParams",
+    result: "AnimationStateResult",
+    summary: "clear the Edit preview and stop (revert to rest)",
+  },
+  {
     name: "get-script-status",
     params: "EmptyParams",
     result: "ScriptStatusResult",
@@ -706,6 +748,13 @@ const commandSkips = new Map<string, string>([
   ["reload-project", "reloads and replaces the active project's scene and catalog"],
   ["screenshot", "writes an image file and can be deferred"],
   ["quit", "terminates the host process"],
+  ["get-animation-state", "needs a rigged entity with an animation player (covered by the e2e)"],
+  ["list-clips", "needs a project with imported animation clips (covered by the e2e)"],
+  ["play-animation", "needs a rigged entity + an imported clip (covered by the e2e)"],
+  ["pause-animation", "needs a rigged entity with an animation player (covered by the e2e)"],
+  ["seek-animation", "needs a rigged entity with an animation player (covered by the e2e)"],
+  ["set-animation-loop", "needs a rigged entity with an animation player (covered by the e2e)"],
+  ["stop-preview", "needs a rigged entity with an animation player (covered by the e2e)"],
 ]);
 
 function stripComments(text: string): string {
@@ -2077,7 +2126,7 @@ namespace se
         c.primary = jsonBoolOr(j, "primary", true);
         c.showModel = jsonBoolOr(j, "showModel", true);
         c.showFrustum = jsonBoolOr(j, "showFrustum", true);
-        c.frustumMaxDistance = jsonF32Or(j, "frustumMaxDistance", 25.0f);
+        c.frustumMaxDistance = jsonF32Or(j, "frustumMaxDistance", 10.0f);
         return {};
     }
 
@@ -2180,8 +2229,12 @@ namespace se
         const char* wrap = c.wrap == AnimationPlayerComponent::Wrap::Once       ? "once"
                            : c.wrap == AnimationPlayerComponent::Wrap::PingPong ? "pingpong"
                                                                                 : "loop";
-        return nlohmann::json{ { "clip", uuidToJson(c.clip.value) }, { "time", c.time }, { "speed", c.speed },
-                               { "wrap", wrap }, { "playing", c.playing } };
+        const char* transition =
+            c.transitionMode == AnimationPlayerComponent::Transition::CrossFade ? "crossfade" : "inertialize";
+        return nlohmann::json{ { "clip", uuidToJson(c.clip.value) }, { "time", c.time },
+                               { "speed", c.speed },                 { "wrap", wrap },
+                               { "playing", c.playing },             { "transitionMode", transition },
+                               { "loopBlend", c.loopBlend } };
     }
 
     auto animationPlayerComponentFromJson(AnimationPlayerComponent& c, const nlohmann::json& j) -> Result<void>
@@ -2194,6 +2247,10 @@ namespace se
                  : wrap == "pingpong" ? AnimationPlayerComponent::Wrap::PingPong
                                       : AnimationPlayerComponent::Wrap::Loop;
         c.playing = jsonBoolOr(j, "playing", false);
+        const std::string transition = jsonStringOr(j, "transitionMode", std::string{ "inertialize" });
+        c.transitionMode = transition == "crossfade" ? AnimationPlayerComponent::Transition::CrossFade
+                                                      : AnimationPlayerComponent::Transition::Inertialize;
+        c.loopBlend = jsonF32Or(j, "loopBlend", 0.0f);
         return {};
     }
 

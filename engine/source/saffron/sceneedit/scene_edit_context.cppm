@@ -203,6 +203,7 @@ export namespace se
         PlayState playState = PlayState::Edit;
         std::optional<Scene> playScene;                // the throwaway play duplicate; nullopt in Edit
         u64 playVersion = 0;                           // bumped on every play transition (reconcile-poll stamp)
+        u64 animationVersion = 0;                      // bumped by the animation commands (play/pause/seek/loop)
         i32 stepFrames = 0;                            // pending single-step ticks, granted only while Paused
         bool hadPrimaryCamera = false;                 // captured at enterPlay; false drives the editor warning
         SubscriberList<PlayState> onPlayStateChanged;  // the physics/scripting lifecycle seam

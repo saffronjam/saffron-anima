@@ -1632,6 +1632,130 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<AnimationStateParams>) -> Result<AnimationStateParams>
+    {
+        AnimationStateParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<ListClipsParams>) -> Result<ListClipsParams>
+    {
+        ListClipsParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<PlayAnimationParams>) -> Result<PlayAnimationParams>
+    {
+        PlayAnimationParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "clip", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "clip");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.clip = std::move(*parsed);
+        }
+
+        {
+            auto value = optionalField(params, "speed", 2, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "speed");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.speed = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "loop", 3, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "loop");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.loop = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "blend", 4, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "blend");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.blend = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<SeekAnimationParams>) -> Result<SeekAnimationParams>
+    {
+        SeekAnimationParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "time", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readF32(**value, "time");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.time = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<SetAnimationLoopParams>) -> Result<SetAnimationLoopParams>
+    {
+        SetAnimationLoopParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "wrap", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readString(**value, "wrap");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.wrap = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<DrainScriptErrorsParams>) -> Result<DrainScriptErrorsParams>
     {
         DrainScriptErrorsParams out;
@@ -2816,6 +2940,7 @@ namespace se
         else { out["entity"] = nullptr; }
         out["playState"] = value.playState;
         out["playVersion"] = value.playVersion;
+        out["animationVersion"] = value.animationVersion;
         return out;
     }
 
@@ -2833,6 +2958,37 @@ namespace se
         out["playVersion"] = value.playVersion;
         out["sceneVersion"] = value.sceneVersion;
         out["hasPrimaryCamera"] = value.hasPrimaryCamera;
+        out["animationVersion"] = value.animationVersion;
+        return out;
+    }
+
+    auto dtoToJson(const AnimationStateResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["clip"] = dtoToJson(value.clip);
+        out["clipName"] = value.clipName;
+        out["duration"] = value.duration;
+        out["time"] = value.time;
+        out["playing"] = value.playing;
+        out["wrap"] = value.wrap;
+        out["speed"] = value.speed;
+        out["animationVersion"] = value.animationVersion;
+        return out;
+    }
+
+    auto dtoToJson(const ListClipsResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["clips"] = dtoVectorToJson(value.clips);
+        return out;
+    }
+
+    auto dtoToJson(const AnimationClipDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
+        out["name"] = value.name;
+        out["duration"] = value.duration;
         return out;
     }
 

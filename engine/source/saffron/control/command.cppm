@@ -89,6 +89,7 @@ export namespace se
     void registerRenderCommands(CommandRegistry& reg);
     void registerSceneCommands(CommandRegistry& reg);
     void registerAssetCommands(CommandRegistry& reg);
+    void registerAnimationCommands(CommandRegistry& reg);
     void registerBuiltinCommands(CommandRegistry& reg);
 
     auto controlSocketPath() -> std::string;

@@ -959,6 +959,7 @@ export namespace se
         std::optional<EntityRef> entity;
         std::string playState;
         i32 playVersion;
+        i32 animationVersion;  // bumped by play/pause/seek/loop so the reconcile poll can gate on it
     };
 
     struct PlayStateResult
@@ -967,6 +968,62 @@ export namespace se
         i32 playVersion;
         i32 sceneVersion;       // echoed so a stop reads as a scene change
         bool hasPrimaryCamera;  // captured at enterPlay; false drives the editor warning
+        i32 animationVersion;   // bumped by the animation commands (Phase 12 reconcile poll)
+    };
+
+    struct AnimationClipDto
+    {
+        WireUuid id;
+        std::string name;
+        f32 duration;
+    };
+
+    struct ListClipsParams
+    {
+        EntitySelector entity;
+    };
+
+    struct ListClipsResult
+    {
+        std::vector<AnimationClipDto> clips;
+    };
+
+    struct PlayAnimationParams
+    {
+        EntitySelector entity;
+        AssetSelector clip;
+        std::optional<f32> speed;  // default 1
+        std::optional<bool> loop;  // default true
+        std::optional<f32> blend;  // default 0 (transition seconds)
+    };
+
+    struct SeekAnimationParams
+    {
+        EntitySelector entity;
+        f32 time;
+    };
+
+    struct SetAnimationLoopParams
+    {
+        EntitySelector entity;
+        std::string wrap;  // "once" | "loop" | "pingpong"
+    };
+
+    struct AnimationStateParams
+    {
+        EntitySelector entity;
+    };
+
+    struct AnimationStateResult
+    {
+        WireUuid clip;
+        std::string clipName;
+        f32 duration;
+        f32 time;
+        bool playing;
+        std::string wrap;
+        f32 speed;
+        i32 animationVersion;
     };
 
     struct StepParams
@@ -1214,6 +1271,9 @@ export namespace se
     auto dtoToJson(const EnvironmentDto& value) -> Json;
     auto dtoToJson(const SelectionResult& value) -> Json;
     auto dtoToJson(const PlayStateResult& value) -> Json;
+    auto dtoToJson(const AnimationClipDto& value) -> Json;
+    auto dtoToJson(const ListClipsResult& value) -> Json;
+    auto dtoToJson(const AnimationStateResult& value) -> Json;
     auto dtoToJson(const DeselectResult& value) -> Json;
     auto dtoToJson(const SetComponentFieldResult& value) -> Json;
     auto dtoToJson(const EditorCamera& value) -> Json;
@@ -1280,4 +1340,9 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<SetProbesParams>) -> Result<SetProbesParams>;
     auto parseDto(const Json& params, DtoTag<SetExposureParams>) -> Result<SetExposureParams>;
     auto parseDto(const Json& params, DtoTag<StepParams>) -> Result<StepParams>;
+    auto parseDto(const Json& params, DtoTag<ListClipsParams>) -> Result<ListClipsParams>;
+    auto parseDto(const Json& params, DtoTag<PlayAnimationParams>) -> Result<PlayAnimationParams>;
+    auto parseDto(const Json& params, DtoTag<SeekAnimationParams>) -> Result<SeekAnimationParams>;
+    auto parseDto(const Json& params, DtoTag<SetAnimationLoopParams>) -> Result<SetAnimationLoopParams>;
+    auto parseDto(const Json& params, DtoTag<AnimationStateParams>) -> Result<AnimationStateParams>;
 }

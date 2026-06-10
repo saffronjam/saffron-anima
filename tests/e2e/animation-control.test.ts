@@ -1,0 +1,84 @@
+// Driving animation over the control plane: list-clips / play-animation / get-animation-state /
+// seek-animation / pause-animation / set-animation-loop. play-animation previews in Edit (no
+// Play needed), so the playhead advances through the host's per-frame evaluator and the state
+// command reports it. The pose math + GPU path are covered by the animation self-test and the
+// playback screenshot test; this file proves the wire.
+
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { join } from "node:path";
+import { Engine, REPO } from "./harness.ts";
+
+let engine: Engine;
+let meshId = "";
+const FIXTURE = join(REPO, "engine", "assets", "models", "animated-strip.gltf");
+
+interface AnimState {
+  clip: string;
+  clipName: string;
+  duration: number;
+  time: number;
+  playing: boolean;
+  wrap: string;
+  speed: number;
+  animationVersion: number;
+}
+
+beforeAll(async () => {
+  engine = await Engine.boot({ SAFFRON_AUTO_EMPTY_PROJECT: "1" });
+  const imported = await engine.call<{ id: string; name: string }>("import-model", { path: FIXTURE });
+  meshId = imported.id;
+  await engine.settle();
+});
+afterAll(async () => {
+  await engine?.shutdown();
+});
+
+test("list-clips reports the imported clip", async () => {
+  const { clips } = await engine.call<{ clips: { id: string; name: string; duration: number }[] }>("list-clips", {
+    entity: meshId,
+  });
+  expect(clips.length).toBe(1);
+  expect(clips[0].name).toBe("Bend");
+  expect(clips[0].duration).toBeCloseTo(1.0, 3);
+});
+
+test("play-animation advances the playhead in Edit preview", async () => {
+  const started = await engine.call<AnimState>("play-animation", { entity: meshId, clip: "Bend", loop: true });
+  expect(started.playing).toBe(true);
+  expect(started.clipName).toBe("Bend");
+  expect(started.wrap).toBe("loop");
+
+  await engine.settle(300);
+  const state = await engine.call<AnimState>("get-animation-state", { entity: meshId });
+  expect(state.playing).toBe(true);
+  expect(state.time).toBeGreaterThan(0); // advanced without entering Play
+});
+
+test("seek-animation sets the playhead, pause freezes it", async () => {
+  await engine.call<AnimState>("pause-animation", { entity: meshId });
+  const seeked = await engine.call<AnimState>("seek-animation", { entity: meshId, time: 0.25 });
+  expect(seeked.time).toBeCloseTo(0.25, 3);
+  expect(seeked.playing).toBe(false);
+
+  await engine.settle(200);
+  const state = await engine.call<AnimState>("get-animation-state", { entity: meshId });
+  expect(state.playing).toBe(false);
+  expect(state.time).toBeCloseTo(0.25, 3); // paused, so the playhead did not move
+});
+
+test("set-animation-loop changes the wrap mode", async () => {
+  const once = await engine.call<AnimState>("set-animation-loop", { entity: meshId, wrap: "once" });
+  expect(once.wrap).toBe("once");
+});
+
+test("the animationVersion bumps on each mutation", async () => {
+  const a = await engine.call<AnimState>("get-animation-state", { entity: meshId });
+  await engine.call("seek-animation", { entity: meshId, time: 0.5 });
+  const b = await engine.call<AnimState>("get-animation-state", { entity: meshId });
+  expect(b.animationVersion).toBeGreaterThan(a.animationVersion);
+});
+
+test("the engine logged no validation errors", async () => {
+  await engine.settle(500);
+  expect(engine.validationErrors()).toEqual([]);
+});
