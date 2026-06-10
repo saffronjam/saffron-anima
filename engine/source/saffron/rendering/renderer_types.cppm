@@ -562,6 +562,20 @@ export namespace se
         u32 deformedOffset = 0;
     };
 
+    /// One skinned mesh-instance the TLAS references via its own per-frame refit BLAS. The
+    /// deformed vertices are already in WORLD space (the joint palette is worldBone *
+    /// inverseBind and the skin kernel omits the model matrix), so the TLAS transform for it
+    /// is identity. deformedOffset is the instance's base vertex in the frame's deformed
+    /// buffer (the exact value submitDrawList assigned), and mesh supplies the index stream.
+    struct SkinnedRtInstance
+    {
+        u64 entity = 0;  // keys the grow-only per-instance refit BLAS (BUILD once, then UPDATE)
+        u32 deformedOffset = 0;
+        u32 vertexCount = 0;
+        u32 indexCount = 0;
+        Ref<GpuMesh> mesh;  // index buffer source for the BLAS geometry
+    };
+
     // The scene's structured draw list for the frame: built by submitDrawList from the
     // DrawItems, consumed by the scene pass (shaded) and the depth pre-pass (depth only).
     struct SceneDrawList
@@ -574,6 +588,9 @@ export namespace se
         // The parallel dispatches that deform the PREVIOUS pose into the prev-deformed buffer
         // (previous palette + previous-deformed output), read only by the motion pass for TAA.
         std::vector<SkinDispatch> prevSkinDispatches;
+        // Per skinned instance: the entity + deformed offset the RT refit BLAS reads (carries the
+        // exact deformedVertexOffset submitDrawList assigned). Empty unless RT consumes the scene.
+        std::vector<SkinnedRtInstance> skinnedRtInstances;
         std::vector<Ref<GpuTexture>> liveTextures;  // pins indexed textures for the frame
         vk::DescriptorSet lightSet;
         vk::DescriptorSet instanceSet;
@@ -1489,6 +1506,15 @@ export namespace se
         vk::DescriptorSet meshSet;
     };
 
+    /// A per-skinned-instance refit BLAS, keyed by entity uuid in Rt::skinnedBlas. Built once
+    /// (MODE_BUILD with ALLOW_UPDATE) and refit in place every frame (MODE_UPDATE, src == dst)
+    /// from the current frame's deformed buffer — topology never changes for a skinned mesh.
+    struct SkinnedBlas
+    {
+        Ref<AccelerationStructure> as;
+        bool built = false;  // false until the first MODE_BUILD; gates BUILD vs UPDATE
+    };
+
     // Hardware ray tracing: a per-frame TLAS over the scene's mesh instances + inline
     // ray-query shadows in the mesh fragment, feature-gated (off unless context.rtSupported).
     // BLAS live on each GpuMesh; this owns the TLAS + its instance buffer (ping-ponged per
@@ -1507,11 +1533,22 @@ export namespace se
         vk::DescriptorSetLayout meshLayout;  // set 6: the TLAS
         std::array<vk::DescriptorSet, MaxFramesInFlight> meshSets;
         u32 blasCount = 0;  // built BLAS count (rt-stats)
-        // This frame's instance transforms + meshes, captured by renderScene + consumed by
-        // the TLAS-build graph pass. Cleared each frame in beginFrame.
+        // This frame's static instance transforms + meshes, captured by renderScene + consumed
+        // by the TLAS-build graph pass. Cleared each frame in beginFrame. Skinned instances ride
+        // the SceneDrawList (their deformed offsets are authoritative there), not these vectors.
         std::vector<glm::mat4> frameModels;
         std::vector<Ref<GpuMesh>> frameMeshes;
         bool buildPending = false;  // RT shadows on + instances present this frame
+        // Per-skinned-instance refit BLAS, per frame-in-flight then keyed by entity uuid. The
+        // map is grow-only across frames so a steady entity keeps its AS and refits in place
+        // (BUILD on the slot's first sight, MODE_UPDATE after). It is per-slot — like the
+        // deformed buffer it reads — because an in-place UPDATE rewrites the AS while frame N's
+        // GPU work may still trace the SAME slot's prior contents; the per-slot fence wait in
+        // beginFrame serializes each slot, so slot f's BLAS is never refit under a live read.
+        std::array<std::unordered_map<u64, SkinnedBlas>, MaxFramesInFlight> skinnedBlas;
+        std::array<Ref<Buffer>, MaxFramesInFlight> blasScratchBuffers;  // skinned BLAS build/refit scratch
+        std::array<u32, MaxFramesInFlight> blasScratchCapacity{};
+        u32 skinnedBlasCount = 0;  // skinned refit BLAS active this frame (rt-stats)
     };
 
     // ReSTIR DI (reservoir spatiotemporal importance resampling) — stochastic many-light
