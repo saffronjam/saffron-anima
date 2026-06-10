@@ -541,6 +541,11 @@ namespace se
         std::vector<SkinDispatch> dispatches;
         std::vector<SkinDispatch> prevDispatches;  // parallel: deform the previous pose for motion
         std::vector<Ref<GpuMesh>> dispatchMeshes;  // parallel to dispatches: the mesh each set binds
+        // RT skinned instances: built only when a ray-tracing consumer is on, so non-RT scenes
+        // pay nothing. Parallel to `dispatches` (one per skinned bucket, same deformed offset),
+        // and trimmed alongside them under the per-frame set budget below.
+        const bool rtSkinned = renderer.context.rtSupported && renderer.rt.useRtShadows;
+        std::vector<SkinnedRtInstance> skinnedRt;
         // Previous palette, laid out exactly like `joints`: a default copy of the current palette
         // (uncached slots => zero deformation motion), with each skinned bucket's slice replaced
         // by the entity's cached last-frame slice. The prev-palette cache is updated afterwards.
@@ -568,6 +573,18 @@ namespace se
                 prevDispatches.push_back(
                     SkinDispatch{ vk::DescriptorSet{}, bucket.mesh->vertexCount, bucket.jointOffset, deformedCursor });
                 dispatchMeshes.push_back(bucket.mesh);
+                // The refit BLAS reads exactly this instance's deformed slice (deformedCursor),
+                // so it carries the SAME offset the scene pass draws. Needs an entity to key the
+                // grow-only per-instance BLAS; an entity-less skinned draw is RT-skipped.
+                if (rtSkinned && bucket.entity != 0)
+                {
+                    skinnedRt.push_back(SkinnedRtInstance{ bucket.entity, deformedCursor, bucket.mesh->vertexCount,
+                                                           bucket.mesh->indexCount, bucket.mesh });
+                }
+                else
+                {
+                    skinnedRt.push_back(SkinnedRtInstance{});  // placeholder keeps parity with dispatches
+                }
                 deformedCursor = deformedCursor + bucket.mesh->vertexCount;
                 // The current slice for this bucket's entity, and its cached previous slice (or
                 // the current one if uncached => no deformation-motion ghost on the first frame).
@@ -642,6 +659,7 @@ namespace se
             logWarn(std::string{ "skinning: skinned instances present but no joint palette uploaded; skipping" });
             dispatches.clear();
             prevDispatches.clear();
+            skinnedRt.clear();  // no deformed buffer => no refit BLAS to point the TLAS at
         }
         if (!dispatches.empty())
         {
@@ -662,6 +680,7 @@ namespace se
                 dispatches.resize(SkinMaxSetsPerFrame);
                 prevDispatches.resize(SkinMaxSetsPerFrame);
                 dispatchMeshes.resize(SkinMaxSetsPerFrame);
+                skinnedRt.resize(SkinMaxSetsPerFrame);  // clamp the refit BLAS set to the deformed ones
             }
             static_cast<void>(renderer.context.device.resetDescriptorPool(renderer.skinning.pools[frame]));
             const vk::Buffer palette = renderer.instancing.jointBuffers[frame]->buffer;
@@ -714,6 +733,7 @@ namespace se
                 {
                     dispatches.clear();
                     prevDispatches.clear();
+                    skinnedRt.clear();  // the deformed buffer is unwritten; don't refit BLASes off it
                     break;
                 }
             }
@@ -756,6 +776,15 @@ namespace se
         list.batches = std::move(batches);
         list.skinDispatches = std::move(dispatches);
         list.prevSkinDispatches = std::move(prevDispatches);
+        // Keep only the real RT skinned instances (drop entity-less placeholders that kept parity
+        // with the dispatch trim). Each carries the deformed offset its sibling dispatch wrote.
+        for (SkinnedRtInstance& s : skinnedRt)
+        {
+            if (s.entity != 0 && s.mesh)
+            {
+                list.skinnedRtInstances.push_back(std::move(s));
+            }
+        }
         list.liveTextures = std::move(liveTextures);
         list.lightSet = renderer.lighting.lightSets[frame];
         list.instanceSet = renderer.instancing.sets[frame];
