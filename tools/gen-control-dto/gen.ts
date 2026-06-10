@@ -409,6 +409,18 @@ const commands: CommandDef[] = [
     summary: "clear the Edit preview and stop (revert to rest)",
   },
   {
+    name: "get-skeleton-overlay",
+    params: "EmptyParams",
+    result: "SkeletonOverlayResult",
+    summary: "the line-skeleton overlay toggle, axes, and joint size",
+  },
+  {
+    name: "set-skeleton-overlay",
+    params: "SetSkeletonOverlayParams",
+    result: "SkeletonOverlayResult",
+    summary: "the selected rig's line-skeleton viewport overlay (show|axes|jointSize)",
+  },
+  {
     name: "get-script-status",
     params: "EmptyParams",
     result: "ScriptStatusResult",
@@ -699,6 +711,8 @@ const commandFixtures = new Map<string, string>([
   ["pause", "empty"],
   ["step", "step-one"],
   ["stop", "empty"],
+  ["get-skeleton-overlay", "empty"],
+  ["set-skeleton-overlay", "skeleton-overlay-on"],
   ["get-play-state", "empty"],
   ["get-script-status", "empty"],
   ["drain-script-errors", "alarms-since-0"],

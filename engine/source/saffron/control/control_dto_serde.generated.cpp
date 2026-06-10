@@ -1756,6 +1756,42 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<SetSkeletonOverlayParams>) -> Result<SetSkeletonOverlayParams>
+    {
+        SetSkeletonOverlayParams out;
+
+        {
+            auto value = optionalField(params, "show", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "show");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.show = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "axes", 1, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "axes");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.axes = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "jointSize", 2, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "jointSize");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.jointSize = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<DrainScriptErrorsParams>) -> Result<DrainScriptErrorsParams>
     {
         DrainScriptErrorsParams out;
@@ -2989,6 +3025,15 @@ namespace se
         out["id"] = dtoToJson(value.id);
         out["name"] = value.name;
         out["duration"] = value.duration;
+        return out;
+    }
+
+    auto dtoToJson(const SkeletonOverlayResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["show"] = value.show;
+        out["axes"] = value.axes;
+        out["jointSize"] = value.jointSize;
         return out;
     }
 
