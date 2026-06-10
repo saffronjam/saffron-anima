@@ -1433,6 +1433,8 @@ return {0}
                 item.normalMatrix = glm::mat4(glm::transpose(glm::inverse(glm::mat3(model))));
                 item.submeshMaterials = std::move(materials.submeshes);
                 item.material.unlit = materials.unlit;
+                item.entity =
+                    hasComponent<IdComponent>(scene, entity) ? getComponent<IdComponent>(scene, entity).id.value : 0;
                 items.push_back(std::move(item));
             });
 
@@ -1487,8 +1489,16 @@ return {0}
                     item.mesh = meshRef;
                     item.skinned = true;
                     item.jointOffset = static_cast<u32>(frameJoints.size());
+                    item.jointCount = static_cast<u32>(palette.size());
                     item.submeshMaterials = std::move(materials.submeshes);
                     item.material.unlit = materials.unlit;
+                    // model stays identity: the joint matrices (worldBone * inverseBind) already
+                    // place the vertices in world space, so entity movement rides inside the
+                    // palette. Deformation motion (prev palette vs current) thus covers both bone
+                    // animation AND the whole rig moving — no separate object-motion term needed.
+                    item.entity = hasComponent<IdComponent>(scene, entity)
+                                      ? getComponent<IdComponent>(scene, entity).id.value
+                                      : 0;
                     frameJoints.insert(frameJoints.end(), palette.begin(), palette.end());
                     items.push_back(std::move(item));
                 });
