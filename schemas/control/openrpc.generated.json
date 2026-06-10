@@ -924,6 +924,132 @@
       }
     },
     {
+      "name": "get-animation-state",
+      "summary": "a rig's playhead, clip, wrap, and speed",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AnimationStateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AnimationStateResult"
+        }
+      }
+    },
+    {
+      "name": "list-clips",
+      "summary": "the animation clips in the project catalog",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ListClipsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ListClipsResult"
+        }
+      }
+    },
+    {
+      "name": "play-animation",
+      "summary": "play a clip on a rig (previews in Edit too)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PlayAnimationParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AnimationStateResult"
+        }
+      }
+    },
+    {
+      "name": "pause-animation",
+      "summary": "stop advancing time, keep the pose shown",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AnimationStateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AnimationStateResult"
+        }
+      }
+    },
+    {
+      "name": "seek-animation",
+      "summary": "set the playhead (previews in Edit)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SeekAnimationParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AnimationStateResult"
+        }
+      }
+    },
+    {
+      "name": "set-animation-loop",
+      "summary": "set the wrap mode (once|loop|pingpong)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetAnimationLoopParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AnimationStateResult"
+        }
+      }
+    },
+    {
+      "name": "stop-preview",
+      "summary": "clear the Edit preview and stop (revert to rest)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AnimationStateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AnimationStateResult"
+        }
+      }
+    },
+    {
       "name": "get-script-status",
       "summary": "play state, live script instances, error high-water",
       "params": [
@@ -1869,6 +1995,85 @@
           "sinceFrame",
           "count",
           "durationMs"
+        ]
+      },
+      "AnimationClipDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "duration"
+        ]
+      },
+      "AnimationStateParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      },
+      "AnimationStateResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "clip": {
+            "type": "string"
+          },
+          "clipName": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "number"
+          },
+          "time": {
+            "type": "number"
+          },
+          "playing": {
+            "type": "boolean"
+          },
+          "wrap": {
+            "type": "string"
+          },
+          "speed": {
+            "type": "number"
+          },
+          "animationVersion": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clip",
+          "clipName",
+          "duration",
+          "time",
+          "playing",
+          "wrap",
+          "speed",
+          "animationVersion"
         ]
       },
       "AssetEntryDto": {
@@ -2922,6 +3127,40 @@
           "components"
         ]
       },
+      "ListClipsParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      },
+      "ListClipsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "clips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnimationClipDto"
+            }
+          }
+        },
+        "required": [
+          "clips"
+        ]
+      },
       "ListProbesResult": {
         "type": "object",
         "additionalProperties": false,
@@ -3161,6 +3400,45 @@
           "pixels"
         ]
       },
+      "PlayAnimationParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "clip": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "speed": {
+            "type": "number"
+          },
+          "loop": {
+            "type": "boolean"
+          },
+          "blend": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "entity",
+          "clip"
+        ]
+      },
       "PlayStateResult": {
         "type": "object",
         "additionalProperties": false,
@@ -3176,13 +3454,17 @@
           },
           "hasPrimaryCamera": {
             "type": "boolean"
+          },
+          "animationVersion": {
+            "type": "integer"
           }
         },
         "required": [
           "state",
           "playVersion",
           "sceneVersion",
-          "hasPrimaryCamera"
+          "hasPrimaryCamera",
+          "animationVersion"
         ]
       },
       "ProbeRef": {
@@ -3842,6 +4124,29 @@
           "errorHighWater"
         ]
       },
+      "SeekAnimationParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "time": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "entity",
+          "time"
+        ]
+      },
       "SelectionResult": {
         "type": "object",
         "additionalProperties": false,
@@ -3867,13 +4172,17 @@
           },
           "playVersion": {
             "type": "integer"
+          },
+          "animationVersion": {
+            "type": "integer"
           }
         },
         "required": [
           "selectionVersion",
           "sceneVersion",
           "playState",
-          "playVersion"
+          "playVersion",
+          "animationVersion"
         ]
       },
       "SetAaParams": {
@@ -3912,6 +4221,29 @@
         },
         "required": [
           "aa"
+        ]
+      },
+      "SetAnimationLoopParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "wrap": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity",
+          "wrap"
         ]
       },
       "SetAtmosphereParams": {

@@ -359,6 +359,55 @@
       "fixture": "empty"
     },
     {
+      "name": "get-animation-state",
+      "params": "AnimationStateParams",
+      "result": "AnimationStateResult",
+      "status": "typed",
+      "skip": "needs a rigged entity with an animation player (covered by the e2e)"
+    },
+    {
+      "name": "list-clips",
+      "params": "ListClipsParams",
+      "result": "ListClipsResult",
+      "status": "typed",
+      "skip": "needs a project with imported animation clips (covered by the e2e)"
+    },
+    {
+      "name": "play-animation",
+      "params": "PlayAnimationParams",
+      "result": "AnimationStateResult",
+      "status": "typed",
+      "skip": "needs a rigged entity + an imported clip (covered by the e2e)"
+    },
+    {
+      "name": "pause-animation",
+      "params": "AnimationStateParams",
+      "result": "AnimationStateResult",
+      "status": "typed",
+      "skip": "needs a rigged entity with an animation player (covered by the e2e)"
+    },
+    {
+      "name": "seek-animation",
+      "params": "SeekAnimationParams",
+      "result": "AnimationStateResult",
+      "status": "typed",
+      "skip": "needs a rigged entity with an animation player (covered by the e2e)"
+    },
+    {
+      "name": "set-animation-loop",
+      "params": "SetAnimationLoopParams",
+      "result": "AnimationStateResult",
+      "status": "typed",
+      "skip": "needs a rigged entity with an animation player (covered by the e2e)"
+    },
+    {
+      "name": "stop-preview",
+      "params": "AnimationStateParams",
+      "result": "AnimationStateResult",
+      "status": "typed",
+      "skip": "needs a rigged entity with an animation player (covered by the e2e)"
+    },
+    {
       "name": "get-script-status",
       "params": "EmptyParams",
       "result": "ScriptStatusResult",
