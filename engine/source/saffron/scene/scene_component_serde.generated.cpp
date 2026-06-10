@@ -250,6 +250,28 @@ namespace se
         return {};
     }
 
+    auto animationPlayerComponentToJson(const AnimationPlayerComponent& c) -> nlohmann::json
+    {
+        const char* wrap = c.wrap == AnimationPlayerComponent::Wrap::Once       ? "once"
+                           : c.wrap == AnimationPlayerComponent::Wrap::PingPong ? "pingpong"
+                                                                                : "loop";
+        return nlohmann::json{ { "clip", uuidToJson(c.clip.value) }, { "time", c.time }, { "speed", c.speed },
+                               { "wrap", wrap }, { "playing", c.playing } };
+    }
+
+    auto animationPlayerComponentFromJson(AnimationPlayerComponent& c, const nlohmann::json& j) -> Result<void>
+    {
+        c.clip = Uuid{ jsonU64Or(j, "clip", 0) };
+        c.time = jsonF32Or(j, "time", 0.0f);
+        c.speed = jsonF32Or(j, "speed", 1.0f);
+        const std::string wrap = jsonStringOr(j, "wrap", std::string{ "loop" });
+        c.wrap = wrap == "once"       ? AnimationPlayerComponent::Wrap::Once
+                 : wrap == "pingpong" ? AnimationPlayerComponent::Wrap::PingPong
+                                      : AnimationPlayerComponent::Wrap::Loop;
+        c.playing = jsonBoolOr(j, "playing", false);
+        return {};
+    }
+
     auto directionalLightComponentToJson(const DirectionalLightComponent& c) -> nlohmann::json
     {
         return nlohmann::json{ { "direction", vec3ToJson(c.direction) },

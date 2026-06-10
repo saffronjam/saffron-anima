@@ -37,6 +37,10 @@ namespace se
         registerComponent<ScriptComponent>(
             reg, "Script", [](Scene&, Entity) {}, scriptComponentToJson, scriptComponentFromJson, true);
 
+        registerComponent<AnimationPlayerComponent>(
+            reg, "AnimationPlayer", [](Scene&, Entity) {}, animationPlayerComponentToJson,
+            animationPlayerComponentFromJson, true);
+
         registerComponent<DirectionalLightComponent>(
             reg, "DirectionalLight", [](Scene&, Entity) {}, directionalLightComponentToJson,
             directionalLightComponentFromJson, true);
