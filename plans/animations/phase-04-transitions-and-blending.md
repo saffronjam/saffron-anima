@@ -1,6 +1,6 @@
 # Phase 4 — transitions: cross-fade + inertialization
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 

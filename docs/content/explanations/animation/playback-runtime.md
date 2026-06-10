@@ -71,13 +71,41 @@ and a script can still override a bone through the same `PoseOverrideComponent` 
 - **Loop** — wrap the playhead modulo the duration.
 - **PingPong** — bounce at each end, flipping the stored direction.
 
+## Transitions
+
+A clip change pops if the new clip's first pose differs from the current one. Two mechanisms
+smooth it, both keyed per entity and captured once at the switch:
+
+- **Cross-fade** — freeze the outgoing pose and blend it toward the incoming clip by a
+  smoothstepped `alpha = transition / transitionDuration`. Simple to reason about; the obvious
+  fallback if a quintic artifact shows up.
+- **Inertialization** (the default) — capture the per-joint *pose offset* between the outgoing
+  pose and the incoming clip at the switch, then evaluate **only** the incoming clip and decay the
+  offset to zero with a quintic (C², zero-jerk). It is roughly half the cost of a sustained two-clip
+  blend, and — the strategic reason it is the default — it reuses the exact `PoseDelta` machinery a
+  physics handoff (a powered ragdoll) needs to nudge an animated target, built here where it is easy
+  to test before it is load-bearing.
+
+The offset is `poseDiff(outgoing, incoming)` — additive translation, a delta quaternion
+(`outgoing · inverse(incoming)`, decayed via `slerp(identity, Δrot, k)`, never a raw component
+lerp), and a multiplicative scale ratio. `applyDelta(incoming, offset, k)` returns the outgoing
+pose at `k = 1` and the incoming pose at `k = 0`, so the switch frame matches the outgoing pose
+exactly (no pop) and the result eases onto the incoming clip.
+
+A **Loop wrap** is just a transition too: when `loopBlend > 0`, crossing the seam captures the
+end-pose and inertializes onto the wrapped start-pose over `loopBlend` seconds, so looped
+locomotion does not stutter. A transition is started by a control command (the
+`play-animation --blend` arg, a later phase); the component carries the idle state (`prevClip`,
+`transition`, `transitionDuration`, `transitionMode`) so it round-trips harmlessly at rest.
+
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
 | Evaluator (gate, advance, sample, blend, write) | `animation.cpp` | `tickAnimation`, `advanceTime`, `blendJoint` |
-| Edit/Play mode + clip cache | `animation.cppm` | `AnimMode`, `AnimationRuntime` |
-| Dumb-data player | `scene.cppm` | `AnimationPlayerComponent` |
+| Transitions (cross-fade, inertialize, loop-wrap) | `animation.cpp` | `poseDiff`, `applyDelta`, `quinticDecay` |
+| Edit/Play mode + clip & transition cache | `animation.cppm` | `AnimMode`, `AnimationRuntime`, `PoseDelta`, `TransitionState` |
+| Dumb-data player | `scene.cppm` | `AnimationPlayerComponent` (`transitionMode`, `loopBlend`) |
 | Runtime pose override + composition | `scene.cppm` | `PoseOverrideComponent`, `localMatrix`, `updateWorldTransforms` |
 | Per-frame host wiring | `host.cppm` | `tickAnimation` call in `onUpdate` |
 
