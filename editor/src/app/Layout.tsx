@@ -30,6 +30,7 @@ import { RenderPanel } from "../panels/RenderPanel";
 import { AssetsPanel } from "../panels/AssetsPanel";
 import { ViewportPanel } from "../panels/ViewportPanel";
 import { RightSidebar } from "../panels/RightSidebar";
+import { BottomDock } from "../panels/BottomDock";
 import { emitLayoutSettled } from "./layoutBus";
 import { logRender } from "../lib/renderLog";
 import {
@@ -52,6 +53,7 @@ export function Layout() {
   const projectPath = useEditorStore((s) => s.project?.path);
   const playState = useEditorStore((s) => s.playState);
   const rightToolsOpen = useEditorStore((s) => s.rightTools.length > 0);
+  const bottomToolsOpen = useEditorStore((s) => s.bottomTools.length > 0);
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     clampSidebarWidth(loadSidebarWidth(projectPath) ?? SIDEBAR_DEFAULT_WIDTH),
   );
@@ -77,6 +79,16 @@ export function Layout() {
     rightLayout.onLayoutChanged(layout);
     emitLayoutSettled();
   };
+
+  // Opening or closing the bottom dock resizes the viewport rect (a panel is
+  // added/removed). The viewport's ResizeObserver sees the host div change, but a
+  // forced resize-end commit makes the Wayland subsurface re-glue exactly to the
+  // new bounds (the LeftBottomTabs precedent — emit on the next frame so the panel
+  // has laid out). Mounting fires it too, which is harmless (no dock, no move).
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => emitLayoutSettled({ force: true }));
+    return () => cancelAnimationFrame(raf);
+  }, [bottomToolsOpen]);
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent): void => {
@@ -188,6 +200,24 @@ export function Layout() {
         <ResizablePanel id="assets" defaultSize={28} minSize={12} className="min-h-0 bg-background">
           <AssetsPanel />
         </ResizablePanel>
+        {/* The bottom dock (timeline) renders only when a tool is open; closing the last
+            tab removes it and the viewport/assets reclaim the height. Stacked in the same
+            vertical group so react-resizable-panels persists its split — no separate
+            layout reset. The handle drag fires onRightLayoutChanged → emitLayoutSettled,
+            re-gluing the viewport subsurface on resize-end. */}
+        {bottomToolsOpen ? (
+          <>
+            <ResizableHandle />
+            <ResizablePanel
+              id="bottom-dock"
+              defaultSize={22}
+              minSize={8}
+              className="min-h-0 bg-background"
+            >
+              <BottomDock />
+            </ResizablePanel>
+          </>
+        ) : null}
       </ResizablePanelGroup>
       {/* The right sidebar (perf tools) renders only when a tool is open; closing all its
           tabs removes it and the viewport reclaims the width. Pixel width like the left,
