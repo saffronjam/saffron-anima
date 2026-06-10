@@ -4,7 +4,9 @@ module;
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <format>
 #include <optional>
 #include <string>
@@ -87,6 +89,12 @@ namespace se
     {
         return PlayStateResult{ playStateName(editor.playState), static_cast<i32>(editor.playVersion),
                                 static_cast<i32>(editor.sceneVersion), editor.hadPrimaryCamera };
+    }
+
+    auto normalizeScriptKey(std::string key) -> std::string
+    {
+        std::ranges::transform(key, key.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return key;
     }
 
     auto vec3Json(const Vec3& value) -> json
@@ -1372,6 +1380,29 @@ namespace se
                     fly.lookDelta = glm::vec2{ 0.0f };
                 }
                 return FlyInputResult{ fly.active };
+            });
+
+        registerCommand<ScriptInputParams, ScriptInputResult>(
+            reg, "script-input", "script-input {keys} — set the key state visible to Lua scripts",
+            [](EngineContext& ctx, const ScriptInputParams& params) -> Result<ScriptInputResult>
+            {
+                ctx.sceneEdit.scriptInputKeys.clear();
+                for (const std::string& key : params.keys)
+                {
+                    const std::string normalized = normalizeScriptKey(key);
+                    if (!normalized.empty())
+                    {
+                        ctx.sceneEdit.scriptInputKeys.insert(normalized);
+                    }
+                }
+                std::vector<std::string> keys;
+                keys.reserve(ctx.sceneEdit.scriptInputKeys.size());
+                for (const std::string& key : ctx.sceneEdit.scriptInputKeys)
+                {
+                    keys.push_back(key);
+                }
+                std::ranges::sort(keys);
+                return ScriptInputResult{ std::move(keys) };
             });
 
         registerCommand<SetProbesParams, SetProbesResult>(

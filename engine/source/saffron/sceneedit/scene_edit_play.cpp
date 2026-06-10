@@ -151,6 +151,7 @@ namespace se
         dropSmoothing(ctx);
         ctx.playScene.reset();
         ctx.stepFrames = 0;
+        ctx.scriptInputKeys.clear();
         // The discard is the restore: the edit scene was never writable through
         // activeScene during play. The sceneVersion bump makes the editor's heavy
         // reconcile re-fetch the authored entity list.

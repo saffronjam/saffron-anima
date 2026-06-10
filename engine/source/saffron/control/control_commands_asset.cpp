@@ -399,6 +399,7 @@ namespace se
                 }
                 applyProjectInfo(ctx, project);
                 ctx.sceneEdit.sceneVersion += 1;
+                ctx.sceneEdit.scriptInputKeys.clear();
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
             });
@@ -442,6 +443,7 @@ namespace se
                 applyProjectInfo(ctx, project);
                 sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
                 ctx.sceneEdit.sceneVersion += 1;
+                ctx.sceneEdit.scriptInputKeys.clear();
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
             });
@@ -887,6 +889,7 @@ namespace se
                 applyProjectInfo(ctx, project);
                 sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
                 ctx.sceneEdit.sceneVersion += 1;
+                ctx.sceneEdit.scriptInputKeys.clear();
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
             });
@@ -917,6 +920,7 @@ namespace se
                 applyProjectInfo(ctx, project);
                 sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
                 ctx.sceneEdit.sceneVersion += 1;
+                ctx.sceneEdit.scriptInputKeys.clear();
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
             });

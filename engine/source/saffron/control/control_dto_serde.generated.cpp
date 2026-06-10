@@ -2028,6 +2028,20 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<ScriptInputParams>) -> Result<ScriptInputParams>
+    {
+        ScriptInputParams out;
+
+        {
+            auto value = requiredField(params, "keys", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readVector<std::string>(**value, "keys");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.keys = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<SetProbesParams>) -> Result<SetProbesParams>
     {
         SetProbesParams out;
@@ -2926,6 +2940,13 @@ namespace se
     {
         Json out = Json::object();
         out["active"] = value.active;
+        return out;
+    }
+
+    auto dtoToJson(const ScriptInputResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["keys"] = dtoVectorToJson(value.keys);
         return out;
     }
 

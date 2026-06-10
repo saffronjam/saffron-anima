@@ -10,6 +10,7 @@ module;
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -209,10 +210,11 @@ export namespace se
         // The simulation seam: tickPlay invokes this with the active (play) scene and
         // the clamped dt. The Host points it at the script runtime; std-only here.
         std::function<void(Scene&, f32)> simTick;
-        i64 playTick = 0;                       // ticks run since enterPlay (error timestamps)
-        i32 scriptInstanceCount = 0;            // live script instances; set by the Host wiring
-        std::vector<ScriptError> scriptErrors;  // bounded ring, oldest dropped at ScriptErrorRingCap
-        i64 scriptErrorSeq = 0;                 // last assigned ScriptError.seq (drain high-water)
+        i64 playTick = 0;                                 // ticks run since enterPlay (error timestamps)
+        i32 scriptInstanceCount = 0;                      // live script instances; set by the Host wiring
+        std::vector<ScriptError> scriptErrors;            // bounded ring, oldest dropped at ScriptErrorRingCap
+        i64 scriptErrorSeq = 0;                           // last assigned ScriptError.seq (drain high-water)
+        std::unordered_set<std::string> scriptInputKeys;  // normalized key names held for Lua gameplay input
     };
 
     // Append to the bounded script-error ring, stamping seq + the current play tick.

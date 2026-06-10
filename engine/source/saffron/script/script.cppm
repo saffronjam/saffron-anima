@@ -19,6 +19,7 @@ extern "C"
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -88,6 +89,7 @@ export namespace se
         std::vector<ScriptInstance> instances;
         Scene* currentScene = nullptr;
         const ComponentRegistry* currentRegistry = nullptr;
+        const std::unordered_set<std::string>* inputKeys = nullptr;
     };
 
     /// Create the VM and instantiate every ScriptComponent slot in the scene:
@@ -95,8 +97,8 @@ export namespace se
     /// `self.entity` is bound to the owning entity. A slot that fails to load is a
     /// logged skip; on_create(self) runs where present. The registry backs
     /// entity:get_component snapshots. Err only when no VM could be created at all.
-    auto startScripts(ScriptHost& host, Scene& scene, const ComponentRegistry& registry, std::string_view srcDir)
-        -> Result<void>;
+    auto startScripts(ScriptHost& host, Scene& scene, const ComponentRegistry& registry, std::string_view srcDir,
+                      const std::unordered_set<std::string>& inputKeys) -> Result<void>;
 
     /// Run every instance's on_update(self, dt) in instance order. The first
     /// failing instance halts the tick and is returned (pause-on-error policy);

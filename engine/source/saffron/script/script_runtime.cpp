@@ -15,6 +15,7 @@ extern "C"
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <expected>
 #include <filesystem>
@@ -23,6 +24,7 @@ extern "C"
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -215,6 +217,13 @@ namespace se
             return error;
         }
 
+        auto normalizeInputKey(std::string key) -> std::string
+        {
+            std::ranges::transform(key, key.begin(),
+                                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            return key;
+        }
+
         // Calls self:<name>(dt?) for the instance at selfRef. An absent method is
         // a successful no-op (only on_update is required, enforced at class load).
         auto callInstanceMethod(lua_State* L, int selfRef, const char* name, std::optional<f32> dt) -> Result<void>
@@ -360,8 +369,8 @@ namespace se
         }
     }
 
-    auto startScripts(ScriptHost& host, Scene& scene, const ComponentRegistry& registry, std::string_view srcDir)
-        -> Result<void>
+    auto startScripts(ScriptHost& host, Scene& scene, const ComponentRegistry& registry, std::string_view srcDir,
+                      const std::unordered_set<std::string>& inputKeys) -> Result<void>
     {
         stopScripts(host);
         auto vm = newScriptVm();
@@ -371,6 +380,7 @@ namespace se
         }
         host.vm = std::move(*vm);
         host.currentRegistry = &registry;
+        host.inputKeys = &inputKeys;
         lua_State* L = host.vm.state;
         luabridge::getGlobalNamespace(L)
             .beginNamespace("se")
@@ -383,6 +393,15 @@ namespace se
             .addFunction("set_rotation", &ScriptEntity::setRotation)
             .addFunction("set_scale", &ScriptEntity::setScale)
             .endClass()
+            .addFunction("is_key_pressed",
+                         [&host](const char* key) -> bool
+                         {
+                             if (host.inputKeys == nullptr || key == nullptr)
+                             {
+                                 return false;
+                             }
+                             return host.inputKeys->contains(normalizeInputKey(key));
+                         })
             // First match by name (names are not unique — a deliberate MVP choice);
             // an invalid handle when absent, so scripts check :valid().
             .addFunction("get_entity_by_name",
@@ -519,6 +538,7 @@ namespace se
         host.instances.clear();
         host.classRefByPath.clear();
         host.currentRegistry = nullptr;
+        host.inputKeys = nullptr;
         host.vm = ScriptVm{};
     }
 
