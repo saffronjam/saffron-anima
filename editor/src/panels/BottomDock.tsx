@@ -1,9 +1,9 @@
 /// The bottom dock: the tools (currently just the Timeline) opened from the Topbar, shown
 /// as a compact strip of closeable tabs like the right sidebar. Closing the last tab empties
 /// `bottomTools` and Layout removes the dock entirely, so the viewport reclaims the height.
-/// Phase 12 supplies the real TimelinePanel; until then the body is a placeholder.
 import { X } from "lucide-react";
 import { useEditorStore, type BottomTool } from "../state/store";
+import { TimelinePanel } from "./TimelinePanel";
 import { cn } from "@/lib/utils";
 
 const BOTTOM_TOOL_LABEL: Record<BottomTool, string> = { timeline: "Timeline" };
@@ -60,9 +60,7 @@ export function BottomDock() {
           );
         })}
       </div>
-      <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground">
-        {active === "timeline" ? <span>Timeline (coming soon)</span> : null}
-      </div>
+      <div className="min-h-0 flex-1">{active === "timeline" ? <TimelinePanel /> : null}</div>
     </div>
   );
 }
