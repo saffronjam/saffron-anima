@@ -23,6 +23,15 @@ dark-orange frustum from the camera FOV and near/far planes, capped by `frustumM
 `CameraComponent` can hide either helper with `showModel` or `showFrustum`; play mode renders
 neither one.
 
+The frustum is **depth-tested against the scene depth**, so the camera model and any geometry in
+front of it occlude the lines instead of the frustum painting over them. The overlay pass binds the
+1x scene depth as a read-only attachment (depth test on, depth write off), and only the frustum
+reads it — the manipulation handles and billboards still draw on top, so they stay visible and
+grabbable even behind a wall. Each frustum vertex carries its projected NDC depth, computed through
+the same editor camera the scene draws with, so the values line up with the depth buffer exactly.
+When an [AA mode](../../anti-aliasing/aa-modes/) makes the scene multisampled, the scene pass first
+resolves its depth into the 1x buffer the overlay reads.
+
 ## The gizmo-pointer command
 
 The handles are drawn into the frame stream the webview paints, so the engine receives no raw mouse from the canvas. The [viewport panel](../viewport-panel/) therefore translates each pointer phase into NDC and forwards it with the `gizmo-pointer` command:
@@ -69,9 +78,10 @@ The rebase is TRS-only, like the reparent decompose: a rotated child under a non
 | W/E/R shortcuts | `editor/src/app/useGizmoShortcuts.ts` | `useGizmoShortcuts`, `GIZMO_COMMANDS`, `matchesBinding` |
 | Shared gizmo state | `editor/src/state/store.ts` | `gizmo`, `setGizmo` |
 | Mode commands (engine) | `control_commands_scene.cpp` | `get-gizmo`, `set-gizmo`, `gizmo-pointer` |
-| Overlay geometry (engine) | `engine/source/saffron/host/host.cppm` | `buildNativeGizmo`, `addLine`, `addQuad` |
+| Overlay geometry (engine) | `engine/source/saffron/host/host.cppm` | `buildNativeGizmo`, `buildSceneEditCameraFrustums`, `addLine`, `submitNativeGizmo` |
 | Hit-test / shared geometry (engine) | `scene_edit_gizmo.cpp` | `hitNativeGizmo`, `gizmoPlaneCorners`, `ringBasis` |
 | Analytic AA (engine) | `gizmo_overlay.slang`, `renderer_types.cppm` | `fragmentMain`, `OverlayVertex` |
+| Depth-tested overlay (engine) | `renderer.cppm`, `renderer_pipelines.cpp` | `newOverlayPipeline` (`depthTest`), the `editor-overlay` pass depth attachment, `submitOverlay` |
 
 ## Related
 

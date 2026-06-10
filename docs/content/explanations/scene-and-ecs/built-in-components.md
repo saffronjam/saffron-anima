@@ -116,7 +116,7 @@ struct CameraComponent
     bool primary = true;   // scene renders through the first primary camera
     bool showModel = true;
     bool showFrustum = true;
-    f32 frustumMaxDistance = 25.0f;
+    f32 frustumMaxDistance = 10.0f;
 };
 ```
 
