@@ -52,13 +52,25 @@ palette, and the deformed buffer. A 16-byte push constant carries `{vertexCount,
 deformedOffset}`. The `skin` compute pass — placed right after light-cull, before any pass that reads
 the deformed buffer — dispatches `ceil(vertexCount/64)` groups per instance.
 
+## Every geometry pass reads it
+
+Because the deformed buffer is laid out like a static mesh, **every** geometry pass binds it for
+skinned batches the same way — through one `bindBatchVertices` helper that picks the deformed buffer
+over the static stream. The depth pre-pass, the directional/spot/point shadow passes, and the SSAO
+G-buffer pre-pass all draw skinned geometry now (the old `if (batch.skinned) continue;` skips are
+gone), so an animated character gets early-Z, casts and receives shadows, and shows AO — the three
+defects that came from skinned geometry only existing in the main scene pass. The deform happened
+once; every pass is just a read. (Motion vectors and the ray-traced BLAS read it in later phases.)
+
 ## Barriers
 
-The pass declares the deformed buffer as `StorageWriteCompute`; the scene pass declares it as
-`VertexInputRead`. The [render graph](usage-and-barrier-derivation/) derives the compute-write →
-vertex-fetch barrier from that pair — no hand-written `vkCmdPipelineBarrier`. (The static/skin/palette
-reads need none: the mesh streams are uploaded long before, and the palette's host write is visible at
-submit, the same guarantee the old vertex shader relied on.)
+The skin pass runs **before every geometry pass** and declares the deformed buffer as
+`StorageWriteCompute`; each consumer (shadows, depth pre-pass, G-buffer, scene) declares it as
+`VertexInputRead`. The [render graph](usage-and-barrier-derivation/) derives the single compute-write →
+vertex-fetch barrier from those usages — no hand-written `vkCmdPipelineBarrier`, and the later reads
+are read-after-read (no extra barrier). (The static/skin/palette reads need none: the mesh streams are
+uploaded long before, and the palette's host write is visible at submit, the same guarantee the old
+vertex shader relied on.)
 
 ## In the code
 
@@ -72,9 +84,9 @@ submit, the same guarantee the old vertex shader relied on.)
 | Compute→vertex barrier | `render_graph.cppm` | `RgUsage::VertexInputRead` |
 
 > [!NOTE]
-> This phase rewires only the scene pass; the depth/shadow/AO/motion passes still skip skinned
-> batches until they too are pointed at the deformed buffer. The deformed buffer already exists and is
-> correct — later phases just read it from more passes (and rebuild the BLAS from it).
+> The scene, depth pre-pass, shadow, and SSAO G-buffer passes all read the deformed buffer. Motion
+> vectors and the ray-traced BLAS are the two remaining consumers — they read the same buffer in later
+> phases, so skinned characters stop ghosting under TAA and deform in ray-traced effects too.
 
 ## Related
 
