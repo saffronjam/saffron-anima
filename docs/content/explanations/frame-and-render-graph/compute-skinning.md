@@ -60,7 +60,8 @@ over the static stream. The depth pre-pass, the directional/spot/point shadow pa
 G-buffer pre-pass all draw skinned geometry now (the old `if (batch.skinned) continue;` skips are
 gone), so an animated character gets early-Z, casts and receives shadows, and shows AO — the three
 defects that came from skinned geometry only existing in the main scene pass. The deform happened
-once; every pass is just a read. (The ray-traced BLAS is the one remaining consumer, in a later phase.)
+once; every pass is just a read. The ray-traced acceleration structure reads the very same buffer
+(see [Ray tracing](#ray-tracing) below), so it is the last consumer to fall in line.
 
 ## Motion vectors
 
@@ -81,15 +82,43 @@ mesh both bindings point at the same static stream, so `prevPosition == position
 motion contributes; the one shader handles both cases. The motion pass's old `if (batch.skinned)
 continue;` guard is gone, so animated characters stop ghosting under TAA.
 
+## Ray tracing
+
+A ray query traces against an acceleration structure, not the rasterized vertex stream — so making a
+skinned character cast a ray-traced shadow, occlude DDGI, or block a ReSTIR visibility ray means its
+**BLAS** must follow the pose, not the bind shape. A static mesh builds its BLAS once at upload from
+the object-space bind-pose vertices, and the TLAS instance carries `model`. That is wrong for a
+skinned mesh twice over: the bind pose is frozen, and the deformed vertices are **already in world
+space** (the palette is `worldBone · inverseBind` and `skin.slang` omits the model matrix), so any
+instance transform would double-apply the placement.
+
+So each skinned instance gets its **own** BLAS, refit every frame from its slice of the deformed
+buffer, and the TLAS references it with an **identity** transform. Topology never changes — only
+positions move — so the first frame for an entity is a full `BUILD` (with `ALLOW_UPDATE`) and every
+later frame is an in-place `UPDATE` (refit, `src == dst`), which is far cheaper than a rebuild. The
+refit BLAS is **per frame-in-flight, keyed by entity**: it reads the current frame's deformed buffer,
+and a per-slot fence wait keeps frame *N+1* from refitting an AS frame *N* may still be tracing. The
+refits record into the same command buffer as the TLAS build, immediately before it.
+
+This is the one place an app pass writes barriers by hand — the accepted exception, the same one the
+TLAS build already takes. The refits emit an AS-build → AS-build barrier so the TLAS build sees the
+finished BLASes, and a scratch-reuse barrier between consecutive refits (they share one scratch
+region). The skin-compute-write → AS-build-read dependency on the deformed buffer is still
+graph-derived: the TLAS pass declares it `AccelStructBuildRead`. The whole path is gated on a
+ray-tracing consumer being on **and** skinned instances existing, so non-RT or static scenes allocate
+nothing and dispatch nothing.
+
 ## Barriers
 
 The skin pass runs **before every geometry pass** and declares the deformed buffer as
 `StorageWriteCompute`; each consumer (shadows, depth pre-pass, G-buffer, scene) declares it as
-`VertexInputRead`. The [render graph](usage-and-barrier-derivation/) derives the single compute-write →
-vertex-fetch barrier from those usages — no hand-written `vkCmdPipelineBarrier`, and the later reads
-are read-after-read (no extra barrier). (The static/skin/palette reads need none: the mesh streams are
-uploaded long before, and the palette's host write is visible at submit, the same guarantee the old
-vertex shader relied on.)
+`VertexInputRead`, and the TLAS/BLAS pass declares it `AccelStructBuildRead`. The
+[render graph](usage-and-barrier-derivation/) derives the single compute-write → consumer barrier from
+those usages — no hand-written `vkCmdPipelineBarrier`, and the later reads are read-after-read (no
+extra barrier). (The static/skin/palette reads need none: the mesh streams are uploaded long before,
+and the palette's host write is visible at submit, the same guarantee the old vertex shader relied on.)
+The acceleration-structure builds are the sole exception — they self-manage their AS-build barriers,
+documented above.
 
 ## In the code
 
@@ -100,14 +129,16 @@ vertex shader relied on.)
 | Dispatch build + per-instance sets | `renderer_drawlist.cpp` | `submitDrawList`, `ensureDeformedCapacity` |
 | The compute pass | `renderer.cppm` | the `skin` `RgPass` |
 | Scene-pass read | `renderer_drawlist.cpp` | `recordSceneDrawList`, `recordBatchSubmeshes` |
-| Compute→vertex barrier | `render_graph.cppm` | `RgUsage::VertexInputRead` |
+| Compute→vertex / AS-build barrier | `render_graph.cppm` | `RgUsage::VertexInputRead`, `RgUsage::AccelStructBuildRead` |
 | Skinned motion vectors | `motion.slang`, `renderer_types.cppm` | `InstanceData::prevModel`, `Skinning::prevDeformedBuffers`, `prevPaletteByEntity` |
+| Skinned BLAS refit | `renderer_detail.cppm`, `renderer.cppm` | `recordSkinnedBlasBuilds`, `buildTlas`, `Rt::skinnedBlas`, `SkinnedRtInstance` |
 
 > [!NOTE]
 > The scene, depth pre-pass, shadow, SSAO G-buffer, and motion-vector passes all read the deformed
-> buffer; the motion pass also reads a second deformed buffer skinned with last frame's palette. The
-> ray-traced BLAS is the one remaining consumer — it reads the same buffer in a later phase so skinned
-> characters deform in ray-traced effects too.
+> buffer; the motion pass also reads a second deformed buffer skinned with last frame's palette; and
+> the per-frame BLAS refit reads it as acceleration-structure build input. Every consumer is now in
+> place, so skinned characters are correct in raster, TAA, and ray tracing alike — there is no
+> "skinned draws only in the scene pass" caveat left.
 
 ## Related
 
