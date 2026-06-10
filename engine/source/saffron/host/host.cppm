@@ -34,6 +34,7 @@ import Saffron.Rendering;
 import Saffron.SceneEdit;
 import Saffron.Control;
 import Saffron.Scene;
+import Saffron.Animation;
 import Saffron.Script;
 import Saffron.Assets;
 
@@ -376,18 +377,79 @@ namespace se
                 }
                 if (kind == BillboardKind::Camera)
                 {
+                    if (se::getComponent<se::CameraComponent>(scene, e).showModel)
+                    {
+                        return;
+                    }
                     addCameraIcon(vertices, p.pixel, sel ? selectedColor : glm::vec4{ 0.85f, 0.87f, 0.92f, 0.95f },
                                   width, height);
                 }
             });
     }
 
-    // Builds the combined overlay (billboards first, gizmo on top) + submits it to the renderer.
+    void buildSceneEditCameraFrustums(se::SceneEditContext& editor, const se::CameraView& cam, se::u32 width,
+                                      se::u32 height, std::vector<se::OverlayVertex>& vertices)
+    {
+        if (width == 0 || height == 0)
+        {
+            return;
+        }
+        constexpr glm::vec4 FrustumColor{ 0.78f, 0.29f, 0.02f, 0.95f };
+        constexpr std::array<std::pair<se::u32, se::u32>, 12> Edges{
+            std::pair{ 0u, 1u }, std::pair{ 1u, 2u }, std::pair{ 2u, 3u }, std::pair{ 3u, 0u },
+            std::pair{ 4u, 5u }, std::pair{ 5u, 6u }, std::pair{ 6u, 7u }, std::pair{ 7u, 4u },
+            std::pair{ 0u, 4u }, std::pair{ 1u, 5u }, std::pair{ 2u, 6u }, std::pair{ 3u, 7u }
+        };
+        se::Scene& scene = se::activeScene(editor);
+        const se::f32 aspect = static_cast<se::f32>(width) / static_cast<se::f32>(height);
+
+        se::forEach<se::TransformComponent, se::CameraComponent>(
+            scene,
+            [&](se::Entity entity, se::TransformComponent&, se::CameraComponent& camera)
+            {
+                if (!camera.showFrustum)
+                {
+                    return;
+                }
+                const se::f32 nearPlane = std::max(camera.nearPlane, 0.001f);
+                const se::f32 farPlane = std::max(camera.farPlane, nearPlane + 0.001f);
+                const se::f32 halfFov = glm::radians(std::clamp(camera.fov, 1.0f, 179.0f)) * 0.5f;
+                const se::f32 nearY = std::tan(halfFov) * nearPlane;
+                const se::f32 nearX = nearY * aspect;
+                const se::f32 farY = std::tan(halfFov) * farPlane;
+                const se::f32 farX = farY * aspect;
+                const glm::mat4 model = se::worldMatrix(scene, entity);
+                const std::array<glm::vec3, 8> local{
+                    glm::vec3{ -nearX, -nearY, -nearPlane }, glm::vec3{ -nearX, nearY, -nearPlane },
+                    glm::vec3{ nearX, nearY, -nearPlane },   glm::vec3{ nearX, -nearY, -nearPlane },
+                    glm::vec3{ -farX, -farY, -farPlane },    glm::vec3{ -farX, farY, -farPlane },
+                    glm::vec3{ farX, farY, -farPlane },      glm::vec3{ farX, -farY, -farPlane }
+                };
+                std::array<se::GizmoProjection, 8> projected{};
+                for (se::u32 i = 0; i < local.size(); i = i + 1)
+                {
+                    const glm::vec3 world = glm::vec3(model * glm::vec4(local[i], 1.0f));
+                    projected[i] = se::viewportProject(cam, width, height, world);
+                }
+                for (const auto& edge : Edges)
+                {
+                    const se::GizmoProjection& a = projected[edge.first];
+                    const se::GizmoProjection& b = projected[edge.second];
+                    if (a.visible && b.visible)
+                    {
+                        addLine(vertices, a.pixel, b.pixel, 2.0f, FrustumColor, width, height);
+                    }
+                }
+            });
+    }
+
+    // Builds the combined overlay (billboards/frustums first, gizmo on top) + submits it to the renderer.
     void submitNativeGizmo(se::SceneEditContext& editor, se::Renderer& renderer, const se::CameraView& cam,
                            se::u32 width, se::u32 height)
     {
         std::vector<se::OverlayVertex> vertices;
         buildSceneEditBillboards(editor, cam, width, height, vertices);
+        buildSceneEditCameraFrustums(editor, cam, width, height, vertices);
         buildNativeGizmo(editor, cam, width, height, vertices);
         se::submitOverlay(renderer, std::move(vertices));
     }
@@ -472,8 +534,9 @@ export namespace se
                     if (next == se::PlayState::Playing && !state->scriptVmActive)
                     {
                         const std::filesystem::path src = std::filesystem::path(state->editor->projectRoot) / "src";
-                        auto started = se::startScripts(state->script, se::activeScene(*state->editor),
-                                                        state->editor->registry, src.string());
+                        auto started =
+                            se::startScripts(state->script, se::activeScene(*state->editor), state->editor->registry,
+                                             src.string(), state->editor->scriptInputKeys);
                         if (!started)
                         {
                             se::logError(std::format("script start failed: {}", started.error()));
@@ -512,6 +575,10 @@ export namespace se
                 se::runSceneSerializationSelfTest();
                 se::runSceneHierarchySelfTest();
                 se::runPlayModeSelfTest();
+                if (auto animation = se::runAnimationSelfTest(); !animation)
+                {
+                    se::logError(animation.error());
+                }
                 if (auto script = se::runScriptSelfTest(); !script)
                 {
                     se::logError(script.error());
@@ -677,7 +744,9 @@ export namespace se
                 const se::u32 viewHeight = se::viewportHeight(app.renderer);
                 if (viewWidth > 0 && viewHeight > 0)
                 {
-                    se::renderScene(app.renderer, live, state->assets, cam);
+                    se::RenderSceneOptions options;
+                    options.showEditorCameraModels = editor.playState == se::PlayState::Edit;
+                    se::renderScene(app.renderer, live, state->assets, cam, options);
                     // The gizmo + billboards are editor chrome: hidden inside the game view,
                     // and the gizmo would write transforms the play duplicate swallows.
                     if (editor.playState == se::PlayState::Edit)

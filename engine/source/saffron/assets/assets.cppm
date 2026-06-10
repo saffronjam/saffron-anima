@@ -33,6 +33,18 @@ import Saffron.Scene;
 
 export namespace se
 {
+    struct SystemMeshVisual
+    {
+        bool attempted = false;
+        Ref<GpuMesh> mesh;
+        std::vector<SubmeshMaterial> submeshMaterials;
+    };
+
+    struct RenderSceneOptions
+    {
+        bool showEditorCameraModels = false;
+    };
+
     // Owns the project's asset catalog (id -> {name, type, path}) plus uuid-keyed GPU
     // caches so entities sharing an id upload once. A cached null Ref is the
     // negative-cache marker — a failed asset is not retried each frame.
@@ -42,6 +54,7 @@ export namespace se
         AssetCatalog catalog;                                       // source of truth: id -> {name,type,path}
         std::unordered_map<u64, Ref<GpuMesh>> meshRefByUuid;        // GPU cache
         std::unordered_map<u64, Ref<GpuTexture>> textureRefByUuid;  // GPU cache
+        SystemMeshVisual editorCameraModel;
     };
 
     // What importModel produces: the imported mesh + its primary material, and — for a
@@ -1134,9 +1147,82 @@ return {0}
         return out;
     }
 
+    auto loadEditorCameraModel(AssetServer& assets, Renderer& renderer) -> SystemMeshVisual*
+    {
+        SystemMeshVisual& visual = assets.editorCameraModel;
+        if (visual.attempted)
+        {
+            return visual.mesh ? &visual : nullptr;
+        }
+        visual.attempted = true;
+        auto model = importModelWithMaterial(assetPath("models/editor-camera.glb"));
+        if (!model)
+        {
+            logWarn(std::format("editor camera model: {}", model.error()));
+            return nullptr;
+        }
+        auto meshRef =
+            model->hasSkin ? uploadMesh(renderer, model->mesh, model->skin) : uploadMesh(renderer, model->mesh);
+        if (!meshRef)
+        {
+            logWarn(std::format("editor camera model: {}", meshRef.error()));
+            return nullptr;
+        }
+        visual.mesh = *meshRef;
+        visual.submeshMaterials.reserve(model->mesh.submeshes.size());
+        const ImportedMaterial fallbackMaterial;
+        for (const Submesh& submesh : model->mesh.submeshes)
+        {
+            const std::size_t slot =
+                model->materials.empty() ? 0 : std::min<std::size_t>(submesh.materialSlot, model->materials.size() - 1);
+            const ImportedMaterial& src = model->materials.empty() ? fallbackMaterial : model->materials[slot];
+            SubmeshMaterial material;
+            material.baseColor = src.baseColor;
+            material.metallic = src.metallic;
+            material.roughness = src.roughness;
+            material.emissive = src.emissive;
+            material.emissiveStrength = src.emissiveStrength;
+            visual.submeshMaterials.push_back(material);
+        }
+        if (visual.submeshMaterials.empty())
+        {
+            SubmeshMaterial material;
+            material.baseColor = glm::vec4{ 0.86f, 0.88f, 0.94f, 1.0f };
+            visual.submeshMaterials.push_back(material);
+        }
+        return &visual;
+    }
+
+    void appendEditorCameraModels(Scene& scene, AssetServer& assets, Renderer& renderer, std::vector<DrawItem>& items)
+    {
+        SystemMeshVisual* visual = loadEditorCameraModel(assets, renderer);
+        if (visual == nullptr || !visual->mesh)
+        {
+            return;
+        }
+        forEach<TransformComponent, CameraComponent>(scene,
+                                                     [&](Entity entity, TransformComponent&, CameraComponent& camera)
+                                                     {
+                                                         if (!camera.showModel)
+                                                         {
+                                                             return;
+                                                         }
+                                                         const glm::mat4 model = worldMatrix(scene, entity);
+                                                         DrawItem item;
+                                                         item.mesh = visual->mesh;
+                                                         item.model = model;
+                                                         item.normalMatrix =
+                                                             glm::mat4(glm::transpose(glm::inverse(glm::mat3(model))));
+                                                         item.submeshMaterials = visual->submeshMaterials;
+                                                         item.material.unlit = true;
+                                                         items.push_back(std::move(item));
+                                                     });
+    }
+
     // Draws every entity with a Transform + Mesh through the given camera (the editor
     // viewport camera), resolving each mesh on demand. A no-op without a viewport.
-    void renderScene(Renderer& renderer, Scene& scene, AssetServer& assets, const CameraView& camera)
+    void renderScene(Renderer& renderer, Scene& scene, AssetServer& assets, const CameraView& camera,
+                     const RenderSceneOptions& options = {})
     {
         if (!camera.valid)
         {
@@ -1500,6 +1586,10 @@ return {0}
         // directional light direction (for contact shadows).
         setSsaoCamera(renderer, view, proj, lightDir);
 
+        if (options.showEditorCameraModels)
+        {
+            appendEditorCameraModels(scene, assets, renderer, items);
+        }
         submitDrawList(renderer, viewProjection, items, frameJoints);
 
         // Resolve the scene environment into the visible-sky settings. Procedural samples the

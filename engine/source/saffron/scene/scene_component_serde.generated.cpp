@@ -139,7 +139,8 @@ namespace se
     auto cameraComponentToJson(const CameraComponent& c) -> nlohmann::json
     {
         return nlohmann::json{ { "fov", c.fov }, { "near", c.nearPlane },
-                               { "far", c.farPlane }, { "primary", c.primary } };
+                               { "far", c.farPlane }, { "primary", c.primary },
+                               { "showModel", c.showModel }, { "showFrustum", c.showFrustum } };
     }
 
     auto cameraComponentFromJson(CameraComponent& c, const nlohmann::json& j) -> Result<void>
@@ -148,6 +149,8 @@ namespace se
         c.nearPlane = jsonF32Or(j, "near", 0.1f);
         c.farPlane = jsonF32Or(j, "far", 100.0f);
         c.primary = jsonBoolOr(j, "primary", true);
+        c.showModel = jsonBoolOr(j, "showModel", true);
+        c.showFrustum = jsonBoolOr(j, "showFrustum", true);
         return {};
     }
 

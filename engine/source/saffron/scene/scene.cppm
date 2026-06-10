@@ -149,6 +149,8 @@ export namespace se
         f32 nearPlane = 0.1f;
         f32 farPlane = 100.0f;
         bool primary = true;  // the scene renders through the first primary camera
+        bool showModel = true;
+        bool showFrustum = true;
     };
 
     // A directional light; the scene shades through the first one. direction points
