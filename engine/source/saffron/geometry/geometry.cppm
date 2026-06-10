@@ -157,6 +157,9 @@ export namespace se
         std::vector<VertexSkin> skin;
         std::vector<ImportedNode> nodes;
         ImportedSkin skinDesc;
+        // Skeletal clips decoded from the glTF animations (skinned models only); each
+        // track binds to a joint by index into skinDesc.joints plus the node name.
+        std::vector<AnimClip> animations;
     };
 
     // Decoded RGBA8 pixels, tightly packed (width*height*4 bytes).
@@ -202,6 +205,11 @@ export namespace se
     // The skin stream of a v2 .smesh; empty (not an error) for a v1 file.
     auto loadMeshSkin(const std::string& path) -> Result<std::vector<VertexSkin>>;
 
+    // One animation clip baked to a sidecar `.sanim` (magic `SANM`), never folded into
+    // the `.smesh`. Little-endian raw, versioned, mirroring the `.smesh` shape.
+    auto saveAnimation(const AnimClip& clip, const std::string& path) -> Result<void>;
+    auto loadAnimation(const std::string& path) -> Result<AnimClip>;
+
     // Recomputes smooth vertex normals from the triangles. Used when a source omits them.
     void generateNormals(Mesh& mesh);
 
@@ -235,6 +243,35 @@ namespace se
             u32 reserved[2];
         };
         static_assert(sizeof(SMeshHeader) == 64, "SMeshHeader must be exactly 64 bytes");
+
+        // 32-byte fixed header for a sidecar `.sanim` clip. The clip name follows, then
+        // per-track: {i32 joint; u8 path; u8 interp; u16 pad; u32 nameLen; u32 timeCount;
+        // u32 valueCount} + name + times floats + values floats.
+        struct SANimHeader
+        {
+            char magic[4];  // 'S','A','N','M'
+            u32 version;
+            u32 trackCount;
+            f32 duration;
+            u32 nameLen;
+            u32 reserved[3];
+        };
+        static_assert(sizeof(SANimHeader) == 32, "SANimHeader must be exactly 32 bytes");
+
+        // 20-byte per-track record; the joint name, times, then values follow it.
+        struct SANimTrackRecord
+        {
+            i32 joint;
+            u8 path;
+            u8 interp;
+            u16 pad;
+            u32 nameLen;
+            u32 timeCount;
+            u32 valueCount;
+        };
+        static_assert(sizeof(SANimTrackRecord) == 20, "SANimTrackRecord must be exactly 20 bytes");
+
+        inline constexpr u32 AnimFormatVersion = 1;
 
         auto endsWithIgnoreCase(const std::string& text, const std::string& suffix) -> bool
         {
@@ -689,6 +726,87 @@ namespace se
             }
             model.skin = std::move(vertexSkins);
             model.hasSkin = true;
+
+            // Decode skeletal clips. A channel binds to a joint by its position in the
+            // skin's joint list (the SkinnedMeshComponent.bones order); channels targeting
+            // a non-joint node, morph weights, or sparse samplers are skipped in v1.
+            for (cgltf_size a = 0; a < data->animations_count; a = a + 1)
+            {
+                const cgltf_animation& anim = data->animations[a];
+                AnimClip clip;
+                clip.name = anim.name != nullptr ? anim.name : std::format("clip_{}", a);
+                for (cgltf_size c = 0; c < anim.channels_count; c = c + 1)
+                {
+                    const cgltf_animation_channel& channel = anim.channels[c];
+                    if (channel.target_node == nullptr || channel.sampler == nullptr)
+                    {
+                        continue;
+                    }
+                    if (channel.target_path == cgltf_animation_path_type_weights)
+                    {
+                        logWarn(
+                            std::format("cgltf: '{}' clip '{}' has a morph-weights channel; skipped", path, clip.name));
+                        continue;
+                    }
+                    const auto nodeIndex = static_cast<i32>(channel.target_node - data->nodes);
+                    i32 joint = -1;
+                    for (std::size_t j = 0; j < model.skinDesc.joints.size(); j = j + 1)
+                    {
+                        if (model.skinDesc.joints[j] == nodeIndex)
+                        {
+                            joint = static_cast<i32>(j);
+                            break;
+                        }
+                    }
+                    if (joint < 0)
+                    {
+                        logWarn(std::format("cgltf: '{}' clip '{}' targets a non-skin node; channel skipped", path,
+                                            clip.name));
+                        continue;
+                    }
+                    const cgltf_animation_sampler& sampler = *channel.sampler;
+                    if (sampler.input == nullptr || sampler.output == nullptr || sampler.input->is_sparse ||
+                        sampler.output->is_sparse)
+                    {
+                        logWarn(std::format("cgltf: '{}' clip '{}' has a sparse or empty sampler; channel skipped",
+                                            path, clip.name));
+                        continue;
+                    }
+
+                    AnimTrack track;
+                    track.joint = joint;
+                    track.jointName = model.nodes[static_cast<std::size_t>(nodeIndex)].name;
+                    track.path = channel.target_path == cgltf_animation_path_type_rotation ? AnimTrack::Path::Rotation
+                                 : channel.target_path == cgltf_animation_path_type_scale
+                                     ? AnimTrack::Path::Scale
+                                     : AnimTrack::Path::Translation;
+                    track.interp = sampler.interpolation == cgltf_interpolation_type_step ? AnimTrack::Interp::Step
+                                   : sampler.interpolation == cgltf_interpolation_type_cubic_spline
+                                       ? AnimTrack::Interp::CubicSpline
+                                       : AnimTrack::Interp::Linear;
+                    const auto components = static_cast<cgltf_size>(track.path == AnimTrack::Path::Rotation ? 4 : 3);
+
+                    track.times.resize(sampler.input->count);
+                    for (cgltf_size k = 0; k < sampler.input->count; k = k + 1)
+                    {
+                        cgltf_accessor_read_float(sampler.input, k, &track.times[k], 1);
+                    }
+                    track.values.resize(sampler.output->count * components);
+                    for (cgltf_size e = 0; e < sampler.output->count; e = e + 1)
+                    {
+                        cgltf_accessor_read_float(sampler.output, e, &track.values[e * components], components);
+                    }
+                    if (!track.times.empty() && track.times.back() > clip.duration)
+                    {
+                        clip.duration = track.times.back();
+                    }
+                    clip.tracks.push_back(std::move(track));
+                }
+                if (!clip.tracks.empty())
+                {
+                    model.animations.push_back(std::move(clip));
+                }
+            }
         }
         else if (sawSkinnedPrimitive && sawUnskinnedPrimitive)
         {
@@ -1164,6 +1282,126 @@ namespace se
         return skin;
     }
 
+    auto saveAnimation(const AnimClip& clip, const std::string& path) -> Result<void>
+    {
+        std::ofstream out(path, std::ios::binary);
+        if (!out)
+        {
+            return Err(std::format("cannot open '{}' for writing", path));
+        }
+        SANimHeader header{};
+        std::memcpy(header.magic, "SANM", 4);
+        header.version = AnimFormatVersion;
+        header.trackCount = static_cast<u32>(clip.tracks.size());
+        header.duration = clip.duration;
+        header.nameLen = static_cast<u32>(clip.name.size());
+        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        out.write(clip.name.data(), static_cast<std::streamsize>(clip.name.size()));
+        for (const AnimTrack& track : clip.tracks)
+        {
+            SANimTrackRecord record{};
+            record.joint = track.joint;
+            record.path = static_cast<u8>(track.path);
+            record.interp = static_cast<u8>(track.interp);
+            record.nameLen = static_cast<u32>(track.jointName.size());
+            record.timeCount = static_cast<u32>(track.times.size());
+            record.valueCount = static_cast<u32>(track.values.size());
+            out.write(reinterpret_cast<const char*>(&record), sizeof(record));
+            out.write(track.jointName.data(), static_cast<std::streamsize>(track.jointName.size()));
+            out.write(reinterpret_cast<const char*>(track.times.data()),
+                      static_cast<std::streamsize>(track.times.size() * sizeof(f32)));
+            out.write(reinterpret_cast<const char*>(track.values.data()),
+                      static_cast<std::streamsize>(track.values.size() * sizeof(f32)));
+        }
+        if (!out)
+        {
+            return Err(std::format("write failed for '{}'", path));
+        }
+        return {};
+    }
+
+    auto loadAnimation(const std::string& path) -> Result<AnimClip>
+    {
+        auto raw = readBinaryFile(path);
+        if (!raw)
+        {
+            return Err(raw.error());
+        }
+        const std::vector<u8>& bytes = *raw;
+        if (bytes.size() < sizeof(SANimHeader))
+        {
+            return Err(std::format("'{}' is too small to be a .sanim", path));
+        }
+        SANimHeader header{};
+        std::memcpy(&header, bytes.data(), sizeof(header));
+        if (std::memcmp(header.magic, "SANM", 4) != 0)
+        {
+            return Err(std::format("'{}' is not a .sanim (bad magic)", path));
+        }
+        if (header.version != AnimFormatVersion)
+        {
+            return Err(std::format("'{}' has unsupported animation version {}", path, header.version));
+        }
+
+        // Cursor over the byte buffer; `take` bounds-checks every field so a malformed
+        // count can never drive a giant allocation (same defence as loadMesh).
+        std::size_t cursor = sizeof(SANimHeader);
+        bool overran = false;
+        auto take = [&](std::size_t count) -> const u8*
+        {
+            if (overran || count > bytes.size() - cursor)
+            {
+                overran = true;
+                return nullptr;
+            }
+            const u8* at = bytes.data() + cursor;
+            cursor = cursor + count;
+            return at;
+        };
+
+        AnimClip clip;
+        clip.duration = header.duration;
+        if (const u8* name = take(header.nameLen))
+        {
+            clip.name.assign(reinterpret_cast<const char*>(name), header.nameLen);
+        }
+        clip.tracks.reserve(header.trackCount);
+        for (u32 t = 0; t < header.trackCount && !overran; t = t + 1)
+        {
+            const u8* recordBytes = take(sizeof(SANimTrackRecord));
+            if (recordBytes == nullptr)
+            {
+                break;
+            }
+            SANimTrackRecord record{};
+            std::memcpy(&record, recordBytes, sizeof(record));
+            AnimTrack track;
+            track.joint = record.joint;
+            track.path = static_cast<AnimTrack::Path>(record.path);
+            track.interp = static_cast<AnimTrack::Interp>(record.interp);
+            if (const u8* name = take(record.nameLen))
+            {
+                track.jointName.assign(reinterpret_cast<const char*>(name), record.nameLen);
+            }
+            if (const u8* times = take(static_cast<std::size_t>(record.timeCount) * sizeof(f32)))
+            {
+                track.times.resize(record.timeCount);
+                std::memcpy(track.times.data(), times, static_cast<std::size_t>(record.timeCount) * sizeof(f32));
+            }
+            if (const u8* values = take(static_cast<std::size_t>(record.valueCount) * sizeof(f32)))
+            {
+                track.values.resize(record.valueCount);
+                std::memcpy(track.values.data(), values, static_cast<std::size_t>(record.valueCount) * sizeof(f32));
+            }
+            clip.tracks.push_back(std::move(track));
+        }
+        if (overran)
+        {
+            return Err(std::format("'{}' is truncated or malformed", path));
+        }
+        return clip;
+    }
+
     void runGeometrySelfTest(const std::string& modelsDir)
     {
         auto obj = importObj(modelsDir + "/cube.obj");
@@ -1208,6 +1446,41 @@ namespace se
         else
         {
             logError(".smesh round-trip MISMATCH");
+        }
+
+        // Skeletal clip import (Phase 2): the rigged+animated fixture yields a skin plus at
+        // least one decoded clip, and that clip survives a .sanim round-trip.
+        if (auto rigged = importModelWithMaterial(modelsDir + "/animated-strip.gltf"); !rigged)
+        {
+            logError(std::format("geometry self-test: animated-strip import failed: {}", rigged.error()));
+        }
+        else if (!rigged->hasSkin || rigged->animations.empty())
+        {
+            logError(std::format("geometry self-test: animated-strip missing skin/clips (skin={}, clips={})",
+                                 rigged->hasSkin, rigged->animations.size()));
+        }
+        else
+        {
+            const AnimClip& clip = rigged->animations.front();
+            logInfo(std::format("geometry self-test: animated-strip -> clip '{}', {} track(s), {:.2f}s", clip.name,
+                                clip.tracks.size(), clip.duration));
+            const std::string animPath = "/tmp/saffron_strip.sanim";
+            if (auto savedAnim = saveAnimation(clip, animPath); !savedAnim)
+            {
+                logError(std::format("geometry self-test: .sanim save failed: {}", savedAnim.error()));
+            }
+            else if (auto loadedAnim = loadAnimation(animPath); !loadedAnim)
+            {
+                logError(std::format("geometry self-test: .sanim load failed: {}", loadedAnim.error()));
+            }
+            else if (loadedAnim->name == clip.name && loadedAnim->tracks.size() == clip.tracks.size())
+            {
+                logInfo(".sanim round-trip OK");
+            }
+            else
+            {
+                logError(".sanim round-trip MISMATCH");
+            }
         }
     }
 }
