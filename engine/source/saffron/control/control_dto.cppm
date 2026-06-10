@@ -1026,6 +1026,20 @@ export namespace se
         i32 animationVersion;
     };
 
+    struct SetSkeletonOverlayParams
+    {
+        std::optional<bool> show;      // master toggle
+        std::optional<bool> axes;      // per-joint RGB axis lines
+        std::optional<f32> jointSize;  // joint-dot radius in pixels at unit distance
+    };
+
+    struct SkeletonOverlayResult
+    {
+        bool show;
+        bool axes;
+        f32 jointSize;
+    };
+
     struct StepParams
     {
         std::optional<i32> frames;  // default 1
@@ -1274,6 +1288,7 @@ export namespace se
     auto dtoToJson(const AnimationClipDto& value) -> Json;
     auto dtoToJson(const ListClipsResult& value) -> Json;
     auto dtoToJson(const AnimationStateResult& value) -> Json;
+    auto dtoToJson(const SkeletonOverlayResult& value) -> Json;
     auto dtoToJson(const DeselectResult& value) -> Json;
     auto dtoToJson(const SetComponentFieldResult& value) -> Json;
     auto dtoToJson(const EditorCamera& value) -> Json;
@@ -1345,4 +1360,5 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<SeekAnimationParams>) -> Result<SeekAnimationParams>;
     auto parseDto(const Json& params, DtoTag<SetAnimationLoopParams>) -> Result<SetAnimationLoopParams>;
     auto parseDto(const Json& params, DtoTag<AnimationStateParams>) -> Result<AnimationStateParams>;
+    auto parseDto(const Json& params, DtoTag<SetSkeletonOverlayParams>) -> Result<SetSkeletonOverlayParams>;
 }
