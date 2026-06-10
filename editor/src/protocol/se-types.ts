@@ -689,6 +689,18 @@ export interface SetAnimationLoopParams {
   wrap: string;
 }
 
+export interface SkeletonOverlayResult {
+  show: boolean;
+  axes: boolean;
+  jointSize: number;
+}
+
+export interface SetSkeletonOverlayParams {
+  show?: boolean;
+  axes?: boolean;
+  jointSize?: number;
+}
+
 export interface ScriptStatusResult {
   state: string;
   instances: number;
@@ -1094,6 +1106,8 @@ export interface CommandParamsMap {
   "seek-animation": SeekAnimationParams;
   "set-animation-loop": SetAnimationLoopParams;
   "stop-preview": AnimationStateParams;
+  "get-skeleton-overlay": EmptyParams;
+  "set-skeleton-overlay": SetSkeletonOverlayParams;
   "get-script-status": EmptyParams;
   "drain-script-errors": DrainScriptErrorsParams;
   "get-script-schema": GetScriptSchemaParams;
@@ -1199,6 +1213,8 @@ export interface CommandResultMap {
   "seek-animation": AnimationStateResult;
   "set-animation-loop": AnimationStateResult;
   "stop-preview": AnimationStateResult;
+  "get-skeleton-overlay": SkeletonOverlayResult;
+  "set-skeleton-overlay": SkeletonOverlayResult;
   "get-script-status": ScriptStatusResult;
   "drain-script-errors": DrainScriptErrorsResult;
   "get-script-schema": GetScriptSchemaResult;
