@@ -576,6 +576,7 @@ namespace se
             renderer.rt.tlas[i].reset();
             renderer.rt.instanceBuffers[i].reset();
             renderer.rt.scratchBuffers[i].reset();
+            renderer.rt.blasScratchBuffers[i].reset();
             renderer.overlay.buffers[i].reset();  // host-mapped overlay vertex buffers
         }
         // The last frame's RT scene holds Ref<GpuMesh> captured by setRtScene; beginFrame
@@ -583,6 +584,12 @@ namespace se
         // meshes (vertex + index + BLAS buffers) free before the allocator, not after.
         renderer.rt.frameMeshes.clear();
         renderer.rt.frameModels.clear();
+        // The per-skinned-instance refit BLASes (per slot, grow-only) must free their AS +
+        // backing buffer before the allocator/device, like the per-frame TLAS above.
+        for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
+        {
+            renderer.rt.skinnedBlas[i].clear();
+        }
         for (vk::ImageView& face : renderer.targets.pointShadowFaces)
         {
             if (face)
@@ -2558,13 +2565,22 @@ namespace se
 
         // RT: build the per-frame TLAS over the scene's mesh instances (a Compute-kind pass;
         // recordTlasBuild self-manages the AS-build -> fragment ray-query barrier). The mesh
-        // fragment then traces inline ray-query shadows when rtShadows is on.
+        // fragment then traces inline ray-query shadows when rtShadows is on. Skinned instances
+        // refit a per-instance BLAS from the deformed buffer first (in buildTlas), so the pass
+        // declares an AccelStructBuildRead on it: the graph derives the skin-compute-write ->
+        // AS-build-read barrier, and the pass is ordered after the skin pass above.
         renderer.rt.tlasReady = false;
-        if (renderer.rt.buildPending && renderer.pipelines.cull /*any frame work*/)
+        const bool hasSkinnedRt = !renderer.frame.sceneDrawList.skinnedRtInstances.empty();
+        const bool hasRtInstances = !renderer.rt.frameModels.empty() || hasSkinnedRt;
+        if (renderer.rt.buildPending && hasRtInstances && renderer.pipelines.cull /*any frame work*/)
         {
             RgPass tlasPass;
             tlasPass.name = "tlas-build";
             tlasPass.kind = RgPassKind::Compute;
+            if (hasSkinnedRt && doSkin)
+            {
+                tlasPass.accesses = { RgAccess{ deformedBuffer, RgUsage::AccelStructBuildRead } };
+            }
             tlasPass.execute = [&renderer](vk::CommandBuffer cmd)
             { buildTlas(renderer, cmd, renderer.rt.frameModels, renderer.rt.frameMeshes); };
             addPass(graph, std::move(tlasPass));
@@ -3482,26 +3498,32 @@ namespace se
 
     void setRtScene(Renderer& renderer, std::vector<glm::mat4> models, std::vector<Ref<GpuMesh>> meshes)
     {
-        // Capture this frame's instances; the TLAS-build graph pass consumes them when RT
-        // shadows are on. Only worth building when something will trace against it.
+        // Capture this frame's static instances; the TLAS-build graph pass consumes them (plus
+        // the draw list's skinned instances) when RT shadows are on. Skinned instances are added
+        // by submitDrawList, which runs after this — so the pass is also armed when RT is on and
+        // the static list is empty (the gate re-checks the skinned list in beginFrameGraph).
         renderer.rt.frameModels = std::move(models);
         renderer.rt.frameMeshes = std::move(meshes);
-        renderer.rt.buildPending =
-            renderer.context.rtSupported && renderer.rt.useRtShadows && !renderer.rt.frameModels.empty();
+        renderer.rt.buildPending = renderer.context.rtSupported && renderer.rt.useRtShadows;
     }
 
     void buildTlas(Renderer& renderer, vk::CommandBuffer cmd, const std::vector<glm::mat4>& models,
                    const std::vector<Ref<GpuMesh>>& meshes)
     {
         renderer.rt.tlasReady = false;
-        if (!renderer.context.rtSupported || models.empty())
+        renderer.rt.skinnedBlasCount = 0;
+        const std::vector<SkinnedRtInstance>& skinned = renderer.frame.sceneDrawList.skinnedRtInstances;
+        if (!renderer.context.rtSupported || (models.empty() && skinned.empty()))
         {
             return;
         }
         const u32 f = renderer.frame.index;
+        // Refit each skinned instance's per-frame BLAS first (records into the same cmd; emits the
+        // AS-build -> AS-build barrier so this TLAS build waits on them).
+        recordSkinnedBlasBuilds(renderer, cmd, f, skinned);
         // Pack one VkAccelerationStructureInstanceKHR per mesh instance that has a BLAS.
         std::vector<VkAccelerationStructureInstanceKHR> instances;
-        instances.reserve(models.size());
+        instances.reserve(models.size() + skinned.size());
         for (std::size_t i = 0; i < models.size() && i < meshes.size(); i = i + 1)
         {
             if (!meshes[i] || !meshes[i]->blas)
@@ -3522,6 +3544,26 @@ namespace se
             inst.mask = 0xFF;
             inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
             inst.accelerationStructureReference = static_cast<u64>(meshes[i]->blas->address);
+            instances.push_back(inst);
+        }
+        // Skinned instances reference their refit BLAS with an IDENTITY transform: the deformed
+        // vertices are already in world space (the skin kernel bakes worldBone * inverseBind in,
+        // without the model matrix), so any extra transform would double-apply the placement.
+        for (const SkinnedRtInstance& s : skinned)
+        {
+            auto found = renderer.rt.skinnedBlas[f].find(s.entity);
+            if (found == renderer.rt.skinnedBlas[f].end() || !found->second.as)
+            {
+                continue;
+            }
+            VkAccelerationStructureInstanceKHR inst{};
+            inst.transform.matrix[0][0] = 1.0f;
+            inst.transform.matrix[1][1] = 1.0f;
+            inst.transform.matrix[2][2] = 1.0f;
+            inst.instanceCustomIndex = static_cast<u32>(instances.size());
+            inst.mask = 0xFF;
+            inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+            inst.accelerationStructureReference = static_cast<u64>(found->second.as->address);
             instances.push_back(inst);
         }
         const u32 count = static_cast<u32>(instances.size());
