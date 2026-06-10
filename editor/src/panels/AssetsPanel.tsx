@@ -1365,7 +1365,7 @@ function NewFolderTile({
       data-asset-folder="true"
     >
       <div className="flex aspect-square w-full items-center justify-center">
-        <Folder className="size-16 fill-current stroke-current text-amber-600/80" />
+        <Folder className="size-16 fill-current stroke-current text-yellow-500" />
       </div>
       <Input
         ref={inputRef}
@@ -1435,7 +1435,7 @@ function FolderTile({
   const content = (
     <>
       <div className="flex aspect-square w-full items-center justify-center">
-        <Folder className="size-16 fill-current stroke-current text-amber-600/80" />
+        <Folder className="size-16 fill-current stroke-current text-yellow-500" />
       </div>
       {editing && onCommitRename && onCancelRename ? (
         <FolderNameInput

@@ -128,7 +128,7 @@ export function ProjectMenu() {
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void openInVsCode()} disabled={!project}>
             <span>Open in VS Code</span>
-            <VsCodeIcon className="ml-auto size-4" />
+            <VsCodeIcon className="size-4" />
           </DropdownMenuItem>
           {devMode ? (
             <>
