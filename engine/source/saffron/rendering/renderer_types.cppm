@@ -528,6 +528,10 @@ export namespace se
         // jointOffset; model stays identity (joints place the vertices entirely).
         bool skinned = false;
         u32 jointOffset = 0;
+        u32 jointCount = 0;  // skinned only: matrices this instance contributes to the palette
+        // Source entity uuid (0 = none). Keys the cross-frame motion caches: this frame's
+        // model + palette are cached under it so next frame can reproject from the prior pose.
+        u64 entity = 0;
     };
 
     // A batch of instances sharing a pipeline + mesh, drawn as one instanced drawIndexed.
@@ -567,6 +571,9 @@ export namespace se
         // Per skinned mesh-instance: the compute work the skin pre-pass dispatches before
         // the scene pass reads the deformed buffer. Empty when no skinned instances exist.
         std::vector<SkinDispatch> skinDispatches;
+        // The parallel dispatches that deform the PREVIOUS pose into the prev-deformed buffer
+        // (previous palette + previous-deformed output), read only by the motion pass for TAA.
+        std::vector<SkinDispatch> prevSkinDispatches;
         std::vector<Ref<GpuTexture>> liveTextures;  // pins indexed textures for the frame
         vk::DescriptorSet lightSet;
         vk::DescriptorSet instanceSet;
@@ -1095,6 +1102,11 @@ export namespace se
         std::array<u32, MaxFramesInFlight> capacity{};
         std::array<Ref<Buffer>, MaxFramesInFlight> jointBuffers;
         std::array<u32, MaxFramesInFlight> jointCapacity{};
+        // The previous frame's joint palette, slotted at the same jointOffset as the current
+        // palette so the skin pre-pass deforms the prior pose into the prev-deformed buffer.
+        // Grown like jointBuffers; only the motion pass consumes the result.
+        std::array<Ref<Buffer>, MaxFramesInFlight> prevJointBuffers;
+        std::array<u32, MaxFramesInFlight> prevJointCapacity{};
     };
 
     /// The compute skinning pre-pass apparatus: a per-frame-in-flight deformed-vertex
@@ -1108,7 +1120,17 @@ export namespace se
         std::array<vk::DescriptorPool, MaxFramesInFlight> pools{};
         std::array<Ref<Buffer>, MaxFramesInFlight> deformedBuffers;
         std::array<u32, MaxFramesInFlight> deformedCapacity{};  // in Vertex (32 B) elements
+        // The previous frame's deformed vertices, laid out identically to deformedBuffers (same
+        // deformedVertexOffset per instance). The skin pre-pass writes it from the previous
+        // palette; the motion pass reads it as the prev-position vertex stream for TAA.
+        std::array<Ref<Buffer>, MaxFramesInFlight> prevDeformedBuffers;
+        std::array<u32, MaxFramesInFlight> prevDeformedCapacity{};
         u32 peakVertices = 0;
+        // CPU-side cross-frame caches keyed by entity uuid: last frame's joint palette slice
+        // (deformation motion) + last frame's world matrix (object motion). A new entity reads
+        // back current == previous, so its first frame emits zero motion (no velocity flash).
+        std::unordered_map<u64, std::vector<glm::mat4>> prevPaletteByEntity;
+        std::unordered_map<u64, glm::mat4> prevModelByEntity;
     };
 
     // Renderer-owned pipelines + the mesh PSO cache (built on demand, keyed by variant;
@@ -1642,7 +1664,8 @@ export namespace se
     struct InstanceData
     {
         glm::mat4 model;
-        glm::mat4 normalMatrix;  // transpose(inverse(mat3(model))), correct under non-uniform scale
+        glm::mat4 normalMatrix;       // transpose(inverse(mat3(model))), correct under non-uniform scale
+        glm::mat4 prevModel{ 1.0f };  // last frame's world matrix (TAA object-motion reprojection)
         glm::vec4 baseColor;
         glm::uvec4 texture{ 0 };                  // .x = albedo index, .y = joint offset, .z = metallic-roughness index
         glm::vec4 pbr{ 0.0f, 1.0f, 0.0f, 0.0f };  // x = metallic, y = roughness
