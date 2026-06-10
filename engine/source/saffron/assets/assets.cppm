@@ -71,6 +71,7 @@ export namespace se
         bool hasSkin = false;
         std::vector<ImportedNode> nodes;
         ImportedSkin skinDesc;
+        std::vector<Uuid> animations;  // registered AssetType::Animation clip ids (skinned imports)
     };
 
     struct ProjectInfo
@@ -198,6 +199,10 @@ export namespace se
         {
             return "other";
         }
+        if (type == AssetType::Animation)
+        {
+            return "animation";
+        }
         return "mesh";
     }
 
@@ -211,7 +216,17 @@ export namespace se
         {
             return AssetType::Other;
         }
-        return AssetType::Mesh;
+        if (name == "animation")
+        {
+            return AssetType::Animation;
+        }
+        if (name == "mesh")
+        {
+            return AssetType::Mesh;
+        }
+        // An unknown type-string is a forward-compat entry from a newer build; keep it
+        // around as Other rather than mis-treating it as a renderable mesh.
+        return AssetType::Other;
     }
 
     auto catalogToJson(const AssetCatalog& catalog) -> nlohmann::json
@@ -219,13 +234,20 @@ export namespace se
         nlohmann::json assets = nlohmann::json::array();
         for (const AssetEntry& entry : catalog.entries)
         {
-            assets.push_back(nlohmann::json{ { "id", uuidToJson(entry.id.value) },
-                                             { "name", entry.name },
-                                             { "type", assetTypeName(entry.type) },
-                                             { "path", entry.path },
-                                             { "folder", entry.folder },
-                                             { "hdr", entry.hdr },
-                                             { "linear", entry.linear } });
+            nlohmann::json record{ { "id", uuidToJson(entry.id.value) },
+                                   { "name", entry.name },
+                                   { "type", assetTypeName(entry.type) },
+                                   { "path", entry.path },
+                                   { "folder", entry.folder },
+                                   { "hdr", entry.hdr },
+                                   { "linear", entry.linear } };
+            // Carry clip length on animation rows so the timeline + list-clips can report
+            // duration without opening the .sanim; non-animation rows stay byte-identical.
+            if (entry.type == AssetType::Animation)
+            {
+                record["duration"] = entry.duration;
+            }
+            assets.push_back(std::move(record));
         }
         return assets;
     }
@@ -278,6 +300,7 @@ export namespace se
             parsed.folder = jsonStringOr(entry, "folder", std::string{});
             parsed.hdr = jsonBoolOr(entry, "hdr", false);
             parsed.linear = jsonBoolOr(entry, "linear", false);
+            parsed.duration = jsonF32Or(entry, "duration", 0.0f);
             if (parsed.id.value != 0)
             {
                 putAsset(catalog, std::move(parsed));
@@ -869,6 +892,23 @@ return {0}
             result.hasSkin = true;
             result.nodes = std::move(model->nodes);
             result.skinDesc = std::move(model->skinDesc);
+            // Bake each clip to a sidecar .sanim (uuid-named, beside the .smesh) and
+            // register an AssetType::Animation entry the player resolves by id.
+            for (const AnimClip& clip : model->animations)
+            {
+                const Uuid clipId = newUuid();
+                const std::string clipPath = "models/" + std::to_string(clipId.value) + ".sanim";
+                if (Result<void> bakedClip = saveAnimation(clip, assets.root + "/" + clipPath); !bakedClip)
+                {
+                    logWarn(std::format("model '{}': clip '{}' bake failed: {}", path, clip.name, bakedClip.error()));
+                    continue;
+                }
+                AssetEntry entry{ clipId, uniqueName(assets.catalog, clip.name.empty() ? baseName : clip.name),
+                                  AssetType::Animation, clipPath, std::string{} };
+                entry.duration = clip.duration;
+                putAsset(assets.catalog, std::move(entry));
+                result.animations.push_back(clipId);
+            }
         }
         // Register each material's albedo and lower the factors into a MaterialSlot.
         result.materials.reserve(model->materials.size());
@@ -1064,6 +1104,16 @@ return {0}
         skin.inverseBind = result.skinDesc.inverseBind;
         applyImportedMaterials(scene, meshEntity, result);
 
+        // A rig that ships clips is immediately playable: attach a player defaulting to
+        // the first clip, stopped and looping (Edit preview stays off until requested).
+        if (!result.animations.empty())
+        {
+            AnimationPlayerComponent& player = addComponent<AnimationPlayerComponent>(scene, meshEntity);
+            player.clip = result.animations.front();
+            player.playing = false;
+            player.wrap = AnimationPlayerComponent::Wrap::Loop;
+        }
+
         relinkHierarchy(scene);  // resolve the parent uuids + the joint handles
         return meshEntity;
     }
@@ -1169,25 +1219,13 @@ return {0}
             return nullptr;
         }
         visual.mesh = *meshRef;
-        visual.submeshMaterials.reserve(model->mesh.submeshes.size());
-        const ImportedMaterial fallbackMaterial;
-        for (const Submesh& submesh : model->mesh.submeshes)
-        {
-            const std::size_t slot =
-                model->materials.empty() ? 0 : std::min<std::size_t>(submesh.materialSlot, model->materials.size() - 1);
-            const ImportedMaterial& src = model->materials.empty() ? fallbackMaterial : model->materials[slot];
-            SubmeshMaterial material;
-            material.baseColor = src.baseColor;
-            material.metallic = src.metallic;
-            material.roughness = src.roughness;
-            material.emissive = src.emissive;
-            material.emissiveStrength = src.emissiveStrength;
-            visual.submeshMaterials.push_back(material);
-        }
+        SubmeshMaterial material;
+        material.baseColor = glm::vec4{ 0.02f, 0.018f, 0.016f, 1.0f };
+        material.roughness = 0.78f;
+        material.emissive = glm::vec3{ 0.012f };
+        visual.submeshMaterials.assign(model->mesh.submeshes.size(), material);
         if (visual.submeshMaterials.empty())
         {
-            SubmeshMaterial material;
-            material.baseColor = glm::vec4{ 0.86f, 0.88f, 0.94f, 1.0f };
             visual.submeshMaterials.push_back(material);
         }
         return &visual;
@@ -1200,23 +1238,28 @@ return {0}
         {
             return;
         }
-        forEach<TransformComponent, CameraComponent>(scene,
-                                                     [&](Entity entity, TransformComponent&, CameraComponent& camera)
-                                                     {
-                                                         if (!camera.showModel)
-                                                         {
-                                                             return;
-                                                         }
-                                                         const glm::mat4 model = worldMatrix(scene, entity);
-                                                         DrawItem item;
-                                                         item.mesh = visual->mesh;
-                                                         item.model = model;
-                                                         item.normalMatrix =
-                                                             glm::mat4(glm::transpose(glm::inverse(glm::mat3(model))));
-                                                         item.submeshMaterials = visual->submeshMaterials;
-                                                         item.material.unlit = true;
-                                                         items.push_back(std::move(item));
-                                                     });
+        forEach<TransformComponent, CameraComponent>(
+            scene,
+            [&](Entity entity, TransformComponent&, CameraComponent& camera)
+            {
+                if (!camera.showModel)
+                {
+                    return;
+                }
+                constexpr f32 ModelScale = 7.5f;
+                constexpr f32 LensLocalX = 0.0801217f;
+                const glm::mat4 model =
+                    worldMatrix(scene, entity) * glm::translate(glm::mat4(1.0f), glm::vec3{ 0.0f, -0.1f, 0.0f }) *
+                    glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3{ 0.0f, 1.0f, 0.0f }) *
+                    glm::scale(glm::mat4(1.0f), glm::vec3{ ModelScale }) *
+                    glm::translate(glm::mat4(1.0f), glm::vec3{ -LensLocalX, 0.0f, 0.0f });
+                DrawItem item;
+                item.mesh = visual->mesh;
+                item.model = model;
+                item.normalMatrix = glm::mat4(glm::transpose(glm::inverse(glm::mat3(model))));
+                item.submeshMaterials = visual->submeshMaterials;
+                items.push_back(std::move(item));
+            });
     }
 
     // Draws every entity with a Transform + Mesh through the given camera (the editor

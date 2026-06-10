@@ -18,8 +18,8 @@ Drawing after the resolve also means the scene's [AA mode](../../anti-aliasing/a
 Each mode draws only its own handles: translate shows the three axis lines plus the two-axis plane quads, rotate shows only the three rings, scale shows the axis lines with box ends and a center box for uniform scale. The plane quads are drawn from the *same* projected corners the hit-test checks (`gizmoPlaneCorners`), so the handle under the cursor is always the one that activates.
 
 Light billboards are drawn the same way. Camera entities use editor-only helpers instead: a
-system camera model is appended to the edit-mode draw list, and the overlay draws a dark-orange
-frustum from the camera FOV and near/far planes, capped by `frustumMaxDistance`. The
+black system camera model is appended to the edit-mode draw list, and the overlay draws a
+dark-orange frustum from the camera FOV and near/far planes, capped by `frustumMaxDistance`. The
 `CameraComponent` can hide either helper with `showModel` or `showFrustum`; play mode renders
 neither one.
 
