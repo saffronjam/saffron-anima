@@ -44,6 +44,10 @@ export namespace se
     // array indexed per-instance; lavapipe + desktop GPUs allow far more, this is plenty.
     inline constexpr u32 MaxBindlessTextures = 1024;
 
+    // Per-frame ceiling on compute-skinning descriptor sets — one per skinned mesh-instance.
+    // The skin pool is reset and re-allocated each frame; instances past this are skipped (logged).
+    inline constexpr u32 SkinMaxSetsPerFrame = 64;
+
     // Upper bound on GPU scopes the profiler times per frame — top-level passes plus any
     // opt-in sub-scopes nested inside them. Each scope takes two timestamp slots (begin +
     // end); scopes past this cap are simply not timed (the recorder truncates gracefully).
@@ -215,8 +219,8 @@ export namespace se
         GpuMesh(GpuMesh&& other) noexcept
             : allocator(other.allocator), vertexBuffer(other.vertexBuffer), vertexAlloc(other.vertexAlloc),
               indexBuffer(other.indexBuffer), indexAlloc(other.indexAlloc), skinBuffer(other.skinBuffer),
-              skinAlloc(other.skinAlloc), indexCount(other.indexCount), submeshes(std::move(other.submeshes)),
-              boundsMin(other.boundsMin), boundsMax(other.boundsMax)
+              skinAlloc(other.skinAlloc), indexCount(other.indexCount), vertexCount(other.vertexCount),
+              submeshes(std::move(other.submeshes)), boundsMin(other.boundsMin), boundsMax(other.boundsMax)
         {
             other.allocator = nullptr;
             other.vertexBuffer = nullptr;
@@ -240,6 +244,7 @@ export namespace se
                 skinBuffer = other.skinBuffer;
                 skinAlloc = other.skinAlloc;
                 indexCount = other.indexCount;
+                vertexCount = other.vertexCount;
                 submeshes = std::move(other.submeshes);
                 boundsMin = other.boundsMin;
                 boundsMax = other.boundsMax;
@@ -535,9 +540,22 @@ export namespace se
         Ref<GpuMesh> mesh;
         u32 baseInstance = 0;
         u32 instanceCount = 0;
-        // Skinned batches bind the mesh's VertexSkin stream + the joint palette and
-        // draw only in the scene pass (no prepass/shadow/gbuffer/motion in v1).
+        // Skinned batches draw the frame's deformed-vertex buffer (binding 0) as a static
+        // mesh; the compute pre-pass concatenates each instance's vertices, so this is the
+        // base vertex of this batch's instance in that buffer (0 for unskinned batches).
         bool skinned = false;
+        u32 deformedVertexOffset = 0;
+    };
+
+    /// One skinned mesh-instance's compute work for the frame: the descriptor set wiring
+    /// its static + skin streams, the joint palette, and the deformed output, plus the push
+    /// constant fields the skin kernel reads.
+    struct SkinDispatch
+    {
+        vk::DescriptorSet set;
+        u32 vertexCount = 0;
+        u32 jointOffset = 0;
+        u32 deformedOffset = 0;
     };
 
     // The scene's structured draw list for the frame: built by submitDrawList from the
@@ -546,6 +564,9 @@ export namespace se
     {
         glm::mat4 viewProj{ 1.0f };
         std::vector<DrawBatch> batches;
+        // Per skinned mesh-instance: the compute work the skin pre-pass dispatches before
+        // the scene pass reads the deformed buffer. Empty when no skinned instances exist.
+        std::vector<SkinDispatch> skinDispatches;
         std::vector<Ref<GpuTexture>> liveTextures;  // pins indexed textures for the frame
         vk::DescriptorSet lightSet;
         vk::DescriptorSet instanceSet;
@@ -1076,6 +1097,20 @@ export namespace se
         std::array<u32, MaxFramesInFlight> jointCapacity{};
     };
 
+    /// The compute skinning pre-pass apparatus: a per-frame-in-flight deformed-vertex
+    /// buffer (base 32-byte Vertex layout, STORAGE|VERTEX, grow-only) every skinned
+    /// instance deforms into, plus the descriptor pool the per-instance dispatch sets are
+    /// allocated from (reset each frame). The scene pass then draws skinned meshes as
+    /// ordinary static meshes reading this buffer.
+    struct Skinning
+    {
+        vk::DescriptorSetLayout setLayout;
+        std::array<vk::DescriptorPool, MaxFramesInFlight> pools{};
+        std::array<Ref<Buffer>, MaxFramesInFlight> deformedBuffers;
+        std::array<u32, MaxFramesInFlight> deformedCapacity{};  // in Vertex (32 B) elements
+        u32 peakVertices = 0;
+    };
+
     // Renderer-owned pipelines + the mesh PSO cache (built on demand, keyed by variant;
     // the uebershader maps many materials to one PSO, permutations add cache entries).
     struct Pipelines
@@ -1103,6 +1138,7 @@ export namespace se
         Ref<Pipeline> restirResolve;  // ReSTIR resolve (1 shadow ray) + shade
         Ref<Pipeline> fxaa;           // compute FXAA post-process
         Ref<Pipeline> cull;           // compute light-cull (clustered forward)
+        Ref<Pipeline> skin;           // compute skinning pre-pass (deforms skinned meshes once)
         Ref<Pipeline> overlay;        // screen-space editor overlay (gizmo + billboards), no depth test
         Ref<Pipeline> overlayDepth;   // overlay variant that depth-tests against the scene depth
         std::unordered_map<std::string, Ref<Pipeline>> cache;
@@ -1513,6 +1549,7 @@ export namespace se
         Descriptors descriptors;
         Lighting lighting;
         Instancing instancing;
+        Skinning skinning;
         Pipelines pipelines;
         Targets targets;
         Ibl ibl;
