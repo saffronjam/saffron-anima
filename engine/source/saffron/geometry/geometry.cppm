@@ -438,128 +438,182 @@ namespace se
         // pointer; a null key is a primitive with no material, which gets a default slot).
         std::vector<const cgltf_material*> materialTable;
         std::map<const cgltf_material*, u32> materialSlots;
-        for (cgltf_size m = 0; m < data->meshes_count; m = m + 1)
+        std::optional<std::string> primitiveError;
+        auto appendPrimitive = [&](const cgltf_primitive& prim, const glm::mat4& nodeTransform, bool applyNodeTransform)
         {
-            const cgltf_mesh& gltfMesh = data->meshes[m];
-            for (cgltf_size p = 0; p < gltfMesh.primitives_count; p = p + 1)
+            if (primitiveError || prim.type != cgltf_primitive_type_triangles)
             {
-                const cgltf_primitive& prim = gltfMesh.primitives[p];
-                if (prim.type != cgltf_primitive_type_triangles)
-                {
-                    continue;
-                }
+                return;
+            }
 
-                const cgltf_accessor* positions = nullptr;
-                const cgltf_accessor* normals = nullptr;
-                const cgltf_accessor* texcoords = nullptr;
-                const cgltf_accessor* jointIndices = nullptr;
-                const cgltf_accessor* jointWeights = nullptr;
-                for (cgltf_size a = 0; a < prim.attributes_count; a = a + 1)
+            const cgltf_accessor* positions = nullptr;
+            const cgltf_accessor* normals = nullptr;
+            const cgltf_accessor* texcoords = nullptr;
+            const cgltf_accessor* jointIndices = nullptr;
+            const cgltf_accessor* jointWeights = nullptr;
+            for (cgltf_size a = 0; a < prim.attributes_count; a = a + 1)
+            {
+                const cgltf_attribute& attr = prim.attributes[a];
+                if (attr.type == cgltf_attribute_type_position)
                 {
-                    const cgltf_attribute& attr = prim.attributes[a];
-                    if (attr.type == cgltf_attribute_type_position)
+                    positions = attr.data;
+                }
+                else if (attr.type == cgltf_attribute_type_normal)
+                {
+                    normals = attr.data;
+                }
+                else if (attr.type == cgltf_attribute_type_texcoord && attr.index == 0)
+                {
+                    texcoords = attr.data;
+                }
+                else if (attr.type == cgltf_attribute_type_joints && attr.index == 0)
+                {
+                    jointIndices = attr.data;
+                }
+                else if (attr.type == cgltf_attribute_type_weights && attr.index == 0)
+                {
+                    jointWeights = attr.data;
+                }
+            }
+            if (positions == nullptr)
+            {
+                return;
+            }
+            if (jointIndices != nullptr && jointWeights != nullptr)
+            {
+                sawSkinnedPrimitive = true;
+            }
+            else
+            {
+                sawUnskinnedPrimitive = true;
+            }
+            auto [slotIt, inserted] = materialSlots.try_emplace(prim.material, static_cast<u32>(materialTable.size()));
+            if (inserted)
+            {
+                materialTable.push_back(prim.material);
+            }
+            const u32 materialSlot = slotIt->second;
+
+            const i32 vertexOffset = static_cast<i32>(mesh.vertices.size());
+            const u32 firstIndex = static_cast<u32>(mesh.indices.size());
+            const cgltf_size vertexCount = positions->count;
+            const glm::mat3 normalTransform =
+                applyNodeTransform ? glm::transpose(glm::inverse(glm::mat3(nodeTransform))) : glm::mat3(1.0f);
+            for (cgltf_size i = 0; i < vertexCount; i = i + 1)
+            {
+                Vertex vertex;
+                cgltf_float tmp[3] = { 0.0f, 0.0f, 0.0f };
+                cgltf_accessor_read_float(positions, i, tmp, 3);
+                vertex.position = glm::vec3(tmp[0], tmp[1], tmp[2]);
+                if (applyNodeTransform)
+                {
+                    vertex.position = glm::vec3(nodeTransform * glm::vec4(vertex.position, 1.0f));
+                }
+                if (normals != nullptr)
+                {
+                    cgltf_accessor_read_float(normals, i, tmp, 3);
+                    vertex.normal = glm::vec3(tmp[0], tmp[1], tmp[2]);
+                    if (applyNodeTransform)
                     {
-                        positions = attr.data;
-                    }
-                    else if (attr.type == cgltf_attribute_type_normal)
-                    {
-                        normals = attr.data;
-                    }
-                    else if (attr.type == cgltf_attribute_type_texcoord && attr.index == 0)
-                    {
-                        texcoords = attr.data;
-                    }
-                    else if (attr.type == cgltf_attribute_type_joints && attr.index == 0)
-                    {
-                        jointIndices = attr.data;
-                    }
-                    else if (attr.type == cgltf_attribute_type_weights && attr.index == 0)
-                    {
-                        jointWeights = attr.data;
+                        vertex.normal = glm::normalize(normalTransform * vertex.normal);
                     }
                 }
-                if (positions == nullptr)
+                if (texcoords != nullptr)
                 {
-                    continue;
+                    cgltf_float uv[2] = { 0.0f, 0.0f };
+                    cgltf_accessor_read_float(texcoords, i, uv, 2);
+                    vertex.uv0 = glm::vec2(uv[0], uv[1]);
                 }
+                mesh.vertices.push_back(vertex);
+                VertexSkin influence;
                 if (jointIndices != nullptr && jointWeights != nullptr)
                 {
-                    sawSkinnedPrimitive = true;
+                    cgltf_uint joints[4] = { 0, 0, 0, 0 };
+                    cgltf_accessor_read_uint(jointIndices, i, joints, 4);
+                    cgltf_float weights[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+                    cgltf_accessor_read_float(jointWeights, i, weights, 4);
+                    influence.joints = glm::u16vec4(joints[0], joints[1], joints[2], joints[3]);
+                    influence.weights = glm::vec4(weights[0], weights[1], weights[2], weights[3]);
                 }
-                else
-                {
-                    sawUnskinnedPrimitive = true;
-                }
-                auto [slotIt, inserted] =
-                    materialSlots.try_emplace(prim.material, static_cast<u32>(materialTable.size()));
-                if (inserted)
-                {
-                    materialTable.push_back(prim.material);
-                }
-                const u32 materialSlot = slotIt->second;
+                vertexSkins.push_back(influence);
+            }
 
-                const i32 vertexOffset = static_cast<i32>(mesh.vertices.size());
-                const u32 firstIndex = static_cast<u32>(mesh.indices.size());
-                const cgltf_size vertexCount = positions->count;
+            if (prim.indices != nullptr)
+            {
+                for (cgltf_size i = 0; i < prim.indices->count; i = i + 1)
+                {
+                    const cgltf_size index = cgltf_accessor_read_index(prim.indices, i);
+                    if (index >= vertexCount)
+                    {
+                        primitiveError = std::format("cgltf: '{}' has an out-of-range index", path);
+                        return;
+                    }
+                    mesh.indices.push_back(static_cast<u32>(index));
+                }
+            }
+            else
+            {
                 for (cgltf_size i = 0; i < vertexCount; i = i + 1)
                 {
-                    Vertex vertex;
-                    cgltf_float tmp[3] = { 0.0f, 0.0f, 0.0f };
-                    cgltf_accessor_read_float(positions, i, tmp, 3);
-                    vertex.position = glm::vec3(tmp[0], tmp[1], tmp[2]);
-                    if (normals != nullptr)
-                    {
-                        cgltf_accessor_read_float(normals, i, tmp, 3);
-                        vertex.normal = glm::vec3(tmp[0], tmp[1], tmp[2]);
-                    }
-                    if (texcoords != nullptr)
-                    {
-                        cgltf_float uv[2] = { 0.0f, 0.0f };
-                        cgltf_accessor_read_float(texcoords, i, uv, 2);
-                        vertex.uv0 = glm::vec2(uv[0], uv[1]);
-                    }
-                    mesh.vertices.push_back(vertex);
-                    VertexSkin influence;
-                    if (jointIndices != nullptr && jointWeights != nullptr)
-                    {
-                        cgltf_uint joints[4] = { 0, 0, 0, 0 };
-                        cgltf_accessor_read_uint(jointIndices, i, joints, 4);
-                        cgltf_float weights[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-                        cgltf_accessor_read_float(jointWeights, i, weights, 4);
-                        influence.joints = glm::u16vec4(joints[0], joints[1], joints[2], joints[3]);
-                        influence.weights = glm::vec4(weights[0], weights[1], weights[2], weights[3]);
-                    }
-                    vertexSkins.push_back(influence);
+                    mesh.indices.push_back(static_cast<u32>(i));
                 }
-
-                if (prim.indices != nullptr)
-                {
-                    for (cgltf_size i = 0; i < prim.indices->count; i = i + 1)
-                    {
-                        const cgltf_size index = cgltf_accessor_read_index(prim.indices, i);
-                        if (index >= vertexCount)
-                        {
-                            cgltf_free(data);
-                            return Err(std::format("cgltf: '{}' has an out-of-range index", path));
-                        }
-                        mesh.indices.push_back(static_cast<u32>(index));
-                    }
-                }
-                else
-                {
-                    for (cgltf_size i = 0; i < vertexCount; i = i + 1)
-                    {
-                        mesh.indices.push_back(static_cast<u32>(i));
-                    }
-                }
-
-                Submesh submesh;
-                submesh.firstIndex = firstIndex;
-                submesh.indexCount = static_cast<u32>(mesh.indices.size()) - firstIndex;
-                submesh.vertexOffset = vertexOffset;
-                submesh.materialSlot = materialSlot;
-                mesh.submeshes.push_back(submesh);
             }
+
+            Submesh submesh;
+            submesh.firstIndex = firstIndex;
+            submesh.indexCount = static_cast<u32>(mesh.indices.size()) - firstIndex;
+            submesh.vertexOffset = vertexOffset;
+            submesh.materialSlot = materialSlot;
+            mesh.submeshes.push_back(submesh);
+        };
+
+        if (data->skins_count == 0)
+        {
+            bool sawMeshNode = false;
+            for (cgltf_size n = 0; n < data->nodes_count; n = n + 1)
+            {
+                const cgltf_node& node = data->nodes[n];
+                if (node.mesh == nullptr)
+                {
+                    continue;
+                }
+                sawMeshNode = true;
+                cgltf_float matrix[16];
+                cgltf_node_transform_world(&node, matrix);
+                glm::mat4 nodeTransform;
+                std::memcpy(&nodeTransform, matrix, sizeof(nodeTransform));
+                for (cgltf_size p = 0; p < node.mesh->primitives_count; p = p + 1)
+                {
+                    appendPrimitive(node.mesh->primitives[p], nodeTransform, true);
+                }
+            }
+            if (!sawMeshNode)
+            {
+                for (cgltf_size m = 0; m < data->meshes_count; m = m + 1)
+                {
+                    const cgltf_mesh& gltfMesh = data->meshes[m];
+                    for (cgltf_size p = 0; p < gltfMesh.primitives_count; p = p + 1)
+                    {
+                        appendPrimitive(gltfMesh.primitives[p], glm::mat4(1.0f), false);
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (cgltf_size m = 0; m < data->meshes_count; m = m + 1)
+            {
+                const cgltf_mesh& gltfMesh = data->meshes[m];
+                for (cgltf_size p = 0; p < gltfMesh.primitives_count; p = p + 1)
+                {
+                    appendPrimitive(gltfMesh.primitives[p], glm::mat4(1.0f), false);
+                }
+            }
+        }
+        if (primitiveError)
+        {
+            cgltf_free(data);
+            return Err(*primitiveError);
         }
         std::vector<ImportedMaterial> materials;
         materials.reserve(materialTable.size());
