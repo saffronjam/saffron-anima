@@ -1,6 +1,6 @@
 # Phase 12 — read-only canvas `TimelinePanel`
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 
