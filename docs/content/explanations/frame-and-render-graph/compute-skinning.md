@@ -60,7 +60,26 @@ over the static stream. The depth pre-pass, the directional/spot/point shadow pa
 G-buffer pre-pass all draw skinned geometry now (the old `if (batch.skinned) continue;` skips are
 gone), so an animated character gets early-Z, casts and receives shadows, and shows AO — the three
 defects that came from skinned geometry only existing in the main scene pass. The deform happened
-once; every pass is just a read. (Motion vectors and the ray-traced BLAS read it in later phases.)
+once; every pass is just a read. (The ray-traced BLAS is the one remaining consumer, in a later phase.)
+
+## Motion vectors
+
+TAA needs a per-pixel velocity for every surface, and a skinned mesh moves two ways at once: the
+whole entity can translate/rotate (**object motion**) and a bone can bend between frames
+(**deformation motion**). The motion pass reprojects both — `prevClip = prevViewProj · prevModel ·
+prevPosition` against `curClip = curViewProj · model · position` — so it needs last frame's model
+matrix *and* last frame's deformed position for every vertex.
+
+Object motion is one matrix: `InstanceData` carries a `prevModel` (last frame's world matrix, cached
+per entity in `Skinning.prevModelByEntity`; a brand-new instance sets `prevModel = model` so it emits
+zero velocity instead of a garbage flash). Deformation motion reuses the deform-once architecture
+rather than skinning twice in a shader: the `skin` compute pass runs a **second** dispatch per skinned
+instance with **last frame's joint palette** (`Skinning.prevPaletteByEntity`) into a **previous**
+deformed buffer. `motion.slang` then binds the current deformed buffer on binding 0 and the previous
+one on binding 1 and just *reads* `prevPosition` — no skinning math in the vertex shader. For a static
+mesh both bindings point at the same static stream, so `prevPosition == position` and only object
+motion contributes; the one shader handles both cases. The motion pass's old `if (batch.skinned)
+continue;` guard is gone, so animated characters stop ghosting under TAA.
 
 ## Barriers
 
@@ -82,11 +101,13 @@ vertex shader relied on.)
 | The compute pass | `renderer.cppm` | the `skin` `RgPass` |
 | Scene-pass read | `renderer_drawlist.cpp` | `recordSceneDrawList`, `recordBatchSubmeshes` |
 | Compute→vertex barrier | `render_graph.cppm` | `RgUsage::VertexInputRead` |
+| Skinned motion vectors | `motion.slang`, `renderer_types.cppm` | `InstanceData::prevModel`, `Skinning::prevDeformedBuffers`, `prevPaletteByEntity` |
 
 > [!NOTE]
-> The scene, depth pre-pass, shadow, and SSAO G-buffer passes all read the deformed buffer. Motion
-> vectors and the ray-traced BLAS are the two remaining consumers — they read the same buffer in later
-> phases, so skinned characters stop ghosting under TAA and deform in ray-traced effects too.
+> The scene, depth pre-pass, shadow, SSAO G-buffer, and motion-vector passes all read the deformed
+> buffer; the motion pass also reads a second deformed buffer skinned with last frame's palette. The
+> ray-traced BLAS is the one remaining consumer — it reads the same buffer in a later phase so skinned
+> characters deform in ray-traced effects too.
 
 ## Related
 
