@@ -1,7 +1,23 @@
 # Phase 18 — Slang codegen backend
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — codegen core done (graph → Slang → slangc → SPIR-V); per-material PSO render-wiring remains
 **Depends on:** 01, 17
+
+> **Done (codegen core).** `emitGraphSurface(graph)` lowers a node graph to a Slang `evalSurface` body
+> (constant / textureSlot / multiply / add nodes → statements in array order, then the `materialOutput`
+> channel assignments). `findSlangc()` locates the compiler (env `SAFFRON_SLANGC` → the prebuilt cache →
+> PATH). `compileMaterialGraph` splices the emitted body into a self-contained shader and shells `slangc`
+> → `materials/<uuid>.spv`. `material-compile-graph {material}` runs it. e2e `material_codegen.test.ts`
+> proves a **non-foldable multiply graph** is detected (`foldable=false`) and **codegens to compilable
+> SPIR-V** (`ok=true`). This establishes the headline graph→shader pipeline end to end (feasibility was the
+> big unknown — slangc is locatable + runs from the host).
+>
+> **Remaining for full phase 18:** wire the compiled `.spv` into a **per-material PSO** + the render path
+> — splice the emitted `evalSurface` into the real shader (übershader for scene, or `preview.slang` for the
+> preview) rather than the standalone validation shell, key the PSO cache on the graph hash, set
+> `Material.shader` to the codegen'd module in `resolveEntityMaterials`, and (editor) async-compile +
+> fallback. Then the codegen material actually *renders* with its custom surface. (Phases 19 node library,
+> 20 React Flow editor, 21 cook-time baking follow.)
 
 ## Goal
 
