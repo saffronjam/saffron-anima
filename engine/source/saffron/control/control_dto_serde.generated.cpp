@@ -2522,6 +2522,42 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<MaterialCreateParams>) -> Result<MaterialCreateParams>
+    {
+        MaterialCreateParams out;
+
+        {
+            auto value = requiredField(params, "name", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readString(**value, "name");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.name = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<MaterialAssignParams>) -> Result<MaterialAssignParams>
+    {
+        MaterialAssignParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "material", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "material");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.material = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<OptionalPathParams>) -> Result<OptionalPathParams>
     {
         OptionalPathParams out;
@@ -3380,6 +3416,21 @@ namespace se
         out["id"] = dtoToJson(value.id);
         out["name"] = value.name;
         out["slot"] = dtoToJson(value.slot);
+        return out;
+    }
+
+    auto dtoToJson(const MaterialCreateResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
+        out["name"] = value.name;
+        return out;
+    }
+
+    auto dtoToJson(const MaterialAssignResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["material"] = dtoToJson(value.material);
         return out;
     }
 
