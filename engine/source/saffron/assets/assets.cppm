@@ -1238,6 +1238,58 @@ return {0}
         return spvPath;
     }
 
+    // Codegen for the preview pane: emits a full preview shader (the studio-lit sphere) whose
+    // evalSurface is the material's graph, compiles it with slangc, and returns the .spv path. The
+    // shader's PreviewPush + vertex layout match newPreviewPipeline, so renderMaterialPreview can drive
+    // it with the same push + sphere. (A v1 that duplicates the preview lighting; later it should splice
+    // the shared preview.slang source.)
+    auto compileMaterialPreviewShader(AssetServer& assets, const nlohmann::json& graph, Uuid id) -> Result<std::string>
+    {
+        const std::string slangc = findSlangc();
+        const std::string surfaceBody = emitGraphSurface(graph);
+        const std::string shader =
+            "[[vk::binding(0, 0)]] Sampler2D textures[1024];\n"
+            "struct PreviewPush { float4x4 viewProj; float4 baseColor; uint4 tex; float4 pbr; };\n"
+            "[[vk::push_constant]] PreviewPush push;\n"
+            "struct SurfaceData { float3 albedo; float metallic; float roughness; float3 normal; float3 emissive; };\n"
+            "struct Mat { float4 baseColor; uint4 tex; };\n"
+            "SurfaceData evalSurface(float2 uv)\n{\n    Mat mat;\n    mat.baseColor = push.baseColor;\n"
+            "    mat.tex = push.tex;\n    SurfaceData s;\n" +
+            surfaceBody +
+            "    return s;\n}\n"
+            "struct VIn { [[vk::location(0)]] float3 position; [[vk::location(1)]] float3 normal; "
+            "[[vk::location(2)]] float2 uv0; };\n"
+            "struct VOut { float4 position : SV_Position; float3 normal : NORMAL; float2 uv : TEXCOORD0; };\n"
+            "[shader(\"vertex\")] VOut vertexMain(VIn input)\n{\n    VOut o;\n"
+            "    o.position = mul(push.viewProj, float4(input.position, 1.0));\n    o.normal = input.normal;\n"
+            "    o.uv = input.uv0;\n    return o;\n}\n"
+            "[shader(\"fragment\")] float4 fragmentMain(VOut input) : SV_Target\n{\n"
+            "    SurfaceData s = evalSurface(input.uv);\n    float3 N = normalize(input.normal);\n"
+            "    float3 L = normalize(float3(0.5, 0.6, 0.6));\n    float ndotl = max(dot(N, L), 0.0);\n"
+            "    float3 c = s.albedo * (ndotl + 0.25) + s.emissive;\n    return float4(c / (c + 1.0), 1.0);\n}\n";
+        ensureAssetDirectories(assets);
+        const std::string slangPath = assets.root + "/materials/" + std::to_string(id.value) + "_preview.slang";
+        const std::string spvPath = assets.root + "/materials/" + std::to_string(id.value) + "_preview.spv";
+        {
+            std::ofstream out(slangPath);
+            if (!out)
+            {
+                return Err(std::format("cannot write generated preview shader '{}'", slangPath));
+            }
+            out << shader;
+        }
+        const std::string cmd = "\"" + slangc + "\" \"" + slangPath +
+                                "\" -profile glsl_450 -target spirv -emit-spirv-directly -fvk-use-entrypoint-name "
+                                "-matrix-layout-column-major -o \"" +
+                                spvPath + "\" > /dev/null 2>&1";
+        const int rc = std::system(cmd.c_str());
+        if (rc != 0 || !std::filesystem::exists(spvPath))
+        {
+            return Err(std::format("slangc failed (rc={}) compiling preview shader {}", rc, id.value));
+        }
+        return spvPath;
+    }
+
     // Writes a MaterialAsset to assets/materials/<uuid>.smat and registers a Material catalog
     // entry (named, deduped). Returns the new id.
     auto saveMaterialAsset(AssetServer& assets, const MaterialAsset& mat, const std::string& name,
