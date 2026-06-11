@@ -78,12 +78,12 @@ export namespace se
         glm::vec2 uvTiling{ 1.0f };
         glm::vec2 uvOffset{ 0.0f };
         Uuid albedoTexture;
-        Uuid ormTexture;       // packed AO/roughness/metallic (or a standalone metallic-roughness)
+        Uuid ormTexture;  // packed AO/roughness/metallic (or a standalone metallic-roughness)
         Uuid normalTexture;
         Uuid emissiveTexture;
         Uuid heightTexture;
         std::string normalConvention = "gl";  // gl | dx — baked to gl at import; recorded for provenance
-        u32 features = 0;      // resolved feature bitset (populated from the PBR-slots phase)
+        u32 features = 0;                     // resolved feature bitset (populated from the PBR-slots phase)
         // Optional node graph (the editable source of truth for a graph-authored material). When a
         // foldable graph is present, the resolved factors/textures above are derived from it; a
         // non-foldable graph (procedural nodes) is the codegen path. Null/empty = no graph.
@@ -822,34 +822,32 @@ return {0}
     auto materialAssetToJson(const MaterialAsset& m) -> nlohmann::json
     {
         const auto u = [](Uuid id) { return std::to_string(id.value); };
-        return nlohmann::json{
-            { "version", 1 },
-            { "shader", m.shader },
-            { "blend", m.blend },
-            { "unlit", m.unlit },
-            { "doubleSided", m.doubleSided },
-            { "normalConvention", m.normalConvention },
-            { "factors",
-              { { "baseColor", { m.baseColor.x, m.baseColor.y, m.baseColor.z, m.baseColor.w } },
-                { "metallic", m.metallic },
-                { "roughness", m.roughness },
-                { "emissive", { m.emissive.x, m.emissive.y, m.emissive.z } },
-                { "emissiveStrength", m.emissiveStrength },
-                { "normalStrength", m.normalStrength },
-                { "alphaCutoff", m.alphaCutoff },
-                { "heightScale", m.heightScale },
-                { "uvTiling", { m.uvTiling.x, m.uvTiling.y } },
-                { "uvOffset", { m.uvOffset.x, m.uvOffset.y } } } },
-            { "textures",
-              { { "albedo", u(m.albedoTexture) },
-                { "ormOrMr", u(m.ormTexture) },
-                { "normal", u(m.normalTexture) },
-                { "emissive", u(m.emissiveTexture) },
-                { "height", u(m.heightTexture) } } },
-            { "graph", m.graph.is_null() ? nlohmann::json::object() : m.graph },
-            { "parent", std::to_string(m.parent.value) },
-            { "overrides", m.overrides.is_null() ? nlohmann::json::object() : m.overrides }
-        };
+        return nlohmann::json{ { "version", 1 },
+                               { "shader", m.shader },
+                               { "blend", m.blend },
+                               { "unlit", m.unlit },
+                               { "doubleSided", m.doubleSided },
+                               { "normalConvention", m.normalConvention },
+                               { "factors",
+                                 { { "baseColor", { m.baseColor.x, m.baseColor.y, m.baseColor.z, m.baseColor.w } },
+                                   { "metallic", m.metallic },
+                                   { "roughness", m.roughness },
+                                   { "emissive", { m.emissive.x, m.emissive.y, m.emissive.z } },
+                                   { "emissiveStrength", m.emissiveStrength },
+                                   { "normalStrength", m.normalStrength },
+                                   { "alphaCutoff", m.alphaCutoff },
+                                   { "heightScale", m.heightScale },
+                                   { "uvTiling", { m.uvTiling.x, m.uvTiling.y } },
+                                   { "uvOffset", { m.uvOffset.x, m.uvOffset.y } } } },
+                               { "textures",
+                                 { { "albedo", u(m.albedoTexture) },
+                                   { "ormOrMr", u(m.ormTexture) },
+                                   { "normal", u(m.normalTexture) },
+                                   { "emissive", u(m.emissiveTexture) },
+                                   { "height", u(m.heightTexture) } } },
+                               { "graph", m.graph.is_null() ? nlohmann::json::object() : m.graph },
+                               { "parent", std::to_string(m.parent.value) },
+                               { "overrides", m.overrides.is_null() ? nlohmann::json::object() : m.overrides } };
     }
 
     auto materialAssetFromJson(const nlohmann::json& j) -> MaterialAsset
@@ -877,7 +875,8 @@ return {0}
             const nlohmann::json& f = *fit;
             if (auto v = f.find("baseColor"); v != f.end() && v->is_array() && v->size() == 4)
             {
-                m.baseColor = glm::vec4{ (*v)[0].get<f32>(), (*v)[1].get<f32>(), (*v)[2].get<f32>(), (*v)[3].get<f32>() };
+                m.baseColor =
+                    glm::vec4{ (*v)[0].get<f32>(), (*v)[1].get<f32>(), (*v)[2].get<f32>(), (*v)[3].get<f32>() };
             }
             m.metallic = f.value("metallic", 0.0f);
             m.roughness = f.value("roughness", 1.0f);
@@ -1003,8 +1002,8 @@ return {0}
                 const nlohmann::json value = props.value("value", nlohmann::json::array());
                 if (channel == "baseColor" && value.is_array() && value.size() >= 4)
                 {
-                    m.baseColor = glm::vec4{ value[0].get<f32>(), value[1].get<f32>(), value[2].get<f32>(),
-                                             value[3].get<f32>() };
+                    m.baseColor =
+                        glm::vec4{ value[0].get<f32>(), value[1].get<f32>(), value[2].get<f32>(), value[3].get<f32>() };
                 }
                 else if (channel == "emissive" && value.is_array() && value.size() >= 3)
                 {
@@ -1360,8 +1359,8 @@ return {0}
         {
             if (field == "baseColor" && value.is_array() && value.size() >= 4)
             {
-                m.baseColor = glm::vec4{ value[0].get<f32>(), value[1].get<f32>(), value[2].get<f32>(),
-                                         value[3].get<f32>() };
+                m.baseColor =
+                    glm::vec4{ value[0].get<f32>(), value[1].get<f32>(), value[2].get<f32>(), value[3].get<f32>() };
             }
             else if (field == "emissive" && value.is_array() && value.size() >= 3)
             {

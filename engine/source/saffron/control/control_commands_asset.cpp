@@ -883,8 +883,8 @@ namespace se
                 }
                 const json& sel = params.material.value;
                 const std::string selector = sel.is_string() ? sel.get<std::string>() : std::string{};
-                const bool clearing = selector == "0" || selector.empty() ||
-                                      (sel.is_number_unsigned() && sel.get<u64>() == 0);
+                const bool clearing =
+                    selector == "0" || selector.empty() || (sel.is_number_unsigned() && sel.get<u64>() == 0);
                 Uuid matId{ 0 };
                 if (!clearing)
                 {
