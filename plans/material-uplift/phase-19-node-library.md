@@ -1,16 +1,19 @@
 # Phase 19 — Node library
 
-**Status:** IN PROGRESS — emitter node-set done; editor palette (phase 20) + render-context nodes remain
+**Status:** IN PROGRESS — emitter node-set done + visibly rendering; editor palette (phase 20) + render-context nodes remain
 **Depends on:** 18
 
-> **Done (codegen node-set).** `emitGraphSurface` (phase 18) supports the core authoring vocabulary:
-> `constant`, `textureSlot`, `multiply`, `add`, `subtract`, `divide`, `lerp`, `saturate`/`clamp`,
-> `oneMinus`, `dot` — each emits a typed Slang statement (all values `float4`, wired by pin name a/b/t);
-> an unknown node emits a safe `float4(0)` default. e2e `material_nodes.test.ts` proves a
-> lerp→oneMinus→saturate graph codegens to compilable Slang. **Remaining:** (1) render-context nodes
-> (triplanar, noise, Fresnel, normal-map, custom-Slang) need the per-material render path (phase-18
-> completion) + the full shader context (world pos/normal/view); (2) the editor **node palette** + custom
-> node components are part of the React Flow editor (phase 20); (3) per-node golden compile tests.
+> **Done (codegen node-set, visibly rendering).** `emitGraphSurface` supports the core authoring
+> vocabulary: `constant`, `textureSlot`, `multiply`, `add`, `subtract`, `divide`, `lerp`,
+> `saturate`/`clamp`, `oneMinus`, `dot`, plus the **procedural** nodes `uv`, `sin`, `cos`, `frac`, `step`,
+> `smoothstep` — each emits a typed Slang statement (all values `float4`, wired by pin name a/b/t); an
+> unknown node emits a safe `float4(0)` default. e2e `material_nodes.test.ts` proves a
+> lerp→oneMinus→saturate graph codegens to compilable Slang; `material_procedural.test.ts` proves a
+> `frac(uv * 8)` graph **renders a pattern** through the preview codegen path (valid PNG, validation-clean).
+> **Remaining:** (1) render-context nodes (triplanar, noise, Fresnel, normal-map, custom-Slang) need the
+> full shader context (world pos/normal/view) — available once scene-path codegen lands (phase-18
+> follow-on); (2) the editor **node palette** + custom node components are part of the React Flow editor
+> (phase 20); (3) per-node golden compile tests.
 
 ## Goal
 
