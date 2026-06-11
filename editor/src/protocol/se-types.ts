@@ -1143,6 +1143,16 @@ export interface PreviewRenderResult {
   png: string;
 }
 
+export interface MaterialSetGraphParams {
+  material: WireUuid | string | number;
+  graph: unknown;
+}
+
+export interface MaterialSetGraphResult {
+  id: WireUuid;
+  foldable: boolean;
+}
+
 export interface PathResult {
   path: string;
 }
@@ -1285,6 +1295,7 @@ export interface CommandParamsMap {
   "material-get": MaterialGetParams;
   "material-update": MaterialUpdateParams;
   "preview-render": PreviewRenderParams;
+  "material-set-graph": MaterialSetGraphParams;
   "save-scene": PathParams;
   "load-scene": PathParams;
   "save-project": OptionalPathParams;
@@ -1402,6 +1413,7 @@ export interface CommandResultMap {
   "material-get": MaterialGetResult;
   "material-update": MaterialUpdateResult;
   "preview-render": PreviewRenderResult;
+  "material-set-graph": MaterialSetGraphResult;
   "save-scene": PathResult;
   "load-scene": PathResult;
   "save-project": ProjectInfoDto;
