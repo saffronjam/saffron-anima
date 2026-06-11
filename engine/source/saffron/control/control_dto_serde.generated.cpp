@@ -3797,6 +3797,14 @@ namespace se
         return out;
     }
 
+    auto dtoToJson(const MaterialCookResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["compiled"] = value.compiled;
+        out["failed"] = value.failed;
+        return out;
+    }
+
     auto dtoToJson(const PathResult& value) -> Json
     {
         Json out = Json::object();
