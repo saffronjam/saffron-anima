@@ -1,7 +1,21 @@
 # Phase 15 — Engine hardening
 
-**Status:** NOT STARTED
+**Status:** COMPLETED — slot reclamation + mipmaps + dangling-ref validation done; BC compression deferred (optional)
 **Depends on:** 05
+
+> **Done.** (1) **Bindless slot reclamation**: a shared `Ref<std::vector<u32>>` free-list on `Descriptors`,
+> held by every `GpuTexture`; `reset()` returns the slot on destroy, `claimBindlessSlot` reuses a freed slot
+> before growing `nextBindlessIndex`. Safe because the draw path holds live texture `Ref`s for the frame
+> (textures die at cache-clear/teardown, never mid-frame) and the free-list outlives both. render-stats now
+> reports `bindlessTextures`/`bindlessFree`. e2e `material_reclaim.test.ts` proves slots return to the
+> free-list across a project reload (and reclaim runs at every test teardown). (2) **Mipmaps**: the LDR
+> `uploadTexture` path creates a full chain and `recordMipChain` blits down it (`vkCmdBlitImage`, linear),
+> sampled by the existing trilinear sampler — 4K material textures stop aliasing. (3) **Dangling-ref
+> validation**: a missing material already defaulted+warned; a missing texture now warns once
+> (negative-cached) and the draw path falls back to the default white (never black/null).
+>
+> **Deferred (optional, per the plan):** BC7/BC5 transcode, and mipmaps for the float/16 (HDR/EXR) upload
+> paths — those need a per-format `BLIT_SRC/DST` feature check first.
 
 ## Goal
 
