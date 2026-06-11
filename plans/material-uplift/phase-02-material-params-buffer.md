@@ -1,7 +1,18 @@
 # Phase 02 — Material params buffer
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 01
+
+> **Outcome:** `MaterialParamsData` (96 B, `static_assert`'d) + per-frame `materialBuffers` added to
+> `Instancing`; set 2 gained **binding 2** (fragment-stage `StorageBuffer`); `submitDrawList` now
+> dedups each `SubmeshMaterial` into a per-frame table (keyed on the entry bytes), packs the index
+> into `InstanceData.texture.w`, and uploads via a new `ensureMaterialCapacity`. `mesh.slang` reads
+> `materialParams[materialIndex]` for baseColor/albedo/mr/factors/emissive. **Decision:** `InstanceData`
+> layout left untouched (it carries `prevModel` — 256 B — and is shared by depth/shadow/motion/gbuffer/skin
+> pipelines; only `mesh.slang`'s fragment read the material lanes, so they are now vestigial but harmless;
+> trimming deferred to avoid touching every pass's `Instance` struct). Teardown `materialBuffers[i].reset()`
+> added. **Verified:** 6/6 material e2e pass incl. `materials_render` (MR texture changes shaded pixels) and
+> the MaterialSet per-slot-factor test — confirms distinct materials get distinct deduped entries.
 
 ## Goal
 
