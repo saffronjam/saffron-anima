@@ -114,6 +114,10 @@ export namespace se
         Mesh,
         Albedo,
         MetallicRoughness,
+        Normal,
+        Occlusion,
+        Emissive,
+        Height,
     };
 
     enum class ScreenshotTargetDto
