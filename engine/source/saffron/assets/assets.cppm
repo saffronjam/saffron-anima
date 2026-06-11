@@ -1394,6 +1394,47 @@ return {0}
         glm::vec3 proxyAlbedo{ 1.0f };
     };
 
+    // Resolves a loaded MaterialAsset (.smat) to a render-ready SubmeshMaterial, loading its
+    // texture handles to bindless GPU textures. A packed ORM also feeds the occlusion slot (AO in
+    // R), so one ARM/ORM map drives roughness (G), metalness (B), and AO (R).
+    auto resolveMaterialAsset(AssetServer& assets, Renderer& renderer, const MaterialAsset& mat) -> SubmeshMaterial
+    {
+        SubmeshMaterial sm;
+        sm.baseColor = mat.baseColor;
+        sm.metallic = mat.metallic;
+        sm.roughness = mat.roughness;
+        sm.emissive = mat.emissive;
+        sm.emissiveStrength = mat.emissiveStrength;
+        sm.normalStrength = mat.normalStrength;
+        sm.uvTiling = mat.uvTiling;
+        sm.uvOffset = mat.uvOffset;
+        sm.heightScale = mat.heightScale;
+        sm.alphaClip = (mat.blend == "masked");
+        sm.alphaCutoff = mat.alphaCutoff;
+        if (mat.albedoTexture.value != 0)
+        {
+            sm.albedoTexture = loadTextureAsset(assets, renderer, mat.albedoTexture);
+        }
+        if (mat.ormTexture.value != 0)
+        {
+            sm.metallicRoughnessTexture = loadTextureAsset(assets, renderer, mat.ormTexture);
+            sm.occlusionTexture = loadTextureAsset(assets, renderer, mat.ormTexture);
+        }
+        if (mat.normalTexture.value != 0)
+        {
+            sm.normalTexture = loadTextureAsset(assets, renderer, mat.normalTexture);
+        }
+        if (mat.emissiveTexture.value != 0)
+        {
+            sm.emissiveTexture = loadTextureAsset(assets, renderer, mat.emissiveTexture);
+        }
+        if (mat.heightTexture.value != 0)
+        {
+            sm.heightTexture = loadTextureAsset(assets, renderer, mat.heightTexture);
+        }
+        return sm;
+    }
+
     auto resolveEntityMaterials(Scene& scene, AssetServer& assets, Renderer& renderer, Entity entity,
                                 const Ref<GpuMesh>& meshRef) -> ResolvedMaterials
     {
@@ -1438,6 +1479,24 @@ return {0}
             }
             return sm;
         };
+        if (hasComponent<MaterialAssetComponent>(scene, entity))
+        {
+            const Uuid matId = getComponent<MaterialAssetComponent>(scene, entity).material;
+            if (matId.value != 0)
+            {
+                auto loaded = loadMaterialAsset(assets, matId);
+                if (!loaded)
+                {
+                    logWarn(std::format("entity material asset {} missing; using default", matId.value));
+                }
+                const MaterialAsset mat = loaded ? *loaded : defaultMaterialAsset();
+                out.unlit = mat.unlit;
+                out.proxyAlbedo = glm::vec3(mat.baseColor);
+                const SubmeshMaterial sm = resolveMaterialAsset(assets, renderer, mat);
+                out.submeshes.assign(std::max<std::size_t>(meshRef->submeshes.size(), std::size_t{ 1 }), sm);
+                return out;
+            }
+        }
         if (hasComponent<MaterialSetComponent>(scene, entity))
         {
             const std::vector<MaterialSlot>& slots = getComponent<MaterialSetComponent>(scene, entity).slots;
