@@ -1170,6 +1170,7 @@ export namespace se
     struct Pipelines
     {
         Ref<Pipeline> thumbnail;      // lazy mesh-thumbnail graphics pipeline
+        Ref<Pipeline> preview;        // lazy material-preview graphics pipeline (sphere + studio light)
         Ref<Pipeline> tonemap;        // in-place compute tonemap (post-process)
         Ref<Pipeline> depthPrepass;   // vertex-only depth pre-pass
         Ref<Pipeline> shadowDepth;    // vertex-only depth pass into the shadow map (depth-biased)
@@ -1643,6 +1644,7 @@ export namespace se
         glm::mat4 prevViewProj{ 1.0f };       // last frame's camera viewProj, for TAA motion vectors
         bool prevViewProjValid = false;       // false until the first frame stores one
         Ref<GpuTexture> defaultWhiteTexture;  // 1x1 white; bound when a material has no albedo
+        Ref<GpuMesh> previewSphere;           // lazy unit UV sphere for material previews
         RenderStats stats;                    // populated each frame by submitDrawList
         f32 frameMs = 0.0f;                   // EMA-smoothed frame-to-frame CPU time, updated in endFrame
         u64 lastFrameNs = 0;                  // steady_clock stamp of the previous endFrame; 0 until one lands
@@ -1769,6 +1771,11 @@ export namespace se
     // Renders a mesh to a square GPU texture (a 3/4 view framed by the mesh AABB, lit by
     // a fixed light) for an asset thumbnail. Synchronous one-off render; safe between frames.
     auto renderMeshThumbnail(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<Ref<GpuTexture>>;
+    // Renders a unit sphere with `material` under fixed studio lighting (the preview.slang pipeline)
+    // into a size×size sampled texture — the material preview pane + cached material thumbnails. Like
+    // renderMeshThumbnail, an out-of-band render that waits idle (never on the present path).
+    auto renderMaterialPreview(Renderer& renderer, const SubmeshMaterial& material, u32 size)
+        -> Result<Ref<GpuTexture>>;
 
     // Renders/loads an asset to PNG bytes in memory (synchronous, own command buffer + waitIdle;
     // never on the present path). Mesh: framed like renderMeshThumbnail at size×size. Texture:
