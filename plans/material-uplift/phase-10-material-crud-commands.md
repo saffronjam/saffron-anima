@@ -16,11 +16,13 @@
 > **not parse `std::optional<EntitySelector>`** — so `material-create`'s "snapshot from current entity"
 > (`from`) was dropped; revisit with a string selector or explicit factor fields.
 >
-> **Read CRUD added (later in-session):** `material-list` → `{ materials: [{id,name,folder}] }` (the browser
-> enumeration) and `material-get {id|name}` → the material's blend/unlit/factors/texture-ids (the inspector
-> read). Both e2e-covered (`material_list.test.ts`, `material_get.test.ts`). **Still deferred to phase 13
-> (editor):** `material.update` (live edit — the editor panel writes through it) and the `material-create`
-> snapshot-from-entity (`from`), both consumed by the editor UI.
+> **Full CRUD added (later in-session):** `material-list` → `{ materials: [{id,name,folder}] }`,
+> `material-get {id|name}` → blend/unlit/factors/texture-ids, and `material-update {id} [baseColor metallic
+> roughness emissive emissiveStrength]` (overwrites the `.smat` in place via `updateMaterialAsset`). All
+> e2e-covered (`material_list`/`material_get`/`material_update.test.ts`). So the command surface the editor
+> needs is complete except the `material-create` **snapshot-from-entity** (`from`) — still deferred (gen.ts
+> can't parse `std::optional<EntitySelector>`; revisit with a string selector or explicit factor fields).
+> `material-update` covers the scalar factors; texture-slot assignment is via `assign-asset`.
 
 ## Goal
 
