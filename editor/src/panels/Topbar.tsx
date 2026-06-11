@@ -307,6 +307,7 @@ export function Topbar() {
               <DropdownMenuItem onSelect={() => openRightTool("profiler")}>
                 Profiler
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => openRightTool("material")}>Material</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <Button
