@@ -57,6 +57,43 @@ export namespace se
         SystemMeshVisual editorCameraModel;
     };
 
+    // The native material asset (.smat): a reference-only property bag over the übershader. It
+    // bakes nothing — texture references are catalog Uuids, and colorspace / normal convention
+    // are recorded on the referenced texture's AssetEntry. Resolved to a SubmeshMaterial +
+    // MaterialParams at draw time (a later phase). Grows with the PBR slot set.
+    struct MaterialAsset
+    {
+        std::string shader = "mesh";   // übershader family selector
+        std::string blend = "opaque";  // opaque | masked | translucent (PSO axis)
+        bool unlit = false;
+        bool doubleSided = false;
+        glm::vec4 baseColor{ 1.0f };
+        f32 metallic = 0.0f;
+        f32 roughness = 1.0f;
+        glm::vec3 emissive{ 0.0f };
+        f32 emissiveStrength = 1.0f;
+        f32 normalStrength = 1.0f;
+        f32 alphaCutoff = 0.5f;
+        f32 heightScale = 0.05f;
+        glm::vec2 uvTiling{ 1.0f };
+        glm::vec2 uvOffset{ 0.0f };
+        Uuid albedoTexture;
+        Uuid ormTexture;       // packed AO/roughness/metallic (or a standalone metallic-roughness)
+        Uuid normalTexture;
+        Uuid emissiveTexture;
+        Uuid heightTexture;
+        std::string normalConvention = "gl";  // gl | dx — baked to gl at import; recorded for provenance
+        u32 features = 0;      // resolved feature bitset (populated from the PBR-slots phase)
+    };
+
+    // The built-in default material: white albedo, fully rough, non-metallic. Returned by the
+    // resolve path when a referenced material is missing. Its id is in the reserved (< 1024) range.
+    inline constexpr Uuid DefaultMaterialId{ 1 };
+    inline auto defaultMaterialAsset() -> MaterialAsset
+    {
+        return MaterialAsset{};
+    }
+
     // What importModel produces: the imported mesh + its primary material, and — for a
     // rigged glTF — the node forest + skin descriptor spawnSkinnedModel instantiates
     // as bone entities.
@@ -203,6 +240,10 @@ export namespace se
         {
             return "animation";
         }
+        if (type == AssetType::Material)
+        {
+            return "material";
+        }
         return "mesh";
     }
 
@@ -219,6 +260,10 @@ export namespace se
         if (name == "animation")
         {
             return AssetType::Animation;
+        }
+        if (name == "material")
+        {
+            return AssetType::Material;
         }
         if (name == "mesh")
         {
@@ -362,6 +407,7 @@ export namespace se
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(assets.root) / "models", ec);
         std::filesystem::create_directories(std::filesystem::path(assets.root) / "textures", ec);
+        std::filesystem::create_directories(std::filesystem::path(assets.root) / "materials", ec);
     }
 
     void ensureAssetDirectories(const AssetServer& assets)
@@ -369,6 +415,7 @@ export namespace se
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(assets.root) / "models", ec);
         std::filesystem::create_directories(std::filesystem::path(assets.root) / "textures", ec);
+        std::filesystem::create_directories(std::filesystem::path(assets.root) / "materials", ec);
     }
 
     void clearAssetCaches(AssetServer& assets)
@@ -759,6 +806,160 @@ return {0}
                                              std::string{}, true });
         assets.textureRefByUuid[id.value] = *texture;
         return id;
+    }
+
+    // --- Native material asset (.smat) serialization + catalog I/O ---
+
+    auto materialAssetToJson(const MaterialAsset& m) -> nlohmann::json
+    {
+        const auto u = [](Uuid id) { return std::to_string(id.value); };
+        return nlohmann::json{
+            { "version", 1 },
+            { "shader", m.shader },
+            { "blend", m.blend },
+            { "unlit", m.unlit },
+            { "doubleSided", m.doubleSided },
+            { "normalConvention", m.normalConvention },
+            { "factors",
+              { { "baseColor", { m.baseColor.x, m.baseColor.y, m.baseColor.z, m.baseColor.w } },
+                { "metallic", m.metallic },
+                { "roughness", m.roughness },
+                { "emissive", { m.emissive.x, m.emissive.y, m.emissive.z } },
+                { "emissiveStrength", m.emissiveStrength },
+                { "normalStrength", m.normalStrength },
+                { "alphaCutoff", m.alphaCutoff },
+                { "heightScale", m.heightScale },
+                { "uvTiling", { m.uvTiling.x, m.uvTiling.y } },
+                { "uvOffset", { m.uvOffset.x, m.uvOffset.y } } } },
+            { "textures",
+              { { "albedo", u(m.albedoTexture) },
+                { "ormOrMr", u(m.ormTexture) },
+                { "normal", u(m.normalTexture) },
+                { "emissive", u(m.emissiveTexture) },
+                { "height", u(m.heightTexture) } } }
+        };
+    }
+
+    auto materialAssetFromJson(const nlohmann::json& j) -> MaterialAsset
+    {
+        MaterialAsset m;
+        const auto uuid = [](const nlohmann::json& v) -> Uuid
+        {
+            if (v.is_string())
+            {
+                return Uuid{ std::strtoull(v.get<std::string>().c_str(), nullptr, 10) };
+            }
+            if (v.is_number_unsigned())
+            {
+                return Uuid{ v.get<u64>() };
+            }
+            return Uuid{ 0 };
+        };
+        m.shader = j.value("shader", std::string{ "mesh" });
+        m.blend = j.value("blend", std::string{ "opaque" });
+        m.unlit = j.value("unlit", false);
+        m.doubleSided = j.value("doubleSided", false);
+        m.normalConvention = j.value("normalConvention", std::string{ "gl" });
+        if (auto fit = j.find("factors"); fit != j.end() && fit->is_object())
+        {
+            const nlohmann::json& f = *fit;
+            if (auto v = f.find("baseColor"); v != f.end() && v->is_array() && v->size() == 4)
+            {
+                m.baseColor = glm::vec4{ (*v)[0].get<f32>(), (*v)[1].get<f32>(), (*v)[2].get<f32>(), (*v)[3].get<f32>() };
+            }
+            m.metallic = f.value("metallic", 0.0f);
+            m.roughness = f.value("roughness", 1.0f);
+            if (auto v = f.find("emissive"); v != f.end() && v->is_array() && v->size() == 3)
+            {
+                m.emissive = glm::vec3{ (*v)[0].get<f32>(), (*v)[1].get<f32>(), (*v)[2].get<f32>() };
+            }
+            m.emissiveStrength = f.value("emissiveStrength", 1.0f);
+            m.normalStrength = f.value("normalStrength", 1.0f);
+            m.alphaCutoff = f.value("alphaCutoff", 0.5f);
+            m.heightScale = f.value("heightScale", 0.05f);
+            if (auto v = f.find("uvTiling"); v != f.end() && v->is_array() && v->size() == 2)
+            {
+                m.uvTiling = glm::vec2{ (*v)[0].get<f32>(), (*v)[1].get<f32>() };
+            }
+            if (auto v = f.find("uvOffset"); v != f.end() && v->is_array() && v->size() == 2)
+            {
+                m.uvOffset = glm::vec2{ (*v)[0].get<f32>(), (*v)[1].get<f32>() };
+            }
+        }
+        if (auto tit = j.find("textures"); tit != j.end() && tit->is_object())
+        {
+            const nlohmann::json& t = *tit;
+            if (auto v = t.find("albedo"); v != t.end())
+            {
+                m.albedoTexture = uuid(*v);
+            }
+            if (auto v = t.find("ormOrMr"); v != t.end())
+            {
+                m.ormTexture = uuid(*v);
+            }
+            if (auto v = t.find("normal"); v != t.end())
+            {
+                m.normalTexture = uuid(*v);
+            }
+            if (auto v = t.find("emissive"); v != t.end())
+            {
+                m.emissiveTexture = uuid(*v);
+            }
+            if (auto v = t.find("height"); v != t.end())
+            {
+                m.heightTexture = uuid(*v);
+            }
+        }
+        return m;
+    }
+
+    // Writes a MaterialAsset to assets/materials/<uuid>.smat and registers a Material catalog
+    // entry (named, deduped). Returns the new id.
+    auto saveMaterialAsset(AssetServer& assets, const MaterialAsset& mat, const std::string& name,
+                           const std::string& folder = std::string{}) -> Result<Uuid>
+    {
+        const Uuid id = newUuid();
+        ensureAssetDirectories(assets);
+        const std::string relativePath = "materials/" + std::to_string(id.value) + ".smat";
+        std::ofstream out(assets.root + "/" + relativePath);
+        if (!out)
+        {
+            return Err(std::format("cannot write material '{}'", relativePath));
+        }
+        out << materialAssetToJson(mat).dump(2);
+        if (!out)
+        {
+            return Err(std::format("write failed for material '{}'", relativePath));
+        }
+        putAsset(assets.catalog,
+                 AssetEntry{ id, uniqueName(assets.catalog, name), AssetType::Material, relativePath, folder });
+        return id;
+    }
+
+    // Reads assets/materials/<uuid>.smat into a MaterialAsset (pure data; textures are not
+    // resolved to GPU handles here). The reserved default-material id returns the built-in.
+    auto loadMaterialAsset(AssetServer& assets, Uuid id) -> Result<MaterialAsset>
+    {
+        if (id.value == DefaultMaterialId.value)
+        {
+            return defaultMaterialAsset();
+        }
+        const AssetEntry* entry = findAsset(assets.catalog, id);
+        if (entry == nullptr || entry->type != AssetType::Material)
+        {
+            return Err(std::format("material asset {} not found", id.value));
+        }
+        std::ifstream in(assets.root + "/" + entry->path);
+        if (!in)
+        {
+            return Err(std::format("cannot read material '{}'", entry->path));
+        }
+        nlohmann::json j = nlohmann::json::parse(in, nullptr, false);
+        if (j.is_discarded())
+        {
+            return Err(std::format("invalid material json '{}'", entry->path));
+        }
+        return materialAssetFromJson(j);
     }
 
     // Imports an external image file into the asset dir + catalog (name = filename stem).
