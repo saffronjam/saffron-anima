@@ -196,9 +196,13 @@ export namespace se
         Uuid normalTexture;      // tangent-space normal map (OpenGL +Y convention)
         Uuid occlusionTexture;   // ambient occlusion (AO in R)
         Uuid emissiveTexture;    // emissive map (modulates the emissive factor)
+        Uuid heightTexture;      // height/displacement (R) for parallax occlusion mapping
         f32 normalStrength = 1.0f;
         glm::vec2 uvTiling{ 1.0f };
         glm::vec2 uvOffset{ 0.0f };
+        f32 heightScale = 0.05f;
+        bool alphaClip = false;  // masked: discard fragments below alphaCutoff
+        f32 alphaCutoff = 0.5f;
     };
 
     // One material in a multi-material mesh; the same fields as MaterialComponent.
@@ -215,9 +219,13 @@ export namespace se
         Uuid normalTexture;
         Uuid occlusionTexture;
         Uuid emissiveTexture;
+        Uuid heightTexture;
         f32 normalStrength = 1.0f;
         glm::vec2 uvTiling{ 1.0f };
         glm::vec2 uvOffset{ 0.0f };
+        f32 heightScale = 0.05f;
+        bool alphaClip = false;
+        f32 alphaCutoff = 0.5f;
     };
 
     // An ordered material table for a mesh with more than one source material; each
