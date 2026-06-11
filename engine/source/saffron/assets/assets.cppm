@@ -1150,6 +1150,48 @@ return {0}
                     logWarn(std::format("model '{}': metallic-roughness texture failed: {}", path, texture.error()));
                 }
             }
+            if (src.hasNormal)
+            {
+                // Normal maps are linear data, not sRGB color.
+                const std::string label = std::format("{} normal {}", baseName, i);
+                auto texture =
+                    registerTextureBytes(assets, renderer, src.normalBytes, src.normalExt, label, /*srgb=*/false);
+                if (texture)
+                {
+                    slot.normalTexture = *texture;
+                }
+                else
+                {
+                    logWarn(std::format("model '{}': normal texture failed: {}", path, texture.error()));
+                }
+            }
+            if (src.hasOcclusion)
+            {
+                const std::string label = std::format("{} occlusion {}", baseName, i);
+                auto texture =
+                    registerTextureBytes(assets, renderer, src.occlusionBytes, src.occlusionExt, label, /*srgb=*/false);
+                if (texture)
+                {
+                    slot.occlusionTexture = *texture;
+                }
+                else
+                {
+                    logWarn(std::format("model '{}': occlusion texture failed: {}", path, texture.error()));
+                }
+            }
+            if (src.hasEmissiveTex)
+            {
+                const std::string label = std::format("{} emissive {}", baseName, i);
+                auto texture = registerTextureBytes(assets, renderer, src.emissiveTexBytes, src.emissiveTexExt, label);
+                if (texture)
+                {
+                    slot.emissiveTexture = *texture;
+                }
+                else
+                {
+                    logWarn(std::format("model '{}': emissive texture failed: {}", path, texture.error()));
+                }
+            }
             result.materials.push_back(slot);
         }
         if (!result.materials.empty())
@@ -1236,6 +1278,16 @@ return {0}
             material.emissive = slot.emissive;
             material.emissiveStrength = slot.emissiveStrength;
             material.unlit = slot.unlit;
+            material.normalTexture = slot.normalTexture;
+            material.occlusionTexture = slot.occlusionTexture;
+            material.emissiveTexture = slot.emissiveTexture;
+            material.heightTexture = slot.heightTexture;
+            material.normalStrength = slot.normalStrength;
+            material.uvTiling = slot.uvTiling;
+            material.uvOffset = slot.uvOffset;
+            material.heightScale = slot.heightScale;
+            material.alphaClip = slot.alphaClip;
+            material.alphaCutoff = slot.alphaCutoff;
         }
     }
 
