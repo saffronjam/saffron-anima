@@ -1,7 +1,16 @@
 # Phase 07 — Texture import upgrades
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (bake helpers; EXR + 16-bit deferred)
 **Depends on:** 03
+
+> **Outcome / scope note.** Landed the low-risk, correctness-critical subset: `bakeDxToGlNormal`
+> (invert green → OpenGL convention) and `bakeGlossToRoughness` (1−x) in `Saffron.Geometry` (exported
+> declaration + impl), operating on a decoded `DecodedImage` in place. The phase-08 importer applies
+> these at import so the übershader stays convention-agnostic. Build clean (helpers unused until phase 08
+> → no behaviour change). **Deferred as refinements** (not needed for the phase-08 visual test, which uses
+> 8-bit PNG): **EXR decode** (tinyexr vendoring + DWAA-compression risk — the coast-rocks EXRs can be
+> converted to PNG offline via the host's ImageMagick), **16-bit PNG decode + `uploadTexture16`** (for
+> higher-precision displacement), and an `AssetEntry.normalConvention` provenance field.
 
 ## Goal
 
