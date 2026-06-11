@@ -377,6 +377,26 @@ namespace se
                 }
                 png = std::move(*bytes);
             }
+            else if (match->type == AssetType::Material)
+            {
+                auto loaded = loadMaterialAsset(ctx.assets, match->id);
+                if (!loaded)
+                {
+                    return Err(loaded.error());
+                }
+                const SubmeshMaterial sm = resolveMaterialAsset(ctx.assets, ctx.renderer, *loaded);
+                auto tex = renderMaterialPreview(ctx.renderer, sm, size);
+                if (!tex)
+                {
+                    return Err(tex.error());
+                }
+                auto bytes = encodeTextureThumbnailPng(ctx.renderer, *tex, size);
+                if (!bytes)
+                {
+                    return Err(bytes.error());
+                }
+                png = std::move(*bytes);
+            }
             else
             {
                 return Err(std::string{ "asset has no thumbnail" });
