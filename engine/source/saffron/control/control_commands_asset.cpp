@@ -905,6 +905,42 @@ namespace se
                 return MaterialAssignResult{ WireUuid{ matId.value } };
             });
 
+        registerCommand<EmptyParams, MaterialCookResult>(
+            reg, "material-cook", "material-cook",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<MaterialCookResult>
+            {
+                // Bake every codegen material's übershader variant to disk (the shipping/precompile
+                // direction): a non-foldable graph needs its per-material shader compiled. Foldable and
+                // graphless materials are skipped (they draw on the shared übershader).
+                MaterialCookResult out{ 0, 0 };
+                for (const AssetEntry& entry : ctx.assets.catalog.entries)
+                {
+                    if (entry.type != AssetType::Material)
+                    {
+                        continue;
+                    }
+                    auto raw = loadMaterialAssetRaw(ctx.assets, entry.id);
+                    if (!raw || !raw->graph.is_object() || raw->graph.empty())
+                    {
+                        continue;
+                    }
+                    MaterialAsset probe = *raw;
+                    if (lowerGraphToParams(raw->graph, probe))
+                    {
+                        continue;  // folds to params — no shader needed
+                    }
+                    if (compileMaterialMeshShader(ctx.assets, raw->graph, entry.id))
+                    {
+                        out.compiled += 1;
+                    }
+                    else
+                    {
+                        out.failed += 1;
+                    }
+                }
+                return out;
+            });
+
         registerCommand<MaterialCompileParams, MaterialCompileResult>(
             reg, "material-compile-graph", "material-compile-graph {material}",
             [](EngineContext& ctx, const MaterialCompileParams& params) -> Result<MaterialCompileResult>
