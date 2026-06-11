@@ -1150,6 +1150,30 @@ return {0}
                 {
                     body += std::format("    float4 n_{} = float4(dot(n_{}.rgb, n_{}.rgb));\n", id, a, b);
                 }
+                else if (type == "uv")
+                {
+                    body += std::format("    float4 n_{} = float4(uv, 0.0, 1.0);\n", id);
+                }
+                else if (type == "sin")
+                {
+                    body += std::format("    float4 n_{} = sin(n_{});\n", id, a);
+                }
+                else if (type == "cos")
+                {
+                    body += std::format("    float4 n_{} = cos(n_{});\n", id, a);
+                }
+                else if (type == "frac")
+                {
+                    body += std::format("    float4 n_{} = frac(n_{});\n", id, a);
+                }
+                else if (type == "step")
+                {
+                    body += std::format("    float4 n_{} = step(n_{}, n_{});\n", id, a, b);
+                }
+                else if (type == "smoothstep")
+                {
+                    body += std::format("    float4 n_{} = smoothstep(n_{}, n_{}, n_{});\n", id, a, b, t);
+                }
                 else
                 {
                     body += std::format("    float4 n_{} = float4(0.0);  // unknown node '{}'\n", id, type);
