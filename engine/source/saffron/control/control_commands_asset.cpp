@@ -837,6 +837,54 @@ namespace se
                 return AssignAssetResult{ WireUuid{ assignId.value }, assignName, params.slot };
             });
 
+        registerCommand<MaterialCreateParams, MaterialCreateResult>(
+            reg, "material-create", "material-create {name} [from-entity]",
+            [](EngineContext& ctx, const MaterialCreateParams& params) -> Result<MaterialCreateResult>
+            {
+                MaterialAsset asset;
+                const std::string name = params.name.empty() ? std::string{ "Material" } : params.name;
+                auto id = saveMaterialAsset(ctx.assets, asset, name);
+                if (!id)
+                {
+                    return Err(id.error());
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return MaterialCreateResult{ WireUuid{ id->value }, name };
+            });
+
+        registerCommand<MaterialAssignParams, MaterialAssignResult>(
+            reg, "material-assign", "material-assign {entity, material:id|name}",
+            [](EngineContext& ctx, const MaterialAssignParams& params) -> Result<MaterialAssignResult>
+            {
+                auto entity = resolveEntity(ctx, json{ { "entity", params.entity.value } });
+                if (!entity)
+                {
+                    return Err(entity.error());
+                }
+                const json& sel = params.material.value;
+                const std::string selector = sel.is_string() ? sel.get<std::string>() : std::string{};
+                const bool clearing = selector == "0" || selector.empty() ||
+                                      (sel.is_number_unsigned() && sel.get<u64>() == 0);
+                Uuid matId{ 0 };
+                if (!clearing)
+                {
+                    auto resolved = resolveAsset(ctx, params.material);
+                    if (!resolved)
+                    {
+                        return Err(resolved.error());
+                    }
+                    matId = (*resolved)->id;
+                }
+                Scene& scene = activeScene(ctx.sceneEdit);
+                if (!hasComponent<MaterialAssetComponent>(scene, *entity))
+                {
+                    addComponent<MaterialAssetComponent>(scene, *entity);
+                }
+                getComponent<MaterialAssetComponent>(scene, *entity).material = matId;  // 0 = cleared
+                ctx.sceneEdit.sceneVersion += 1;
+                return MaterialAssignResult{ WireUuid{ matId.value } };
+            });
+
         registerCommand<PathParams, PathResult>(reg, "save-scene", "save-scene {path}",
                                                 [](EngineContext& ctx, const PathParams& params) -> Result<PathResult>
                                                 {
