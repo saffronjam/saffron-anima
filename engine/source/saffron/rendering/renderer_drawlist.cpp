@@ -310,6 +310,41 @@ namespace se
         renderer.context.device.updateDescriptorSets(write, {});
         return {};
     }
+    // Ensures the current frame's material-params buffer holds at least `count` entries and
+    // is written to set 2 binding 2; same grow-only policy as the instance buffer.
+    auto ensureMaterialCapacity(Renderer& renderer, u32 frame, u32 count) -> Result<void>
+    {
+        if (renderer.instancing.materialBuffers[frame] && renderer.instancing.materialCapacity[frame] >= count)
+        {
+            return {};
+        }
+        u32 capacity = renderer.instancing.materialCapacity[frame];
+        if (capacity == 0)
+        {
+            capacity = 64;
+        }
+        while (capacity < count)
+        {
+            capacity = capacity * 2;
+        }
+        Result<Ref<Buffer>> buffer =
+            makeMappedStorageBuffer(renderer, static_cast<vk::DeviceSize>(capacity) * sizeof(MaterialParamsData));
+        if (!buffer)
+        {
+            return Err(buffer.error());
+        }
+        renderer.instancing.materialBuffers[frame] = *buffer;
+        renderer.instancing.materialCapacity[frame] = capacity;
+
+        vk::DescriptorBufferInfo bufferInfo{ (*buffer)->buffer, 0, (*buffer)->size };
+        vk::WriteDescriptorSet write{};
+        write.dstSet = renderer.instancing.sets[frame];
+        write.dstBinding = 2;
+        write.descriptorType = vk::DescriptorType::eStorageBuffer;
+        write.setBufferInfo(bufferInfo);
+        renderer.context.device.updateDescriptorSets(write, {});
+        return {};
+    }
 
     // Ensures the frame's deformed-vertex buffer holds at least `vertexCount` base-layout
     // Vertex elements; same grow-only policy (starts 4096, doubles, never shrinks). The
@@ -438,6 +473,23 @@ namespace se
         std::vector<Bucket> buckets;
         std::vector<Ref<GpuTexture>> liveTextures;
         const u32 defaultTextureIndex = renderer.defaultWhiteTexture ? renderer.defaultWhiteTexture->bindlessIndex : 0u;
+        // Deduplicated per-material params: one entry per distinct material this frame, indexed
+        // by InstanceData.texture.w. Keyed on the raw bytes of the built entry, so identical
+        // materials (the common case) collapse to one entry and one shared shader lookup.
+        std::vector<MaterialParamsData> materialTable;
+        std::unordered_map<std::string, u32> materialDedup;
+        const auto internMaterial = [&](const MaterialParamsData& m) -> u32
+        {
+            std::string key(reinterpret_cast<const char*>(&m), sizeof(MaterialParamsData));
+            if (auto found = materialDedup.find(key); found != materialDedup.end())
+            {
+                return found->second;
+            }
+            const u32 index = static_cast<u32>(materialTable.size());
+            materialTable.push_back(m);
+            materialDedup.emplace(std::move(key), index);
+            return index;
+        };
         // This frame's model matrices, keyed by entity, applied to the cache after the loop so a
         // repeated entity reads the same previous value. A new entity (no cache hit) reprojects
         // from its current model => zero object motion on its first frame.
@@ -518,13 +570,23 @@ namespace se
                         liveTextures.push_back(mat.metallicRoughnessTexture);
                     }
                 }
+                MaterialParamsData mp;
+                mp.baseColor = baseColor;
+                mp.pbr = glm::vec4{ metallicRoughness.x, metallicRoughness.y, 1.0f, 0.5f };
+                mp.emissive = glm::vec4{ emissive, 0.0f };
+                mp.uv = glm::vec4{ 1.0f, 1.0f, 0.0f, 0.0f };
+                mp.tex0 = glm::uvec4{ albedoIndex, mrIndex, 0u, 0u };
+                mp.tex1 = glm::uvec4{ 0u };
+                const u32 materialIndex = internMaterial(mp);
+
                 InstanceData instance;
                 instance.model = item.model;
                 instance.normalMatrix = item.normalMatrix;
                 instance.prevModel = prevModel;
                 instance.baseColor = baseColor;
-                // .x = albedo bindless index, .y = joint-palette offset (skinned), .z = metallic-roughness.
-                instance.texture = glm::uvec4{ albedoIndex, item.jointOffset, mrIndex, 0 };
+                // .x = albedo bindless index, .y = joint-palette offset (skinned), .z = metallic-roughness,
+                // .w = deduplicated material-params index (set 2, binding 2).
+                instance.texture = glm::uvec4{ albedoIndex, item.jointOffset, mrIndex, materialIndex };
                 instance.pbr = glm::vec4{ metallicRoughness.x, metallicRoughness.y, 0.0f, 0.0f };
                 instance.emissive = glm::vec4{ emissive, 0.0f };
                 rows.push_back(instance);
@@ -624,6 +686,17 @@ namespace se
         const vk::DeviceSize bytes = instances.size() * sizeof(InstanceData);
         std::memcpy(renderer.instancing.buffers[frame]->mapped, instances.data(), bytes);
         vmaFlushAllocation(renderer.context.allocator, renderer.instancing.buffers[frame]->alloc, 0, bytes);
+        // Upload the frame's deduplicated material table (set 2, binding 2). Non-empty whenever
+        // there are instances, since every row interns at least the default material.
+        if (Result<void> ok = ensureMaterialCapacity(renderer, frame, static_cast<u32>(materialTable.size())); !ok)
+        {
+            logError(ok.error());
+            return;
+        }
+        const vk::DeviceSize materialBytes = materialTable.size() * sizeof(MaterialParamsData);
+        std::memcpy(renderer.instancing.materialBuffers[frame]->mapped, materialTable.data(), materialBytes);
+        vmaFlushAllocation(renderer.context.allocator, renderer.instancing.materialBuffers[frame]->alloc, 0,
+                           materialBytes);
         if (!joints.empty())
         {
             if (Result<void> ok = ensureJointCapacity(renderer, frame, static_cast<u32>(joints.size())); !ok)
