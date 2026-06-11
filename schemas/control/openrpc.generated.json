@@ -1896,6 +1896,24 @@
       }
     },
     {
+      "name": "material-set-graph",
+      "summary": "material-set-graph {material, graph}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MaterialSetGraphParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MaterialSetGraphResult"
+        }
+      }
+    },
+    {
       "name": "save-scene",
       "summary": "save-scene {path}",
       "params": [
@@ -3661,6 +3679,43 @@
           "id",
           "name",
           "folder"
+        ]
+      },
+      "MaterialSetGraphParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "material": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "graph": {}
+        },
+        "required": [
+          "material",
+          "graph"
+        ]
+      },
+      "MaterialSetGraphResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "foldable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "foldable"
         ]
       },
       "MaterialUpdateParams": {
