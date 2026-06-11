@@ -680,6 +680,12 @@ const commands: CommandDef[] = [
     result: "PreviewRenderResult",
     summary: "preview-render {material} [size]",
   },
+  {
+    name: "material-set-graph",
+    params: "MaterialSetGraphParams",
+    result: "MaterialSetGraphResult",
+    summary: "material-set-graph {material, graph}",
+  },
   { name: "save-scene", params: "PathParams", result: "PathResult", summary: "save-scene {path}" },
   { name: "load-scene", params: "PathParams", result: "PathResult", summary: "load-scene {path}" },
   {
@@ -828,6 +834,7 @@ const commandSkips = new Map<string, string>([
   ["material-get", "needs a created material asset"],
   ["material-update", "needs a created material asset"],
   ["preview-render", "renders a material to a PNG blob"],
+  ["material-set-graph", "needs a created material asset"],
   ["load-scene", "loads and replaces the scene from a file"],
   ["reload-project", "reloads and replaces the active project's scene and catalog"],
   ["screenshot", "writes an image file and can be deferred"],
