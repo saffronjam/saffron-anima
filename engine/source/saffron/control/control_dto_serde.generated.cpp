@@ -2704,6 +2704,58 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<MaterialCreateInstanceParams>) -> Result<MaterialCreateInstanceParams>
+    {
+        MaterialCreateInstanceParams out;
+
+        {
+            auto value = requiredField(params, "parent", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "parent");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.parent = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "name", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readString(**value, "name");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.name = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<MaterialSetOverrideParams>) -> Result<MaterialSetOverrideParams>
+    {
+        MaterialSetOverrideParams out;
+
+        {
+            auto value = requiredField(params, "material", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "material");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.material = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "field", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readString(**value, "field");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.field = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "value", 2, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readJson(**value, "value");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.value = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<OptionalPathParams>) -> Result<OptionalPathParams>
     {
         OptionalPathParams out;
@@ -3652,6 +3704,13 @@ namespace se
         Json out = Json::object();
         out["id"] = dtoToJson(value.id);
         out["foldable"] = value.foldable;
+        return out;
+    }
+
+    auto dtoToJson(const MaterialSetOverrideResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
         return out;
     }
 
