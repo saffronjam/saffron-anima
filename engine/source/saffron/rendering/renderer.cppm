@@ -536,10 +536,12 @@ namespace se
         renderer.frame.sceneSubmissions.clear();
         renderer.frame.uiSubmissions.clear();
         renderer.defaultWhiteTexture.reset();
+        renderer.previewSphere.reset();           // material-preview sphere mesh
         renderer.pipelines.cull.reset();          // RAII frees the compute pipeline + layout
         renderer.pipelines.overlay.reset();       // editor gizmo + billboard PSO
         renderer.pipelines.overlayDepth.reset();  // depth-tested overlay PSO (frustums)
         renderer.pipelines.thumbnail.reset();
+        renderer.pipelines.preview.reset();       // material-preview PSO
         renderer.pipelines.tonemap.reset();
         renderer.pipelines.fxaa.reset();
         renderer.pipelines.depthPrepass.reset();
