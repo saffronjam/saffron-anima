@@ -885,6 +885,19 @@ namespace se
                 return MaterialAssignResult{ WireUuid{ matId.value } };
             });
 
+        registerCommand<MaterialImportParams, MaterialImportResultDto>(
+            reg, "material-import", "material-import {path} [name]",
+            [](EngineContext& ctx, const MaterialImportParams& params) -> Result<MaterialImportResultDto>
+            {
+                auto result = importMaterialFolder(ctx.assets, ctx.renderer, params.path, params.name);
+                if (!result)
+                {
+                    return Err(result.error());
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return MaterialImportResultDto{ WireUuid{ result->material.value }, result->roles };
+            });
+
         registerCommand<PathParams, PathResult>(reg, "save-scene", "save-scene {path}",
                                                 [](EngineContext& ctx, const PathParams& params) -> Result<PathResult>
                                                 {
