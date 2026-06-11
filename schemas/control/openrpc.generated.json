@@ -1842,6 +1842,24 @@
       }
     },
     {
+      "name": "material-get",
+      "summary": "material-get {id|name}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MaterialGetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MaterialGetResult"
+        }
+      }
+    },
+    {
       "name": "save-scene",
       "summary": "save-scene {path}",
       "params": [
@@ -3461,6 +3479,85 @@
         "required": [
           "id",
           "name"
+        ]
+      },
+      "MaterialGetParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "material": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "material"
+        ]
+      },
+      "MaterialGetResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "blend": {
+            "type": "string"
+          },
+          "unlit": {
+            "type": "boolean"
+          },
+          "baseColor": {
+            "$ref": "#/components/schemas/Vec4"
+          },
+          "metallic": {
+            "type": "number"
+          },
+          "roughness": {
+            "type": "number"
+          },
+          "emissive": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "emissiveStrength": {
+            "type": "number"
+          },
+          "albedoTexture": {
+            "type": "string"
+          },
+          "ormTexture": {
+            "type": "string"
+          },
+          "normalTexture": {
+            "type": "string"
+          },
+          "emissiveTexture": {
+            "type": "string"
+          },
+          "heightTexture": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "blend",
+          "unlit",
+          "baseColor",
+          "metallic",
+          "roughness",
+          "emissive",
+          "emissiveStrength",
+          "albedoTexture",
+          "ormTexture",
+          "normalTexture",
+          "emissiveTexture",
+          "heightTexture"
         ]
       },
       "MaterialImportParams": {
