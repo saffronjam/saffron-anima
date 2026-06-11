@@ -905,6 +905,32 @@ namespace se
                 return MaterialAssignResult{ WireUuid{ matId.value } };
             });
 
+        registerCommand<MaterialCompileParams, MaterialCompileResult>(
+            reg, "material-compile-graph", "material-compile-graph {material}",
+            [](EngineContext& ctx, const MaterialCompileParams& params) -> Result<MaterialCompileResult>
+            {
+                auto resolved = resolveAsset(ctx, params.material);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                auto raw = loadMaterialAssetRaw(ctx.assets, (*resolved)->id);
+                if (!raw)
+                {
+                    return Err(raw.error());
+                }
+                if (!raw->graph.is_object() || raw->graph.empty())
+                {
+                    return Err(std::string{ "material has no node graph to compile" });
+                }
+                auto spv = compileMaterialGraph(ctx.assets, raw->graph, (*resolved)->id);
+                if (!spv)
+                {
+                    return Err(spv.error());
+                }
+                return MaterialCompileResult{ WireUuid{ (*resolved)->id.value }, true };
+            });
+
         registerCommand<MaterialImportParams, MaterialImportResultDto>(
             reg, "material-import", "material-import {path} [name]",
             [](EngineContext& ctx, const MaterialImportParams& params) -> Result<MaterialImportResultDto>
