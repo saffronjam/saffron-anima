@@ -12,6 +12,12 @@ and scalar factors out of the instance and into `MaterialParams`. **Same visuals
 data plumbing every later phase writes through, and it scales to the arbitrary parameter counts
 node-graph materials need (which can never fit a fixed instance struct).
 
+> **Heads-up (verified phase 01):** the shader `Instance` struct in `mesh.slang` has a **`prevModel`
+> mat4** lane (TAA object-motion) that the initial grounding missed — so it is 3× mat4, not 2×.
+> **Re-verify the real `InstanceData` layout in `renderer_types.cppm` before editing** (it likely
+> includes `prevModel`, making it 256 B not 192 B). The `materialIndex` still goes in `texture.w`,
+> but confirm the CPU/GPU field order (incl. `prevModel`) and update the `static_assert` accordingly.
+
 ## Why
 
 `InstanceData` is 192 B with only `texture.w`/`pbr.zw`/`emissive.w` free — enough for nothing
