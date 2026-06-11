@@ -461,24 +461,72 @@ uint clusterIndexFor(float2 pixel, float viewZ)
 // builds one variant per value (lit vs unlit), so a material picks a pipeline by flag.
 [[vk::constant_id(0)]] const bool kUnlit = false;
 
+// The material seam: evalSurface turns interpolated vertex data + bound textures into the
+// surface inputs the lighting consumes. Today it is the fixed glTF metallic-roughness path;
+// later phases (and the node graph) replace its body while the lighting below is unchanged.
+struct SurfaceData
+{
+    float3 albedo;
+    float metallic;
+    float roughness;
+    float3 normal;     // world-space, normalized
+    float3 emissive;
+    float occlusion;   // 1.0 = none; multiplies the ambient term
+    float opacity;
+};
+
+struct MaterialInput
+{
+    float3 worldNormal;
+    float2 uv0;
+    float4 baseColor;
+    uint albedoIndex;
+    uint mrTextureIndex;
+    float2 mrFactor;   // x = metallic factor, y = roughness factor
+    float3 emissive;
+};
+
+SurfaceData evalSurface(MaterialInput m)
+{
+    SurfaceData s;
+    float4 tex = albedoTextures[NonUniformResourceIndex(m.albedoIndex)].Sample(m.uv0);
+    s.albedo = tex.rgb * m.baseColor.rgb;
+    s.opacity = tex.a * m.baseColor.a;
+    // glTF metallic-roughness map: roughness in G, metalness in B; modulates the factors.
+    // The default white texture (when a material has none) leaves the factors unchanged.
+    float4 mrSample = albedoTextures[NonUniformResourceIndex(m.mrTextureIndex)].Sample(m.uv0);
+    s.metallic = saturate(m.mrFactor.x * mrSample.b);
+    s.roughness = clamp(m.mrFactor.y * mrSample.g, 0.045, 1.0);
+    s.normal = normalize(m.worldNormal);
+    s.emissive = m.emissive;
+    s.occlusion = 1.0;
+    return s;
+}
+
 [shader("fragment")]
 float4 fragmentMain(VertexOutput input) : SV_Target
 {
-    float3 n = normalize(input.worldNormal);
-    float4 tex = albedoTextures[NonUniformResourceIndex(input.textureIndex)].Sample(input.uv0);
-    float3 albedo = tex.rgb * input.baseColor.rgb;
+    MaterialInput mi;
+    mi.worldNormal = input.worldNormal;
+    mi.uv0 = input.uv0;
+    mi.baseColor = input.baseColor;
+    mi.albedoIndex = input.textureIndex;
+    mi.mrTextureIndex = input.mrTextureIndex;
+    mi.mrFactor = input.mr;
+    mi.emissive = input.emissive;
+    SurfaceData surf = evalSurface(mi);
+
+    float3 n = surf.normal;
+    float3 albedo = surf.albedo;
 
     // Unlit: albedo * base color + emissive, no lighting (a different cached PSO via kUnlit).
     if (kUnlit)
     {
-        return float4(albedo + input.emissive, tex.a * input.baseColor.a);
+        return float4(albedo + surf.emissive, surf.opacity);
     }
 
-    // glTF metallic-roughness map: roughness in G, metalness in B; modulates the factors.
-    // The default white texture (when a material has none) leaves the factors unchanged.
-    float4 mrSample = albedoTextures[NonUniformResourceIndex(input.mrTextureIndex)].Sample(input.uv0);
-    float metallic = saturate(input.mr.x * mrSample.b);
-    float roughness = clamp(input.mr.y * mrSample.g, 0.045, 1.0);  // clamp away from 0 (specular singularity)
+    float metallic = surf.metallic;
+    float roughness = surf.roughness;  // clamp away from 0 (specular singularity)
     float3 v = normalize(globals.eyePosition.xyz - input.worldPos);
 
     // Screen UV for sampling the screen-space effect maps.
@@ -581,6 +629,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     {
         ambient = albedo * (1.0 - metallic) * globals.ambientColor.rgb;
     }
+    ambient *= surf.occlusion;  // material occlusion (1.0 until per-material AO lands)
     // Screen-space AO darkens only the indirect (ambient) term, sampled at this pixel.
     if (globals.counts.w != 0)
     {
@@ -600,6 +649,6 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         float3 probeIrradiance = ddgiSampleIrradiance(input.worldPos, n);
         ambient += probeIrradiance * albedo * (1.0 - metallic);
     }
-    float3 color = lo + ambient + input.emissive;
-    return float4(color, tex.a * input.baseColor.a);
+    float3 color = lo + ambient + surf.emissive;
+    return float4(color, surf.opacity);
 }
