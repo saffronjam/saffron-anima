@@ -1824,6 +1824,24 @@
       }
     },
     {
+      "name": "material-list",
+      "summary": "material-list",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MaterialListResult"
+        }
+      }
+    },
+    {
       "name": "save-scene",
       "summary": "save-scene {path}",
       "params": [
@@ -3475,6 +3493,41 @@
         "required": [
           "id",
           "roles"
+        ]
+      },
+      "MaterialListResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "materials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MaterialRefDto"
+            }
+          }
+        },
+        "required": [
+          "materials"
+        ]
+      },
+      "MaterialRefDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "folder": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "folder"
         ]
       },
       "MoveAssetParams": {

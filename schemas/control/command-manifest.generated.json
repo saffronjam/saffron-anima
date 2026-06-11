@@ -709,6 +709,13 @@
       "skip": "requires an external texture folder"
     },
     {
+      "name": "material-list",
+      "params": "EmptyParams",
+      "result": "MaterialListResult",
+      "status": "typed",
+      "skip": "lists project material assets"
+    },
+    {
       "name": "save-scene",
       "params": "PathParams",
       "result": "PathResult",
