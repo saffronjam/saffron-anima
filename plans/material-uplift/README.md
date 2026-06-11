@@ -100,6 +100,20 @@ Rough milestone reading: **01–10** is a complete native material system with i
 scripting (no UI graph); **11–14** adds the visual editor with live preview; **15–16** hardens
 and adds instances; **17–21** is the full node-graph endgame. Each block is independently valuable.
 
+### Implementation progress note (in-session)
+
+Phases **01–10 are COMPLETE and validated end-to-end** — the native material system: surface/lighting
+seam, material-params SSBO, `.smat` assets, full PBR slots (normal mapping **proven live** by
+`normal_render.test.ts`, parallax + alpha wired), glTF auto-import of normal/occlusion/emissive,
+`assign-asset` slot extension, `MaterialAssetComponent` + resolve precedence, and `material-create`/
+`material-assign` commands (`.smat`→entity path **proven** by `material_asset.test.ts`). 114/114 contract
+checks pass. Per-phase follow-ons are noted in each phase file.
+
+**Remaining (11–21)** is the larger preview + editor + node-graph cluster. Sequenced for risk/value:
+the **suffix-folder importer** (phase-08 follow-on — pure logic, the "drag a folder" UX) is done first as
+it is low-risk and high-value; the preview render infra (11), React editor (13–14, 20), hardening with
+GPU-lifetime hazards (15), instances (16), and the node-graph subsystem (17–21) are the next major push.
+
 ## Cross-cutting conventions (apply to every phase)
 
 - **Milestone gate per phase:** finish with `make engine` then `make prepare-for-commit` green;
