@@ -1063,6 +1063,24 @@ export interface AssignAssetResult {
   slot: "mesh" | "albedo" | "metallic-roughness" | "normal" | "occlusion" | "emissive" | "height";
 }
 
+export interface MaterialCreateParams {
+  name: string;
+}
+
+export interface MaterialCreateResult {
+  id: WireUuid;
+  name: string;
+}
+
+export interface MaterialAssignParams {
+  entity: WireUuid | string | number;
+  material: WireUuid | string | number;
+}
+
+export interface MaterialAssignResult {
+  material: WireUuid;
+}
+
 export interface PathResult {
   path: string;
 }
@@ -1198,6 +1216,8 @@ export interface CommandParamsMap {
   "probe-asset": AssetMetadataParams;
   "delete-asset": DeleteAssetParams;
   "assign-asset": AssignAssetParams;
+  "material-create": MaterialCreateParams;
+  "material-assign": MaterialAssignParams;
   "save-scene": PathParams;
   "load-scene": PathParams;
   "save-project": OptionalPathParams;
@@ -1308,6 +1328,8 @@ export interface CommandResultMap {
   "probe-asset": AssetMetadataDto;
   "delete-asset": DeleteAssetResult;
   "assign-asset": AssignAssetResult;
+  "material-create": MaterialCreateResult;
+  "material-assign": MaterialAssignResult;
   "save-scene": PathResult;
   "load-scene": PathResult;
   "save-project": ProjectInfoDto;
