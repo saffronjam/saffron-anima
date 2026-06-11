@@ -305,7 +305,8 @@ export namespace se
         Mesh,
         Texture,
         Other,
-        Animation
+        Animation,
+        Material
     };
 
     struct AssetEntry
