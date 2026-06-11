@@ -1,7 +1,20 @@
 # Phase 21 — Cook-time shader baking
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — `material-cook` bakes all codegen variants; Slang-module linking + a shipping cook step remain
 **Depends on:** 18
+
+> **Done (cook command).** `material-cook` (control, `EmptyParams` → `{compiled, failed}`) iterates the
+> catalog, and for every material with a **non-foldable** graph compiles its übershader variant to
+> `assets/materials/<id>_mesh.spv` (reusing `compileMaterialMeshShader`); foldable/graphless materials are
+> skipped. e2e `material_cook.test.ts` proves two procedural materials are compiled and their `.spv`s land
+> on disk. This is the precompile/bake direction — run it to warm every variant after a `mesh.slang` change
+> or before shipping.
+>
+> **Remaining:** (1) **Slang-module linking** — split `mesh.slang` so the lighting half is a compiled
+> module each variant `import`s, so a material recompiles only its `evalSurface` (not the whole übershader);
+> this is the "recompile the world" fix and the make-or-break for shipping. (2) A real **cook pipeline**:
+> bake variants into a shipped asset bundle keyed by graph hash, with the runtime loading baked SPIR-V and
+> never invoking `slangc`. (3) Hook `material-cook` into the editor's project build / `tools/ci`.
 
 ## Goal
 
