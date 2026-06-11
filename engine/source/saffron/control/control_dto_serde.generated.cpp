@@ -2682,6 +2682,28 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<MaterialSetGraphParams>) -> Result<MaterialSetGraphParams>
+    {
+        MaterialSetGraphParams out;
+
+        {
+            auto value = requiredField(params, "material", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "material");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.material = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "graph", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readJson(**value, "graph");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.graph = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<OptionalPathParams>) -> Result<OptionalPathParams>
     {
         OptionalPathParams out;
@@ -3622,6 +3644,14 @@ namespace se
     {
         Json out = Json::object();
         out["png"] = value.png;
+        return out;
+    }
+
+    auto dtoToJson(const MaterialSetGraphResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
+        out["foldable"] = value.foldable;
         return out;
     }
 
