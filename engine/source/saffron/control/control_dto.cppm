@@ -831,6 +831,17 @@ export namespace se
         WireUuid id;
     };
 
+    struct PreviewRenderParams
+    {
+        AssetSelector material;
+        std::optional<u32> size;
+    };
+
+    struct PreviewRenderResult
+    {
+        std::string png;  // base64-encoded PNG of the material on a studio-lit sphere
+    };
+
     struct AssignAssetResult
     {
         WireUuid id;
@@ -1390,6 +1401,7 @@ export namespace se
     auto dtoToJson(const MaterialListResult& value) -> Json;
     auto dtoToJson(const MaterialGetResult& value) -> Json;
     auto dtoToJson(const MaterialUpdateResult& value) -> Json;
+    auto dtoToJson(const PreviewRenderResult& value) -> Json;
     auto dtoToJson(const PathResult& value) -> Json;
     auto dtoToJson(const ScreenshotResult& value) -> Json;
     auto dtoToJson(const ThumbnailResult& value) -> Json;
@@ -1459,6 +1471,7 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<MaterialImportParams>) -> Result<MaterialImportParams>;
     auto parseDto(const Json& params, DtoTag<MaterialGetParams>) -> Result<MaterialGetParams>;
     auto parseDto(const Json& params, DtoTag<MaterialUpdateParams>) -> Result<MaterialUpdateParams>;
+    auto parseDto(const Json& params, DtoTag<PreviewRenderParams>) -> Result<PreviewRenderParams>;
     auto parseDto(const Json& params, DtoTag<ScreenshotParams>) -> Result<ScreenshotParams>;
     auto parseDto(const Json& params, DtoTag<ThumbnailParams>) -> Result<ThumbnailParams>;
     auto parseDto(const Json& params, DtoTag<CreateEntityParams>) -> Result<CreateEntityParams>;
