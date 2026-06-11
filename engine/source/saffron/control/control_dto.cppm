@@ -770,6 +770,18 @@ export namespace se
         WireUuid material;
     };
 
+    struct MaterialImportParams
+    {
+        std::string path;  // a folder of PBR textures (suffix-detected) or a single texture
+        std::string name;
+    };
+
+    struct MaterialImportResultDto
+    {
+        WireUuid id;
+        std::string roles;  // space-joined detected map roles, for the editor's confirmation proposal
+    };
+
     struct AssignAssetResult
     {
         WireUuid id;
@@ -1324,6 +1336,7 @@ export namespace se
     auto dtoToJson(const AssignAssetResult& value) -> Json;
     auto dtoToJson(const MaterialCreateResult& value) -> Json;
     auto dtoToJson(const MaterialAssignResult& value) -> Json;
+    auto dtoToJson(const MaterialImportResultDto& value) -> Json;
     auto dtoToJson(const PathResult& value) -> Json;
     auto dtoToJson(const ScreenshotResult& value) -> Json;
     auto dtoToJson(const ThumbnailResult& value) -> Json;
@@ -1390,6 +1403,7 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<AssignAssetParams>) -> Result<AssignAssetParams>;
     auto parseDto(const Json& params, DtoTag<MaterialCreateParams>) -> Result<MaterialCreateParams>;
     auto parseDto(const Json& params, DtoTag<MaterialAssignParams>) -> Result<MaterialAssignParams>;
+    auto parseDto(const Json& params, DtoTag<MaterialImportParams>) -> Result<MaterialImportParams>;
     auto parseDto(const Json& params, DtoTag<ScreenshotParams>) -> Result<ScreenshotParams>;
     auto parseDto(const Json& params, DtoTag<ThumbnailParams>) -> Result<ThumbnailParams>;
     auto parseDto(const Json& params, DtoTag<CreateEntityParams>) -> Result<CreateEntityParams>;
