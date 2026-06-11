@@ -236,6 +236,14 @@ export namespace se
         std::vector<MaterialSlot> slots;
     };
 
+    // References a shared .smat material asset by id. Takes precedence over the inline
+    // MaterialComponent / MaterialSetComponent when present (edit-once-propagate). A missing
+    // or zero id falls back to the built-in default material at resolve time.
+    struct MaterialAssetComponent
+    {
+        Uuid material;
+    };
+
     // One script attached to an entity: a .lua path relative to the project src/
     // plus per-instance field overrides (filled by the editor; empty until then).
     struct ScriptSlot
