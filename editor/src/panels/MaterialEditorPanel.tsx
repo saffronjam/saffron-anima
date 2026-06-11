@@ -8,6 +8,7 @@ import { useEditorStore } from "../state/store";
 import { renderField, type FieldRenderContext } from "../components/fieldRenderer";
 import { makeCoalescer, type Coalescer } from "../control/coalesce";
 import { errorText, notifyError } from "../lib/flash";
+import { MaterialGraphEditor } from "./MaterialGraphEditor";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -40,6 +41,7 @@ export function MaterialEditorPanel() {
   const [materials, setMaterials] = useState<MaterialRef[]>([]);
   const [fields, setFields] = useState<Record<string, unknown> | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [graphOpen, setGraphOpen] = useState(false);
   const coalescers = useRef<Map<string, Coalescer<unknown>>>(new Map());
 
   const refreshList = useCallback(async () => {
@@ -142,6 +144,14 @@ export function MaterialEditorPanel() {
         <Button size="sm" onClick={() => void newMaterial()}>
           New
         </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={!selectedMaterialId}
+          onClick={() => setGraphOpen(true)}
+        >
+          Graph
+        </Button>
       </div>
 
       {preview ? (
@@ -173,6 +183,16 @@ export function MaterialEditorPanel() {
             </div>
           ))
         : null}
+
+      {graphOpen && selectedMaterialId ? (
+        <MaterialGraphEditor
+          materialId={selectedMaterialId}
+          onClose={() => {
+            setGraphOpen(false);
+            void refreshPreview(selectedMaterialId);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
