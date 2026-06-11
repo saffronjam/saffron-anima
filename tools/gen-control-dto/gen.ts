@@ -2283,7 +2283,15 @@ namespace se
                                { "roughness", c.roughness },
                                { "emissive", vec3ToJson(c.emissive) },
                                { "emissiveStrength", c.emissiveStrength },
-                               { "unlit", c.unlit } };
+                               { "unlit", c.unlit },
+                               { "normalTexture", uuidToJson(c.normalTexture.value) },
+                               { "occlusionTexture", uuidToJson(c.occlusionTexture.value) },
+                               { "emissiveTexture", uuidToJson(c.emissiveTexture.value) },
+                               { "heightTexture", uuidToJson(c.heightTexture.value) },
+                               { "normalStrength", c.normalStrength },
+                               { "heightScale", c.heightScale },
+                               { "alphaClip", c.alphaClip },
+                               { "alphaCutoff", c.alphaCutoff } };
     }
 
     auto materialComponentFromJson(MaterialComponent& c, const nlohmann::json& j) -> Result<void>
@@ -2296,6 +2304,14 @@ namespace se
         c.emissive = vec3FromJson(j.value("emissive", nlohmann::json::object()));
         c.emissiveStrength = jsonF32Or(j, "emissiveStrength", 1.0f);
         c.unlit = jsonBoolOr(j, "unlit", false);
+        c.normalTexture = Uuid{ jsonU64Or(j, "normalTexture", 0) };
+        c.occlusionTexture = Uuid{ jsonU64Or(j, "occlusionTexture", 0) };
+        c.emissiveTexture = Uuid{ jsonU64Or(j, "emissiveTexture", 0) };
+        c.heightTexture = Uuid{ jsonU64Or(j, "heightTexture", 0) };
+        c.normalStrength = jsonF32Or(j, "normalStrength", 1.0f);
+        c.heightScale = jsonF32Or(j, "heightScale", 0.05f);
+        c.alphaClip = jsonBoolOr(j, "alphaClip", false);
+        c.alphaCutoff = jsonF32Or(j, "alphaCutoff", 0.5f);
         return {};
     }
 
@@ -2311,7 +2327,15 @@ namespace se
                                             { "roughness", s.roughness },
                                             { "emissive", vec3ToJson(s.emissive) },
                                             { "emissiveStrength", s.emissiveStrength },
-                                            { "unlit", s.unlit } });
+                                            { "unlit", s.unlit },
+                                            { "normalTexture", uuidToJson(s.normalTexture.value) },
+                                            { "occlusionTexture", uuidToJson(s.occlusionTexture.value) },
+                                            { "emissiveTexture", uuidToJson(s.emissiveTexture.value) },
+                                            { "heightTexture", uuidToJson(s.heightTexture.value) },
+                                            { "normalStrength", s.normalStrength },
+                                            { "heightScale", s.heightScale },
+                                            { "alphaClip", s.alphaClip },
+                                            { "alphaCutoff", s.alphaCutoff } });
         }
         return nlohmann::json{ { "slots", std::move(slots) } };
     }
@@ -2332,6 +2356,14 @@ namespace se
                 s.emissive = vec3FromJson(sj.value("emissive", nlohmann::json::object()));
                 s.emissiveStrength = jsonF32Or(sj, "emissiveStrength", 1.0f);
                 s.unlit = jsonBoolOr(sj, "unlit", false);
+                s.normalTexture = Uuid{ jsonU64Or(sj, "normalTexture", 0) };
+                s.occlusionTexture = Uuid{ jsonU64Or(sj, "occlusionTexture", 0) };
+                s.emissiveTexture = Uuid{ jsonU64Or(sj, "emissiveTexture", 0) };
+                s.heightTexture = Uuid{ jsonU64Or(sj, "heightTexture", 0) };
+                s.normalStrength = jsonF32Or(sj, "normalStrength", 1.0f);
+                s.heightScale = jsonF32Or(sj, "heightScale", 0.05f);
+                s.alphaClip = jsonBoolOr(sj, "alphaClip", false);
+                s.alphaCutoff = jsonF32Or(sj, "alphaCutoff", 0.5f);
                 c.slots.push_back(s);
             }
         }
