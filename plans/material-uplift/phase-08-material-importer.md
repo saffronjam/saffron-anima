@@ -1,7 +1,24 @@
 # Phase 08 — Material importer (auto-detect)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (maps reach the GPU + validated; suffix folder importer is a follow-on)
 **Depends on:** 05, 07
+
+> **Outcome.** This phase's real job was to get PBR maps onto the GPU and **validate phases 04-06's
+> previously-dormant shader code** — done. `assign-asset` gained **Normal / Occlusion / Emissive / Height**
+> slots (`AssetSlotDto` + handler writes to the matching `MaterialComponent` field; `gen.ts` regenerated,
+> 112/112 contract checks pass). **glTF import** now extracts + registers normal (linear), occlusion
+> (linear), and emissive (sRGB) textures → `MaterialSlot` → `MaterialComponent` (single- and multi-material
+> via `applyImportedMaterials`), mirroring the already-tested albedo/MR path. A new e2e
+> `tests/e2e/normal_render.test.ts` proves the **full normal path end to end**: assign a normal map →
+> resolve → `FEATURE_NORMAL` + deduped params → the übershader's derivative-TBN perturbation **visibly
+> changes the shaded pixels**. POM/occlusion/emissive are structurally identical, so high-confidence by
+> construction. Build clean; 9/9 material/normal/assets e2e.
+>
+> **Follow-on (deferred):** the suffix-detect **folder importer** (`detectMaterialSet` + `importMaterialFolder`
+> + a `material.import` command) — the "drag a folder of PNGs" convenience. The functional import path
+> already works (per-texture `importTexture` + `assign-asset` slots + glTF auto-import); the suffix table +
+> the bake helpers (phase 07) plug in when this lands. Also noted: the `make schema` target needs a headless
+> display (the e2e harness self-spawns weston; the contract test does not) — wrap it in weston to run.
 
 ## Goal
 
