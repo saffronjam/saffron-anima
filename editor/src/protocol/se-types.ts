@@ -1053,14 +1053,14 @@ export interface DeleteAssetResult {
 
 export interface AssignAssetParams {
   entity: WireUuid | string | number;
-  slot: "mesh" | "albedo" | "metallic-roughness";
+  slot: "mesh" | "albedo" | "metallic-roughness" | "normal" | "occlusion" | "emissive" | "height";
   asset: WireUuid | string | number;
 }
 
 export interface AssignAssetResult {
   id: WireUuid;
   name: string;
-  slot: "mesh" | "albedo" | "metallic-roughness";
+  slot: "mesh" | "albedo" | "metallic-roughness" | "normal" | "occlusion" | "emissive" | "height";
 }
 
 export interface PathResult {
