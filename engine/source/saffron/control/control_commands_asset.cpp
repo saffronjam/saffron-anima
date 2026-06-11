@@ -1074,6 +1074,51 @@ namespace se
                 return MaterialSetGraphResult{ WireUuid{ (*resolved)->id.value }, foldable };
             });
 
+        registerCommand<MaterialCreateInstanceParams, MaterialCreateResult>(
+            reg, "material-create-instance", "material-create-instance {parent} [name]",
+            [](EngineContext& ctx, const MaterialCreateInstanceParams& params) -> Result<MaterialCreateResult>
+            {
+                auto parent = resolveAsset(ctx, params.parent);
+                if (!parent)
+                {
+                    return Err(parent.error());
+                }
+                MaterialAsset child;
+                child.parent = (*parent)->id;
+                const std::string name = params.name.empty() ? std::string{ "Instance" } : params.name;
+                auto id = saveMaterialAsset(ctx.assets, child, name);
+                if (!id)
+                {
+                    return Err(id.error());
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return MaterialCreateResult{ WireUuid{ id->value }, name };
+            });
+
+        registerCommand<MaterialSetOverrideParams, MaterialSetOverrideResult>(
+            reg, "material-set-override", "material-set-override {material, field, value}",
+            [](EngineContext& ctx, const MaterialSetOverrideParams& params) -> Result<MaterialSetOverrideResult>
+            {
+                auto resolved = resolveAsset(ctx, params.material);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                auto raw = loadMaterialAssetRaw(ctx.assets, (*resolved)->id);
+                if (!raw)
+                {
+                    return Err(raw.error());
+                }
+                MaterialAsset m = *raw;
+                m.overrides[params.field] = params.value;  // null overrides becomes an object on []
+                if (auto ok = updateMaterialAsset(ctx.assets, (*resolved)->id, m); !ok)
+                {
+                    return Err(ok.error());
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return MaterialSetOverrideResult{ WireUuid{ (*resolved)->id.value } };
+            });
+
         registerCommand<PathParams, PathResult>(reg, "save-scene", "save-scene {path}",
                                                 [](EngineContext& ctx, const PathParams& params) -> Result<PathResult>
                                                 {
