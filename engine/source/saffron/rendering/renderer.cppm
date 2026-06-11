@@ -655,6 +655,7 @@ namespace se
         for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
         {
             renderer.instancing.buffers[i].reset();  // RAII frees the SSBO before the allocator
+            renderer.instancing.materialBuffers[i].reset();
             renderer.instancing.jointBuffers[i].reset();
             renderer.instancing.prevJointBuffers[i].reset();
             renderer.skinning.deformedBuffers[i].reset();
