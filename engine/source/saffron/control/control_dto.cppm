@@ -748,6 +748,28 @@ export namespace se
         AssetSelector asset;
     };
 
+    struct MaterialCreateParams
+    {
+        std::string name;
+    };
+
+    struct MaterialCreateResult
+    {
+        WireUuid id;
+        std::string name;
+    };
+
+    struct MaterialAssignParams
+    {
+        EntitySelector entity;
+        AssetSelector material;  // 0 / empty clears the assignment
+    };
+
+    struct MaterialAssignResult
+    {
+        WireUuid material;
+    };
+
     struct AssignAssetResult
     {
         WireUuid id;
@@ -1300,6 +1322,8 @@ export namespace se
     auto dtoToJson(const AssetMetadataDto& value) -> Json;
     auto dtoToJson(const DeleteAssetResult& value) -> Json;
     auto dtoToJson(const AssignAssetResult& value) -> Json;
+    auto dtoToJson(const MaterialCreateResult& value) -> Json;
+    auto dtoToJson(const MaterialAssignResult& value) -> Json;
     auto dtoToJson(const PathResult& value) -> Json;
     auto dtoToJson(const ScreenshotResult& value) -> Json;
     auto dtoToJson(const ThumbnailResult& value) -> Json;
@@ -1364,6 +1388,8 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<AssetMetadataParams>) -> Result<AssetMetadataParams>;
     auto parseDto(const Json& params, DtoTag<DeleteAssetParams>) -> Result<DeleteAssetParams>;
     auto parseDto(const Json& params, DtoTag<AssignAssetParams>) -> Result<AssignAssetParams>;
+    auto parseDto(const Json& params, DtoTag<MaterialCreateParams>) -> Result<MaterialCreateParams>;
+    auto parseDto(const Json& params, DtoTag<MaterialAssignParams>) -> Result<MaterialAssignParams>;
     auto parseDto(const Json& params, DtoTag<ScreenshotParams>) -> Result<ScreenshotParams>;
     auto parseDto(const Json& params, DtoTag<ThumbnailParams>) -> Result<ThumbnailParams>;
     auto parseDto(const Json& params, DtoTag<CreateEntityParams>) -> Result<CreateEntityParams>;
