@@ -890,6 +890,12 @@ export namespace se
         bool ok;  // the graph emitted compilable Slang and slangc produced a .spv
     };
 
+    struct MaterialCookResult
+    {
+        u32 compiled;  // codegen materials whose übershader variant compiled
+        u32 failed;    // codegen materials whose compile failed
+    };
+
     struct AssignAssetResult
     {
         WireUuid id;
@@ -1453,6 +1459,7 @@ export namespace se
     auto dtoToJson(const MaterialSetGraphResult& value) -> Json;
     auto dtoToJson(const MaterialSetOverrideResult& value) -> Json;
     auto dtoToJson(const MaterialCompileResult& value) -> Json;
+    auto dtoToJson(const MaterialCookResult& value) -> Json;
     auto dtoToJson(const PathResult& value) -> Json;
     auto dtoToJson(const ScreenshotResult& value) -> Json;
     auto dtoToJson(const ThumbnailResult& value) -> Json;
