@@ -208,7 +208,7 @@ updates the module DAG in `AGENTS.md`.
 | [10 — skeleton line overlay + `show-bones`](phase-10-skeleton-overlay.md) | `buildSkeletonOverlay` (segments + joint dots + RGB axis lines, screen-constant); renders in Edit **and** Play; selection highlight; a `SceneEditContext` option + `set-skeleton-overlay` control command. | COMPLETED |
 | [11 — editor bottom dock + tools-style tab system](phase-11-editor-bottom-dock.md) | `BottomTool` union + `bottomTools`/`activeBottomTool` slices + open/close + height persistence; `Layout.tsx` full-width bottom dock; `Topbar` trigger; `emitLayoutSettled` bounds-sync. Empty dock that opens/closes/resizes and re-glues the viewport. | COMPLETED |
 | [12 — read-only canvas `TimelinePanel`](phase-12-timeline-panel.md) | track headers / ms ruler / clip bars / scrubbable playhead / transport + Loop / footer; canvas pump like `FrameTimeGraph`; reads `get-animation-state` on the reconcile poll; scrub → `seek-animation` via `useScrubValue` + coalescer. **The headline UI.** | COMPLETED |
-| [13 — kinematic foot IK + reserved physics metadata](phase-13-foot-ik-and-physics-ahead.md) | two-bone analytic IK as the first blend-layer override producer (foot planting against a ground hook); reserve per-bone physics fields (shape/mass, joint type, swing/twist limits, PD gains) on the skeleton for the eventual Jolt powered ragdoll. | NOT STARTED |
+| [13 — kinematic foot IK + reserved physics metadata](phase-13-foot-ik-and-physics-ahead.md) | two-bone analytic IK as the first blend-layer override producer (foot planting against a ground hook); reserve per-bone physics fields (shape/mass, joint type, swing/twist limits, PD gains) on the skeleton for the eventual Jolt powered ragdoll. | COMPLETED |
 
 ## Sequencing
 
