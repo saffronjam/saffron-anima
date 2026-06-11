@@ -1091,6 +1091,16 @@ export interface MaterialImportResultDto {
   roles: string;
 }
 
+export interface MaterialListResult {
+  materials: MaterialRefDto[];
+}
+
+export interface MaterialRefDto {
+  id: WireUuid;
+  name: string;
+  folder: string;
+}
+
 export interface PathResult {
   path: string;
 }
@@ -1229,6 +1239,7 @@ export interface CommandParamsMap {
   "material-create": MaterialCreateParams;
   "material-assign": MaterialAssignParams;
   "material-import": MaterialImportParams;
+  "material-list": EmptyParams;
   "save-scene": PathParams;
   "load-scene": PathParams;
   "save-project": OptionalPathParams;
@@ -1342,6 +1353,7 @@ export interface CommandResultMap {
   "material-create": MaterialCreateResult;
   "material-assign": MaterialAssignResult;
   "material-import": MaterialImportResultDto;
+  "material-list": MaterialListResult;
   "save-scene": PathResult;
   "load-scene": PathResult;
   "save-project": ProjectInfoDto;
