@@ -2938,6 +2938,8 @@ namespace se
         out["restir"] = value.restir;
         out["blasCount"] = value.blasCount;
         out["pipelines"] = value.pipelines;
+        out["bindlessTextures"] = value.bindlessTextures;
+        out["bindlessFree"] = value.bindlessFree;
         out["hdr"] = value.hdr;
         out["exposureEv"] = value.exposureEv;
         out["aa"] = dtoToJson(value.aa);
