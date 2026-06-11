@@ -1063,6 +1063,140 @@ return {0}
         return foldable;
     }
 
+    // Emits the body of evalSurface for a node graph: one Slang statement per node (in array
+    // order — inputs must precede consumers), then the materialOutput channel assignments. The
+    // generated body runs in a shader with `Sampler2D textures[1024]`, a `Mat { float4 baseColor;
+    // uint4 tex; }` push constant, and a `float2 uv`. This is the codegen the foldable lowering
+    // can't handle (procedural/math nodes).
+    auto emitGraphSurface(const nlohmann::json& graph) -> std::string
+    {
+        std::string body = "    s.albedo = mat.baseColor.rgb;\n    s.metallic = 0.0;\n    s.roughness = 1.0;\n"
+                           "    s.normal = float3(0.0, 0.0, 1.0);\n    s.emissive = float3(0.0);\n";
+        if (!graph.is_object())
+        {
+            return body;
+        }
+        std::unordered_map<std::string, std::string> inputFrom;  // "node:pin" -> source node id
+        std::string outputId;
+        for (const nlohmann::json& e : graph.value("edges", nlohmann::json::array()))
+        {
+            const nlohmann::json to = e.value("to", nlohmann::json::array());
+            const nlohmann::json from = e.value("from", nlohmann::json::array());
+            if (to.size() >= 2 && !from.empty())
+            {
+                inputFrom[to[0].get<std::string>() + ":" + to[1].get<std::string>()] = from[0].get<std::string>();
+            }
+        }
+        for (const nlohmann::json& n : graph.value("nodes", nlohmann::json::array()))
+        {
+            const std::string id = n.value("id", std::string{});
+            const std::string type = n.value("type", std::string{});
+            const nlohmann::json props = n.value("props", nlohmann::json::object());
+            if (type == "materialOutput")
+            {
+                outputId = id;
+            }
+            else if (type == "constant")
+            {
+                const nlohmann::json v = props.value("value", nlohmann::json::array());
+                const auto at = [&](std::size_t i, f32 d) { return i < v.size() ? v[i].get<f32>() : d; };
+                body += std::format("    float4 n_{} = float4({}, {}, {}, {});\n", id, at(0, 0.0f), at(1, 0.0f),
+                                    at(2, 0.0f), at(3, 1.0f));
+            }
+            else if (type == "textureSlot")
+            {
+                body += std::format("    float4 n_{} = textures[NonUniformResourceIndex(mat.tex.x)].Sample(uv);\n", id);
+            }
+            else if (type == "multiply" || type == "add")
+            {
+                const std::string a = inputFrom.count(id + ":a") != 0 ? inputFrom[id + ":a"] : std::string{};
+                const std::string b = inputFrom.count(id + ":b") != 0 ? inputFrom[id + ":b"] : std::string{};
+                const char* op = type == "multiply" ? "*" : "+";
+                body += std::format("    float4 n_{} = n_{} {} n_{};\n", id, a, op, b);
+            }
+        }
+        const auto srcFor = [&](const char* pin) -> std::string
+        {
+            const auto it = inputFrom.find(outputId + ":" + pin);
+            return it != inputFrom.end() ? it->second : std::string{};
+        };
+        if (auto s = srcFor("baseColor"); !s.empty())
+        {
+            body += std::format("    s.albedo = n_{}.rgb;\n", s);
+        }
+        if (auto s = srcFor("metallic"); !s.empty())
+        {
+            body += std::format("    s.metallic = n_{}.r;\n", s);
+        }
+        if (auto s = srcFor("roughness"); !s.empty())
+        {
+            body += std::format("    s.roughness = n_{}.r;\n", s);
+        }
+        if (auto s = srcFor("emissive"); !s.empty())
+        {
+            body += std::format("    s.emissive = n_{}.rgb;\n", s);
+        }
+        return body;
+    }
+
+    // Locates slangc (env SAFFRON_SLANGC, the prebuilt cache, then PATH).
+    auto findSlangc() -> std::string
+    {
+        if (const char* env = std::getenv("SAFFRON_SLANGC"); env != nullptr && env[0] != '\0')
+        {
+            return env;
+        }
+        if (const char* home = std::getenv("HOME"); home != nullptr)
+        {
+            const std::string cached = std::string{ home } + "/.cache/saffron-slang/slang/bin/slangc";
+            if (std::filesystem::exists(cached))
+            {
+                return cached;
+            }
+        }
+        return "slangc";  // fall back to PATH
+    }
+
+    // Codegen: emits a self-contained shader for a material's node graph and compiles it with slangc
+    // to materials/<uuid>.spv. Returns the .spv path. (The per-material PSO render path that loads it
+    // is the next step; this proves the graph -> compilable Slang pipeline.)
+    auto compileMaterialGraph(AssetServer& assets, const nlohmann::json& graph, Uuid id) -> Result<std::string>
+    {
+        const std::string slangc = findSlangc();
+        const std::string surfaceBody = emitGraphSurface(graph);
+        const std::string shader =
+            "[[vk::binding(0, 0)]] Sampler2D textures[1024];\n"
+            "struct SurfaceData { float3 albedo; float metallic; float roughness; float3 normal; float3 emissive; };\n"
+            "struct Mat { float4 baseColor; uint4 tex; };\n"
+            "[[vk::push_constant]] Mat mat;\n"
+            "SurfaceData evalSurface(float2 uv)\n{\n    SurfaceData s;\n" +
+            surfaceBody +
+            "    return s;\n}\n"
+            "[shader(\"fragment\")] float4 fragmentMain(float2 uv : TEXCOORD0) : SV_Target\n{\n"
+            "    SurfaceData s = evalSurface(uv);\n    return float4(s.albedo + s.emissive, 1.0);\n}\n";
+        ensureAssetDirectories(assets);
+        const std::string slangPath = assets.root + "/materials/" + std::to_string(id.value) + ".slang";
+        const std::string spvPath = assets.root + "/materials/" + std::to_string(id.value) + ".spv";
+        {
+            std::ofstream out(slangPath);
+            if (!out)
+            {
+                return Err(std::format("cannot write generated shader '{}'", slangPath));
+            }
+            out << shader;
+        }
+        const std::string cmd = "\"" + slangc + "\" \"" + slangPath +
+                                "\" -profile glsl_450 -target spirv -emit-spirv-directly -fvk-use-entrypoint-name "
+                                "-matrix-layout-column-major -o \"" +
+                                spvPath + "\" > /dev/null 2>&1";
+        const int rc = std::system(cmd.c_str());
+        if (rc != 0 || !std::filesystem::exists(spvPath))
+        {
+            return Err(std::format("slangc failed (rc={}) compiling material graph {}", rc, id.value));
+        }
+        return spvPath;
+    }
+
     // Writes a MaterialAsset to assets/materials/<uuid>.smat and registers a Material catalog
     // entry (named, deduped). Returns the new id.
     auto saveMaterialAsset(AssetServer& assets, const MaterialAsset& mat, const std::string& name,
