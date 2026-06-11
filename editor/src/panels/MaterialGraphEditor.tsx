@@ -149,7 +149,18 @@ function GraphCanvas({ materialId, onClose }: { materialId: string; onClose: () 
   }, [materialId, setNodes, setEdges]);
 
   const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge(connection, eds)),
+    (connection: Connection) => {
+      if (connection.source === connection.target) {
+        return; // no self-loops
+      }
+      // The emitter takes one source per input pin, so a new wire into an occupied input replaces it.
+      setEdges((eds) => {
+        const freed = eds.filter(
+          (e) => !(e.target === connection.target && e.targetHandle === connection.targetHandle),
+        );
+        return addEdge(connection, freed);
+      });
+    },
     [setEdges],
   );
 
