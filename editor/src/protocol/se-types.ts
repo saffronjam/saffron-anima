@@ -1101,6 +1101,26 @@ export interface MaterialRefDto {
   folder: string;
 }
 
+export interface MaterialGetParams {
+  material: WireUuid | string | number;
+}
+
+export interface MaterialGetResult {
+  id: WireUuid;
+  blend: string;
+  unlit: boolean;
+  baseColor: Vec4;
+  metallic: number;
+  roughness: number;
+  emissive: Vec3;
+  emissiveStrength: number;
+  albedoTexture: WireUuid;
+  ormTexture: WireUuid;
+  normalTexture: WireUuid;
+  emissiveTexture: WireUuid;
+  heightTexture: WireUuid;
+}
+
 export interface PathResult {
   path: string;
 }
@@ -1240,6 +1260,7 @@ export interface CommandParamsMap {
   "material-assign": MaterialAssignParams;
   "material-import": MaterialImportParams;
   "material-list": EmptyParams;
+  "material-get": MaterialGetParams;
   "save-scene": PathParams;
   "load-scene": PathParams;
   "save-project": OptionalPathParams;
@@ -1354,6 +1375,7 @@ export interface CommandResultMap {
   "material-assign": MaterialAssignResult;
   "material-import": MaterialImportResultDto;
   "material-list": MaterialListResult;
+  "material-get": MaterialGetResult;
   "save-scene": PathResult;
   "load-scene": PathResult;
   "save-project": ProjectInfoDto;
