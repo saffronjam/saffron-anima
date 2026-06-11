@@ -83,7 +83,7 @@ const enumWireNames = new Map<string, Record<string, string>>([
     { Off: "off", Fxaa: "fxaa", Taa: "taa", Msaa2: "msaa2", Msaa4: "msaa4", Msaa8: "msaa8" },
   ],
   ["GiModeDto", { Off: "off", Ddgi: "ddgi" }],
-  ["AssetSlotDto", { Mesh: "mesh", Albedo: "albedo", MetallicRoughness: "metallic-roughness" }],
+  ["AssetSlotDto", { Mesh: "mesh", Albedo: "albedo", MetallicRoughness: "metallic-roughness", Normal: "normal", Occlusion: "occlusion", Emissive: "emissive", Height: "height" }],
   ["ScreenshotTargetDto", { Viewport: "viewport", Window: "window" }],
   ["AssetTypeDto", { Mesh: "mesh", Texture: "texture", Other: "other", Animation: "animation" }],
   ["ProfilerModeDto", { Off: "off", Timestamps: "timestamps", PipelineStats: "pipeline-stats" }],
@@ -1419,7 +1419,7 @@ function tsType(type: string): string {
     case "GiModeDto":
       return '"off" | "ddgi"';
     case "AssetSlotDto":
-      return '"mesh" | "albedo" | "metallic-roughness"';
+      return '"mesh" | "albedo" | "metallic-roughness" | "normal" | "occlusion" | "emissive" | "height"';
     case "ScreenshotTargetDto":
       return '"viewport" | "window"';
     case "AssetTypeDto":
