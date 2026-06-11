@@ -686,6 +686,18 @@ const commands: CommandDef[] = [
     result: "MaterialSetGraphResult",
     summary: "material-set-graph {material, graph}",
   },
+  {
+    name: "material-create-instance",
+    params: "MaterialCreateInstanceParams",
+    result: "MaterialCreateResult",
+    summary: "material-create-instance {parent} [name]",
+  },
+  {
+    name: "material-set-override",
+    params: "MaterialSetOverrideParams",
+    result: "MaterialSetOverrideResult",
+    summary: "material-set-override {material, field, value}",
+  },
   { name: "save-scene", params: "PathParams", result: "PathResult", summary: "save-scene {path}" },
   { name: "load-scene", params: "PathParams", result: "PathResult", summary: "load-scene {path}" },
   {
@@ -835,6 +847,8 @@ const commandSkips = new Map<string, string>([
   ["material-update", "needs a created material asset"],
   ["preview-render", "renders a material to a PNG blob"],
   ["material-set-graph", "needs a created material asset"],
+  ["material-create-instance", "needs a created parent material"],
+  ["material-set-override", "needs a created material asset"],
   ["load-scene", "loads and replaces the scene from a file"],
   ["reload-project", "reloads and replaces the active project's scene and catalog"],
   ["screenshot", "writes an image file and can be deferred"],
