@@ -1,7 +1,23 @@
 # Phase 10 — Material CRUD commands
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (create + assign; list/get/update deferred to the editor phase)
 **Depends on:** 03, 09
+
+> **Outcome.** Added `material-create {name}` → `{ id, name }` (writes a default `.smat` via
+> `saveMaterialAsset`) and `material-assign {entity, material}` → `{ material }` (sets/clears
+> `MaterialAssetComponent`; `0`/empty clears). A new e2e `tests/e2e/material_asset.test.ts` proves the
+> **whole native path**: create → assign → `resolveEntityMaterials` precedence → `resolveMaterialAsset`
+> → the render changes from the entity's inline glTF material to the fresh default — confirming phases
+> 03/09/10 together. Build clean; **114/114 contract checks**; `.smat` e2e green.
+>
+> **gen.ts gotchas learned:** (1) gen.ts *parses* `control_dto.cppm` for DTO fields, but the exported
+> `parseDto`/`dtoToJson` **declarations** in that file are **hand-maintained** (add them next to the
+> sibling command's, or `command.cppm`'s `registerCommand` won't find the overload). (2) gen.ts could
+> **not parse `std::optional<EntitySelector>`** — so `material-create`'s "snapshot from current entity"
+> (`from`) was dropped; revisit with a string selector or explicit factor fields.
+>
+> **Deferred to phase 13 (editor):** `material.list` / `material.get` / `material.update` (the browser +
+> live-edit commands) and the `material-create` snapshot-from-entity, both consumed by the editor UI.
 
 ## Goal
 
