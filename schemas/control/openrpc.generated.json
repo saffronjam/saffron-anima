@@ -3708,7 +3708,8 @@
           },
           "heightTexture": {
             "type": "string"
-          }
+          },
+          "graph": {}
         },
         "required": [
           "id",
@@ -3723,7 +3724,8 @@
           "ormTexture",
           "normalTexture",
           "emissiveTexture",
-          "heightTexture"
+          "heightTexture",
+          "graph"
         ]
       },
       "MaterialImportParams": {
