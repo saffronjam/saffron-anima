@@ -1117,6 +1117,11 @@ export namespace se
         std::array<Ref<Buffer>, MaxFramesInFlight> buffers;
         std::array<vk::DescriptorSet, MaxFramesInFlight> sets;
         std::array<u32, MaxFramesInFlight> capacity{};
+        // Per-frame deduplicated material params (set 2, binding 2): one MaterialParamsData
+        // entry per distinct material this frame, indexed by InstanceData.texture.w. Grown
+        // on demand like the instance buffer.
+        std::array<Ref<Buffer>, MaxFramesInFlight> materialBuffers;
+        std::array<u32, MaxFramesInFlight> materialCapacity{};
         std::array<Ref<Buffer>, MaxFramesInFlight> jointBuffers;
         std::array<u32, MaxFramesInFlight> jointCapacity{};
         // The previous frame's joint palette, slotted at the same jointOffset as the current
@@ -1708,6 +1713,22 @@ export namespace se
         glm::vec4 pbr{ 0.0f, 1.0f, 0.0f, 0.0f };  // x = metallic, y = roughness
         glm::vec4 emissive{ 0.0f };               // rgb = emissive radiance (strength baked in)
     };
+
+    // Per-distinct-material data (set 2, binding 2), indexed by InstanceData.texture.w.
+    // Many instances of one material share a single entry (deduplicated per frame). The
+    // übershader reads its texture indices + factors from here; later phases grow the
+    // payload (normal/orm/emissive/height, uv transform, feature bits) without changing
+    // the per-instance stride. std430-compatible: every member is 16-byte aligned.
+    struct MaterialParamsData
+    {
+        glm::vec4 baseColor{ 1.0f };
+        glm::vec4 pbr{ 0.0f, 1.0f, 1.0f, 0.5f };  // metallic, roughness, normalStrength, alphaCutoff
+        glm::vec4 emissive{ 0.0f };               // rgb = radiance, w = heightScale
+        glm::vec4 uv{ 1.0f, 1.0f, 0.0f, 0.0f };   // tiling.xy, offset.xy
+        glm::uvec4 tex0{ 0u };                     // albedo, orm/mr, normal, emissive (bindless indices)
+        glm::uvec4 tex1{ 0u };                     // height, reserved, reserved, featureBits
+    };
+    static_assert(sizeof(MaterialParamsData) == 96, "MaterialParams must match the std430 shader layout");
 
     // Mesh rendering: a depth-tested instanced pipeline (set 0 = material albedo,
     // set 1 = directional light, set 2 = per-instance data; push constant = viewProj),
