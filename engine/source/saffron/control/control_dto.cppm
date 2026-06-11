@@ -842,6 +842,18 @@ export namespace se
         std::string png;  // base64-encoded PNG of the material on a studio-lit sphere
     };
 
+    struct MaterialSetGraphParams
+    {
+        AssetSelector material;
+        Json graph;  // { nodes:[{id,type,props}], edges:[{from:[node,pin],to:[node,pin]}] }
+    };
+
+    struct MaterialSetGraphResult
+    {
+        WireUuid id;
+        bool foldable;  // true if the graph folded entirely to params (no codegen-only node)
+    };
+
     struct AssignAssetResult
     {
         WireUuid id;
@@ -1402,6 +1414,7 @@ export namespace se
     auto dtoToJson(const MaterialGetResult& value) -> Json;
     auto dtoToJson(const MaterialUpdateResult& value) -> Json;
     auto dtoToJson(const PreviewRenderResult& value) -> Json;
+    auto dtoToJson(const MaterialSetGraphResult& value) -> Json;
     auto dtoToJson(const PathResult& value) -> Json;
     auto dtoToJson(const ScreenshotResult& value) -> Json;
     auto dtoToJson(const ThumbnailResult& value) -> Json;
@@ -1472,6 +1485,7 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<MaterialGetParams>) -> Result<MaterialGetParams>;
     auto parseDto(const Json& params, DtoTag<MaterialUpdateParams>) -> Result<MaterialUpdateParams>;
     auto parseDto(const Json& params, DtoTag<PreviewRenderParams>) -> Result<PreviewRenderParams>;
+    auto parseDto(const Json& params, DtoTag<MaterialSetGraphParams>) -> Result<MaterialSetGraphParams>;
     auto parseDto(const Json& params, DtoTag<ScreenshotParams>) -> Result<ScreenshotParams>;
     auto parseDto(const Json& params, DtoTag<ThumbnailParams>) -> Result<ThumbnailParams>;
     auto parseDto(const Json& params, DtoTag<CreateEntityParams>) -> Result<CreateEntityParams>;
