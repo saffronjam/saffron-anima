@@ -1,6 +1,6 @@
 # Phase 3 — `AnimationPlayerComponent` + evaluator + blend layer + playback
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 
