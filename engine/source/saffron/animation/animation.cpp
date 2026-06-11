@@ -4,7 +4,9 @@ module;
 // includes, no `import std`.
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -139,6 +141,37 @@ namespace se
             }
         }
 
+        // Shortest-arc rotation taking unit `from` onto unit `to`. Falls back to a stable
+        // perpendicular axis for the antiparallel case and identity for degenerate inputs.
+        auto rotationBetween(glm::vec3 from, glm::vec3 to) -> glm::quat
+        {
+            const f32 lf = glm::length(from);
+            const f32 lt = glm::length(to);
+            if (lf < 1e-8f || lt < 1e-8f)
+            {
+                return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            }
+            from = from / lf;
+            to = to / lt;
+            const f32 d = glm::clamp(glm::dot(from, to), -1.0f, 1.0f);
+            if (d > 1.0f - 1e-6f)
+            {
+                return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            }
+            if (d < -1.0f + 1e-6f)
+            {
+                // Antiparallel: any perpendicular axis is a valid 180 deg flip.
+                glm::vec3 axis = glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), from);
+                if (glm::length(axis) < 1e-6f)
+                {
+                    axis = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), from);
+                }
+                return glm::normalize(glm::angleAxis(glm::pi<f32>(), glm::normalize(axis)));
+            }
+            const glm::vec3 axis = glm::normalize(glm::cross(from, to));
+            return glm::normalize(glm::angleAxis(std::acos(d), axis));
+        }
+
         // Per-joint blend of two poses (lerp T/S, slerp R). The cross-fade primitive.
         auto blendJoint(const JointPose& base, const JointPose& over, f32 weight) -> JointPose
         {
@@ -163,6 +196,107 @@ namespace se
             x = glm::clamp(x, 0.0f, 1.0f);
             const f32 smoother = x * x * x * (x * (x * 6.0f - 15.0f) + 10.0f);
             return 1.0f - smoother;
+        }
+
+        // A bone's parent world rotation, identity at the root or when the parent is stale.
+        auto parentWorldRotation(Scene& scene, entt::entity handle) -> glm::quat
+        {
+            if (handle == entt::null || !scene.registry.valid(handle))
+            {
+                return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            }
+            if (const auto* rel = scene.registry.try_get<RelationshipComponent>(handle))
+            {
+                const entt::entity parent = rel->parentHandle;
+                if (parent != entt::null && scene.registry.valid(parent))
+                {
+                    return worldRotation(scene, Entity{ parent });
+                }
+            }
+            return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        }
+
+        // Foot-IK blend-layer producer: for each enabled chain, solve the two-bone IK against
+        // the ground plane and write the result into the override_/weight layer. The chain's
+        // world transforms come from the cached WorldTransformComponent (one frame stale, which
+        // the e2e settles over). Never touches a bone's TransformComponent — the blend layer is
+        // the only path. Writes the per-chain joints' local poses into `finalLocal`.
+        void applyFootIk(Scene& scene, const SkinnedMeshComponent& skin, const FootIkComponent& ik,
+                         std::vector<JointPose>& finalLocal)
+        {
+            const auto jointCount = static_cast<i32>(finalLocal.size());
+            auto handleOf = [&](i32 idx) -> entt::entity
+            {
+                if (idx < 0 || idx >= static_cast<i32>(skin.boneHandles.size()))
+                {
+                    return entt::null;
+                }
+                return skin.boneHandles[static_cast<std::size_t>(idx)];
+            };
+
+            for (const FootChain& chain : ik.chains)
+            {
+                const entt::entity upperH = handleOf(chain.upper);
+                const entt::entity midH = handleOf(chain.mid);
+                const entt::entity endH = handleOf(chain.end);
+                if (upperH == entt::null || midH == entt::null || endH == entt::null)
+                {
+                    continue;
+                }
+                if (chain.upper >= jointCount || chain.mid >= jointCount || chain.end >= jointCount)
+                {
+                    continue;
+                }
+                if (!scene.registry.valid(upperH) || !scene.registry.valid(midH) || !scene.registry.valid(endH))
+                {
+                    continue;
+                }
+
+                // Resolve the chain from THIS frame's animated pose (finalLocal) by forward
+                // kinematics, NOT the cached WorldTransformComponent — that cache is last frame's
+                // post-IK result, so reading it feeds the solver its own output and a near-straight
+                // chain oscillates/flips. The chain root's parent sits above the chain, so its
+                // cached world transform is stable. v1 assumes a directly-parented chain
+                // (upper→mid→end, unit bone scale), which the foot-chain config describes.
+                const std::size_t ui = static_cast<std::size_t>(chain.upper);
+                const std::size_t mi = static_cast<std::size_t>(chain.mid);
+                const std::size_t ei = static_cast<std::size_t>(chain.end);
+                glm::vec3 parentPos{ 0.0f };
+                glm::quat parentRot{ 1.0f, 0.0f, 0.0f, 0.0f };
+                if (const auto* rel = scene.registry.try_get<RelationshipComponent>(upperH);
+                    rel != nullptr && rel->parentHandle != entt::null && scene.registry.valid(rel->parentHandle))
+                {
+                    parentPos = worldTranslation(scene, Entity{ rel->parentHandle });
+                    parentRot = worldRotation(scene, Entity{ rel->parentHandle });
+                }
+                const glm::quat wUpperRot = glm::normalize(parentRot * finalLocal[ui].rotation);
+                const glm::vec3 rootPos = parentPos + parentRot * finalLocal[ui].translation;
+                const glm::quat wMidRot = glm::normalize(wUpperRot * finalLocal[mi].rotation);
+                const glm::vec3 midPos = rootPos + wUpperRot * finalLocal[mi].translation;
+                const glm::vec3 endPos = midPos + wMidRot * finalLocal[ei].translation;
+                const f32 upperLen = glm::length(midPos - rootPos);
+                const f32 lowerLen = glm::length(endPos - midPos);
+                if (upperLen < 1e-5f || lowerLen < 1e-5f)
+                {
+                    continue;
+                }
+
+                // v1 ground = a horizontal plane at groundHeight: plant the foot by lifting its
+                // world Y up to the plane (never pull it below — a foot already above stays).
+                glm::vec3 target = endPos;
+                target.y = glm::max(target.y, ik.groundHeight);
+
+                const TwoBoneIkResult solved =
+                    solveTwoBoneIk(rootPos, midPos, endPos, target, chain.poleVector, upperLen, lowerLen);
+
+                // The solved quats are world deltas: the upper swings the whole chain, the mid
+                // additionally bends (it inherits the upper's swing as the upper's child). Strip
+                // the (new) parent world rotation to land each in local space.
+                const glm::quat newUpperWorld = glm::normalize(solved.upper * wUpperRot);
+                const glm::quat newMidWorld = glm::normalize(solved.upper * solved.lower * wMidRot);
+                finalLocal[ui].rotation = glm::normalize(glm::inverse(parentRot) * newUpperWorld);
+                finalLocal[mi].rotation = glm::normalize(glm::inverse(newUpperWorld) * newMidWorld);
+            }
         }
 
         // sampleClip, but each track is bound to its joint by index when sound and re-resolved
@@ -349,6 +483,106 @@ namespace se
         return out;
     }
 
+    auto solveTwoBoneIk(glm::vec3 root, glm::vec3 mid, glm::vec3 end, glm::vec3 target, glm::vec3 poleVector,
+                        f32 upperLen, f32 lowerLen) -> TwoBoneIkResult
+    {
+        // The returned quaternions are world-space DELTA rotations: pre-multiply each onto the
+        // joint's current world rotation, then strip the parent world rotation, to land in
+        // local space (the caller does that). Pure law-of-cosines solve (ozz IKTwoBoneJob / UE
+        // two-bone): straighten + re-bend the knee to the reach angle, swing the chain onto the
+        // target, then twist the bend plane onto the pole.
+        TwoBoneIkResult out;
+        const f32 a = glm::max(upperLen, 1e-6f);
+        const f32 b = glm::max(lowerLen, 1e-6f);
+
+        const glm::vec3 toTarget = target - root;
+        const f32 reach = glm::length(toTarget);
+        if (reach < 1e-6f)
+        {
+            return out;  // target on the root: nothing to aim at, stay put
+        }
+        // Clamp the reach into the chain's range so each acos stays valid (graceful over/under).
+        const f32 reachClamped = glm::clamp(reach, glm::abs(a - b) + 1e-4f, a + b - 1e-4f);
+
+        const glm::vec3 startMid = mid - root;
+        const glm::vec3 startEnd = end - root;
+        const f32 lenStartEnd = glm::length(startEnd);
+
+        auto angleOpposite = [](f32 adj0, f32 adj1, f32 opp) -> f32
+        {
+            const f32 cosA = glm::clamp((adj0 * adj0 + adj1 * adj1 - opp * opp) / (2.0f * adj0 * adj1), -1.0f, 1.0f);
+            return std::acos(cosA);
+        };
+
+        // The bend axis: perpendicular to the limb plane. Seed it from the current bend; if the
+        // chain is straight, fall back to the pole so the knee has a definite hinge direction.
+        glm::vec3 bendAxis = glm::cross(startMid, startEnd);
+        if (glm::length(bendAxis) < 1e-6f)
+        {
+            bendAxis = glm::cross(startMid, poleVector);
+            if (glm::length(bendAxis) < 1e-6f)
+            {
+                bendAxis = glm::cross(startMid, glm::vec3(0.0f, 0.0f, 1.0f));
+            }
+            if (glm::length(bendAxis) < 1e-6f)
+            {
+                bendAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+            }
+        }
+        bendAxis = glm::normalize(bendAxis);
+
+        // 1. Knee bend at the mid joint: change the interior angle at the mid (between the
+        //    reversed upper segment and the lower segment) from its current value to the reach
+        //    value. Rotating the lower bone about the bend axis by this delta sets |start-end|
+        //    to the clamped reach.
+        const f32 currentMidAngle =
+            lenStartEnd > 1e-6f ? angleOpposite(a, b, lenStartEnd) : glm::pi<f32>();  // folded back == pi
+        const f32 targetMidAngle = angleOpposite(a, b, reachClamped);
+        const f32 bendDelta = targetMidAngle - currentMidAngle;
+
+        // Rotating the lower bone about the bend axis by ±bendDelta both yield a valid chain;
+        // pick the sign that lands |start-end| on the reach length (handles the axis-sign
+        // ambiguity in cross(startMid, startEnd) without a separate orientation argument).
+        glm::quat bend = glm::angleAxis(bendDelta, bendAxis);
+        glm::vec3 startEndBent = startMid + bend * (end - mid);
+        if (glm::abs(glm::length(startEndBent) - reachClamped) > 1e-3f)
+        {
+            bend = glm::angleAxis(-bendDelta, bendAxis);
+            startEndBent = startMid + bend * (end - mid);
+        }
+        out.lower = glm::normalize(bend);
+
+        // 2. Swing: rotate the whole chain about the root so the bent start->end points at the
+        //    target. Applied to the upper joint (the lower inherits it through the hierarchy).
+        const glm::quat swing = rotationBetween(startEndBent, toTarget);
+        out.upper = glm::normalize(swing);
+
+        // 3. Pole: twist about the root->target axis so the mid joint sits in the plane spanned
+        //    by the target direction and the pole vector (knee/elbow points the intended way).
+        //    The swung mid joint (start-relative) is swing*startMid; project it off the chain
+        //    axis to get the current knee direction, and likewise the desired pole direction.
+        const glm::vec3 targetDir = toTarget / reach;
+        const glm::vec3 midBent = swing * startMid;  // start-relative mid after the swing
+        const glm::vec3 currentPole = midBent - targetDir * glm::dot(midBent, targetDir);
+        const glm::vec3 desiredPole = poleVector - targetDir * glm::dot(poleVector, targetDir);
+        // Twist the chain about the root->target axis so the knee lands on the pole's side. The
+        // rotation MUST be about targetDir (not the shortest arc between the poles): both poles are
+        // perpendicular to targetDir, so when they are anti-aligned the shortest arc would pick an
+        // arbitrary axis and flip the whole chain off the target. Use the signed angle about
+        // targetDir instead, which keeps the solved end exactly on the target. Skip it on a
+        // (near-)straight chain, where the knee lies on the axis and the pole plane is undefined.
+        const f32 poleScale = glm::max(a, b);
+        if (glm::length(currentPole) > 0.02f * poleScale && glm::length(desiredPole) > 1e-5f)
+        {
+            const glm::vec3 cp = glm::normalize(currentPole);
+            const glm::vec3 dp = glm::normalize(desiredPole);
+            const f32 twistAngle = std::atan2(glm::dot(glm::cross(cp, dp), targetDir), glm::dot(cp, dp));
+            const glm::quat twist = glm::angleAxis(twistAngle, targetDir);
+            out.upper = glm::normalize(twist * out.upper);
+        }
+        return out;
+    }
+
     void tickAnimation(AnimationRuntime& runtime, Scene& scene, const AssetCatalog& catalog, std::string_view assetRoot,
                        f32 dt, AnimMode mode)
     {
@@ -365,6 +599,7 @@ namespace se
                 {
                     clearOverrides(scene, skin);
                     runtime.transitions.erase(key);
+                    runtime.lastPose.erase(key);
                     return;
                 }
 
@@ -468,6 +703,15 @@ namespace se
                     runtime.transitions.erase(key);
                 }
 
+                // External pose producer: kinematic foot IK feeds the same override_/weight
+                // blend layer ragdoll will use, mixed into finalLocal before the bones are
+                // written. Gated on the component so non-IK rigs pay nothing.
+                if (const auto* ik = scene.registry.try_get<FootIkComponent>(entity.handle);
+                    ik != nullptr && ik->enabled)
+                {
+                    applyFootIk(scene, skin, *ik, finalLocal);
+                }
+
                 for (std::size_t i = 0; i < jointCount; i = i + 1)
                 {
                     if (i >= skin.boneHandles.size())
@@ -484,6 +728,10 @@ namespace se
                     override_.rotation = finalLocal[i].rotation;
                     override_.scale = finalLocal[i].scale;
                 }
+
+                // Snapshot this frame's final pose for the next frame's finite-difference
+                // velocities (the physics handoff). Cheap; no consumer yet.
+                runtime.lastPose[key] = finalLocal;
             });
     }
 
@@ -857,6 +1105,61 @@ namespace se
             // With the blend the wrap frame stays at the pre-wrap pose; a hard cut would jump
             // ~72 deg toward the start pose, which quatClose would reject.
             expect(quatClose(wrapFrame, preWrap), "loop wrap holds the pre-wrap pose (no pop)");
+        }
+
+        // Two-bone IK (Phase 13): the solver returns world deltas that, composed onto the
+        // chain's (identity) bone world rotations, place the end on an in-range target exactly,
+        // and clamp gracefully (straight chain toward the target, no NaN) when over-reached.
+        {
+            const glm::vec3 root(0.0f, 0.0f, 0.0f);
+            const glm::vec3 mid(1.0f, 0.0f, 0.0f);
+            const glm::vec3 end(2.0f, 0.0f, 0.0f);  // straight chain along +X, lengths 1 + 1
+            const glm::vec3 pole(0.0f, 1.0f, 0.0f);
+            const f32 upperLen = 1.0f;
+            const f32 lowerLen = 1.0f;
+
+            // Compose the world deltas onto the chain (bone world rotations start at identity).
+            auto solvedEnd = [&](const TwoBoneIkResult& r) -> glm::vec3
+            {
+                const glm::vec3 newMid = root + r.upper * (mid - root);
+                return newMid + r.upper * r.lower * (end - mid);
+            };
+            auto hasNaN = [](const glm::vec3& v) -> bool { return glm::any(glm::isnan(v)); };
+
+            // In range: target reachable, end lands on it exactly.
+            {
+                const glm::vec3 target(1.0f, 1.0f, 0.0f);  // |root->target| = sqrt(2), in [0, 2]
+                const TwoBoneIkResult r = solveTwoBoneIk(root, mid, end, target, pole, upperLen, lowerLen);
+                const glm::vec3 reached = solvedEnd(r);
+                expect(!hasNaN(reached), "two-bone IK in-range has no NaN");
+                expect(glm::distance(reached, target) < 1e-3f, "two-bone IK reaches an in-range target exactly");
+            }
+
+            // Bent chain start (the common case): mid already off-axis, still reaches. The
+            // segment lengths match upperLen/lowerLen exactly so the law of cosines is consistent.
+            {
+                const glm::vec3 bentMid(0.5f, 0.86602540f, 0.0f);  // |root->mid| = 1
+                const glm::vec3 bentEnd(1.5f, 0.86602540f, 0.0f);  // |mid->end| = 1 (along +X)
+                const glm::vec3 target(0.5f, -1.2f, 0.3f);         // |root->target| = ~1.34, in [0, 2]
+                const TwoBoneIkResult r = solveTwoBoneIk(root, bentMid, bentEnd, target, pole, upperLen, lowerLen);
+                const glm::vec3 newMid = root + r.upper * (bentMid - root);
+                const glm::vec3 reached = newMid + r.upper * r.lower * (bentEnd - bentMid);
+                expect(glm::distance(reached, target) < 1e-3f, "two-bone IK reaches from a pre-bent chain");
+            }
+
+            // Over-extended: target past the chain's reach. The chain straightens toward the
+            // target and the end lands at max reach along the target direction (no NaN).
+            {
+                const glm::vec3 target(5.0f, 0.0f, 0.0f);  // distance 5 > maxReach 2
+                const TwoBoneIkResult r = solveTwoBoneIk(root, mid, end, target, pole, upperLen, lowerLen);
+                const glm::vec3 reached = solvedEnd(r);
+                expect(!hasNaN(reached), "two-bone IK over-reach has no NaN");
+                const f32 dist = glm::length(reached - root);
+                expect(glm::abs(dist - (upperLen + lowerLen)) < 1e-2f,
+                       "two-bone IK clamps an over-reach to a straight chain");
+                expect(glm::length(glm::normalize(reached - root) - glm::vec3(1.0f, 0.0f, 0.0f)) < 1e-2f,
+                       "two-bone IK aims the clamped chain at the target");
+            }
         }
 
         if (failures != 0)

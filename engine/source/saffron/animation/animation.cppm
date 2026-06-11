@@ -55,6 +55,23 @@ export namespace se
     /// `base` shifted by `weight`·`delta` (weight 0 → base, 1 → the pose `delta` was built from).
     auto applyDelta(const JointPose& base, const PoseDelta& delta, f32 weight) -> JointPose;
 
+    /// The two world-space joint rotations a two-bone solve produces (upper = thigh/upper-arm,
+    /// lower = shin/forearm). The end effector is positioned by composing these onto the chain.
+    struct TwoBoneIkResult
+    {
+        glm::quat upper{ 1.0f, 0.0f, 0.0f, 0.0f };
+        glm::quat lower{ 1.0f, 0.0f, 0.0f, 0.0f };
+    };
+
+    /// Solve a 2-bone chain (e.g. thigh→shin→foot) so the end effector reaches `target`,
+    /// bending around `poleVector`. `root`/`mid`/`end` are the chain's current world
+    /// positions; `upperLen`/`lowerLen` are the segment lengths. Returns world-space
+    /// rotations for the upper and lower joints (the caller removes parent world rotation to
+    /// land in local space). Pure: a target inside `[|upperLen-lowerLen|, upperLen+lowerLen]`
+    /// is reached exactly; an over/under-reach clamps to a straight chain aimed at the target.
+    auto solveTwoBoneIk(glm::vec3 root, glm::vec3 mid, glm::vec3 end, glm::vec3 target, glm::vec3 poleVector,
+                        f32 upperLen, f32 lowerLen) -> TwoBoneIkResult;
+
     /// Sample one track at time t. Returns a vec3 in .xyz for Translation/Scale, or a
     /// normalized quaternion as xyzw for Rotation. STEP holds the previous key, LINEAR
     /// lerps (slerp for rotation), CUBICSPLINE is a Hermite spline with dt-scaled
@@ -87,6 +104,10 @@ export namespace se
     {
         std::unordered_map<u64, AnimClip> clipCache;
         std::unordered_map<u64, TransitionState> transitions;  // active clip switches by entity uuid
+        // Each rig's previous-frame final local pose (by entity uuid). Snapshotted at the end
+        // of every tick; the eventual physics handoff finite-differences it for per-bone
+        // velocities so a ragdoll take-over does not pop. No consumer yet — reserved.
+        std::unordered_map<u64, std::vector<JointPose>> lastPose;
     };
 
     /// Sample and (when playing) advance every AnimationPlayerComponent on a SkinnedMesh
