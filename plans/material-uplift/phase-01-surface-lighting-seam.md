@@ -1,7 +1,15 @@
 # Phase 01 — Surface/lighting seam
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** —
+
+> **Outcome:** `SurfaceData`/`MaterialInput`/`evalSurface` added to `mesh.slang`; `fragmentMain`
+> now builds a `MaterialInput`, calls `evalSurface`, and feeds `surf.*` into the unchanged
+> lighting (incl. `ambient *= surf.occlusion`, currently 1.0). `slangc` compiles clean (only the
+> pre-existing profile-upgrade warning). Math is byte-equivalent. Note: the headless present-only
+> smoke aborts at **teardown** on a pre-existing VMA "allocations not freed" assertion — unrelated
+> to this shader change (a shader edit cannot leak GPU allocations); the pipeline loads and renders
+> to teardown without per-frame validation errors. Teardown leak tracked as a separate, not-mine issue.
 
 ## Goal
 
