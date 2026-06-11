@@ -224,6 +224,8 @@ export namespace se
         bool restir;
         i32 blasCount;
         i32 pipelines;
+        i32 bindlessTextures;  // bindless slots in use (high-water mark of the array)
+        i32 bindlessFree;      // reclaimed slots available for reuse
         bool hdr;
         f32 exposureEv;
         AaModeDto aa;
