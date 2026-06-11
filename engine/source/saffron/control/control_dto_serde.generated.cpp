@@ -2594,6 +2594,70 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<MaterialUpdateParams>) -> Result<MaterialUpdateParams>
+    {
+        MaterialUpdateParams out;
+
+        {
+            auto value = requiredField(params, "material", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "material");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.material = std::move(*parsed);
+        }
+
+        {
+            auto value = optionalField(params, "baseColor", 1, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = parseDto(*value, DtoTag<Vec4>{});
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.baseColor = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "metallic", 2, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "metallic");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.metallic = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "roughness", 3, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "roughness");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.roughness = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "emissive", 4, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = parseDto(*value, DtoTag<Vec3>{});
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.emissive = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "emissiveStrength", 5, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "emissiveStrength");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.emissiveStrength = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<OptionalPathParams>) -> Result<OptionalPathParams>
     {
         OptionalPathParams out;
@@ -3520,6 +3584,13 @@ namespace se
         out["y"] = value.y;
         out["z"] = value.z;
         out["w"] = value.w;
+        return out;
+    }
+
+    auto dtoToJson(const MaterialUpdateResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
         return out;
     }
 

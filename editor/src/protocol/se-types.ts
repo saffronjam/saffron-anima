@@ -1121,6 +1121,19 @@ export interface MaterialGetResult {
   heightTexture: WireUuid;
 }
 
+export interface MaterialUpdateParams {
+  material: WireUuid | string | number;
+  baseColor?: Vec4;
+  metallic?: number;
+  roughness?: number;
+  emissive?: Vec3;
+  emissiveStrength?: number;
+}
+
+export interface MaterialUpdateResult {
+  id: WireUuid;
+}
+
 export interface PathResult {
   path: string;
 }
@@ -1261,6 +1274,7 @@ export interface CommandParamsMap {
   "material-import": MaterialImportParams;
   "material-list": EmptyParams;
   "material-get": MaterialGetParams;
+  "material-update": MaterialUpdateParams;
   "save-scene": PathParams;
   "load-scene": PathParams;
   "save-project": OptionalPathParams;
@@ -1376,6 +1390,7 @@ export interface CommandResultMap {
   "material-import": MaterialImportResultDto;
   "material-list": MaterialListResult;
   "material-get": MaterialGetResult;
+  "material-update": MaterialUpdateResult;
   "save-scene": PathResult;
   "load-scene": PathResult;
   "save-project": ProjectInfoDto;

@@ -723,6 +723,13 @@
       "skip": "needs a created material asset"
     },
     {
+      "name": "material-update",
+      "params": "MaterialUpdateParams",
+      "result": "MaterialUpdateResult",
+      "status": "typed",
+      "skip": "needs a created material asset"
+    },
+    {
       "name": "save-scene",
       "params": "PathParams",
       "result": "PathResult",

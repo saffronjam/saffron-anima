@@ -1860,6 +1860,24 @@
       }
     },
     {
+      "name": "material-update",
+      "summary": "material-update {id} [fields]",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MaterialUpdateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MaterialUpdateResult"
+        }
+      }
+    },
+    {
       "name": "save-scene",
       "summary": "save-scene {path}",
       "params": [
@@ -3625,6 +3643,52 @@
           "id",
           "name",
           "folder"
+        ]
+      },
+      "MaterialUpdateParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "material": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "baseColor": {
+            "$ref": "#/components/schemas/Vec4"
+          },
+          "metallic": {
+            "type": "number"
+          },
+          "roughness": {
+            "type": "number"
+          },
+          "emissive": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "emissiveStrength": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "material"
+        ]
+      },
+      "MaterialUpdateResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
         ]
       },
       "MoveAssetParams": {
