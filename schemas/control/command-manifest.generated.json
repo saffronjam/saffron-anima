@@ -744,6 +744,20 @@
       "skip": "needs a created material asset"
     },
     {
+      "name": "material-create-instance",
+      "params": "MaterialCreateInstanceParams",
+      "result": "MaterialCreateResult",
+      "status": "typed",
+      "skip": "needs a created parent material"
+    },
+    {
+      "name": "material-set-override",
+      "params": "MaterialSetOverrideParams",
+      "result": "MaterialSetOverrideResult",
+      "status": "typed",
+      "skip": "needs a created material asset"
+    },
+    {
       "name": "save-scene",
       "params": "PathParams",
       "result": "PathResult",
