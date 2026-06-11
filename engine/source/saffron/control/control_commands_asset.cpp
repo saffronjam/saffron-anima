@@ -913,6 +913,38 @@ namespace se
                 return out;
             });
 
+        registerCommand<MaterialGetParams, MaterialGetResult>(
+            reg, "material-get", "material-get {id|name}",
+            [](EngineContext& ctx, const MaterialGetParams& params) -> Result<MaterialGetResult>
+            {
+                auto resolved = resolveAsset(ctx, params.material);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                auto loaded = loadMaterialAsset(ctx.assets, (*resolved)->id);
+                if (!loaded)
+                {
+                    return Err(loaded.error());
+                }
+                const MaterialAsset& m = *loaded;
+                MaterialGetResult r;
+                r.id = WireUuid{ (*resolved)->id.value };
+                r.blend = m.blend;
+                r.unlit = m.unlit;
+                r.baseColor = Vec4{ m.baseColor.x, m.baseColor.y, m.baseColor.z, m.baseColor.w };
+                r.metallic = m.metallic;
+                r.roughness = m.roughness;
+                r.emissive = Vec3{ m.emissive.x, m.emissive.y, m.emissive.z };
+                r.emissiveStrength = m.emissiveStrength;
+                r.albedoTexture = WireUuid{ m.albedoTexture.value };
+                r.ormTexture = WireUuid{ m.ormTexture.value };
+                r.normalTexture = WireUuid{ m.normalTexture.value };
+                r.emissiveTexture = WireUuid{ m.emissiveTexture.value };
+                r.heightTexture = WireUuid{ m.heightTexture.value };
+                return r;
+            });
+
         registerCommand<PathParams, PathResult>(reg, "save-scene", "save-scene {path}",
                                                 [](EngineContext& ctx, const PathParams& params) -> Result<PathResult>
                                                 {
