@@ -1134,6 +1134,15 @@ export interface MaterialUpdateResult {
   id: WireUuid;
 }
 
+export interface PreviewRenderParams {
+  material: WireUuid | string | number;
+  size?: number;
+}
+
+export interface PreviewRenderResult {
+  png: string;
+}
+
 export interface PathResult {
   path: string;
 }
@@ -1275,6 +1284,7 @@ export interface CommandParamsMap {
   "material-list": EmptyParams;
   "material-get": MaterialGetParams;
   "material-update": MaterialUpdateParams;
+  "preview-render": PreviewRenderParams;
   "save-scene": PathParams;
   "load-scene": PathParams;
   "save-project": OptionalPathParams;
@@ -1391,6 +1401,7 @@ export interface CommandResultMap {
   "material-list": MaterialListResult;
   "material-get": MaterialGetResult;
   "material-update": MaterialUpdateResult;
+  "preview-render": PreviewRenderResult;
   "save-scene": PathResult;
   "load-scene": PathResult;
   "save-project": ProjectInfoDto;
