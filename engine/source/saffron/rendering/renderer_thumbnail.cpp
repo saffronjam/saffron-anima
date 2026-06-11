@@ -340,9 +340,9 @@ namespace se
         glm::vec4 pbr;   // x metallic, y roughness, z normalStrength
     };
 
-    auto newPreviewPipeline(Renderer& renderer) -> Result<Ref<Pipeline>>
+    auto newPreviewPipeline(Renderer& renderer, const std::string& spvPath) -> Result<Ref<Pipeline>>
     {
-        auto moduleResult = loadShaderModule(renderer.context.device, assetPath("shaders/preview.spv"));
+        auto moduleResult = loadShaderModule(renderer.context.device, spvPath);
         if (!moduleResult)
         {
             return Err(moduleResult.error());
@@ -480,17 +480,33 @@ namespace se
         return uploadMesh(renderer, mesh);
     }
 
-    auto renderMaterialPreview(Renderer& renderer, const SubmeshMaterial& material, u32 size)
-        -> Result<Ref<GpuTexture>>
+    auto renderMaterialPreview(Renderer& renderer, const SubmeshMaterial& material, u32 size,
+                               const std::string& shaderSpv) -> Result<Ref<GpuTexture>>
     {
-        if (!renderer.pipelines.preview)
+        // Empty shaderSpv => the default studio preview pipeline (cached). A codegen material passes
+        // its compiled shader path and gets a fresh per-call pipeline (caching is a follow-on).
+        Ref<Pipeline> pipeline;
+        if (shaderSpv.empty())
         {
-            auto pipeline = newPreviewPipeline(renderer);
-            if (!pipeline)
+            if (!renderer.pipelines.preview)
             {
-                return Err(pipeline.error());
+                auto created = newPreviewPipeline(renderer, assetPath("shaders/preview.spv"));
+                if (!created)
+                {
+                    return Err(created.error());
+                }
+                renderer.pipelines.preview = *created;
             }
-            renderer.pipelines.preview = *pipeline;
+            pipeline = renderer.pipelines.preview;
+        }
+        else
+        {
+            auto created = newPreviewPipeline(renderer, shaderSpv);
+            if (!created)
+            {
+                return Err(created.error());
+            }
+            pipeline = *created;
         }
         if (!renderer.previewSphere)
         {
@@ -610,10 +626,10 @@ namespace se
         vk::Viewport viewport{ 0.0f, 0.0f, static_cast<f32>(size), static_cast<f32>(size), 0.0f, 1.0f };
         cmd.setViewport(0, viewport);
         cmd.setScissor(0, vk::Rect2D{ vk::Offset2D{ 0, 0 }, vk::Extent2D{ size, size } });
-        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, renderer.pipelines.preview->pipeline);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, renderer.pipelines.preview->layout, 0,
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->pipeline);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline->layout, 0,
                                renderer.descriptors.bindlessSet, {});
-        cmd.pushConstants(renderer.pipelines.preview->layout,
+        cmd.pushConstants(pipeline->layout,
                           vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(push),
                           &push);
         vk::DeviceSize offset = 0;

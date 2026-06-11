@@ -1774,8 +1774,10 @@ export namespace se
     // Renders a unit sphere with `material` under fixed studio lighting (the preview.slang pipeline)
     // into a size×size sampled texture — the material preview pane + cached material thumbnails. Like
     // renderMeshThumbnail, an out-of-band render that waits idle (never on the present path).
-    auto renderMaterialPreview(Renderer& renderer, const SubmeshMaterial& material, u32 size)
-        -> Result<Ref<GpuTexture>>;
+    // shaderSpv: empty => the default studio preview shader; otherwise a codegen'd preview .spv path
+    // (a node-graph material's compiled surface), used for a fresh per-call pipeline.
+    auto renderMaterialPreview(Renderer& renderer, const SubmeshMaterial& material, u32 size,
+                               const std::string& shaderSpv = std::string{}) -> Result<Ref<GpuTexture>>;
 
     // Renders/loads an asset to PNG bytes in memory (synchronous, own command buffer + waitIdle;
     // never on the present path). Mesh: framed like renderMeshThumbnail at size×size. Texture:
