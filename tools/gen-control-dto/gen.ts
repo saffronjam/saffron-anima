@@ -638,6 +638,18 @@ const commands: CommandDef[] = [
     result: "AssignAssetResult",
     summary: "assign asset to entity",
   },
+  {
+    name: "material-create",
+    params: "MaterialCreateParams",
+    result: "MaterialCreateResult",
+    summary: "material-create {name} [from-entity]",
+  },
+  {
+    name: "material-assign",
+    params: "MaterialAssignParams",
+    result: "MaterialAssignResult",
+    summary: "material-assign {entity, material}",
+  },
   { name: "save-scene", params: "PathParams", result: "PathResult", summary: "save-scene {path}" },
   { name: "load-scene", params: "PathParams", result: "PathResult", summary: "load-scene {path}" },
   {
@@ -779,6 +791,8 @@ const commandSkips = new Map<string, string>([
   ["delete-asset", "removes a project asset"],
   ["create-script", "writes a script file into the project src/"],
   ["save-scene", "writes a scene file"],
+  ["material-create", "writes a .smat material file"],
+  ["material-assign", "needs a created material asset"],
   ["load-scene", "loads and replaces the scene from a file"],
   ["reload-project", "reloads and replaces the active project's scene and catalog"],
   ["screenshot", "writes an image file and can be deferred"],
