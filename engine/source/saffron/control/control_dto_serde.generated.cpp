@@ -2580,6 +2580,20 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<MaterialGetParams>) -> Result<MaterialGetParams>
+    {
+        MaterialGetParams out;
+
+        {
+            auto value = requiredField(params, "material", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "material");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.material = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<OptionalPathParams>) -> Result<OptionalPathParams>
     {
         OptionalPathParams out;
@@ -3480,6 +3494,35 @@ namespace se
         return out;
     }
 
+    auto dtoToJson(const MaterialGetResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
+        out["blend"] = value.blend;
+        out["unlit"] = value.unlit;
+        out["baseColor"] = dtoToJson(value.baseColor);
+        out["metallic"] = value.metallic;
+        out["roughness"] = value.roughness;
+        out["emissive"] = dtoToJson(value.emissive);
+        out["emissiveStrength"] = value.emissiveStrength;
+        out["albedoTexture"] = dtoToJson(value.albedoTexture);
+        out["ormTexture"] = dtoToJson(value.ormTexture);
+        out["normalTexture"] = dtoToJson(value.normalTexture);
+        out["emissiveTexture"] = dtoToJson(value.emissiveTexture);
+        out["heightTexture"] = dtoToJson(value.heightTexture);
+        return out;
+    }
+
+    auto dtoToJson(const Vec4& value) -> Json
+    {
+        Json out = Json::object();
+        out["x"] = value.x;
+        out["y"] = value.y;
+        out["z"] = value.z;
+        out["w"] = value.w;
+        return out;
+    }
+
     auto dtoToJson(const PathResult& value) -> Json
     {
         Json out = Json::object();
@@ -3511,16 +3554,6 @@ namespace se
     {
         Json out = Json::object();
         out["quitting"] = value.quitting;
-        return out;
-    }
-
-    auto dtoToJson(const Vec4& value) -> Json
-    {
-        Json out = Json::object();
-        out["x"] = value.x;
-        out["y"] = value.y;
-        out["z"] = value.z;
-        out["w"] = value.w;
         return out;
     }
 }
