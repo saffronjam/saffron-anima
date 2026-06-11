@@ -2655,6 +2655,66 @@ namespace se
                 out.emissiveStrength = std::move(*parsed);
             }
         }
+
+        {
+            auto value = optionalField(params, "normalStrength", 6, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "normalStrength");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.normalStrength = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "albedoTexture", 7, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readWireUuid(*value, "albedoTexture");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.albedoTexture = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "ormTexture", 8, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readWireUuid(*value, "ormTexture");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.ormTexture = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "normalTexture", 9, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readWireUuid(*value, "normalTexture");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.normalTexture = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "emissiveTexture", 10, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readWireUuid(*value, "emissiveTexture");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.emissiveTexture = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "heightTexture", 11, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readWireUuid(*value, "heightTexture");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.heightTexture = std::move(*parsed);
+            }
+        }
         return out;
     }
 
