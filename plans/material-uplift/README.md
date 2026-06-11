@@ -100,19 +100,47 @@ Rough milestone reading: **01–10** is a complete native material system with i
 scripting (no UI graph); **11–14** adds the visual editor with live preview; **15–16** hardens
 and adds instances; **17–21** is the full node-graph endgame. Each block is independently valuable.
 
-### Implementation progress note (in-session)
+### Implementation progress / resume checkpoint (in-session)
 
-Phases **01–10 are COMPLETE and validated end-to-end** — the native material system: surface/lighting
-seam, material-params SSBO, `.smat` assets, full PBR slots (normal mapping **proven live** by
-`normal_render.test.ts`, parallax + alpha wired), glTF auto-import of normal/occlusion/emissive,
-`assign-asset` slot extension, `MaterialAssetComponent` + resolve precedence, and `material-create`/
-`material-assign` commands (`.smat`→entity path **proven** by `material_asset.test.ts`). 114/114 contract
-checks pass. Per-phase follow-ons are noted in each phase file.
+**DONE — the entire native material system (phases 01–10) + several follow-ons, all built clean,
+committed, and validated end-to-end.** Highlights:
 
-**Remaining (11–21)** is the larger preview + editor + node-graph cluster. Sequenced for risk/value:
-the **suffix-folder importer** (phase-08 follow-on — pure logic, the "drag a folder" UX) is done first as
-it is low-risk and high-value; the preview render infra (11), React editor (13–14, 20), hardening with
-GPU-lifetime hazards (15), instances (16), and the node-graph subsystem (17–21) are the next major push.
+- **01–02** surface/lighting `evalSurface` seam + `MaterialParams` SSBO (set 2 binding 2) + draw-list
+  material dedup. **03** native `.smat` asset (`AssetType::Material`, save/load, default material).
+  **04** derivative-based tangent frame. **05–06** full PBR slots (normal/occlusion/emissive/height) +
+  UV transform + feature bits + parallax-occlusion + alpha-clip, all feature-gated in the übershader.
+- **07** DX→GL / gloss→rough bake helpers. **08** glTF auto-import of normal/occlusion/emissive +
+  `assign-asset` Normal/Occlusion/Emissive/Height slots + the **suffix-detect folder importer**
+  (`material-import`, the "drag a folder" UX). **09** `MaterialAssetComponent` + `resolveMaterialAsset`
+  + resolve precedence (asset > set > inline > default). **10** `material-create/assign/import/list/get`.
+- **Bug fixes:** PBR map slots now **persist across save+reload** (`gen.ts` serde); contract **115/115**.
+- **Proven by e2e:** `normal_render` (normal map perturbs shading), `material_asset` (`.smat`→entity
+  render), `material_import` (suffix detection), `material_persist` (save/reload), `material_list`,
+  `material_get`. Plus the pre-existing material suite, all green.
+
+**Validation note:** the headless smoke aborts at *teardown* on a **pre-existing** VMA "allocations not
+freed" assertion (present before this work — a shader/material edit can't leak GPU allocations); rendering
+runs to teardown validation-clean. `make schema` needs a headless display (wrap in weston; the e2e
+harness self-spawns one).
+
+**REMAINING (11–21) — the preview + editor + node-graph cluster (the next major push):**
+- **11–12 preview:** in-frame render of the übershader on a sphere into a separate target (reuse the
+  renderer-global IBL/SSAO/DDGI/light sets — *not* the flat thumbnail pipeline), studio IBL, readback to
+  PNG over the control plane (`preview.render`). The critical path — gates the editor + node graph.
+- **13–14 editor:** `RightTool:"material"` panel over the field renderer + live preview sphere; entity
+  material picker. Needs `material.update` (live edit) + `material-create from-entity`.
+- **15 hardening:** bindless slot reclamation (free-list — mind frames-in-flight use-after-free),
+  mipmaps + BC, dangling-ref validation.
+- **16 instances:** `.smat` `parent` + sparse `overrides` (needs per-field optional override tracking).
+- **17–21 node graph:** data model → Slang codegen of `evalSurface` (runtime `slangc` + async/fallback +
+  PSO cache by graph hash + Slang module linking) → node library → React Flow editor → cook-time baking.
+
+**Small deferred items (noted in phase files):** `doubleSided` PSO axis (regression-test winding first);
+`uvTiling`/`uvOffset` serde (needs a `vec2` helper); EXR (tinyexr) + 16-bit decode + `uploadTexture16`;
+`material.update`; `material-create from-entity`. None block the native system.
+
+**To resume:** start with **phase 11 (preview)** — it gates 13–14 and 20. Build inside the
+`saffron-build` toolbox; e2e via `bun test` (harness self-spawns weston); `make schema` needs a weston wrap.
 
 ## Cross-cutting conventions (apply to every phase)
 
