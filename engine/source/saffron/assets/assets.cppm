@@ -962,6 +962,158 @@ return {0}
         return materialAssetFromJson(j);
     }
 
+    // Detects a PBR map role from a texture filename's suffix tokens (case-insensitive). Returns one
+    // of albedo|normal|orm|roughness|metallic|ao|height|emissive|gloss|opacity, or empty if
+    // unrecognized. Most-specific tokens win (e.g. arm/orm before albedo).
+    auto detectMaterialRole(const std::string& filename) -> std::string
+    {
+        std::string s;
+        s.reserve(filename.size());
+        for (char c : filename)
+        {
+            s.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c);
+        }
+        const auto has = [&](const char* token) { return s.find(token) != std::string::npos; };
+        if (has("arm") || has("orm") || has("_mra"))
+        {
+            return "orm";
+        }
+        if (has("albedo") || has("basecolor") || has("base_color") || has("diffuse") || has("_diff") || has("_col") ||
+            has("color"))
+        {
+            return "albedo";
+        }
+        if (has("normal") || has("_nor") || has("nrm"))
+        {
+            return "normal";
+        }
+        if (has("rough"))
+        {
+            return "roughness";
+        }
+        if (has("metal"))
+        {
+            return "metallic";
+        }
+        if (has("emissive") || has("emission") || has("_emit"))
+        {
+            return "emissive";
+        }
+        if (has("height") || has("displace") || has("_disp") || has("bump"))
+        {
+            return "height";
+        }
+        if (has("occlusion") || has("_ao") || has("ambientocclusion"))
+        {
+            return "ao";
+        }
+        if (has("gloss"))
+        {
+            return "gloss";
+        }
+        if (has("opacity") || has("alpha") || has("_mask"))
+        {
+            return "opacity";
+        }
+        return "";
+    }
+
+    struct MaterialImportResult
+    {
+        Uuid material;
+        std::string roles;  // space-joined detected roles, for the editor's confirmation proposal
+    };
+
+    // Drag-a-folder material import: scans `dir` for textures, detects each map's role by filename
+    // suffix, imports it with the right colorspace, assembles a .smat, and saves it. Normal maps are
+    // assumed OpenGL convention and roughness assumed (not glossiness) — the bake helpers (phase 07)
+    // plug in here when DX/gloss provenance is added. A packed ARM/ORM also feeds the occlusion slot.
+    auto importMaterialFolder(AssetServer& assets, Renderer& renderer, const std::string& dir, const std::string& name)
+        -> Result<MaterialImportResult>
+    {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec))
+        {
+            return Err(std::format("not a directory: {}", dir));
+        }
+        const auto registerFile = [&](const std::filesystem::path& p, bool srgb) -> Uuid
+        {
+            std::ifstream in(p, std::ios::binary);
+            const std::vector<u8> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            if (bytes.empty())
+            {
+                return Uuid{ 0 };
+            }
+            std::string ext = p.extension().string();
+            if (!ext.empty() && ext[0] == '.')
+            {
+                ext = ext.substr(1);
+            }
+            auto id = registerTextureBytes(assets, renderer, bytes, ext, p.stem().string(), srgb);
+            return id ? *id : Uuid{ 0 };
+        };
+        MaterialAsset mat;
+        std::string roles;
+        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(dir, ec))
+        {
+            if (!entry.is_regular_file())
+            {
+                continue;
+            }
+            const std::filesystem::path& p = entry.path();
+            std::string ext = p.extension().string();
+            for (char& c : ext)
+            {
+                c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c;
+            }
+            if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".tga")
+            {
+                continue;
+            }
+            const std::string role = detectMaterialRole(p.filename().string());
+            if (role == "albedo")
+            {
+                mat.albedoTexture = registerFile(p, true);
+                roles += "albedo ";
+            }
+            else if (role == "normal")
+            {
+                mat.normalTexture = registerFile(p, false);
+                roles += "normal ";
+            }
+            else if (role == "orm" || role == "roughness" || role == "metallic")
+            {
+                mat.ormTexture = registerFile(p, false);
+                roles += role + " ";
+            }
+            else if (role == "ao")
+            {
+                if (mat.ormTexture.value == 0)
+                {
+                    mat.ormTexture = registerFile(p, false);
+                }
+                roles += "ao ";
+            }
+            else if (role == "height")
+            {
+                mat.heightTexture = registerFile(p, false);
+                roles += "height ";
+            }
+            else if (role == "emissive")
+            {
+                mat.emissiveTexture = registerFile(p, true);
+                roles += "emissive ";
+            }
+        }
+        const std::string matName = name.empty() ? std::filesystem::path(dir).filename().string() : name;
+        auto id = saveMaterialAsset(assets, mat, matName.empty() ? std::string{ "Material" } : matName);
+        if (!id)
+        {
+            return Err(id.error());
+        }
+        return MaterialImportResult{ *id, roles };
+    }
+
     // Imports an external image file into the asset dir + catalog (name = filename stem).
     auto importTexture(AssetServer& assets, Renderer& renderer, const std::string& path) -> Result<Uuid>
     {
