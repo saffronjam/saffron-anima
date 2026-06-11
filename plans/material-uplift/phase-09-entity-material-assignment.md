@@ -13,9 +13,11 @@
 > new branch is dormant). **Functional `.smat`→entity render is exercised in phase 10** (which adds
 > `material.create`/`assign`).
 >
-> **Deferred:** (1) the **9-field `MaterialComponent`/`MaterialSlot` serde persistence** (the phase-05/06
-> normal/occlusion/emissive/height/uv/alpha fields) — these are in-memory only, so an imported normal map
-> is lost on project save+reload; closing it is a `gen.ts emitSceneSerde` follow-on. (2) the **`doubleSided`
+> **Deferred:** (1) ~~the 9-field `MaterialComponent`/`MaterialSlot` serde persistence~~ — **DONE** (later
+> in-session): `gen.ts emitSceneSerde` now persists `normal/occlusion/emissive/height` textures +
+> `normalStrength`/`heightScale`/`alphaClip`/`alphaCutoff` for both `MaterialComponent` and `MaterialSlot`;
+> `material_persist.test.ts` proves an assigned normal map survives save+reload. (Only `uvTiling`/`uvOffset`
+> remain unpersisted — `vec2` needs a serde helper; they default 1/0, not a data-loss path.) (2) the **`doubleSided`
 > PSO axis** (`Material` + `requestMeshPipeline` cache key + `cullMode`) — isolated; a later cleanup, paired
 > with reading `MaterialAsset.doubleSided` here.
 
