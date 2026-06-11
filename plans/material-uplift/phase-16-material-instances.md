@@ -1,7 +1,18 @@
 # Phase 16 — Material instances / variants
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 13
+
+> **Outcome.** `MaterialAsset` gained `parent` (Uuid) + a sparse `overrides` map (serde'd). Split the load:
+> `loadMaterialAssetRaw` (the stored `.smat` as-is — the edit path) vs `loadMaterialAsset` (resolved for
+> rendering: an instance = its parent's resolved params with `applyOverrides` on top, recursive with a
+> depth-8 cycle guard; a master applies its foldable graph). `material-create-instance {parent} [name]`
+> mints a child; `material-set-override {material, field, value}` writes one sparse override (`null`
+> overrides becomes an object on `[]`). e2e `material_instance.test.ts` proves the three behaviors:
+> pure inheritance (instance render == parent), override divergence (a roughness override changes it), and
+> **reflow** (editing the parent's baseColor re-renders the instance while keeping its override). 122/122
+> contract. **Follow-on:** the editor's override UI (greyed inherited fields + per-field override toggles)
+> is React work for the node-graph editor pass (phase 20-era).
 
 ## Goal
 
