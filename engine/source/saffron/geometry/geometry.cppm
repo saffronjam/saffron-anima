@@ -142,6 +142,15 @@ export namespace se
         std::vector<u8> metallicRoughnessBytes;
         std::string metallicRoughnessExt;
         bool hasMetallicRoughness = false;
+        std::vector<u8> normalBytes;  // tangent-space normal map (linear)
+        std::string normalExt;
+        bool hasNormal = false;
+        std::vector<u8> occlusionBytes;  // ambient occlusion (linear, AO in R)
+        std::string occlusionExt;
+        bool hasOcclusion = false;
+        std::vector<u8> emissiveTexBytes;  // emissive map (sRGB)
+        std::string emissiveTexExt;
+        bool hasEmissiveTex = false;
     };
 
     struct ImportedModel
@@ -440,6 +449,12 @@ namespace se
         ImportedMaterial material;
         material.emissive = glm::vec3(src.emissive_factor[0], src.emissive_factor[1], src.emissive_factor[2]);
         material.emissiveStrength = src.has_emissive_strength ? src.emissive_strength.emissive_strength : 1.0f;
+        material.hasNormal =
+            readGltfTextureBytes(src.normal_texture, path, "normal", material.normalBytes, material.normalExt);
+        material.hasOcclusion = readGltfTextureBytes(src.occlusion_texture, path, "occlusion", material.occlusionBytes,
+                                                     material.occlusionExt);
+        material.hasEmissiveTex = readGltfTextureBytes(src.emissive_texture, path, "emissive", material.emissiveTexBytes,
+                                                       material.emissiveTexExt);
         if (!src.has_pbr_metallic_roughness)
         {
             return material;
