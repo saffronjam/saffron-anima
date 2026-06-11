@@ -69,5 +69,15 @@ namespace se
 
         registerComponent<BoneComponent>(
             reg, "Bone", [](Scene&, Entity) {}, boneComponentToJson, boneComponentFromJson, true);
+
+        // Foot-IK chains on the rig; the animation evaluator reads them as a blend-layer
+        // producer. The toggle is also reachable over the control plane (set-foot-ik).
+        registerComponent<FootIkComponent>(
+            reg, "FootIk", [](Scene&, Entity) {}, footIkComponentToJson, footIkComponentFromJson, true);
+
+        // Reserved per-bone Jolt metadata (no runtime use this phase); serialized so authoring
+        // survives a round trip ahead of the physics phase.
+        registerComponent<BonePhysicsComponent>(
+            reg, "BonePhysics", [](Scene&, Entity) {}, bonePhysicsComponentToJson, bonePhysicsComponentFromJson, true);
     }
 }

@@ -126,6 +126,54 @@ export namespace se
         glm::vec3 scale{ 1.0f };
     };
 
+    // One leg/arm chain for kinematic foot IK: joint indices into SkinnedMeshComponent.bones
+    // (upper→mid→end, e.g. thigh→shin→foot) plus the pole vector that orients the knee plane.
+    struct FootChain
+    {
+        i32 upper = -1;
+        i32 mid = -1;
+        i32 end = -1;
+        glm::vec3 poleVector{ 0.0f, 0.0f, 1.0f };
+    };
+
+    // Foot-IK config on the rig entity (beside SkinnedMeshComponent). When enabled, the
+    // animation evaluator runs solveTwoBoneIk per chain and feeds the result through the
+    // PoseBuffer blend layer (override_/weight), never the bones' TransformComponents.
+    // v1 ground is a horizontal plane at `groundHeight`; true terrain waits for physics.
+    struct FootIkComponent
+    {
+        bool enabled = false;
+        f32 groundHeight = 0.0f;
+        std::vector<FootChain> chains;
+    };
+
+    // Reserved per-bone metadata for the eventual Jolt powered-ragdoll (UE-PhAT /
+    // Jolt-RagdollSettings shaped). No runtime use this phase — purely the schema the physics
+    // phase will read to build collider bodies + constraints. Authored once, mapped 1:1 later.
+    struct BonePhysics
+    {
+        glm::vec3 shapeHalfExtents{ 0.0f };  // capsule/box collider half-size
+        f32 mass = 1.0f;
+        enum class Joint : u8
+        {
+            Fixed,
+            Hinge,
+            SwingTwist,
+            Free
+        } joint = Joint::SwingTwist;
+        glm::vec3 swingTwistLimits{ 0.0f };  // radians
+        f32 driveStiffness = 0.0f;
+        f32 driveDamping = 0.0f;
+        f32 driveMaxForce = 0.0f;  // PD motor gains
+    };
+
+    // Optional sidecar on the rig entity: a parallel array to SkinnedMeshComponent.bones of
+    // the reserved physics metadata above. Serialized through the component path; inert.
+    struct BonePhysicsComponent
+    {
+        std::vector<BonePhysics> bones;
+    };
+
     // References a mesh asset by stable id; the AssetServer resolves it to a GPU mesh.
     struct MeshComponent
     {
@@ -902,6 +950,10 @@ export namespace se
     auto boneComponentFromJson(BoneComponent& c, const nlohmann::json& j) -> Result<void>;
     auto skinnedMeshComponentToJson(const SkinnedMeshComponent& c) -> nlohmann::json;
     auto skinnedMeshComponentFromJson(SkinnedMeshComponent& c, const nlohmann::json& j) -> Result<void>;
+    auto footIkComponentToJson(const FootIkComponent& c) -> nlohmann::json;
+    auto footIkComponentFromJson(FootIkComponent& c, const nlohmann::json& j) -> Result<void>;
+    auto bonePhysicsComponentToJson(const BonePhysicsComponent& c) -> nlohmann::json;
+    auto bonePhysicsComponentFromJson(BonePhysicsComponent& c, const nlohmann::json& j) -> Result<void>;
     auto environmentToJson(const SceneEnvironment& env) -> nlohmann::json;
     auto environmentFromJson(const nlohmann::json& j) -> SceneEnvironment;
 

@@ -428,6 +428,96 @@ namespace se
         return {};
     }
 
+    auto footIkComponentToJson(const FootIkComponent& c) -> nlohmann::json
+    {
+        nlohmann::json chains = nlohmann::json::array();
+        for (const FootChain& chain : c.chains)
+        {
+            chains.push_back(nlohmann::json{ { "upper", chain.upper },
+                                             { "mid", chain.mid },
+                                             { "end", chain.end },
+                                             { "poleVector", vec3ToJson(chain.poleVector) } });
+        }
+        return nlohmann::json{
+            { "enabled", c.enabled }, { "groundHeight", c.groundHeight }, { "chains", std::move(chains) }
+        };
+    }
+
+    auto footIkComponentFromJson(FootIkComponent& c, const nlohmann::json& j) -> Result<void>
+    {
+        c.enabled = jsonBoolOr(j, "enabled", false);
+        c.groundHeight = jsonF32Or(j, "groundHeight", 0.0f);
+        c.chains.clear();
+        if (j.contains("chains") && j["chains"].is_array())
+        {
+            for (const nlohmann::json& entry : j["chains"])
+            {
+                FootChain chain;
+                chain.upper = static_cast<i32>(entry.value("upper", -1));
+                chain.mid = static_cast<i32>(entry.value("mid", -1));
+                chain.end = static_cast<i32>(entry.value("end", -1));
+                chain.poleVector = vec3FromJson(entry.value("poleVector", nlohmann::json::object()));
+                c.chains.push_back(chain);
+            }
+        }
+        return {};
+    }
+
+    auto bonePhysicsComponentToJson(const BonePhysicsComponent& c) -> nlohmann::json
+    {
+        auto jointName = [](BonePhysics::Joint joint) -> const char*
+        {
+            switch (joint)
+            {
+                case BonePhysics::Joint::Fixed: return "fixed";
+                case BonePhysics::Joint::Hinge: return "hinge";
+                case BonePhysics::Joint::SwingTwist: return "swingtwist";
+                case BonePhysics::Joint::Free: return "free";
+            }
+            return "swingtwist";
+        };
+        nlohmann::json bones = nlohmann::json::array();
+        for (const BonePhysics& b : c.bones)
+        {
+            bones.push_back(nlohmann::json{ { "shapeHalfExtents", vec3ToJson(b.shapeHalfExtents) },
+                                            { "mass", b.mass },
+                                            { "joint", jointName(b.joint) },
+                                            { "swingTwistLimits", vec3ToJson(b.swingTwistLimits) },
+                                            { "driveStiffness", b.driveStiffness },
+                                            { "driveDamping", b.driveDamping },
+                                            { "driveMaxForce", b.driveMaxForce } });
+        }
+        return nlohmann::json{ { "bones", std::move(bones) } };
+    }
+
+    auto bonePhysicsComponentFromJson(BonePhysicsComponent& c, const nlohmann::json& j) -> Result<void>
+    {
+        auto jointFromName = [](const std::string& name) -> BonePhysics::Joint
+        {
+            if (name == "fixed") { return BonePhysics::Joint::Fixed; }
+            if (name == "hinge") { return BonePhysics::Joint::Hinge; }
+            if (name == "free") { return BonePhysics::Joint::Free; }
+            return BonePhysics::Joint::SwingTwist;
+        };
+        c.bones.clear();
+        if (j.contains("bones") && j["bones"].is_array())
+        {
+            for (const nlohmann::json& entry : j["bones"])
+            {
+                BonePhysics b;
+                b.shapeHalfExtents = vec3FromJson(entry.value("shapeHalfExtents", nlohmann::json::object()));
+                b.mass = jsonF32Or(entry, "mass", 1.0f);
+                b.joint = jointFromName(jsonStringOr(entry, "joint", std::string{ "swingtwist" }));
+                b.swingTwistLimits = vec3FromJson(entry.value("swingTwistLimits", nlohmann::json::object()));
+                b.driveStiffness = jsonF32Or(entry, "driveStiffness", 0.0f);
+                b.driveDamping = jsonF32Or(entry, "driveDamping", 0.0f);
+                b.driveMaxForce = jsonF32Or(entry, "driveMaxForce", 0.0f);
+                c.bones.push_back(b);
+            }
+        }
+        return {};
+    }
+
     auto environmentToJson(const SceneEnvironment& env) -> nlohmann::json
     {
         return nlohmann::json{
