@@ -1,6 +1,6 @@
 # Material uplift
 
-**Status:** IN PROGRESS (phases 01–14 + 16 + 17 + material thumbnails/texture-edit + phase-18 codegen core; remaining: 15 hardening, 18 render-wiring, 19–21 node library/React-Flow editor/cook)
+**Status:** IN PROGRESS (phases 01–14, 16, 17, 18-core, 19-emitter-nodes + thumbnails/texture-edit; remaining: 15 hardening, 18 render-wiring, 20 React-Flow editor, 21 cook)
 
 A native, editable material system for SaffronEngine: import full PBR texture sets,
 manage materials as first-class assets, assign them to entities, edit them in a
