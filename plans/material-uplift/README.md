@@ -1,6 +1,6 @@
 # Material uplift
 
-**Status:** IN PROGRESS (phases 01–14 complete — native material system + preview + editor panel + entity picker; follow-ons noted per phase)
+**Status:** IN PROGRESS (phases 01–14 + 17 complete — material system + preview + editor + node-graph data model; 15–16, 18–21 remain)
 
 A native, editable material system for SaffronEngine: import full PBR texture sets,
 manage materials as first-class assets, assign them to entities, edit them in a

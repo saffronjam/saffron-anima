@@ -1,7 +1,18 @@
 # Phase 17 — Node-graph data model
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (data model + foldable params lowering; codegen is phase 18)
 **Depends on:** 10
+
+> **Outcome.** `MaterialAsset` gained an optional `graph` JSON (`{ nodes:[{id,type,props}],
+> edges:[{from:[node,pin],to:[node,pin]}] }`), stored in the `.smat` + serde'd. `lowerGraphToParams`
+> folds a graph into the flat params when **every** `materialOutput` channel is driven by a `constant`
+> or `texture` node (baseColor/metallic/roughness/emissive/emissiveStrength/normal/height) — returning
+> `foldable=false` if any procedural/math node is present (the codegen path, phase 18). `loadMaterialAsset`
+> applies the fold (the graph is the source of truth; a non-foldable graph keeps the stored params as a
+> fallback). `material-set-graph {material, graph}` stores + folds + reports `foldable`. e2e
+> `material_graph.test.ts` proves a constant-red-baseColor graph renders **identically** to a material
+> with red set directly. The node/edge model + the `materialOutput` channel set are exactly what phase 18's
+> codegen lowers to Slang. **Deferred:** `material-get` returning the graph (the React Flow editor, phase 20).
 
 ## Goal
 
