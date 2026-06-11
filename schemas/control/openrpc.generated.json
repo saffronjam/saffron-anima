@@ -1770,6 +1770,42 @@
       }
     },
     {
+      "name": "material-create",
+      "summary": "material-create {name} [from-entity]",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MaterialCreateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MaterialCreateResult"
+        }
+      }
+    },
+    {
+      "name": "material-assign",
+      "summary": "material-assign {entity, material}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MaterialAssignParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MaterialAssignResult"
+        }
+      }
+    },
+    {
       "name": "save-scene",
       "summary": "save-scene {path}",
       "params": [
@@ -3319,6 +3355,76 @@
           "enabled",
           "count",
           "probes"
+        ]
+      },
+      "MaterialAssignParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "material": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entity",
+          "material"
+        ]
+      },
+      "MaterialAssignResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "material": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "material"
+        ]
+      },
+      "MaterialCreateParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "MaterialCreateResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
         ]
       },
       "MoveAssetParams": {
