@@ -824,6 +824,12 @@ export namespace se
         std::optional<f32> roughness;
         std::optional<Vec3> emissive;
         std::optional<f32> emissiveStrength;
+        std::optional<f32> normalStrength;
+        std::optional<WireUuid> albedoTexture;
+        std::optional<WireUuid> ormTexture;
+        std::optional<WireUuid> normalTexture;
+        std::optional<WireUuid> emissiveTexture;
+        std::optional<WireUuid> heightTexture;
     };
 
     struct MaterialUpdateResult
