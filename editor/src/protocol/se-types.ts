@@ -1128,6 +1128,12 @@ export interface MaterialUpdateParams {
   roughness?: number;
   emissive?: Vec3;
   emissiveStrength?: number;
+  normalStrength?: number;
+  albedoTexture?: WireUuid;
+  ormTexture?: WireUuid;
+  normalTexture?: WireUuid;
+  emissiveTexture?: WireUuid;
+  heightTexture?: WireUuid;
 }
 
 export interface MaterialUpdateResult {
