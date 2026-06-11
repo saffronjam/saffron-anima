@@ -1,7 +1,17 @@
 # Phase 14 — Entity material picker
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 09, 13
+
+> **Outcome.** `AssetKind` + `PickerAssetKind` gained `"material"`, and
+> `FIELD_HINTS["MaterialAsset.material"] = { kind: "uuid", asset: "material" }`. Since `AssetPicker`
+> already filters the catalog by `assetType` and `MaterialAssetComponent` is registered (phase 09), the
+> Inspector now renders its `material` field as a material picker (assets of type `material`), and selecting
+> one writes through the existing `set-component-field` path → `MaterialAssetComponent.material` (which the
+> resolve precedence then honors over the inline material). The component shows up in the Inspector's
+> add-component menu, so the flow is: add `MaterialAsset` → pick a material. Validated `bun run check` /
+> `lint` (0 errors) / `build`. **Follow-on:** material thumbnails in the picker (the `get-thumbnail` material
+> case, via `renderMaterialPreview`) — currently the picker shows the file/type icon for materials.
 
 ## Goal
 
