@@ -119,6 +119,18 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
 };
 
+/// The texture slots a `textureSlot` node can sample, matching the engine emitter's slot switch
+/// (emitGraphSurface in assets.cppm). The editor offers exactly these so a graph can't name an
+/// unknown slot.
+export const TEXTURE_SLOTS = [
+  "albedo",
+  "metallicRoughness",
+  "normal",
+  "emissive",
+  "occlusion",
+  "height",
+] as const;
+
 export interface SaffronNodeData extends Record<string, unknown> {
   spec: NodeSpec;
   props: Record<string, unknown>;
