@@ -7,6 +7,7 @@
 /// Ids are `string` end-to-end (engine Uuids are u64 and can exceed 2^53). NEVER
 /// `Number()` an id.
 import { invoke } from "@tauri-apps/api/core";
+import type { MaterialGraph } from "../materials/graph";
 import type {
   ActiveAlarmsDto,
   AnimationStateResult,
@@ -406,6 +407,14 @@ export const client = {
   /// Render a material on a studio-lit sphere; returns a base64 PNG.
   previewRender(material: string, size?: number) {
     return call("preview-render", { material, size });
+  },
+  /// Replace a material's node graph; returns whether it folded entirely to params (no codegen node).
+  materialSetGraph(material: string, graph: MaterialGraph) {
+    return call("material-set-graph", { material, graph });
+  },
+  /// Compile a material's node graph to a shader via codegen; returns { id, ok }.
+  materialCompileGraph(material: string) {
+    return call("material-compile-graph", { material });
   },
   /// Import a model from a filesystem path; the engine spawns + selects an entity
   /// and returns its ref plus the created mesh/albedo asset ids.
