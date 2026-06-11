@@ -3842,6 +3842,24 @@
           },
           "emissiveStrength": {
             "type": "number"
+          },
+          "normalStrength": {
+            "type": "number"
+          },
+          "albedoTexture": {
+            "type": "string"
+          },
+          "ormTexture": {
+            "type": "string"
+          },
+          "normalTexture": {
+            "type": "string"
+          },
+          "emissiveTexture": {
+            "type": "string"
+          },
+          "heightTexture": {
+            "type": "string"
           }
         },
         "required": [
