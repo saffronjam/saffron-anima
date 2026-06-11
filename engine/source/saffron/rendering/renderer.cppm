@@ -541,7 +541,7 @@ namespace se
         renderer.pipelines.overlay.reset();       // editor gizmo + billboard PSO
         renderer.pipelines.overlayDepth.reset();  // depth-tested overlay PSO (frustums)
         renderer.pipelines.thumbnail.reset();
-        renderer.pipelines.preview.reset();       // material-preview PSO
+        renderer.pipelines.preview.reset();  // material-preview PSO
         renderer.pipelines.tonemap.reset();
         renderer.pipelines.fxaa.reset();
         renderer.pipelines.depthPrepass.reset();
@@ -3396,6 +3396,11 @@ namespace se
 
     auto assetPath(std::string_view relative) -> std::string
     {
+        // An absolute path (e.g. a codegen'd per-material shader under the project) is used as-is.
+        if (!relative.empty() && relative.front() == '/')
+        {
+            return std::string{ relative };
+        }
         const char* base = SDL_GetBasePath();  // SDL3: owned by SDL, do not free
         std::string result;
         if (base != nullptr)
