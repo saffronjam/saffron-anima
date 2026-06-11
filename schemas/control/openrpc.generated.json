@@ -4747,6 +4747,12 @@
           "pipelines": {
             "type": "integer"
           },
+          "bindlessTextures": {
+            "type": "integer"
+          },
+          "bindlessFree": {
+            "type": "integer"
+          },
           "hdr": {
             "type": "boolean"
           },
@@ -4797,6 +4803,8 @@
           "restir",
           "blasCount",
           "pipelines",
+          "bindlessTextures",
+          "bindlessFree",
           "hdr",
           "exposureEv",
           "aa"
