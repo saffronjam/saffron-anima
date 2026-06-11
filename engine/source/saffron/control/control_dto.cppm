@@ -878,6 +878,17 @@ export namespace se
         WireUuid id;
     };
 
+    struct MaterialCompileParams
+    {
+        AssetSelector material;
+    };
+
+    struct MaterialCompileResult
+    {
+        WireUuid id;
+        bool ok;  // the graph emitted compilable Slang and slangc produced a .spv
+    };
+
     struct AssignAssetResult
     {
         WireUuid id;
@@ -1440,6 +1451,7 @@ export namespace se
     auto dtoToJson(const PreviewRenderResult& value) -> Json;
     auto dtoToJson(const MaterialSetGraphResult& value) -> Json;
     auto dtoToJson(const MaterialSetOverrideResult& value) -> Json;
+    auto dtoToJson(const MaterialCompileResult& value) -> Json;
     auto dtoToJson(const PathResult& value) -> Json;
     auto dtoToJson(const ScreenshotResult& value) -> Json;
     auto dtoToJson(const ThumbnailResult& value) -> Json;
@@ -1513,6 +1525,7 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<MaterialSetGraphParams>) -> Result<MaterialSetGraphParams>;
     auto parseDto(const Json& params, DtoTag<MaterialCreateInstanceParams>) -> Result<MaterialCreateInstanceParams>;
     auto parseDto(const Json& params, DtoTag<MaterialSetOverrideParams>) -> Result<MaterialSetOverrideParams>;
+    auto parseDto(const Json& params, DtoTag<MaterialCompileParams>) -> Result<MaterialCompileParams>;
     auto parseDto(const Json& params, DtoTag<ScreenshotParams>) -> Result<ScreenshotParams>;
     auto parseDto(const Json& params, DtoTag<ThumbnailParams>) -> Result<ThumbnailParams>;
     auto parseDto(const Json& params, DtoTag<CreateEntityParams>) -> Result<CreateEntityParams>;
