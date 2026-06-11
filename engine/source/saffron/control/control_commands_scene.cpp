@@ -751,6 +751,24 @@ namespace se
                 return entityRefDto(activeScene(ctx.sceneEdit), *entity);
             });
 
+        registerCommand<EntityParams, WorldTransformResult>(
+            reg, "get-world-transform",
+            "get-world-transform {entity} — the entity's composed world translation + scale",
+            [](EngineContext& ctx, const EntityParams& params) -> Result<WorldTransformResult>
+            {
+                auto entity = resolveEntity(ctx, params.entity);
+                if (!entity)
+                {
+                    return Err(entity.error());
+                }
+                Scene& scene = activeScene(ctx.sceneEdit);
+                const glm::mat4 world = worldMatrix(scene, *entity);
+                const glm::vec3 t{ world[3] };
+                const glm::vec3 s{ glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])),
+                                   glm::length(glm::vec3(world[2])) };
+                return WorldTransformResult{ Vec3{ t.x, t.y, t.z }, Vec3{ s.x, s.y, s.z } };
+            });
+
         registerCommand<EmptyParams, EnvironmentDto>(
             reg, "get-environment", "get-environment — dump the scene sky/environment settings",
             [](EngineContext& ctx, const EmptyParams&) -> Result<EnvironmentDto>
