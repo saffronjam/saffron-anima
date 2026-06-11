@@ -43,7 +43,7 @@ export type EnginePhase = "idle" | "starting" | "attaching" | "ready" | "error";
 export type BottomTab = "inspector" | "environment" | "render";
 
 /// The performance tools openable into the right sidebar from the Topbar wrench menu.
-export type RightTool = "stats" | "profiler";
+export type RightTool = "stats" | "profiler" | "material";
 
 /// The tools openable into the bottom dock from the Topbar. A parallel, independent
 /// slice to the right-tools model; `'timeline'` is the only member until more land.
@@ -76,6 +76,7 @@ export type PlayState = "edit" | "playing" | "paused";
 export interface EditorState {
   entities: EntityListEntry[];
   selectedId: string | null;
+  selectedMaterialId: string | null;  // the material asset open in the Material editor panel
   /// Hierarchy rows whose children are shown. Plain UI state, deliberately outside
   /// the sceneVersion/selectionVersion keying so a scene mutation never collapses
   /// the tree; setEntities prunes ids that vanished from the scene.
@@ -192,6 +193,7 @@ export interface EditorState {
   /// The reconcile poll's sceneVersion bump re-fetches the authoritative list.
   applyOptimisticEntityName(id: string, name: string): void;
   setSelectedId(selectedId: string | null): void;
+  setSelectedMaterialId(id: string | null): void;
   selectEntity(id: string): void;
   toggleExpanded(id: string): void;
   setExpanded(id: string, expanded: boolean): void;
@@ -291,6 +293,7 @@ export interface EditorState {
 export const useEditorStore = create<EditorState>((set) => ({
   entities: [],
   selectedId: null,
+  selectedMaterialId: null,
   expandedIds: new Set<string>(),
   bottomTab: "inspector",
   sceneVersion: -1,
@@ -357,6 +360,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       entities: s.entities.map((e) => (e.id === id ? { ...e, name } : e)),
     })),
   setSelectedId: (selectedId) => set({ selectedId }),
+  setSelectedMaterialId: (selectedMaterialId) => set({ selectedMaterialId }),
   // Optimistic local selection: set immediately on a hierarchy click so the row
   // highlights without waiting a poll interval; the reconcile poll confirms via
   // selectionVersion (engine is authoritative if a newer version arrives).
