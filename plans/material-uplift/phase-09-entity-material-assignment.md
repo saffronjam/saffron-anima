@@ -1,7 +1,23 @@
 # Phase 09 — Entity material assignment
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (component + resolve; 9-field serde + doubleSided deferred)
 **Depends on:** 03
+
+> **Outcome.** `MaterialAssetComponent { Uuid material }` added, registered in
+> `registerBuiltinComponents` with **inline-lambda serde** (one field → no `gen.ts` regen needed).
+> `resolveMaterialAsset(.smat → SubmeshMaterial)` loads the asset's texture handles (a packed ORM feeds
+> both the metallic-roughness slot and the occlusion slot; `blend:"masked"` → `alphaClip`).
+> `resolveEntityMaterials` now applies **precedence: MaterialAssetComponent > MaterialSetComponent >
+> MaterialComponent > built-in default** (a missing/zero asset id → `defaultMaterialAsset()` + a one-time
+> warning, never a crash). Build clean; 6/6 e2e no-regression (no entity carries the component yet, so the
+> new branch is dormant). **Functional `.smat`→entity render is exercised in phase 10** (which adds
+> `material.create`/`assign`).
+>
+> **Deferred:** (1) the **9-field `MaterialComponent`/`MaterialSlot` serde persistence** (the phase-05/06
+> normal/occlusion/emissive/height/uv/alpha fields) — these are in-memory only, so an imported normal map
+> is lost on project save+reload; closing it is a `gen.ts emitSceneSerde` follow-on. (2) the **`doubleSided`
+> PSO axis** (`Material` + `requestMeshPipeline` cache key + `cullMode`) — isolated; a later cleanup, paired
+> with reading `MaterialAsset.doubleSided` here.
 
 ## Goal
 
