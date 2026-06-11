@@ -1,7 +1,20 @@
 # Phase 05 — PBR texture slots
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 02, 04
+
+> **Outcome / scope note.** Landed the full **entity→shader consumption path** for PBR slots, but the
+> **populators + the visual relief test are deferred to phase 08** (which imports the coast-rocks normal
+> map) — there is no normal-mapped fixture to test against yet, so verification here is no-regression.
+> Done: `SubmeshMaterial` + `MaterialComponent` + `MaterialSlot` gained `normal/occlusion/emissive`
+> textures + `normalStrength` + `uvTiling`/`uvOffset`; `resolveEntityMaterials` loads them; the drawlist
+> derives the feature bits from texture presence and packs everything into `MaterialParamsData`
+> (`tex0.z`=normal, `tex0.w`=emissive, `tex1.y`=occlusion, `pbr.z`=normalStrength, `uv`=tiling/offset,
+> `tex1.w`=features). `evalSurface` now takes `MaterialParams`, applies the UV transform, and feature-gates
+> normal mapping (`perturbNormal` + the phase-04 derivative TBN), occlusion (AO in R), and the emissive map.
+> **Deferred:** glTF normal/occlusion/emissive **import** + the suffix importer populate these slots (phase
+> 08); the new component fields are **in-memory only** — serde persistence is added with the component work
+> in phase 09. Build clean; 6/6 material e2e no-regression (all current assets have `features=0` → identical).
 
 ## Goal
 
