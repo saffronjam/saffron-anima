@@ -227,6 +227,8 @@ export interface RenderStatsDto {
   restir: boolean;
   blasCount: number;
   pipelines: number;
+  bindlessTextures: number;
+  bindlessFree: number;
   hdr: boolean;
   exposureEv: number;
   aa: "off" | "fxaa" | "taa" | "msaa2" | "msaa4" | "msaa8";
