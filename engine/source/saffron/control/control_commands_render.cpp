@@ -271,6 +271,8 @@ namespace se
                                restirEnabled(renderer),
                                static_cast<i32>(rtBlasCount(renderer)),
                                static_cast<i32>(pipelineCount(renderer)),
+                               static_cast<i32>(bindlessTextureCount(renderer)),
+                               static_cast<i32>(bindlessFreeCount(renderer)),
                                true,
                                exposureEv(renderer),
                                aaModeDto(aaMode(renderer)) };
