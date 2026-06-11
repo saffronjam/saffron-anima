@@ -90,6 +90,39 @@ why touching lighting won't recompile every material (the trap UE hit with HLSL 
 - Constant edits = no recompile; topology edits recompile async with a visible fallback.
 - `make prepare-for-commit` clean. Docs: the codegen pipeline + the param-vs-topology cost model.
 
+## Scene-path codegen — concrete plan (the remaining chunk)
+
+The preview path renders codegen materials on the sphere. To render them on **scene entities** the
+generated `evalSurface` must go into the real übershader (`mesh.slang`) as a per-material PSO. Worked-out
+approach (grounded in the current code):
+
+1. **Make the emitter context-aware.** `emitGraphSurface` currently hardcodes the *preview* context:
+   `mat.baseColor`, `mat.tex.x`, the array name `textures`, a default `s.normal = float3(0,0,1)`, and it
+   does **not** set `s.occlusion`/`s.opacity` (the preview `SurfaceData` lacks them; mesh.slang's has
+   them). Thread an `EmitContext { texArray, baseColorExpr, texIndexExpr(slot), uvExpr, normalDefault,
+   extraFixups }` through it. Preview ctx = today's strings; mesh ctx = `albedoTextures`,
+   `m.mat.baseColor`, `m.mat.tex0/tex1` per slot, `m.uv0 * m.mat.uv.xy + m.mat.uv.zw`, and a fixup tail
+   `s.normal = normalize(m.worldNormal); s.occlusion = 1.0; s.opacity = base.a …`. Note `textureSlot`
+   ignores `props.slot` today (always albedo) — make it honor the slot via `texIndexExpr`.
+2. **Splice into mesh.slang.** Copy the `*.slang` sources next to the exe in CMake (today only the `.spv`
+   ships). Mark `evalSurface`'s body in `mesh.slang` with `// @graph-begin`/`@graph-end`. At compile time,
+   read the runtime `mesh.slang`, replace the marked region with the mesh-context emit, write a temp, run
+   `slangc` → `materials/<hash>_mesh.spv`. (mesh.slang is one self-contained 750-line file, no includes —
+   so this is a pure text splice.)
+3. **Per-material mesh PSO.** When `loadMaterialAsset` sees a **non-foldable** graph, compile the mesh
+   variant and set `MaterialAsset`/the resolved `Material.shader` to the absolute `_mesh.spv` path.
+   `requestMeshPipeline` already keys on the shader string, so a per-graph PSO falls out; teach
+   `newMeshPipeline`/`loadShaderModule` to accept an absolute path (today it's `assetPath`-relative).
+   Cache the compiled spv on disk by graph hash so re-opens are instant; async-compile with the default
+   übershader as the fallback while building.
+4. **e2e.** Assign a codegen material to an entity, screenshot, assert the procedural surface renders and
+   the log is validation-clean — and that a *foldable* graph still draws on the shared übershader (PSO
+   count doesn't grow per material).
+
+This is a deep integration (scene draw → `Material.shader` → PSO → `newMeshPipeline`), higher-risk than
+the preview path; do it as its own focused pass, gating on the existing preview e2e after the emitter
+refactor so that change is proven safe before the splice.
+
 ## Risks
 
 - **"Recompile the world"**: if the lighting isn't a properly linked module, every material recompiles when
