@@ -559,7 +559,10 @@ namespace se
                 f32 normalStrength = 1.0f;
                 glm::vec2 uvTiling{ 1.0f };
                 glm::vec2 uvOffset{ 0.0f };
-                u32 features = 0u;  // FEATURE_NORMAL=1, FEATURE_EMISSIVE_TEX=2, FEATURE_OCCLUSION=4
+                u32 heightIndex = defaultTextureIndex;
+                f32 heightScale = 0.05f;
+                f32 alphaCutoff = 0.5f;
+                u32 features = 0u;  // NORMAL=1, EMISSIVE_TEX=2, OCCLUSION=4, HEIGHT=8, ALPHACLIP=16
                 if (!item.submeshMaterials.empty())
                 {
                     const SubmeshMaterial& mat = item.submeshMaterials[std::min(s, item.submeshMaterials.size() - 1)];
@@ -597,14 +600,26 @@ namespace se
                         liveTextures.push_back(mat.occlusionTexture);
                         features |= 4u;
                     }
+                    heightScale = mat.heightScale;
+                    alphaCutoff = mat.alphaCutoff;
+                    if (mat.heightTexture && mat.heightTexture->image)
+                    {
+                        heightIndex = mat.heightTexture->bindlessIndex;
+                        liveTextures.push_back(mat.heightTexture);
+                        features |= 8u;
+                    }
+                    if (mat.alphaClip)
+                    {
+                        features |= 16u;
+                    }
                 }
                 MaterialParamsData mp;
                 mp.baseColor = baseColor;
-                mp.pbr = glm::vec4{ metallicRoughness.x, metallicRoughness.y, normalStrength, 0.5f };
-                mp.emissive = glm::vec4{ emissive, 0.0f };
+                mp.pbr = glm::vec4{ metallicRoughness.x, metallicRoughness.y, normalStrength, alphaCutoff };
+                mp.emissive = glm::vec4{ emissive, heightScale };
                 mp.uv = glm::vec4{ uvTiling.x, uvTiling.y, uvOffset.x, uvOffset.y };
                 mp.tex0 = glm::uvec4{ albedoIndex, mrIndex, normalIndex, emissiveIndex };
-                mp.tex1 = glm::uvec4{ 0u, occlusionIndex, 0u, features };
+                mp.tex1 = glm::uvec4{ heightIndex, occlusionIndex, 0u, features };
                 const u32 materialIndex = internMaterial(mp);
 
                 InstanceData instance;
