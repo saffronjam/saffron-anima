@@ -782,6 +782,18 @@ export namespace se
         std::string roles;  // space-joined detected map roles, for the editor's confirmation proposal
     };
 
+    struct MaterialRefDto
+    {
+        WireUuid id;
+        std::string name;
+        std::string folder;
+    };
+
+    struct MaterialListResult
+    {
+        std::vector<MaterialRefDto> materials;
+    };
+
     struct AssignAssetResult
     {
         WireUuid id;
@@ -1337,6 +1349,8 @@ export namespace se
     auto dtoToJson(const MaterialCreateResult& value) -> Json;
     auto dtoToJson(const MaterialAssignResult& value) -> Json;
     auto dtoToJson(const MaterialImportResultDto& value) -> Json;
+    auto dtoToJson(const MaterialRefDto& value) -> Json;
+    auto dtoToJson(const MaterialListResult& value) -> Json;
     auto dtoToJson(const PathResult& value) -> Json;
     auto dtoToJson(const ScreenshotResult& value) -> Json;
     auto dtoToJson(const ThumbnailResult& value) -> Json;

@@ -3464,6 +3464,22 @@ namespace se
         return out;
     }
 
+    auto dtoToJson(const MaterialListResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["materials"] = dtoVectorToJson(value.materials);
+        return out;
+    }
+
+    auto dtoToJson(const MaterialRefDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
+        out["name"] = value.name;
+        out["folder"] = value.folder;
+        return out;
+    }
+
     auto dtoToJson(const PathResult& value) -> Json
     {
         Json out = Json::object();
