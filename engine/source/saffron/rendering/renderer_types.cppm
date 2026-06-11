@@ -303,6 +303,9 @@ export namespace se
         u32 bindlessIndex = 0;  // slot in the bindless texture array (set 0)
         vk::Extent2D extent;
         vk::Format format = vk::Format::eUndefined;
+        // The shared bindless free-list (Descriptors::bindlessFreeList). When set, reset() returns this
+        // texture's slot to it on destroy. Held as a Ref so it outlives the descriptors.
+        Ref<std::vector<u32>> bindlessFreeList;
 
         GpuTexture() = default;
         GpuTexture(const GpuTexture&) = delete;
@@ -310,7 +313,8 @@ export namespace se
 
         GpuTexture(GpuTexture&& other) noexcept
             : device(other.device), allocator(other.allocator), image(other.image), view(other.view),
-              alloc(other.alloc), bindlessIndex(other.bindlessIndex), extent(other.extent), format(other.format)
+              alloc(other.alloc), bindlessIndex(other.bindlessIndex), extent(other.extent), format(other.format),
+              bindlessFreeList(std::move(other.bindlessFreeList))
         {
             other.device = nullptr;
             other.allocator = nullptr;
@@ -332,6 +336,7 @@ export namespace se
                 bindlessIndex = other.bindlessIndex;
                 extent = other.extent;
                 format = other.format;
+                bindlessFreeList = std::move(other.bindlessFreeList);
                 other.device = nullptr;
                 other.allocator = nullptr;
                 other.image = nullptr;
@@ -348,8 +353,14 @@ export namespace se
 
         void reset()
         {
-            // The bindless slot is not reclaimed here: no live material references a
-            // destroyed texture's index, so its stale descriptor is never sampled.
+            // Reclaim the bindless slot for reuse (a live `view` marks a real, non-moved-from texture).
+            // A reclaimed slot's descriptor still points at the destroyed view, but no live material
+            // references it; the next upload overwrites it.
+            if (bindlessFreeList && view)
+            {
+                bindlessFreeList->push_back(bindlessIndex);
+            }
+            bindlessFreeList = nullptr;
             if (device && view)
             {
                 device.destroyImageView(view);
@@ -1069,6 +1080,10 @@ export namespace se
         vk::DescriptorPool bindlessPool;  // eUpdateAfterBindPool
         vk::DescriptorSet bindlessSet;    // the single set 0 for all draws
         u32 nextBindlessIndex = 0;
+        // Reclaimed bindless slots, returned when a GpuTexture is destroyed. Shared (Ref) with every
+        // texture so it outlives both the descriptors and any texture whose dtor pushes to it; an upload
+        // pops a freed slot before growing nextBindlessIndex, so a churny scene keeps the pool bounded.
+        Ref<std::vector<u32>> bindlessFreeList = std::make_shared<std::vector<u32>>();
         vk::DescriptorSetLayout tonemapSetLayout;  // compute set 0: storage image
         vk::DescriptorSet tonemapSet;              // points at the offscreen color view (GENERAL)
         vk::DescriptorSetLayout fxaaSetLayout;
@@ -1753,6 +1768,8 @@ export namespace se
     auto requestMeshPipeline(Renderer& renderer, const Material& material, bool skinned) -> Ref<Pipeline>;
     // Number of distinct mesh PSOs the cache holds (inspectable to verify übershader reuse).
     auto pipelineCount(const Renderer& renderer) -> u32;
+    auto bindlessTextureCount(const Renderer& renderer) -> u32;
+    auto bindlessFreeCount(const Renderer& renderer) -> u32;
     auto uploadMesh(Renderer& renderer, const Mesh& mesh) -> Result<Ref<GpuMesh>>;
     // As above, plus the VertexSkin stream (must parallel mesh.vertices) uploaded as the
     // second vertex buffer the skinned PSO binds.
