@@ -1005,6 +1005,30 @@ namespace se
                 {
                     m.emissiveStrength = *params.emissiveStrength;
                 }
+                if (params.normalStrength)
+                {
+                    m.normalStrength = *params.normalStrength;
+                }
+                if (params.albedoTexture)
+                {
+                    m.albedoTexture = Uuid{ params.albedoTexture->value };
+                }
+                if (params.ormTexture)
+                {
+                    m.ormTexture = Uuid{ params.ormTexture->value };
+                }
+                if (params.normalTexture)
+                {
+                    m.normalTexture = Uuid{ params.normalTexture->value };
+                }
+                if (params.emissiveTexture)
+                {
+                    m.emissiveTexture = Uuid{ params.emissiveTexture->value };
+                }
+                if (params.heightTexture)
+                {
+                    m.heightTexture = Uuid{ params.heightTexture->value };
+                }
                 if (auto ok = updateMaterialAsset(ctx.assets, (*resolved)->id, m); !ok)
                 {
                     return Err(ok.error());
