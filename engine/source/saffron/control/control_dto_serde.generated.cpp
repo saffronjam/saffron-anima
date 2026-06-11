@@ -362,6 +362,10 @@ namespace se
             if (text == "mesh") { return AssetSlotDto::Mesh; }
             if (text == "albedo") { return AssetSlotDto::Albedo; }
             if (text == "metallic-roughness") { return AssetSlotDto::MetallicRoughness; }
+            if (text == "normal") { return AssetSlotDto::Normal; }
+            if (text == "occlusion") { return AssetSlotDto::Occlusion; }
+            if (text == "emissive") { return AssetSlotDto::Emissive; }
+            if (text == "height") { return AssetSlotDto::Height; }
             return Err(std::format("key '{}' has unknown value '{}'", key, *text));
         }
 
@@ -372,6 +376,10 @@ namespace se
             case AssetSlotDto::Mesh: return "mesh";
             case AssetSlotDto::Albedo: return "albedo";
             case AssetSlotDto::MetallicRoughness: return "metallic-roughness";
+            case AssetSlotDto::Normal: return "normal";
+            case AssetSlotDto::Occlusion: return "occlusion";
+            case AssetSlotDto::Emissive: return "emissive";
+            case AssetSlotDto::Height: return "height";
             }
             return "";
         }
