@@ -1184,6 +1184,11 @@ export interface MaterialCompileResult {
   ok: boolean;
 }
 
+export interface MaterialCookResult {
+  compiled: number;
+  failed: number;
+}
+
 export interface PathResult {
   path: string;
 }
@@ -1330,6 +1335,7 @@ export interface CommandParamsMap {
   "material-create-instance": MaterialCreateInstanceParams;
   "material-set-override": MaterialSetOverrideParams;
   "material-compile-graph": MaterialCompileParams;
+  "material-cook": EmptyParams;
   "save-scene": PathParams;
   "load-scene": PathParams;
   "save-project": OptionalPathParams;
@@ -1451,6 +1457,7 @@ export interface CommandResultMap {
   "material-create-instance": MaterialCreateResult;
   "material-set-override": MaterialSetOverrideResult;
   "material-compile-graph": MaterialCompileResult;
+  "material-cook": MaterialCookResult;
   "save-scene": PathResult;
   "load-scene": PathResult;
   "save-project": ProjectInfoDto;
