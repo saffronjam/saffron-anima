@@ -1377,6 +1377,13 @@ return {0}
             {
                 sm.emissiveTexture = loadTextureAsset(assets, renderer, slot.emissiveTexture);
             }
+            sm.heightScale = slot.heightScale;
+            sm.alphaClip = slot.alphaClip;
+            sm.alphaCutoff = slot.alphaCutoff;
+            if (slot.heightTexture.value != 0)
+            {
+                sm.heightTexture = loadTextureAsset(assets, renderer, slot.heightTexture);
+            }
             return sm;
         };
         if (hasComponent<MaterialSetComponent>(scene, entity))
@@ -1414,6 +1421,10 @@ return {0}
             slot.normalStrength = material.normalStrength;
             slot.uvTiling = material.uvTiling;
             slot.uvOffset = material.uvOffset;
+            slot.heightTexture = material.heightTexture;
+            slot.heightScale = material.heightScale;
+            slot.alphaClip = material.alphaClip;
+            slot.alphaCutoff = material.alphaCutoff;
             out.submeshes.push_back(lower(slot));
         }
         return out;
