@@ -5,18 +5,16 @@
 // are relaxed when `softwareGpu` is set — the shape of the data is still checked.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { join } from "node:path";
-import { Engine, REPO } from "./harness.ts";
+import { Engine } from "./harness.ts";
 import type { ProfilerModeResult, RenderPassTimingsDto, RenderStats } from "@saffron/protocol";
 
-const CUBE = join(REPO, "build", "debug", "bin", "models", "cube.gltf");
 
 let engine: Engine;
 let caps: ProfilerModeResult;
 beforeAll(async () => {
   engine = await Engine.boot({ SAFFRON_AUTO_EMPTY_PROJECT: "1" });
   // Need a drawn scene for the per-pass breakdown + throughput counters to be non-trivial.
-  await engine.call("import-model", { args: [CUBE] });
+  await engine.call("add-entity", { preset: "cube" });
   caps = await engine.call<ProfilerModeResult>("profiler.set-mode", { args: ["timestamps"] });
   // Let several frames record + read back (read-back lags by MaxFramesInFlight frames).
   await engine.settle(500);

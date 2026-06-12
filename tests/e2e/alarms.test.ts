@@ -5,16 +5,14 @@
 // fingerprint coalescing, the hysteresis exit, and the never-miss / never-double-count cursor.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { join } from "node:path";
-import { Engine, REPO } from "./harness.ts";
+import { Engine } from "./harness.ts";
 import type { DrainAlarmsResult, ActiveAlarmsDto } from "@saffron/protocol";
 
-const CUBE = join(REPO, "build", "debug", "bin", "models", "cube.gltf");
 
 let engine: Engine;
 beforeAll(async () => {
   engine = await Engine.boot({ SAFFRON_AUTO_EMPTY_PROJECT: "1" });
-  await engine.call("import-model", { args: [CUBE] });
+  await engine.call("add-entity", { preset: "cube" });
 });
 afterAll(async () => {
   await engine?.shutdown();

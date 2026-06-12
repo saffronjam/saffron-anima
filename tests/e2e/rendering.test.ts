@@ -3,11 +3,9 @@
 // (or `make e2e`), inside the saffron-build toolbox.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { join } from "node:path";
-import { Engine, REPO } from "./harness.ts";
+import { Engine } from "./harness.ts";
 import type { EntityList, RenderStats } from "@saffron/protocol";
 
-const CUBE = join(REPO, "build", "debug", "bin", "models", "cube.gltf");
 
 let engine: Engine;
 beforeAll(async () => {
@@ -25,7 +23,7 @@ test("boots clean: ping answers and no validation errors at startup", async () =
 });
 
 test("imports a model and reports a draw", async () => {
-  await engine.call("import-model", { args: [CUBE] });
+  await engine.call("add-entity", { preset: "cube" });
   const entities = await engine.call<EntityList>("list-entities");
   expect(Array.isArray(entities.entities)).toBe(true);
   const stats = await engine.call<RenderStats>("render-stats");

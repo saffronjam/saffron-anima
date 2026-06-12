@@ -4,11 +4,9 @@
 // stays Vulkan-validation-clean (the oracle that caught the MSAA sample-count bug).
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { join } from "node:path";
-import { Engine, REPO } from "./harness.ts";
+import { Engine } from "./harness.ts";
 import type { RenderStats } from "@saffron/protocol";
 
-const CUBE = join(REPO, "build", "debug", "bin", "models", "cube.gltf");
 
 let engine: Engine;
 const stats = () => engine.call<RenderStats & Record<string, unknown>>("render-stats");
@@ -16,7 +14,7 @@ const stats = () => engine.call<RenderStats & Record<string, unknown>>("render-s
 beforeAll(async () => {
   // import-model needs a loaded project; auto-create an empty one (under the gitignored appdata/).
   engine = await Engine.boot({ SAFFRON_AUTO_EMPTY_PROJECT: "1" });
-  await engine.call("import-model", { args: [CUBE] }); // geometry, so the passes actually run
+  await engine.call("add-entity", { preset: "cube" }); // geometry, so the passes actually run
 });
 afterAll(async () => {
   await engine?.shutdown();
