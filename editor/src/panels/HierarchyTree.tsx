@@ -17,9 +17,9 @@
 /// Every drag affordance is in-flow sidebar DOM — no `setDragImage` layer, no portal'd
 /// indicator — because the reparented X11 viewport child paints over anything floating.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEditorStore, buildTree, reanchorPastBones, type TreeNode } from "../state/store";
-import { assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
+import { ASSET_DND_MIME, assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
 import { errorText, notify, notifyError } from "../lib/flash";
 import { matchesBinding } from "../lib/keybindings";
 import { orderedComponentNames } from "./InspectorPanel";
@@ -53,6 +53,8 @@ export interface TreeActions {
 }
 
 const DND_MIME = "application/x-saffron-entity";
+const MAX_INDENT_DEPTH = 10;
+const INDENT_PX = 12;
 
 /// True when `candidateId` is `rootId` or sits anywhere in its subtree, walking the
 /// candidate's ancestry through `parentId` (bounded so corrupt data cannot loop).
@@ -198,14 +200,14 @@ export function HierarchyTree({ actions }: { actions: TreeActions }) {
         }}
       >
         <div
-          className="p-1"
+          className="py-1"
           role="tree"
           aria-label="Scene entities"
           // Dropping a model asset from the catalog instantiates it into the scene. Asset drags carry
           // `application/x-se-asset`; entity-reparent drags (`application/x-saffron-entity`) are ignored
           // here and handled by the per-row / unparent drop zones.
           onDragOver={(e) => {
-            if (readAssetPayload(e.dataTransfer)) {
+            if (e.dataTransfer.types.includes(ASSET_DND_MIME)) {
               e.preventDefault();
             }
           }}
@@ -237,7 +239,7 @@ export function HierarchyTree({ actions }: { actions: TreeActions }) {
           {draggingEntity?.parentId ? (
             <div
               className={cn(
-                "mt-1 rounded-md border border-dashed border-border px-2.5 py-1.5 text-center text-xs text-muted-foreground",
+                "mx-2 mt-1 rounded-md border border-dashed border-border px-2.5 py-1 text-center text-xs text-muted-foreground",
                 dropTargetId === "" && "border-primary text-primary",
               )}
               onDragOver={(e) => {
@@ -385,11 +387,11 @@ const TreeRow = memo(function TreeRow({
           draggable
           tabIndex={0}
           className={cn(
-            "flex w-full cursor-default items-center gap-0.5 rounded-md px-1 py-1.5 text-left text-sm",
-            selected ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent",
+            "flex w-full cursor-default items-center gap-1 py-0.5 pr-2 text-left text-xs",
+            selected ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-accent/40",
             drag.dropTargetId === entity.id && validDropTarget && "ring-1 ring-primary",
           )}
-          style={{ paddingLeft: depth * 14 + 4 }}
+          style={{ paddingLeft: Math.min(depth, MAX_INDENT_DEPTH) * INDENT_PX + 8 }}
           onClick={() => actions.onSelect(entity)}
           onMouseDown={() => {
             if (actions.renamingId && actions.renamingId !== entity.id) {
@@ -434,15 +436,13 @@ const TreeRow = memo(function TreeRow({
             <button
               type="button"
               aria-label={expanded ? "Collapse" : "Expand"}
-              className="flex size-4 flex-none items-center justify-center rounded hover:bg-foreground/10"
+              className="flex size-4 flex-none items-center justify-center text-muted-foreground hover:text-foreground"
               onClick={(e) => {
                 e.stopPropagation();
                 toggleExpanded(entity.id);
               }}
             >
-              <ChevronRight
-                className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
-              />
+              {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
             </button>
           ) : (
             <span className="size-4 flex-none" />
@@ -496,8 +496,8 @@ function SubRow({ entity, name, depth }: { entity: EntityListEntry; name: string
     <button
       type="button"
       role="treeitem"
-      className="flex w-full items-center gap-0.5 rounded-md px-1 py-1 text-left text-xs italic text-muted-foreground hover:bg-accent"
-      style={{ paddingLeft: depth * 14 + 20 }}
+      className="flex w-full items-center gap-1 py-0.5 pr-2 text-left text-xs italic text-muted-foreground hover:bg-accent/40"
+      style={{ paddingLeft: Math.min(depth, MAX_INDENT_DEPTH) * INDENT_PX + 24 }}
       onClick={() => {
         selectEntity(entity.id);
         setBottomTab("inspector");
@@ -538,7 +538,7 @@ export function RenameRow({
     <Input
       ref={inputRef}
       value={value}
-      className="h-7 px-2.5 py-1.5 text-sm"
+      className="h-6 px-2 py-1 text-xs"
       onChange={(e) => setValue(e.target.value)}
       onFocus={(e) => e.currentTarget.select()}
       onBlur={() => {

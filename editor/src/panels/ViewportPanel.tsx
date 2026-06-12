@@ -10,7 +10,7 @@ import { useEditorStore } from "../state/store";
 import { LoadingOverlay } from "../app/LoadingOverlay";
 import { useSubsurfaceBounds } from "../lib/useSubsurfaceBounds";
 import { bindingFor } from "../lib/keybindings";
-import { assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
+import { ASSET_DND_MIME, assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
 import { errorText, notify, notifyError } from "../lib/flash";
 
 /// Pointer travel (CSS px) below which a press-release is treated as a click
@@ -153,7 +153,7 @@ export function ViewportPanel() {
   }, [setPhase]);
 
   // Bounds-sync: keep the engine's subsurface glued to the host div on resize / dock-split / layout
-  // changes (extracted so the rig editor's preview pane can drive the same single subsurface).
+  // changes (extracted so the asset editor's preview pane can drive the same single subsurface).
   useSubsurfaceBounds(hostRef);
 
   useEffect(() => {
@@ -500,7 +500,7 @@ export function ViewportPanel() {
       // drop target even though the rendered pixels live below it. Asset drags carry
       // `application/x-se-asset`; other drags fall through.
       onDragOver={(e) => {
-        if (readAssetPayload(e.dataTransfer)) {
+        if (e.dataTransfer.types.includes(ASSET_DND_MIME)) {
           e.preventDefault();
         }
       }}
