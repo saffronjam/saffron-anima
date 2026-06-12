@@ -367,6 +367,8 @@ export namespace se
         bool hdr = false;     // texture: decode as linear float (.hdr); else sRGB RGBA8
         bool linear = false;  // texture: upload as a linear RGBA8 format (metallic-roughness), not sRGB
         f32 duration = 0.0f;  // animation: clip length in seconds (0 for non-animation entries)
+        i32 tracks = 0;       // animation: animated joint-channel count (0 for non-animation entries)
+        bool rigged = false;  // belongs to a rigged .smodel (the container has a skin); scan-derived
         Uuid container;       // 0 = standalone file; else the owning model's id
         i32 chunk = -1;       // TOC chunk index inside the container (-1 = standalone / n/a)
         Colorspace colorspace = Colorspace::Auto;  // texture colorspace provenance (phase 10 fills it)

@@ -307,6 +307,18 @@ namespace se
         expect(stopPlay(*ctx).has_value(), "a second stop succeeds");
         expect(ctx->selected.handle == entt::null, "a runtime-spawned selection clears on stop");
 
+        // The preview accessor: a previewScene takes over activeScene while playState stays Edit, and
+        // clearing it returns to the authored scene (mirrors the control-plane enter/exit-rig-preview).
+        expect(!previewing(*ctx), "no preview after stop");
+        ctx->previewScene.emplace();
+        createEntity(*ctx->previewScene, "PreviewRig");
+        expect(previewing(*ctx), "a set previewScene reads as previewing");
+        expect(ctx->playState == PlayState::Edit, "preview stays in Edit");
+        expect(&activeScene(*ctx) == &*ctx->previewScene, "activeScene routes to the preview");
+        ctx->previewScene.reset();
+        expect(!previewing(*ctx), "clearing previewScene leaves preview");
+        expect(&activeScene(*ctx) == &ctx->scene, "activeScene returns to the authored scene");
+
         destroySceneEditContext(ctx);
         if (failures == 0)
         {

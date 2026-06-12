@@ -176,9 +176,10 @@ export namespace se
     // with optional per-joint RGB axes. Opt-in (show defaults false); drawn in Edit and Play.
     struct SkeletonOverlayOptions
     {
-        bool show = false;     // master toggle (set-skeleton-overlay)
-        bool axes = false;     // per-joint RGB axis lines
-        f32 jointSize = 4.0f;  // joint-dot radius in pixels at unit distance (scaled screen-constant)
+        bool show = false;        // master toggle (set-skeleton-overlay)
+        bool axes = false;        // per-joint RGB axis lines
+        f32 jointSize = 4.0f;     // joint-dot radius in pixels at unit distance (scaled screen-constant)
+        i32 highlightJoint = -1;  // get-rig node index of the tinted joint while previewing, -1 = none
     };
 
     // The editor's mutable state: the scene being edited, the component registry
@@ -226,20 +227,48 @@ export namespace se
         std::vector<ScriptError> scriptErrors;            // bounded ring, oldest dropped at ScriptErrorRingCap
         i64 scriptErrorSeq = 0;                           // last assigned ScriptError.seq (drain high-water)
         std::unordered_set<std::string> scriptInputKeys;  // normalized key names held for Lua gameplay input
+
+        // The rig preview (the asset-editor view): an isolated scene holding only the previewed rig +
+        // its furnishing, entered/left over the control plane. Routed through activeScene exactly like
+        // the play duplicate, so render/skinning/animation/commands retarget to it for free. Stays in
+        // PlayState::Edit (mutually exclusive with play), and never leaks into project.json because
+        // save-project serializes `scene` explicitly.
+        std::optional<Scene> previewScene;        // the isolated preview scene; nullopt when not previewing
+        Uuid previewAsset{ 0 };                   // the model container being previewed (0 = none)
+        Entity previewRigEntity{ entt::null };    // the spawned rig mesh entity in previewScene
+        std::vector<Uuid> previewBoneByNode;      // get-rig node index -> spawned joint entity uuid (0 = none)
+        Entity savedSelection{ entt::null };      // authored-scene selection stashed across the preview
+        SceneEditCamera savedCamera;              // fly-cam stashed on enter, restored on exit (byte-identity)
+        SkeletonOverlayOptions savedOverlay;      // overlay prefs stashed on enter (preview forces it on)
+        bool previewShowFloor = true;             // the preview floor slab toggle (set-rig-preview-options)
+        Entity previewFloorEntity{ entt::null };  // the spawned floor slab in previewScene (for the toggle)
     };
 
     // Append to the bounded script-error ring, stamping seq + the current play tick.
     void pushScriptError(SceneEditContext& ctx, u64 entityUuid, std::string script, std::string message);
 
-    // The scene every consumer addresses: the play duplicate while playing/paused, the
-    // authored scene in Edit. Nothing else may branch on playState to pick a scene.
+    // The scene every consumer addresses: the rig preview while previewing, the play duplicate while
+    // playing/paused, the authored scene in Edit. Preview takes precedence (it is entered only from
+    // Edit). Nothing else may branch on playState/previewScene to pick a scene.
     inline auto activeScene(SceneEditContext& ctx) -> Scene&
     {
+        if (ctx.previewScene)
+        {
+            return *ctx.previewScene;
+        }
         if (ctx.playState == PlayState::Edit)
         {
             return ctx.scene;
         }
         return *ctx.playScene;
+    }
+
+    // True while a rig preview is engaged. Commands that mutate the authored scene or project must
+    // refuse while this holds — activeScene routes to the preview, so they would otherwise edit or
+    // render the wrong scene (and could leak preview state into a save).
+    inline auto previewing(const SceneEditContext& ctx) -> bool
+    {
+        return ctx.previewScene.has_value();
     }
 
     // The payload dragged from an asset tile onto a component picker field.
