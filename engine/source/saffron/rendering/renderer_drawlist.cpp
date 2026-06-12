@@ -185,7 +185,7 @@ namespace se
         gpu.skinAlloc = skinAlloc;
 
         vk::CommandBufferAllocateInfo cmdAlloc{};
-        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.commandPool = oneOffCommandPool(renderer);
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
         auto cmds =
@@ -209,14 +209,13 @@ namespace se
         }
         static_cast<void>(cmd.end());
 
-        vk::CommandBufferSubmitInfo cmdInfo{};
-        cmdInfo.commandBuffer = cmd;
-        vk::SubmitInfo2 submitInfo{};
-        submitInfo.setCommandBufferInfos(cmdInfo);
-        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
-        static_cast<void>(renderer.context.device.waitIdle());
-        renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        auto submitted = submitAndWait(renderer, cmd);
+        renderer.context.device.freeCommandBuffers(oneOffCommandPool(renderer), cmd);
         vmaDestroyBuffer(renderer.context.allocator, staging, stagingAllocation);
+        if (!submitted)
+        {
+            return Err(submitted.error());
+        }
 
         auto meshRef = std::make_shared<GpuMesh>(std::move(gpu));
         // Build this mesh's BLAS once (RT geometry occlusion oracle) when RT is available.

@@ -29,6 +29,7 @@ module;
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -475,6 +476,19 @@ namespace se
             frame.inFlight = *fence;
         }
 
+        {
+            // Dedicated pool for the thumbnail worker thread (command pools are not thread-safe).
+            vk::CommandPoolCreateInfo poolInfo{};
+            poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+            poolInfo.queueFamilyIndex = renderer.context.graphicsQueueFamily;
+            auto pool = checked(renderer.context.device.createCommandPool(poolInfo), "createCommandPool (worker)");
+            if (!pool)
+            {
+                return Err(pool.error());
+            }
+            renderer.workerCommandPool = *pool;
+        }
+
         if (Result<void> descriptors = initDescriptorResources(renderer); !descriptors)
         {
             return Err(descriptors.error());
@@ -797,6 +811,11 @@ namespace se
             renderer.context.device.destroyFence(frame.inFlight);
             renderer.context.device.destroySemaphore(frame.imageAvailable);
             renderer.context.device.destroyCommandPool(frame.commandPool);
+        }
+        if (renderer.workerCommandPool)
+        {
+            renderer.context.device.destroyCommandPool(renderer.workerCommandPool);
+            renderer.workerCommandPool = nullptr;
         }
 
         destroySwapchainResources(renderer);
@@ -3271,6 +3290,7 @@ namespace se
             cmdInfo.commandBuffer = frame.commandBuffer;
             vk::SubmitInfo2 submitInfo{};
             submitInfo.setCommandBufferInfos(cmdInfo);
+            const std::lock_guard<std::mutex> lock(gpuQueueMutex());  // shared with the thumbnail worker
             static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, frame.inFlight));
         }
         else
@@ -3293,13 +3313,20 @@ namespace se
             submitInfo.setWaitSemaphoreInfos(waitInfo);
             submitInfo.setCommandBufferInfos(cmdInfo);
             submitInfo.setSignalSemaphoreInfos(signalInfo);
-            static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, frame.inFlight));
 
-            vk::PresentInfoKHR presentInfo{};
-            presentInfo.setWaitSemaphores(signalSemaphore);
-            presentInfo.setSwapchains(renderer.swapchain.handle);
-            presentInfo.setImageIndices(renderer.frame.imageIndex);
-            vk::Result present = renderer.context.graphicsQueue.presentKHR(presentInfo);
+            // Submit + present are both queue operations, externally synchronized against the
+            // thumbnail worker's submits (it never presents).
+            vk::Result present = vk::Result::eSuccess;
+            {
+                const std::lock_guard<std::mutex> lock(gpuQueueMutex());
+                static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, frame.inFlight));
+
+                vk::PresentInfoKHR presentInfo{};
+                presentInfo.setWaitSemaphores(signalSemaphore);
+                presentInfo.setSwapchains(renderer.swapchain.handle);
+                presentInfo.setImageIndices(renderer.frame.imageIndex);
+                present = renderer.context.graphicsQueue.presentKHR(presentInfo);
+            }
             if (present == vk::Result::eErrorOutOfDateKHR || present == vk::Result::eSuboptimalKHR)
             {
                 recreateSwapchain(renderer);
@@ -3715,6 +3742,9 @@ namespace se
     {
         if (renderer.context.device)
         {
+            // vkDeviceWaitIdle requires every queue to be externally synchronized: hold the queue
+            // mutex so a thumbnail-worker submit can't overlap the idle.
+            const std::lock_guard<std::mutex> lock(gpuQueueMutex());
             static_cast<void>(renderer.context.device.waitIdle());
         }
     }

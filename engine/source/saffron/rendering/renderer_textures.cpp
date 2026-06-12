@@ -22,6 +22,7 @@ module;
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -157,6 +158,8 @@ namespace se
     // must set GpuTexture::bindlessFreeList so the slot returns here when the texture is destroyed.
     static auto claimBindlessSlot(Renderer& renderer) -> u32
     {
+        // Shared with the thumbnail worker's uploads + the free-list return in ~GpuTexture.
+        const std::lock_guard<std::mutex> lock(bindlessMutex());
         std::vector<u32>& freeList = *renderer.descriptors.bindlessFreeList;
         if (!freeList.empty())
         {
@@ -221,7 +224,7 @@ namespace se
         }
 
         vk::CommandBufferAllocateInfo cmdAlloc{};
-        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.commandPool = oneOffCommandPool(renderer);
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
         auto cmds =
@@ -257,14 +260,14 @@ namespace se
                               region);
         recordMipChain(cmd, vk::Image{ rawImage }, width, height, mipLevels);
         static_cast<void>(cmd.end());
-        vk::CommandBufferSubmitInfo cmdInfo{};
-        cmdInfo.commandBuffer = cmd;
-        vk::SubmitInfo2 submitInfo{};
-        submitInfo.setCommandBufferInfos(cmdInfo);
-        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
-        static_cast<void>(renderer.context.device.waitIdle());
-        renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        auto submitted = submitAndWait(renderer, cmd);
+        renderer.context.device.freeCommandBuffers(oneOffCommandPool(renderer), cmd);
         vmaDestroyBuffer(renderer.context.allocator, staging, stagingAllocation);
+        if (!submitted)
+        {
+            vmaDestroyImage(renderer.context.allocator, rawImage, imageAllocation);
+            return Err(submitted.error());
+        }
 
         vk::ImageViewCreateInfo viewInfo{};
         viewInfo.image = vk::Image{ rawImage };
@@ -392,7 +395,7 @@ namespace se
         }
 
         vk::CommandBufferAllocateInfo cmdAlloc{};
-        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.commandPool = oneOffCommandPool(renderer);
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
         auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc),
@@ -420,14 +423,14 @@ namespace se
                         vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eFragmentShader,
                         vk::AccessFlagBits2::eShaderSampledRead);
         static_cast<void>(cmd.end());
-        vk::CommandBufferSubmitInfo cmdInfo{};
-        cmdInfo.commandBuffer = cmd;
-        vk::SubmitInfo2 submitInfo{};
-        submitInfo.setCommandBufferInfos(cmdInfo);
-        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
-        static_cast<void>(renderer.context.device.waitIdle());
-        renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        auto submitted = submitAndWait(renderer, cmd);
+        renderer.context.device.freeCommandBuffers(oneOffCommandPool(renderer), cmd);
         vmaDestroyBuffer(renderer.context.allocator, staging, stagingAllocation);
+        if (!submitted)
+        {
+            vmaDestroyImage(renderer.context.allocator, rawImage, imageAllocation);
+            return Err(submitted.error());
+        }
 
         vk::ImageViewCreateInfo viewInfo{};
         viewInfo.image = vk::Image{ rawImage };

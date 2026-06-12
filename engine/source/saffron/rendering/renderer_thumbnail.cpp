@@ -229,7 +229,7 @@ namespace se
         } push{ proj * view, glm::mat4(1.0f) };
 
         vk::CommandBufferAllocateInfo cmdAlloc{};
-        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.commandPool = oneOffCommandPool(renderer);
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
         auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc),
@@ -307,13 +307,12 @@ namespace se
                         vk::AccessFlagBits2::eShaderSampledRead);
         static_cast<void>(cmd.end());
 
-        vk::CommandBufferSubmitInfo cmdInfo{};
-        cmdInfo.commandBuffer = cmd;
-        vk::SubmitInfo2 submitInfo{};
-        submitInfo.setCommandBufferInfos(cmdInfo);
-        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
-        static_cast<void>(renderer.context.device.waitIdle());
-        renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        auto submitted = submitAndWait(renderer, cmd);
+        renderer.context.device.freeCommandBuffers(oneOffCommandPool(renderer), cmd);
+        if (!submitted)
+        {
+            return Err(submitted.error());
+        }
 
         // Take ownership of the resolved image as a sampled GpuTexture (no material set; the
         // editor reads thumbnails over the control plane). Null the Image's handles so it
@@ -568,7 +567,7 @@ namespace se
         push.pbr = glm::vec4{ material.metallic, material.roughness, material.normalStrength, 0.0f };
 
         vk::CommandBufferAllocateInfo cmdAlloc{};
-        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.commandPool = oneOffCommandPool(renderer);
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
         auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc),
@@ -648,13 +647,12 @@ namespace se
                         vk::AccessFlagBits2::eShaderSampledRead);
         static_cast<void>(cmd.end());
 
-        vk::CommandBufferSubmitInfo cmdInfo{};
-        cmdInfo.commandBuffer = cmd;
-        vk::SubmitInfo2 submitInfo{};
-        submitInfo.setCommandBufferInfos(cmdInfo);
-        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
-        static_cast<void>(renderer.context.device.waitIdle());
-        renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        auto submitted = submitAndWait(renderer, cmd);
+        renderer.context.device.freeCommandBuffers(oneOffCommandPool(renderer), cmd);
+        if (!submitted)
+        {
+            return Err(submitted.error());
+        }
 
         GpuTexture texture;
         texture.device = renderer.context.device;
@@ -718,8 +716,8 @@ namespace se
         return (props.optimalTilingFeatures & needed) == needed;
     }
 
-    auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size,
-                                   PngTransfer transfer) -> Result<ThumbnailPng>
+    auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size, PngTransfer transfer)
+        -> Result<ThumbnailPng>
     {
         if (!texture)
         {
@@ -768,10 +766,13 @@ namespace se
             }
         }
 
-        const vk::DeviceSize bytes =
-            static_cast<vk::DeviceSize>(dstW) * dstH * formatPixelBytes(texture->format);
+        const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(dstW) * dstH * formatPixelBytes(texture->format);
 
-        static_cast<void>(renderer.context.device.waitIdle());
+        // No pre-readback wait: the capture/blit command buffer's own barriers transition the source
+        // out of eShaderReadOnlyOptimal with srcStage=eFragmentShader, and a pipeline barrier's first
+        // scope covers every command submitted earlier on this queue — so the readback is already
+        // ordered after any in-flight frame's sampling of the texture. The post-submit fence below
+        // (submitAndWait) is the only wait needed, and the texture's producer already fenced its upload.
 
         VkBuffer rawBuffer = VK_NULL_HANDLE;
         VmaAllocation alloc = nullptr;
@@ -782,7 +783,7 @@ namespace se
         }
 
         vk::CommandBufferAllocateInfo allocInfo{};
-        allocInfo.commandPool = renderer.frame.frames[0].commandPool;
+        allocInfo.commandPool = oneOffCommandPool(renderer);
         allocInfo.level = vk::CommandBufferLevel::ePrimary;
         allocInfo.commandBufferCount = 1;
         auto cmds = checked(renderer.context.device.allocateCommandBuffers(allocInfo),
@@ -849,17 +850,17 @@ namespace se
         }
         static_cast<void>(cmd.end());
 
-        vk::CommandBufferSubmitInfo cmdInfo{};
-        cmdInfo.commandBuffer = cmd;
-        vk::SubmitInfo2 submitInfo{};
-        submitInfo.setCommandBufferInfos(cmdInfo);
-        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
-        static_cast<void>(renderer.context.device.waitIdle());
-        renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        auto submitted = submitAndWait(renderer, cmd);
+        renderer.context.device.freeCommandBuffers(oneOffCommandPool(renderer), cmd);
+        if (!submitted)
+        {
+            vmaDestroyBuffer(renderer.context.allocator, rawBuffer, alloc);
+            return Err(submitted.error());
+        }
         vmaInvalidateAllocation(renderer.context.allocator, alloc, 0, VK_WHOLE_SIZE);
 
-        auto png = encodeBufferToPng(static_cast<const unsigned char*>(info.pMappedData), dstW, dstH,
-                                     texture->format, transfer);
+        auto png = encodeBufferToPng(static_cast<const unsigned char*>(info.pMappedData), dstW, dstH, texture->format,
+                                     transfer);
         vmaDestroyBuffer(renderer.context.allocator, rawBuffer, alloc);
         if (!png)
         {
@@ -877,5 +878,45 @@ namespace se
             return Err(tex.error());
         }
         return encodeTextureThumbnailPng(renderer, *tex, size);
+    }
+
+    void bindThumbnailWorkerThread(Renderer& renderer)
+    {
+        tlsThumbnailPool = renderer.workerCommandPool;
+    }
+
+    auto prewarmThumbnailResources(Renderer& renderer) -> Result<void>
+    {
+        // renderMeshThumbnail / renderMaterialPreview lazily create these the first time they run.
+        // The worker must never be the one to write them (that would race a main-thread read), so the
+        // main thread creates them up front before the worker starts.
+        if (!renderer.pipelines.thumbnail)
+        {
+            auto pipeline = newThumbnailPipeline(renderer);
+            if (!pipeline)
+            {
+                return Err(pipeline.error());
+            }
+            renderer.pipelines.thumbnail = *pipeline;
+        }
+        if (!renderer.pipelines.preview)
+        {
+            auto pipeline = newPreviewPipeline(renderer, assetPath("shaders/preview.spv"));
+            if (!pipeline)
+            {
+                return Err(pipeline.error());
+            }
+            renderer.pipelines.preview = *pipeline;
+        }
+        if (!renderer.previewSphere)
+        {
+            auto sphere = makePreviewSphere(renderer);
+            if (!sphere)
+            {
+                return Err(sphere.error());
+            }
+            renderer.previewSphere = *sphere;
+        }
+        return {};
     }
 }

@@ -10,6 +10,7 @@ module;
 #include <array>
 #include <cstddef>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -26,6 +27,24 @@ import :RenderGraph;
 
 export namespace se
 {
+    // The graphics queue is externally synchronized in Vulkan. The frame loop and the thumbnail
+    // worker thread both submit/present on it, so every `submit2`/`presentKHR` takes this lock —
+    // one queue, one mutex, process-wide.
+    inline auto gpuQueueMutex() -> std::mutex&
+    {
+        static std::mutex m;
+        return m;
+    }
+
+    // The bindless texture array + its free-list are host-side shared state. `vkUpdateDescriptorSets`
+    // on the same set and the free-list push/pop must be externally synchronized once the worker can
+    // also upload textures, so claim/write/return all take this lock.
+    inline auto bindlessMutex() -> std::mutex&
+    {
+        static std::mutex m;
+        return m;
+    }
+
     // Format of the offscreen depth buffer. D32_SFLOAT is universally supported.
     inline constexpr vk::Format DepthFormat = vk::Format::eD32Sfloat;
 
@@ -355,9 +374,11 @@ export namespace se
         {
             // Reclaim the bindless slot for reuse (a live `view` marks a real, non-moved-from texture).
             // A reclaimed slot's descriptor still points at the destroyed view, but no live material
-            // references it; the next upload overwrites it.
+            // references it; the next upload overwrites it. Locked because a worker-uploaded texture
+            // may be destroyed off the main thread (a failed/duplicate handback).
             if (bindlessFreeList && view)
             {
+                const std::lock_guard<std::mutex> lock(bindlessMutex());
                 bindlessFreeList->push_back(bindlessIndex);
             }
             bindlessFreeList = nullptr;
@@ -1685,6 +1706,9 @@ export namespace se
         // only safely owned in-frame, so the copy is deferred there.
         std::optional<std::string> captureNextSwapchainPath;
         Window* window = nullptr;  // borrowed
+        // Dedicated command pool for the thumbnail worker thread (Vulkan command pools are not
+        // thread-safe, so the worker never borrows a frame pool). Created in newRenderer.
+        vk::CommandPool workerCommandPool;
     };
 
     auto newRenderer(Window& window) -> Result<Renderer>;
@@ -1822,6 +1846,16 @@ export namespace se
     auto encodeAssetThumbnailPng(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<ThumbnailPng>;
     auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size,
                                    PngTransfer transfer = PngTransfer::Clamp) -> Result<ThumbnailPng>;
+
+    // Binds the calling thread to the renderer's dedicated thumbnail command pool: every subsequent
+    // one-off upload/render/readback on this thread allocates from `workerCommandPool` instead of a
+    // frame pool. Call once at the top of the thumbnail worker thread. Idempotent per thread.
+    void bindThumbnailWorkerThread(Renderer& renderer);
+
+    // Eagerly creates the lazily-built thumbnail/preview pipelines + preview sphere on the calling
+    // (main) thread, so the worker thread never races their first-use initialization. Call before
+    // starting the thumbnail worker. Idempotent.
+    auto prewarmThumbnailResources(Renderer& renderer) -> Result<void>;
 
     // Resolves each item's material to a cached PSO, batches by (pipeline, mesh, texture),
     // uploads the frame's instance buffer, and stores the structured draw list on the

@@ -11,6 +11,7 @@ module;
 #include <glm/gtc/packing.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -19,6 +20,7 @@ module;
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -54,6 +56,10 @@ export namespace se
         }
         return {};
     }
+
+    // Defined below; forward-declared so the earlier one-off paths (buildBlas) can use them.
+    auto oneOffCommandPool(Renderer& renderer) -> vk::CommandPool;
+    auto submitAndWait(Renderer& renderer, vk::CommandBuffer cmd) -> Result<void>;
 
     void transitionImage(vk::CommandBuffer cmd, vk::Image image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
                          vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess, vk::PipelineStageFlags2 dstStage,
@@ -529,7 +535,7 @@ export namespace se
         const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
 
         vk::CommandBufferAllocateInfo cmdAlloc{};
-        cmdAlloc.commandPool = renderer.frame.frames[0].commandPool;
+        cmdAlloc.commandPool = oneOffCommandPool(renderer);
         cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
         cmdAlloc.commandBufferCount = 1;
         auto cmds = checked(renderer.context.device.allocateCommandBuffers(cmdAlloc), "blas cmd");
@@ -543,13 +549,12 @@ export namespace se
         static_cast<void>(cmd.begin(begin));
         renderer.context.rt.cmdBuild(static_cast<VkCommandBuffer>(cmd), 1, &buildInfo, &pRange);
         static_cast<void>(cmd.end());
-        vk::CommandBufferSubmitInfo cmdInfo{};
-        cmdInfo.commandBuffer = cmd;
-        vk::SubmitInfo2 submitInfo{};
-        submitInfo.setCommandBufferInfos(cmdInfo);
-        static_cast<void>(renderer.context.graphicsQueue.submit2(submitInfo, nullptr));
-        static_cast<void>(renderer.context.device.waitIdle());
-        renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
+        auto submitted = submitAndWait(renderer, cmd);
+        renderer.context.device.freeCommandBuffers(oneOffCommandPool(renderer), cmd);
+        if (!submitted)
+        {
+            return Err(submitted.error());
+        }
         return *blas;
     }
 
@@ -1174,6 +1179,49 @@ export namespace se
         return {};
     }
 
+    // The command pool one-off uploads/readbacks allocate from. Defaults to the main frame pool, but
+    // the thumbnail worker thread rebinds this (thread-locally) to the renderer's dedicated worker
+    // pool — Vulkan command pools are not thread-safe, so each thread must own its pool.
+    inline thread_local vk::CommandPool tlsThumbnailPool = nullptr;
+
+    auto oneOffCommandPool(Renderer& renderer) -> vk::CommandPool
+    {
+        return tlsThumbnailPool ? tlsThumbnailPool : renderer.frame.frames[0].commandPool;
+    }
+
+    // Submits a one-off command buffer on the graphics queue and blocks only on *its* completion via
+    // a fresh fence — never `device.waitIdle()`, which would drain the in-flight scene frame too. The
+    // out-of-band upload/thumbnail paths use this so a worker thread (and the present loop) are never
+    // stalled. The queue is externally synchronized, so the submit is taken under gpuQueueMutex (the
+    // frame loop's submit/present sites take the same lock). The caller owns `cmd` and frees it after.
+    auto submitAndWait(Renderer& renderer, vk::CommandBuffer cmd) -> Result<void>
+    {
+        vk::FenceCreateInfo fenceInfo{};
+        auto fence = checked(renderer.context.device.createFence(fenceInfo), "submitAndWait: createFence");
+        if (!fence)
+        {
+            return Err(fence.error());
+        }
+        vk::CommandBufferSubmitInfo cmdInfo{};
+        cmdInfo.commandBuffer = cmd;
+        vk::SubmitInfo2 submitInfo{};
+        submitInfo.setCommandBufferInfos(cmdInfo);
+        {
+            const std::lock_guard<std::mutex> lock(gpuQueueMutex());
+            if (auto submitted =
+                    checked(renderer.context.graphicsQueue.submit2(submitInfo, *fence), "submitAndWait: submit2");
+                !submitted)
+            {
+                renderer.context.device.destroyFence(*fence);
+                return Err(submitted.error());
+            }
+        }
+        const vk::Result waited =
+            renderer.context.device.waitForFences(*fence, VK_TRUE, std::numeric_limits<u64>::max());
+        renderer.context.device.destroyFence(*fence);
+        return checked(waited, "submitAndWait: waitForFences");
+    }
+
     // Records a fromLayout->TransferSrc barrier, the image->buffer copy, and a
     // TransferSrc->toLayout barrier into a caller-owned command buffer.
     void captureImageToBuffer(vk::CommandBuffer cmd, vk::Image image, vk::Extent2D extent, vk::ImageLayout fromLayout,
@@ -1202,26 +1250,35 @@ export namespace se
         return 4;
     }
 
-    // Writes a PNG. 8-bit sources reorder BGRA->RGB; the HDR (RGBA16F) offscreen is
-    // already tonemapped to display range, so its half floats are clamped to [0,1]*255.
-    // Converts a captured framebuffer to a tightly-packed 3-channel RGB buffer (one
-    // conversion path shared by the file + in-memory encoders below).
-    auto convertToRgb(const unsigned char* pixels, u32 width, u32 height, vk::Format format)
-        -> std::vector<unsigned char>
+    // Converts a captured framebuffer to a tightly-packed 3-channel RGB buffer (one conversion
+    // path shared by the file + in-memory encoders below). 8-bit sources reorder BGRA->RGB. For
+    // RGBA16F, `transfer` selects the mapping: Clamp ([0,1]×255) for an already-tonemapped
+    // offscreen, or Tonemap (Reinhard + gamma) for scene-linear HDR-asset radiance.
+    auto convertToRgb(const unsigned char* pixels, u32 width, u32 height, vk::Format format,
+                      PngTransfer transfer = PngTransfer::Clamp) -> std::vector<unsigned char>
     {
         std::vector<unsigned char> rgb(static_cast<std::size_t>(width) * height * 3);
         if (format == vk::Format::eR16G16B16A16Sfloat)
         {
             const u32* halfs = reinterpret_cast<const u32*>(pixels);  // two halves per u32
+            const auto encode = [transfer](f32 c) -> unsigned char
+            {
+                f32 v = c < 0.0f ? 0.0f : c;
+                if (transfer == PngTransfer::Tonemap)
+                {
+                    v = v / (1.0f + v);            // Reinhard: scene-linear radiance -> [0,1)
+                    v = std::pow(v, 1.0f / 2.2f);  // gamma encode for display
+                }
+                else
+                {
+                    v = v > 1.0f ? 1.0f : v;
+                }
+                return static_cast<unsigned char>(v * 255.0f + 0.5f);
+            };
             for (u32 i = 0; i < width * height; i = i + 1)
             {
                 const glm::vec2 rg = glm::unpackHalf2x16(halfs[i * 2 + 0]);
                 const glm::vec2 ba = glm::unpackHalf2x16(halfs[i * 2 + 1]);
-                const auto encode = [](f32 c) -> unsigned char
-                {
-                    const f32 clamped = c < 0.0f ? 0.0f : (c > 1.0f ? 1.0f : c);
-                    return static_cast<unsigned char>(clamped * 255.0f + 0.5f);
-                };
                 rgb[i * 3 + 0] = encode(rg.x);
                 rgb[i * 3 + 1] = encode(rg.y);
                 rgb[i * 3 + 2] = encode(ba.x);
@@ -1264,10 +1321,10 @@ export namespace se
 
     // Encodes a captured framebuffer to PNG bytes in memory (no file). Used for thumbnails
     // shipped over the JSON control protocol as base64.
-    auto encodeBufferToPng(const unsigned char* pixels, u32 width, u32 height, vk::Format format)
-        -> Result<std::vector<u8>>
+    auto encodeBufferToPng(const unsigned char* pixels, u32 width, u32 height, vk::Format format,
+                           PngTransfer transfer = PngTransfer::Clamp) -> Result<std::vector<u8>>
     {
-        const std::vector<unsigned char> rgb = convertToRgb(pixels, width, height, format);
+        const std::vector<unsigned char> rgb = convertToRgb(pixels, width, height, format, transfer);
         std::vector<u8> out;
         const auto append = [](void* context, void* data, int size)
         {
@@ -2634,6 +2691,8 @@ export namespace se
         write.dstArrayElement = index;
         write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
         write.setImageInfo(info);
+        // Host access to a descriptor set is externally synchronized; the worker writes it too.
+        const std::lock_guard<std::mutex> lock(bindlessMutex());
         renderer.context.device.updateDescriptorSets(write, {});
     }
 
