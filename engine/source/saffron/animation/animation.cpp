@@ -72,8 +72,7 @@ namespace se
 
         // Resolve (and cache) a clip Uuid to its loaded AnimClip. A broken asset is
         // negative-cached as an empty clip so it is not re-read every frame.
-        auto loadClip(AnimationRuntime& runtime, const AssetCatalog& catalog, std::string_view assetRoot, Uuid clip)
-            -> const AnimClip*
+        auto loadClip(AnimationRuntime& runtime, Uuid clip) -> const AnimClip*
         {
             if (clip.value == 0)
             {
@@ -83,16 +82,14 @@ namespace se
             {
                 return &it->second;
             }
-            const AssetEntry* entry = findAsset(catalog, clip);
-            if (entry == nullptr || entry->type != AssetType::Animation)
+            if (!runtime.clipLoader)
             {
                 return nullptr;
             }
-            const std::string path = std::string(assetRoot) + "/" + entry->path;
-            auto loaded = loadAnimation(path);
+            auto loaded = runtime.clipLoader(clip);
             if (!loaded)
             {
-                logWarn(std::format("animation: clip {} failed to load ('{}'): {}", clip.value, path, loaded.error()));
+                logWarn(std::format("animation: clip {} failed to load: {}", clip.value, loaded.error()));
                 return &runtime.clipCache.emplace(clip.value, AnimClip{}).first->second;
             }
             return &runtime.clipCache.emplace(clip.value, std::move(*loaded)).first->second;
@@ -583,8 +580,7 @@ namespace se
         return out;
     }
 
-    void tickAnimation(AnimationRuntime& runtime, Scene& scene, const AssetCatalog& catalog, std::string_view assetRoot,
-                       f32 dt, AnimMode mode)
+    void tickAnimation(AnimationRuntime& runtime, Scene& scene, f32 dt, AnimMode mode)
     {
         forEach<AnimationPlayerComponent, SkinnedMeshComponent>(
             scene,
@@ -592,7 +588,7 @@ namespace se
             {
                 // Play animates every rig; Edit previews only the timeline-selected one.
                 const bool active = mode == AnimMode::Play || player.previewInEdit;
-                const AnimClip* clip = active ? loadClip(runtime, catalog, assetRoot, player.clip) : nullptr;
+                const AnimClip* clip = active ? loadClip(runtime, player.clip) : nullptr;
                 const u64 key =
                     hasComponent<IdComponent>(scene, entity) ? getComponent<IdComponent>(scene, entity).id.value : 0;
                 if (clip == nullptr)
@@ -943,19 +939,18 @@ namespace se
             rot.values = { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, s, 0.0f, s };
             clip.tracks.push_back(rot);
             runtime.clipCache.emplace(player.clip.value, clip);
-            const AssetCatalog catalog;
 
             const glm::quat q45 = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
             // Edit, no preview: nothing animates, no override appears.
-            tickAnimation(runtime, scene, catalog, "", 0.5f, AnimMode::Edit);
+            tickAnimation(runtime, scene, 0.5f, AnimMode::Edit);
             expect(!scene.registry.all_of<PoseOverrideComponent>(rootBone.handle), "edit without preview is inert");
 
             // Edit + preview + playing: the bone is driven to the 45 deg midpoint.
             player.previewInEdit = true;
             player.playing = true;
             player.time = 0.0f;
-            tickAnimation(runtime, scene, catalog, "", 0.5f, AnimMode::Edit);
+            tickAnimation(runtime, scene, 0.5f, AnimMode::Edit);
             expect(glm::abs(player.time - 0.5f) < eps, "edit preview advances the playhead");
             const auto* over = scene.registry.try_get<PoseOverrideComponent>(rootBone.handle);
             expect(over != nullptr, "preview writes a pose override");
@@ -972,7 +967,7 @@ namespace se
 
             // Clearing the preview reverts the bone to rest next tick.
             player.previewInEdit = false;
-            tickAnimation(runtime, scene, catalog, "", 0.0f, AnimMode::Edit);
+            tickAnimation(runtime, scene, 0.0f, AnimMode::Edit);
             expect(!scene.registry.all_of<PoseOverrideComponent>(rootBone.handle),
                    "clearing preview removes the override");
             updateWorldTransforms(scene);
@@ -983,7 +978,7 @@ namespace se
             player.previewInEdit = false;
             player.playing = true;
             player.time = 0.0f;
-            tickAnimation(runtime, scene, catalog, "", 0.5f, AnimMode::Play);
+            tickAnimation(runtime, scene, 0.5f, AnimMode::Play);
             expect(scene.registry.all_of<PoseOverrideComponent>(rootBone.handle), "play animates without preview");
         }
 
@@ -1011,7 +1006,6 @@ namespace se
         {
             const f32 s = std::sqrt(0.5f);
             const glm::quat q90 = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-            const AssetCatalog catalog;
             AnimClip clip;
             clip.name = "spin90";
             clip.duration = 1.0f;
@@ -1043,10 +1037,10 @@ namespace se
                 AnimationRuntime runtime;
                 runtime.clipCache.emplace(player.clip.value, clip);
 
-                tickAnimation(runtime, scene, catalog, "", 0.5f, AnimMode::Edit);  // switch frame, x=0
+                tickAnimation(runtime, scene, 0.5f, AnimMode::Edit);  // switch frame, x=0
                 switchRot = scene.registry.get<PoseOverrideComponent>(bone.handle).rotation;
-                tickAnimation(runtime, scene, catalog, "", 0.5f, AnimMode::Edit);  // x=0.5 -> 1, transition ends
-                tickAnimation(runtime, scene, catalog, "", 0.5f, AnimMode::Edit);  // steady incoming
+                tickAnimation(runtime, scene, 0.5f, AnimMode::Edit);  // x=0.5 -> 1, transition ends
+                tickAnimation(runtime, scene, 0.5f, AnimMode::Edit);  // steady incoming
                 endRot = scene.registry.get<PoseOverrideComponent>(bone.handle).rotation;
             };
 
@@ -1069,7 +1063,6 @@ namespace se
         // the pre-wrap (end) pose rather than snapping to the start.
         {
             const f32 s = std::sqrt(0.5f);
-            const AssetCatalog catalog;
             Scene scene;
             Entity bone = createEntity(scene, "J0");
             Entity meshEntity = createEntity(scene, "Rig");
@@ -1098,9 +1091,9 @@ namespace se
             AnimationRuntime runtime;
             runtime.clipCache.emplace(player.clip.value, clip);
 
-            tickAnimation(runtime, scene, catalog, "", 0.1f, AnimMode::Edit);  // time -> 0.9, near the end pose
+            tickAnimation(runtime, scene, 0.1f, AnimMode::Edit);  // time -> 0.9, near the end pose
             const glm::quat preWrap = scene.registry.get<PoseOverrideComponent>(bone.handle).rotation;
-            tickAnimation(runtime, scene, catalog, "", 0.2f, AnimMode::Edit);  // time wraps past the end to ~0.1
+            tickAnimation(runtime, scene, 0.2f, AnimMode::Edit);  // time wraps past the end to ~0.1
             const glm::quat wrapFrame = scene.registry.get<PoseOverrideComponent>(bone.handle).rotation;
             // With the blend the wrap frame stays at the pre-wrap pose; a hard cut would jump
             // ~72 deg toward the start pose, which quatClose would reject.

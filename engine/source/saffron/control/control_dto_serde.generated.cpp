@@ -411,6 +411,8 @@ namespace se
             if (text == "texture") { return AssetTypeDto::Texture; }
             if (text == "other") { return AssetTypeDto::Other; }
             if (text == "animation") { return AssetTypeDto::Animation; }
+            if (text == "material") { return AssetTypeDto::Material; }
+            if (text == "model") { return AssetTypeDto::Model; }
             return Err(std::format("key '{}' has unknown value '{}'", key, *text));
         }
 
@@ -422,6 +424,8 @@ namespace se
             case AssetTypeDto::Texture: return "texture";
             case AssetTypeDto::Other: return "other";
             case AssetTypeDto::Animation: return "animation";
+            case AssetTypeDto::Material: return "material";
+            case AssetTypeDto::Model: return "model";
             }
             return "";
         }
@@ -2354,6 +2358,176 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<InstantiateModelParams>) -> Result<InstantiateModelParams>
+    {
+        InstantiateModelParams out;
+
+        {
+            auto value = requiredField(params, "asset", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "asset");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.asset = std::move(*parsed);
+        }
+
+        {
+            auto value = optionalField(params, "name", 1, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readString(*value, "name");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.name = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<ExtractSubAssetParams>) -> Result<ExtractSubAssetParams>
+    {
+        ExtractSubAssetParams out;
+
+        {
+            auto value = requiredField(params, "asset", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "asset");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.asset = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "subAsset", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readWireUuid(**value, "subAsset");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.subAsset = std::move(*parsed);
+        }
+
+        {
+            auto value = optionalField(params, "dest", 2, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readString(*value, "dest");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.dest = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<ClearExtractionParams>) -> Result<ClearExtractionParams>
+    {
+        ClearExtractionParams out;
+
+        {
+            auto value = requiredField(params, "asset", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "asset");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.asset = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "subAsset", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readWireUuid(**value, "subAsset");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.subAsset = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<ReimportModelParams>) -> Result<ReimportModelParams>
+    {
+        ReimportModelParams out;
+
+        {
+            auto value = requiredField(params, "asset", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "asset");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.asset = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<ModelInfoParams>) -> Result<ModelInfoParams>
+    {
+        ModelInfoParams out;
+
+        {
+            auto value = requiredField(params, "asset", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "asset");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.asset = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<AssetReferencesParams>) -> Result<AssetReferencesParams>
+    {
+        AssetReferencesParams out;
+
+        {
+            auto value = requiredField(params, "asset", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readAssetSelector(**value, "asset");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.asset = std::move(*parsed);
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<CleanAssetsParams>) -> Result<CleanAssetsParams>
+    {
+        CleanAssetsParams out;
+
+        {
+            auto value = optionalField(params, "dryRun", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "dryRun");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.dryRun = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "exclude", 1, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readVector<std::string>(*value, "exclude");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.exclude = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
+    auto parseDto(const Json& params, DtoTag<DeleteUnusedParams>) -> Result<DeleteUnusedParams>
+    {
+        DeleteUnusedParams out;
+
+        {
+            auto value = requiredField(params, "ids", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readVector<std::string>(**value, "ids");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.ids = std::move(*parsed);
+        }
+
+        {
+            auto value = optionalField(params, "confirm", 1, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "confirm");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.confirm = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<RenameAssetParams>) -> Result<RenameAssetParams>
     {
         RenameAssetParams out;
@@ -3617,8 +3791,7 @@ namespace se
         Json out = Json::object();
         out["id"] = dtoToJson(value.id);
         out["name"] = value.name;
-        out["mesh"] = dtoToJson(value.mesh);
-        out["albedoTexture"] = dtoToJson(value.albedoTexture);
+        out["type"] = value.type;
         return out;
     }
 
@@ -3645,6 +3818,15 @@ namespace se
         out["type"] = dtoToJson(value.type);
         out["path"] = value.path;
         if (value.folder) { out["folder"] = *value.folder; }
+        if (value.container) { out["container"] = dtoToJson(*value.container); }
+        return out;
+    }
+
+    auto dtoToJson(const ScanAssetsResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["added"] = value.added;
+        out["removed"] = value.removed;
         return out;
     }
 
@@ -3654,6 +3836,77 @@ namespace se
         out["id"] = dtoToJson(value.id);
         out["name"] = value.name;
         if (value.folder) { out["folder"] = *value.folder; }
+        return out;
+    }
+
+    auto dtoToJson(const ReimportModelResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["updated"] = value.updated;
+        out["added"] = value.added;
+        out["removedFromSource"] = value.removedFromSource;
+        out["skipped"] = value.skipped;
+        return out;
+    }
+
+    auto dtoToJson(const ModelInfoResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
+        out["name"] = value.name;
+        out["sourcePath"] = value.sourcePath;
+        out["sourceHash"] = value.sourceHash;
+        out["materialCount"] = value.materialCount;
+        out["hasSkin"] = value.hasSkin;
+        out["nodeCount"] = value.nodeCount;
+        out["totalBytes"] = value.totalBytes;
+        out["subAssets"] = dtoVectorToJson(value.subAssets);
+        return out;
+    }
+
+    auto dtoToJson(const ModelSubAssetDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
+        out["name"] = value.name;
+        out["type"] = value.type;
+        out["bytes"] = value.bytes;
+        return out;
+    }
+
+    auto dtoToJson(const AssetReferencesResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["referencedBy"] = dtoVectorToJson(value.referencedBy);
+        out["references"] = dtoVectorToJson(value.references);
+        out["footprint"] = value.footprint;
+        return out;
+    }
+
+    auto dtoToJson(const CleanReport& value) -> Json
+    {
+        Json out = Json::object();
+        out["candidates"] = dtoVectorToJson(value.candidates);
+        out["reclaimableBytes"] = value.reclaimableBytes;
+        return out;
+    }
+
+    auto dtoToJson(const CleanCandidateDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["id"] = dtoToJson(value.id);
+        out["path"] = value.path;
+        out["category"] = value.category;
+        out["bytes"] = value.bytes;
+        out["reason"] = value.reason;
+        return out;
+    }
+
+    auto dtoToJson(const DeleteUnusedResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["deleted"] = value.deleted;
+        out["reclaimedBytes"] = value.reclaimedBytes;
         return out;
     }
 

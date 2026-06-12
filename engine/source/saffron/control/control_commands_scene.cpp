@@ -1087,12 +1087,19 @@ namespace se
                     {
                         return Err(std::string{ "no project loaded" });
                     }
-                    auto cube = importModel(ctx.assets, ctx.renderer, assetPath("models/cube.gltf"));
-                    if (!cube)
+                    // The built-in cube is a model asset like any other: ensure its .smodel exists, then
+                    // instantiate it into the scene.
+                    auto cubeId = ensureBuiltinModelAsset(ctx.assets, assetPath("models/cube.gltf"));
+                    if (!cubeId)
                     {
-                        return Err(cube.error());
+                        return Err(cubeId.error());
                     }
-                    e = spawnModel(scene, "Cube", *cube);
+                    auto root = instantiateModel(scene, ctx.assets, *cubeId, "Cube");
+                    if (!root)
+                    {
+                        return Err(root.error());
+                    }
+                    e = *root;
                 }
                 else if (preset == AddEntityPreset::PointLight)
                 {

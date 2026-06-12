@@ -611,6 +611,13 @@
       "skip": "requires an external model fixture path"
     },
     {
+      "name": "instantiate-model",
+      "params": "InstantiateModelParams",
+      "result": "EntityRef",
+      "status": "typed",
+      "skip": "requires a model asset id from a prior import"
+    },
+    {
       "name": "import-texture",
       "params": "PathParams",
       "result": "ImportTextureResult",
@@ -623,6 +630,62 @@
       "result": "AssetList",
       "status": "typed",
       "fixture": "empty"
+    },
+    {
+      "name": "scan-assets",
+      "params": "EmptyParams",
+      "result": "ScanAssetsResult",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "extract-subasset",
+      "params": "ExtractSubAssetParams",
+      "result": "AssetRef",
+      "status": "typed",
+      "skip": "requires a model + sub-asset id from a prior import"
+    },
+    {
+      "name": "clear-extraction",
+      "params": "ClearExtractionParams",
+      "result": "AssetRef",
+      "status": "typed",
+      "skip": "requires an extracted sub-asset from a prior import"
+    },
+    {
+      "name": "reimport-model",
+      "params": "ReimportModelParams",
+      "result": "ReimportModelResult",
+      "status": "typed",
+      "skip": "requires a model asset id from a prior import"
+    },
+    {
+      "name": "model-info",
+      "params": "ModelInfoParams",
+      "result": "ModelInfoResult",
+      "status": "typed",
+      "skip": "requires a model asset id from a prior import"
+    },
+    {
+      "name": "asset-references",
+      "params": "AssetReferencesParams",
+      "result": "AssetReferencesResult",
+      "status": "typed",
+      "skip": "requires an asset id from a prior import"
+    },
+    {
+      "name": "clean-assets",
+      "params": "CleanAssetsParams",
+      "result": "CleanReport",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "delete-unused",
+      "params": "DeleteUnusedParams",
+      "result": "DeleteUnusedResult",
+      "status": "typed",
+      "skip": "destructive: requires confirmed-unused asset ids"
     },
     {
       "name": "rename-asset",

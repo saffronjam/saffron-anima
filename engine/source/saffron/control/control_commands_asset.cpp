@@ -71,6 +71,14 @@ namespace se
             {
                 return AssetTypeDto::Animation;
             }
+            if (type == AssetType::Material)
+            {
+                return AssetTypeDto::Material;
+            }
+            if (type == AssetType::Model)
+            {
+                return AssetTypeDto::Model;
+            }
             return AssetTypeDto::Mesh;
         }
 
@@ -175,9 +183,15 @@ namespace se
 
         auto assetDto(const AssetEntry& entry) -> AssetEntryDto
         {
-            return AssetEntryDto{ WireUuid{ entry.id.value }, entry.name, assetTypeDto(entry.type), entry.path,
+            return AssetEntryDto{ WireUuid{ entry.id.value },
+                                  entry.name,
+                                  assetTypeDto(entry.type),
+                                  entry.path,
                                   entry.folder.empty() ? std::optional<std::string>{}
-                                                       : std::optional<std::string>{ entry.folder } };
+                                                       : std::optional<std::string>{ entry.folder },
+                                  entry.container.value == 0
+                                      ? std::optional<WireUuid>{}
+                                      : std::optional<WireUuid>{ WireUuid{ entry.container.value } } };
         }
 
         auto assetRef(const AssetEntry& entry) -> AssetRef
@@ -438,7 +452,9 @@ namespace se
                 return projectDto(project);
             });
 
-        // Imports + bakes a model, then spawns an entity carrying it (selected).
+        // Imports a glTF/OBJ by baking it into one .smodel asset + catalog rows, returning the model
+        // asset ref. The mesh, materials, and textures are chunks inside the container; instantiate-model
+        // places the asset into the scene.
         registerCommand<PathParams, ImportModelResult>(
             reg, "import-model", "import-model {path}",
             [](EngineContext& ctx, const PathParams& params) -> Result<ImportModelResult>
@@ -451,17 +467,304 @@ namespace se
                 {
                     return Err(ready.error());
                 }
-                auto imported = importModel(ctx.assets, ctx.renderer, params.path);
-                if (!imported)
+                auto bake = importModel(ctx.assets, params.path, ImportOptions{});
+                if (!bake)
                 {
-                    return Err(imported.error());
+                    return Err(bake.error());
                 }
-                Entity entity = spawnModel(activeScene(ctx.sceneEdit), "Mesh", *imported);
+                std::string name;
+                if (const AssetEntry* model = findAsset(ctx.assets.catalog, bake->modelId); model != nullptr)
+                {
+                    name = model->name;
+                }
+                return ImportModelResult{ .id = WireUuid{ bake->modelId.value }, .name = name, .type = "model" };
+            });
+
+        // Expands a model asset's stored hierarchy into the scene. Returns the new root entity.
+        registerCommand<InstantiateModelParams, EntityRef>(
+            reg, "instantiate-model", "instantiate-model {asset} [name]",
+            [](EngineContext& ctx, const InstantiateModelParams& params) -> Result<EntityRef>
+            {
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                auto resolved = resolveAsset(ctx, params.asset);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                const AssetEntry* entry = *resolved;
+                if (entry->type != AssetType::Model)
+                {
+                    return Err(std::format("asset {} is not a model", entry->id.value));
+                }
+                std::string name = entry->name;
+                if (params.name && !params.name->empty())
+                {
+                    name = *params.name;
+                }
+                auto root = instantiateModel(activeScene(ctx.sceneEdit), ctx.assets, entry->id, name);
+                if (!root)
+                {
+                    return Err(root.error());
+                }
                 ctx.sceneEdit.sceneVersion += 1;
-                setSelection(ctx.sceneEdit, entity);
-                EntityRef ref = entityRefDto(activeScene(ctx.sceneEdit), entity);
-                return ImportModelResult{ ref.id, ref.name, WireUuid{ imported->mesh.value },
-                                          WireUuid{ imported->albedoTexture.value } };
+                setSelection(ctx.sceneEdit, *root);
+                return entityRefDto(activeScene(ctx.sceneEdit), *root);
+            });
+
+        // Rescans assets/ and reconciles the catalog with disk (the filesystem is the source of truth,
+        // so a never-saved import is rediscovered). Idles + clears the GPU caches first; they re-load
+        // lazily against the rebuilt catalog. Returns the count of rows added / removed.
+        registerCommand<EmptyParams, ScanAssetsResult>(
+            reg, "scan-assets", "scan-assets",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<ScanAssetsResult>
+            {
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                waitGpuIdle(ctx.renderer);
+                clearAssetCaches(ctx.assets);
+                auto delta = scanAssets(ctx.assets);
+                if (!delta)
+                {
+                    return Err(delta.error());
+                }
+                writeCatalogCache(ctx.assets);  // refresh the latency cache after a forced rescan
+                return ScanAssetsResult{ .added = static_cast<i32>(delta->added.size()),
+                                         .removed = static_cast<i32>(delta->removed.size()) };
+            });
+
+        // Slices an embedded sub-asset out of its container to a standalone file (same id) + remaps the
+        // container to prefer it. Edit/share the extracted file; the embedded chunk stays as a fallback.
+        registerCommand<ExtractSubAssetParams, AssetRef>(
+            reg, "extract-subasset", "extract-subasset {asset} {subAsset} [dest]",
+            [](EngineContext& ctx, const ExtractSubAssetParams& params) -> Result<AssetRef>
+            {
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                auto resolved = resolveAsset(ctx, params.asset);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                const Uuid modelId = (*resolved)->id;
+                auto extracted =
+                    extractSubAsset(ctx.assets, modelId, Uuid{ params.subAsset.value }, params.dest.value_or(""));
+                if (!extracted)
+                {
+                    return Err(extracted.error());
+                }
+                std::string name;
+                if (const AssetEntry* row = findAsset(ctx.assets.catalog, *extracted); row != nullptr)
+                {
+                    name = row->name;
+                }
+                return AssetRef{ WireUuid{ extracted->value }, name, std::nullopt };
+            });
+
+        // Reverts an extracted sub-asset: drops the remap + external file, back to the embedded chunk.
+        registerCommand<ClearExtractionParams, AssetRef>(
+            reg, "clear-extraction", "clear-extraction {asset} {subAsset}",
+            [](EngineContext& ctx, const ClearExtractionParams& params) -> Result<AssetRef>
+            {
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                auto resolved = resolveAsset(ctx, params.asset);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                const Uuid modelId = (*resolved)->id;
+                const Uuid subId{ params.subAsset.value };
+                if (auto cleared = clearExtraction(ctx.assets, modelId, subId); !cleared)
+                {
+                    return Err(cleared.error());
+                }
+                std::string name;
+                if (const AssetEntry* row = findAsset(ctx.assets.catalog, subId); row != nullptr)
+                {
+                    name = row->name;
+                }
+                return AssetRef{ WireUuid{ subId.value }, name, std::nullopt };
+            });
+
+        // Re-bakes a model from its stored source (skips when unchanged), preserving extractions; live
+        // instances pick up the new bytes with no re-instantiation. Idles the GPU before patching caches.
+        registerCommand<ReimportModelParams, ReimportModelResult>(
+            reg, "reimport-model", "reimport-model {asset}",
+            [](EngineContext& ctx, const ReimportModelParams& params) -> Result<ReimportModelResult>
+            {
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                auto resolved = resolveAsset(ctx, params.asset);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                waitGpuIdle(ctx.renderer);
+                auto delta = reimportModel(ctx.assets, (*resolved)->id);
+                if (!delta)
+                {
+                    return Err(delta.error());
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return ReimportModelResult{ .updated = static_cast<i32>(delta->updated.size()),
+                                            .added = static_cast<i32>(delta->added.size()),
+                                            .removedFromSource = static_cast<i32>(delta->removedFromSource.size()),
+                                            .skipped = delta->skipped };
+            });
+
+        // A container's metadata summary: sub-asset list (type, name, bytes), material/node/skin counts,
+        // source recipe, and total footprint — the Reference-Viewer "what's inside" payload.
+        registerCommand<ModelInfoParams, ModelInfoResult>(
+            reg, "model-info", "model-info {asset}",
+            [](EngineContext& ctx, const ModelInfoParams& params) -> Result<ModelInfoResult>
+            {
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                auto resolved = resolveAsset(ctx, params.asset);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                const AssetEntry* entry = *resolved;
+                if (entry->type != AssetType::Model)
+                {
+                    return Err(std::format("asset {} is not a model", entry->id.value));
+                }
+                auto model = loadModelAsset(ctx.assets, entry->id);
+                if (!model)
+                {
+                    return Err(std::format("model {} is not loadable", entry->id.value));
+                }
+                ModelInfoResult result;
+                result.id = WireUuid{ entry->id.value };
+                result.name = model->meta.name;
+                result.sourcePath = model->meta.import.sourcePath;
+                result.sourceHash = model->meta.import.sourceHash;
+                result.hasSkin = !model->meta.skin.is_null();
+                result.nodeCount = model->meta.nodes.is_array() ? static_cast<i32>(model->meta.nodes.size()) : 0;
+                result.materialCount = 0;
+                std::error_code ec;
+                result.totalBytes =
+                    static_cast<u64>(std::filesystem::file_size(ctx.assets.root + "/" + entry->path, ec));
+                for (const auto& sub : model->meta.subAssets)
+                {
+                    if (sub.type == AssetType::Material)
+                    {
+                        result.materialCount = result.materialCount + 1;
+                    }
+                    AssetEntry subRow;
+                    subRow.id = sub.subId;
+                    subRow.type = sub.type;
+                    subRow.container = entry->id;
+                    ModelSubAssetDto dto;
+                    dto.id = WireUuid{ sub.subId.value };
+                    dto.name = sub.name;
+                    dto.type = assetTypeName(sub.type);
+                    dto.bytes = assetBytes(ctx.assets, subRow);
+                    result.subAssets.push_back(std::move(dto));
+                }
+                return result;
+            });
+
+        // What-references-this / what-this-references + footprint, over the live dependency graph.
+        registerCommand<AssetReferencesParams, AssetReferencesResult>(
+            reg, "asset-references", "asset-references {asset}",
+            [](EngineContext& ctx, const AssetReferencesParams& params) -> Result<AssetReferencesResult>
+            {
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                auto resolved = resolveAsset(ctx, params.asset);
+                if (!resolved)
+                {
+                    return Err(resolved.error());
+                }
+                const Uuid id = (*resolved)->id;
+                DependencyGraph graph =
+                    buildDependencyGraph(activeScene(ctx.sceneEdit), ctx.assets.catalog, ctx.assets);
+                AssetReferencesResult result;
+                for (const Uuid referrer : graph.referencedBy(id))
+                {
+                    result.referencedBy.push_back(std::to_string(referrer.value));
+                }
+                for (const Uuid target : graph.referencesOf(id))
+                {
+                    result.references.push_back(std::to_string(target.value));
+                }
+                result.footprint = graph.footprint(id);
+                return result;
+            });
+
+        // A categorized cleanup report (Unused / Orphaned / Broken / Review) by reachability from the
+        // active scene. Always dry-run — it never deletes; delete-unused is the explicit, gated step.
+        registerCommand<CleanAssetsParams, CleanReport>(
+            reg, "clean-assets", "clean-assets [exclude...]",
+            [](EngineContext& ctx, const CleanAssetsParams& params) -> Result<CleanReport>
+            {
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                std::vector<Uuid> exclude;
+                if (params.exclude)
+                {
+                    for (const std::string& id : *params.exclude)
+                    {
+                        exclude.push_back(Uuid{ std::strtoull(id.c_str(), nullptr, 10) });
+                    }
+                }
+                CleanReportData data =
+                    analyzeClean(activeScene(ctx.sceneEdit), ctx.assets.catalog, ctx.assets, exclude);
+                CleanReport report;
+                report.reclaimableBytes = data.reclaimableBytes;
+                for (const CleanCandidate& candidate : data.candidates)
+                {
+                    report.candidates.push_back(CleanCandidateDto{ WireUuid{ candidate.id.value }, candidate.path,
+                                                                   cleanCategoryName(candidate.category),
+                                                                   candidate.bytes, candidate.reason });
+                }
+                return report;
+            });
+
+        // Deletes only confirmed-unused assets (refusing without confirm), then rescans for cascade.
+        // Outward-facing + irreversible — commit to VCS first.
+        registerCommand<DeleteUnusedParams, DeleteUnusedResult>(
+            reg, "delete-unused", "delete-unused {ids...} {confirm}",
+            [](EngineContext& ctx, const DeleteUnusedParams& params) -> Result<DeleteUnusedResult>
+            {
+                if (auto ready = requireProjectLoaded(ctx); !ready)
+                {
+                    return Err(ready.error());
+                }
+                std::vector<Uuid> ids;
+                for (const std::string& id : params.ids)
+                {
+                    ids.push_back(Uuid{ std::strtoull(id.c_str(), nullptr, 10) });
+                }
+                waitGpuIdle(ctx.renderer);
+                clearAssetCaches(ctx.assets);
+                auto deleted =
+                    deleteUnused(ctx.assets, activeScene(ctx.sceneEdit), ids, params.confirm.value_or(false));
+                if (!deleted)
+                {
+                    return Err(deleted.error());
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return DeleteUnusedResult{ .deleted = deleted->deleted, .reclaimedBytes = deleted->reclaimedBytes };
             });
 
         // Imports an external image into the asset dir; returns its texture id (assign

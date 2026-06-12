@@ -40,7 +40,7 @@ import { AssetFolderTree, folderAncestorPaths, folderLabel } from "./AssetFolder
 import { logRender } from "../lib/renderLog";
 import { matchesBinding } from "../lib/keybindings";
 import { AssetMetadataPanel } from "../components/AssetMetadataPanel";
-import { errorText, notify } from "../lib/flash";
+import { errorText, notify, notifyError } from "../lib/flash";
 import { useOutsideCommit } from "../lib/useOutsideCommit";
 import type { AssetEntry, AssetMetadataDto, AssetUsageDto } from "../protocol";
 import { Badge } from "@/components/ui/badge";
@@ -162,8 +162,7 @@ async function importPath(path: string, folder: string | null): Promise<void> {
     } else {
       const imported = await client.importModel(path);
       if (folder) {
-        await moveImportedAsset(imported.mesh, folder);
-        await moveImportedAsset(imported.albedoTexture, folder);
+        await moveImportedAsset(imported.id, folder);
       }
     }
   } catch {
@@ -177,6 +176,7 @@ export function AssetsPanel() {
   const assets = useEditorStore((s) => s.assets);
   const folders = useEditorStore((s) => s.assetFolders);
   const refreshAssets = useEditorStore((s) => s.refreshAssets);
+  const instantiateModel = useEditorStore((s) => s.instantiateModel);
   const nativeDialogOpen = useEditorStore((s) => s.nativeDialogOpen);
   const openAssetTab = useEditorStore((s) => s.openAssetTab);
   const closeViewTab = useEditorStore((s) => s.closeViewTab);
@@ -199,8 +199,10 @@ export function AssetsPanel() {
   const [dropActive, setDropActive] = useState(false);
   const [assetDropTarget, setAssetDropTarget] = useState<string | null>(null);
   const currentFolder = history.stack[history.index] ?? null;
+  // Embedded sub-assets (a `.smodel`'s mesh/material/texture rows) are hidden from the top level so a
+  // model imports as ONE tile, not a flood — they resolve through their container by (modelId, subId).
   const visibleAssets = useMemo(
-    () => assets.filter((asset) => (asset.folder ?? "") === (currentFolder ?? "")),
+    () => assets.filter((asset) => (asset.folder ?? "") === (currentFolder ?? "") && !asset.container),
     [assets, currentFolder],
   );
 
@@ -571,6 +573,16 @@ export function AssetsPanel() {
     [requestDeleteAsset],
   );
 
+  /// Place a model asset into the scene (the scene poll picks up the new entity).
+  const onInstantiate = useCallback(
+    (modelId: string): void => {
+      void instantiateModel(modelId)
+        .then(() => notify("Added to scene"))
+        .catch((err: unknown) => notifyError(errorText(err)));
+    },
+    [instantiateModel],
+  );
+
   const requestDeleteAssets = useCallback(async (targetAssets: AssetEntry[]): Promise<void> => {
     if (targetAssets.length === 0) {
       return;
@@ -858,6 +870,7 @@ export function AssetsPanel() {
                 }
                 nativeDialogOpen={nativeDialogOpen}
                 onViewAsset={openAssetTab}
+                onInstantiate={onInstantiate}
                 onRenameAsset={setRenamingAsset}
                 onDeleteAsset={deleteAsset}
                 onDeleteAssets={(targets) => void requestDeleteAssets(targets)}
@@ -929,6 +942,7 @@ function GridContextMenuItems({
   renamingFolderGridPath,
   nativeDialogOpen,
   onViewAsset,
+  onInstantiate,
   onRenameAsset,
   onDeleteAsset,
   onDeleteAssets,
@@ -944,6 +958,7 @@ function GridContextMenuItems({
   renamingFolderGridPath: string | null;
   nativeDialogOpen: boolean;
   onViewAsset(asset: AssetEntry): void;
+  onInstantiate(modelId: string): void;
   onRenameAsset(assetId: string): void;
   onDeleteAsset(asset: AssetEntry): void;
   onDeleteAssets(assets: AssetEntry[]): void;
@@ -970,6 +985,20 @@ function GridContextMenuItems({
           <Eye />
           View ({assetCountLabel(batchAssets.length)})
         </ContextMenuItem>
+        {batchAssets.some((asset) => asset.type === "model") ? (
+          <ContextMenuItem
+            onSelect={() => {
+              for (const asset of batchAssets) {
+                if (asset.type === "model") {
+                  onInstantiate(asset.id);
+                }
+              }
+            }}
+          >
+            <Plus />
+            Add to scene
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuSeparator />
         <ContextMenuItem
           variant="destructive"
@@ -991,6 +1020,12 @@ function GridContextMenuItems({
           <Eye />
           View
         </ContextMenuItem>
+        {asset.type === "model" ? (
+          <ContextMenuItem onSelect={() => onInstantiate(asset.id)}>
+            <Plus />
+            Add to scene
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuItem onSelect={() => onRenameAsset(asset.id)}>
           <Pencil />
           Rename

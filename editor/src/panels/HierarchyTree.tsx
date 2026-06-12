@@ -19,6 +19,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { useEditorStore, buildTree, reanchorPastBones, type TreeNode } from "../state/store";
+import { assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
+import { errorText, notify, notifyError } from "../lib/flash";
 import { matchesBinding } from "../lib/keybindings";
 import { orderedComponentNames } from "./InspectorPanel";
 import type { EntityListEntry } from "../protocol";
@@ -195,7 +197,36 @@ export function HierarchyTree({ actions }: { actions: TreeActions }) {
           }
         }}
       >
-        <div className="p-1" role="tree" aria-label="Scene entities">
+        <div
+          className="p-1"
+          role="tree"
+          aria-label="Scene entities"
+          // Dropping a model asset from the catalog instantiates it into the scene. Asset drags carry
+          // `application/x-se-asset`; entity-reparent drags (`application/x-saffron-entity`) are ignored
+          // here and handled by the per-row / unparent drop zones.
+          onDragOver={(e) => {
+            if (readAssetPayload(e.dataTransfer)) {
+              e.preventDefault();
+            }
+          }}
+          onDrop={(e) => {
+            const ids = assetIdsFromPayload(readAssetPayload(e.dataTransfer));
+            if (ids.length === 0) {
+              return;
+            }
+            e.preventDefault();
+            const state = useEditorStore.getState();
+            const models = ids.filter(
+              (id) => state.assets.find((asset) => asset.id === id)?.type === "model",
+            );
+            for (const id of models) {
+              void state
+                .instantiateModel(id)
+                .then(() => notify("Added to scene"))
+                .catch((err: unknown) => notifyError(errorText(err)));
+            }
+          }}
+        >
           {entities.length === 0 ? (
             <div className="p-2.5 text-center italic text-muted-foreground">No entities</div>
           ) : (

@@ -1572,6 +1572,24 @@
       }
     },
     {
+      "name": "instantiate-model",
+      "summary": "instantiate-model {asset} [name]",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/InstantiateModelParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/EntityRef"
+        }
+      }
+    },
+    {
       "name": "import-texture",
       "summary": "import-texture {path}",
       "params": [
@@ -1604,6 +1622,150 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/AssetList"
+        }
+      }
+    },
+    {
+      "name": "scan-assets",
+      "summary": "rescan assets/ and reconcile the catalog from disk",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ScanAssetsResult"
+        }
+      }
+    },
+    {
+      "name": "extract-subasset",
+      "summary": "extract-subasset {asset, subAsset} [dest] — slice an embedded sub-asset to a standalone file",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ExtractSubAssetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetRef"
+        }
+      }
+    },
+    {
+      "name": "clear-extraction",
+      "summary": "clear-extraction {asset, subAsset} — revert an extracted sub-asset to the embedded chunk",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ClearExtractionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetRef"
+        }
+      }
+    },
+    {
+      "name": "reimport-model",
+      "summary": "reimport-model {asset} — re-bake from source (skip if unchanged), preserving extractions",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ReimportModelParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ReimportModelResult"
+        }
+      }
+    },
+    {
+      "name": "model-info",
+      "summary": "model-info {asset} — a container's sub-assets, source recipe, and byte footprint",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ModelInfoParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ModelInfoResult"
+        }
+      }
+    },
+    {
+      "name": "asset-references",
+      "summary": "asset-references {asset} — what references this / what this references + footprint",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AssetReferencesParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetReferencesResult"
+        }
+      }
+    },
+    {
+      "name": "clean-assets",
+      "summary": "clean-assets [exclude] — categorized cleanup report (dry-run; never deletes)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CleanAssetsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CleanReport"
+        }
+      }
+    },
+    {
+      "name": "delete-unused",
+      "summary": "delete-unused {ids} {confirm} — delete confirmed-unused assets, then rescan",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DeleteUnusedParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DeleteUnusedResult"
         }
       }
     },
@@ -2416,13 +2578,18 @@
               "mesh",
               "texture",
               "other",
-              "animation"
+              "animation",
+              "material",
+              "model"
             ]
           },
           "path": {
             "type": "string"
           },
           "folder": {
+            "type": "string"
+          },
+          "container": {
             "type": "string"
           }
         },
@@ -2471,7 +2638,9 @@
               "mesh",
               "texture",
               "other",
-              "animation"
+              "animation",
+              "material",
+              "model"
             ]
           },
           "path": {
@@ -2538,6 +2707,51 @@
         "required": [
           "id",
           "name"
+        ]
+      },
+      "AssetReferencesParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "asset"
+        ]
+      },
+      "AssetReferencesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "referencedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "footprint": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "referencedBy",
+          "references",
+          "footprint"
         ]
       },
       "AssetSelector": {
@@ -2801,6 +3015,92 @@
           "pending"
         ]
       },
+      "CleanAssetsParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "exclude": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": []
+      },
+      "CleanCandidateDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "category",
+          "bytes",
+          "reason"
+        ]
+      },
+      "CleanReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CleanCandidateDto"
+            }
+          },
+          "reclaimableBytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "candidates",
+          "reclaimableBytes"
+        ]
+      },
+      "ClearExtractionParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "subAsset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "subAsset"
+        ]
+      },
       "ComponentList": {
         "type": "object",
         "additionalProperties": false,
@@ -2943,6 +3243,40 @@
           "name",
           "cleared",
           "fileDeleted"
+        ]
+      },
+      "DeleteUnusedParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "DeleteUnusedResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "type": "integer"
+          },
+          "reclaimedBytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted",
+          "reclaimedBytes"
         ]
       },
       "DeselectResult": {
@@ -3173,6 +3507,32 @@
       },
       "EnvironmentDto": {
         "$ref": "#/components/schemas/Environment"
+      },
+      "ExtractSubAssetParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "subAsset": {
+            "type": "string"
+          },
+          "dest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "subAsset"
+        ]
       },
       "FlyInputParams": {
         "type": "object",
@@ -3452,18 +3812,14 @@
           "name": {
             "type": "string"
           },
-          "mesh": {
-            "type": "string"
-          },
-          "albedoTexture": {
+          "type": {
             "type": "string"
           }
         },
         "required": [
           "id",
           "name",
-          "mesh",
-          "albedoTexture"
+          "type"
         ]
       },
       "ImportTextureResult": {
@@ -3496,6 +3852,28 @@
           "id",
           "name",
           "components"
+        ]
+      },
+      "InstantiateModelParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset"
         ]
       },
       "ListClipsParams": {
@@ -3983,6 +4361,96 @@
         },
         "required": [
           "id"
+        ]
+      },
+      "ModelInfoParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "asset"
+        ]
+      },
+      "ModelInfoResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sourcePath": {
+            "type": "string"
+          },
+          "sourceHash": {
+            "type": "string"
+          },
+          "materialCount": {
+            "type": "integer"
+          },
+          "hasSkin": {
+            "type": "boolean"
+          },
+          "nodeCount": {
+            "type": "integer"
+          },
+          "totalBytes": {
+            "type": "integer"
+          },
+          "subAssets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelSubAssetDto"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "sourcePath",
+          "sourceHash",
+          "materialCount",
+          "hasSkin",
+          "nodeCount",
+          "totalBytes",
+          "subAssets"
+        ]
+      },
+      "ModelSubAssetDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "bytes"
         ]
       },
       "MoveAssetParams": {
@@ -4541,6 +5009,49 @@
           "marked"
         ]
       },
+      "ReimportModelParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "asset"
+        ]
+      },
+      "ReimportModelResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "updated": {
+            "type": "integer"
+          },
+          "added": {
+            "type": "integer"
+          },
+          "removedFromSource": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "updated",
+          "added",
+          "removedFromSource",
+          "skipped"
+        ]
+      },
       "RemoveComponentResult": {
         "type": "object",
         "additionalProperties": false,
@@ -4826,6 +5337,22 @@
           "hdr",
           "exposureEv",
           "aa"
+        ]
+      },
+      "ScanAssetsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "added": {
+            "type": "integer"
+          },
+          "removed": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "added",
+          "removed"
         ]
       },
       "ScreenshotParams": {
@@ -6358,6 +6885,18 @@
         "additionalProperties": false,
         "properties": {}
       },
+      "ModelInstance": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "modelId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "modelId"
+        ]
+      },
       "FootIk": {
         "type": "object",
         "additionalProperties": false,
@@ -6554,6 +7093,9 @@
           "Bone": {
             "$ref": "#/components/schemas/Bone"
           },
+          "ModelInstance": {
+            "$ref": "#/components/schemas/ModelInstance"
+          },
           "FootIk": {
             "$ref": "#/components/schemas/FootIk"
           },
@@ -6605,6 +7147,9 @@
           },
           {
             "$ref": "#/components/schemas/Bone"
+          },
+          {
+            "$ref": "#/components/schemas/ModelInstance"
           },
           {
             "$ref": "#/components/schemas/FootIk"

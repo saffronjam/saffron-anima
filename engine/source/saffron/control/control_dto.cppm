@@ -132,6 +132,8 @@ export namespace se
         Texture,
         Other,
         Animation,
+        Material,
+        Model,
     };
 
     enum class ProfilerModeDto
@@ -636,8 +638,26 @@ export namespace se
     {
         WireUuid id;
         std::string name;
-        WireUuid mesh;
-        WireUuid albedoTexture;
+        std::string type;
+    };
+
+    struct InstantiateModelParams
+    {
+        AssetSelector asset;
+        std::optional<std::string> name;
+    };
+
+    struct ExtractSubAssetParams
+    {
+        AssetSelector asset;
+        WireUuid subAsset;
+        std::optional<std::string> dest;
+    };
+
+    struct ClearExtractionParams
+    {
+        AssetSelector asset;
+        WireUuid subAsset;
     };
 
     struct ImportTextureResult
@@ -652,12 +672,103 @@ export namespace se
         AssetTypeDto type;
         std::string path;
         std::optional<std::string> folder;
+        std::optional<WireUuid> container;  // present for a sub-asset embedded in a .smodel
     };
 
     struct AssetList
     {
         std::vector<AssetEntryDto> assets;
         std::vector<std::string> folders;
+    };
+
+    struct ScanAssetsResult
+    {
+        i32 added;
+        i32 removed;
+    };
+
+    struct ReimportModelResult
+    {
+        i32 updated;
+        i32 added;
+        i32 removedFromSource;
+        bool skipped;
+    };
+
+    struct ReimportModelParams
+    {
+        AssetSelector asset;
+    };
+
+    struct ModelInfoParams
+    {
+        AssetSelector asset;
+    };
+
+    struct ModelSubAssetDto
+    {
+        WireUuid id;
+        std::string name;
+        std::string type;
+        u64 bytes;
+    };
+
+    struct ModelInfoResult
+    {
+        WireUuid id;
+        std::string name;
+        std::string sourcePath;
+        std::string sourceHash;
+        i32 materialCount;
+        bool hasSkin;
+        i32 nodeCount;
+        u64 totalBytes;
+        std::vector<ModelSubAssetDto> subAssets;
+    };
+
+    struct AssetReferencesParams
+    {
+        AssetSelector asset;
+    };
+
+    struct AssetReferencesResult
+    {
+        std::vector<std::string> referencedBy;
+        std::vector<std::string> references;
+        u64 footprint;
+    };
+
+    struct CleanCandidateDto
+    {
+        WireUuid id;
+        std::string path;
+        std::string category;
+        u64 bytes;
+        std::string reason;
+    };
+
+    struct CleanReport
+    {
+        std::vector<CleanCandidateDto> candidates;
+        u64 reclaimableBytes;
+    };
+
+    struct CleanAssetsParams
+    {
+        std::optional<bool> dryRun;
+        std::optional<std::vector<std::string>> exclude;
+    };
+
+    struct DeleteUnusedParams
+    {
+        std::vector<std::string> ids;
+        std::optional<bool> confirm;
+    };
+
+    struct DeleteUnusedResult
+    {
+        i32 deleted;
+        u64 reclaimedBytes;
     };
 
     struct RenameAssetParams
@@ -1453,6 +1564,14 @@ export namespace se
     auto dtoToJson(const SetViewportSizeResult& value) -> Json;
     auto dtoToJson(const ProjectInfoDto& value) -> Json;
     auto dtoToJson(const ImportModelResult& value) -> Json;
+    auto dtoToJson(const ScanAssetsResult& value) -> Json;
+    auto dtoToJson(const ReimportModelResult& value) -> Json;
+    auto dtoToJson(const ModelSubAssetDto& value) -> Json;
+    auto dtoToJson(const ModelInfoResult& value) -> Json;
+    auto dtoToJson(const AssetReferencesResult& value) -> Json;
+    auto dtoToJson(const CleanCandidateDto& value) -> Json;
+    auto dtoToJson(const CleanReport& value) -> Json;
+    auto dtoToJson(const DeleteUnusedResult& value) -> Json;
     auto dtoToJson(const ImportTextureResult& value) -> Json;
     auto dtoToJson(const AssetEntryDto& value) -> Json;
     auto dtoToJson(const AssetList& value) -> Json;
@@ -1531,6 +1650,14 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<PathParams>) -> Result<PathParams>;
     auto parseDto(const Json& params, DtoTag<OptionalPathParams>) -> Result<OptionalPathParams>;
     auto parseDto(const Json& params, DtoTag<RenameAssetParams>) -> Result<RenameAssetParams>;
+    auto parseDto(const Json& params, DtoTag<InstantiateModelParams>) -> Result<InstantiateModelParams>;
+    auto parseDto(const Json& params, DtoTag<ExtractSubAssetParams>) -> Result<ExtractSubAssetParams>;
+    auto parseDto(const Json& params, DtoTag<ClearExtractionParams>) -> Result<ClearExtractionParams>;
+    auto parseDto(const Json& params, DtoTag<ReimportModelParams>) -> Result<ReimportModelParams>;
+    auto parseDto(const Json& params, DtoTag<ModelInfoParams>) -> Result<ModelInfoParams>;
+    auto parseDto(const Json& params, DtoTag<AssetReferencesParams>) -> Result<AssetReferencesParams>;
+    auto parseDto(const Json& params, DtoTag<CleanAssetsParams>) -> Result<CleanAssetsParams>;
+    auto parseDto(const Json& params, DtoTag<DeleteUnusedParams>) -> Result<DeleteUnusedParams>;
     auto parseDto(const Json& params, DtoTag<CreateAssetFolderParams>) -> Result<CreateAssetFolderParams>;
     auto parseDto(const Json& params, DtoTag<RenameAssetFolderParams>) -> Result<RenameAssetFolderParams>;
     auto parseDto(const Json& params, DtoTag<DeleteAssetFolderParams>) -> Result<DeleteAssetFolderParams>;

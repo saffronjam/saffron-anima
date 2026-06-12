@@ -96,6 +96,10 @@ export interface SkinnedMesh {
 
 export interface Bone {}
 
+export interface ModelInstance {
+  modelId: WireUuid;
+}
+
 export interface FootChainDto {
   upper: number;
   mid: number;
@@ -171,6 +175,7 @@ export type ComponentBody =
   | Relationship
   | SkinnedMesh
   | Bone
+  | ModelInstance
   | FootIk
   | BonePhysics
   | Record<string, unknown>;
@@ -962,8 +967,12 @@ export interface PathParams {
 export interface ImportModelResult {
   id: WireUuid;
   name: string;
-  mesh: WireUuid;
-  albedoTexture: WireUuid;
+  type: string;
+}
+
+export interface InstantiateModelParams {
+  asset: WireUuid | string | number;
+  name?: string;
 }
 
 export interface ImportTextureResult {
@@ -978,20 +987,109 @@ export interface AssetList {
 export interface AssetEntryDto {
   id: WireUuid;
   name: string;
-  type: "mesh" | "texture" | "other" | "animation";
+  type: "mesh" | "texture" | "other" | "animation" | "material" | "model";
   path: string;
   folder?: string;
+  container?: WireUuid;
 }
 
-export interface RenameAssetParams {
+export interface ScanAssetsResult {
+  added: number;
+  removed: number;
+}
+
+export interface ExtractSubAssetParams {
   asset: WireUuid | string | number;
-  name: string;
+  subAsset: WireUuid;
+  dest?: string;
 }
 
 export interface AssetRef {
   id: WireUuid;
   name: string;
   folder?: string;
+}
+
+export interface ClearExtractionParams {
+  asset: WireUuid | string | number;
+  subAsset: WireUuid;
+}
+
+export interface ReimportModelParams {
+  asset: WireUuid | string | number;
+}
+
+export interface ReimportModelResult {
+  updated: number;
+  added: number;
+  removedFromSource: number;
+  skipped: boolean;
+}
+
+export interface ModelInfoParams {
+  asset: WireUuid | string | number;
+}
+
+export interface ModelInfoResult {
+  id: WireUuid;
+  name: string;
+  sourcePath: string;
+  sourceHash: string;
+  materialCount: number;
+  hasSkin: boolean;
+  nodeCount: number;
+  totalBytes: number;
+  subAssets: ModelSubAssetDto[];
+}
+
+export interface ModelSubAssetDto {
+  id: WireUuid;
+  name: string;
+  type: string;
+  bytes: number;
+}
+
+export interface AssetReferencesParams {
+  asset: WireUuid | string | number;
+}
+
+export interface AssetReferencesResult {
+  referencedBy: string[];
+  references: string[];
+  footprint: number;
+}
+
+export interface CleanAssetsParams {
+  dryRun?: boolean;
+  exclude?: string[];
+}
+
+export interface CleanReport {
+  candidates: CleanCandidateDto[];
+  reclaimableBytes: number;
+}
+
+export interface CleanCandidateDto {
+  id: WireUuid;
+  path: string;
+  category: string;
+  bytes: number;
+  reason: string;
+}
+
+export interface DeleteUnusedParams {
+  ids: string[];
+  confirm?: boolean;
+}
+
+export interface DeleteUnusedResult {
+  deleted: number;
+  reclaimedBytes: number;
+}
+
+export interface RenameAssetParams {
+  asset: WireUuid | string | number;
+  name: string;
 }
 
 export interface CreateAssetFolderParams {
@@ -1033,7 +1131,7 @@ export interface AssetMetadataParams {
 export interface AssetMetadataDto {
   id: WireUuid;
   name: string;
-  type: "mesh" | "texture" | "other" | "animation";
+  type: "mesh" | "texture" | "other" | "animation" | "material" | "model";
   path: string;
   folder?: string;
   sizeBytes: number;
@@ -1325,8 +1423,17 @@ export interface CommandParamsMap {
   "create-script": CreateScriptParams;
   "open-project": PathParams;
   "import-model": PathParams;
+  "instantiate-model": InstantiateModelParams;
   "import-texture": PathParams;
   "list-assets": EmptyParams;
+  "scan-assets": EmptyParams;
+  "extract-subasset": ExtractSubAssetParams;
+  "clear-extraction": ClearExtractionParams;
+  "reimport-model": ReimportModelParams;
+  "model-info": ModelInfoParams;
+  "asset-references": AssetReferencesParams;
+  "clean-assets": CleanAssetsParams;
+  "delete-unused": DeleteUnusedParams;
   "rename-asset": RenameAssetParams;
   "create-asset-folder": CreateAssetFolderParams;
   "rename-asset-folder": RenameAssetFolderParams;
@@ -1448,8 +1555,17 @@ export interface CommandResultMap {
   "create-script": CreateScriptResult;
   "open-project": ProjectInfoDto;
   "import-model": ImportModelResult;
+  "instantiate-model": EntityRef;
   "import-texture": ImportTextureResult;
   "list-assets": AssetList;
+  "scan-assets": ScanAssetsResult;
+  "extract-subasset": AssetRef;
+  "clear-extraction": AssetRef;
+  "reimport-model": ReimportModelResult;
+  "model-info": ModelInfoResult;
+  "asset-references": AssetReferencesResult;
+  "clean-assets": CleanReport;
+  "delete-unused": DeleteUnusedResult;
   "rename-asset": AssetRef;
   "create-asset-folder": AssetList;
   "rename-asset-folder": AssetList;

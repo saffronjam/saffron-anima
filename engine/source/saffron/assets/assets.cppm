@@ -12,7 +12,9 @@ module;
 #include <array>
 #include <bit>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <cctype>
 #include <deque>
 #include <expected>
@@ -55,6 +57,7 @@ export namespace se
     };
 
     struct ThumbnailWorker;  // async thumbnail generation; defined at the foot of this module
+    struct ModelAsset;       // an opened .smodel (metadata + chunk reader); defined after ContainerMetadata
 
     // Owns the project's asset catalog (id -> {name, type, path}) plus uuid-keyed GPU
     // caches so entities sharing an id upload once. A cached null Ref is the
@@ -63,8 +66,9 @@ export namespace se
     {
         std::string root;
         AssetCatalog catalog;                                       // source of truth: id -> {name,type,path}
-        std::unordered_map<u64, Ref<GpuMesh>> meshRefByUuid;        // GPU cache
-        std::unordered_map<u64, Ref<GpuTexture>> textureRefByUuid;  // GPU cache
+        std::unordered_map<u64, Ref<GpuMesh>> meshRefByUuid;        // GPU cache (keyed by mesh / sub-id)
+        std::unordered_map<u64, Ref<GpuTexture>> textureRefByUuid;  // GPU cache (keyed by texture / sub-id)
+        std::unordered_map<u64, Ref<ModelAsset>> modelRefByUuid;    // opened .smodel containers, by model id
         SystemMeshVisual editorCameraModel;
         // Off-thread thumbnail generation (null until startThumbnailWorker). The worker uploads +
         // renders + caches thumbnails so a cold cache-miss never blocks the frame loop; finished GPU
@@ -122,10 +126,10 @@ export namespace se
         return MaterialAsset{};
     }
 
-    // What importModel produces: the imported mesh + its primary material, and — for a
-    // rigged glTF — the node forest + skin descriptor spawnSkinnedModel instantiates
-    // as bone entities.
-    struct ImportResult
+    // The spawn input spawnModel/spawnSkinnedModel consume: the mesh + its material table and — for a
+    // rigged glTF — the node forest + skin descriptor instantiated as bone entities. Reconstructed by
+    // instantiateModel from a .smodel container's metadata; never an import output.
+    struct ModelSpawnInput
     {
         Uuid mesh;
         glm::vec4 baseColor{ 1.0f };
@@ -138,6 +142,84 @@ export namespace se
         ImportedSkin skinDesc;
         std::vector<Uuid> animations;  // registered AssetType::Animation clip ids (skinned imports)
     };
+
+    /// Every decision an import makes, in one serializable place (the UE Interchange "decide" half).
+    /// Stored verbatim in a container's MetadataChunk so a reimport replays the same options rather
+    /// than today's defaults. For v1 scale/axis/genTangents are recorded intent; embedTextures is
+    /// always true. `colorspaceFor` is the single source of truth for per-role texture colorspace.
+    struct ImportOptions
+    {
+        enum class Axis : u8
+        {
+            YUp,
+            ZUp
+        };
+        f32 scale = 1.0f;
+        Axis axis = Axis::YUp;
+        bool genTangents = true;
+        bool embedTextures = true;
+
+        auto colorspaceFor(MaterialMapRole role) const -> Colorspace
+        {
+            if (role == MaterialMapRole::Albedo || role == MaterialMapRole::Emissive)
+            {
+                return Colorspace::Srgb;
+            }
+            return Colorspace::Linear;  // normal / metallic-roughness / occlusion / height are data maps
+        }
+
+        auto toJson() const -> nlohmann::json
+        {
+            const char* axisName = "y-up";
+            if (axis == Axis::ZUp)
+            {
+                axisName = "z-up";
+            }
+            return nlohmann::json{ { "scale", scale },
+                                   { "axis", axisName },
+                                   { "genTangents", genTangents },
+                                   { "embedTextures", embedTextures } };
+        }
+
+        static auto fromJson(const nlohmann::json& j) -> ImportOptions
+        {
+            ImportOptions options;
+            options.scale = jsonF32Or(j, "scale", 1.0f);
+            if (jsonStringOr(j, "axis", std::string{ "y-up" }) == "z-up")
+            {
+                options.axis = Axis::ZUp;
+            }
+            options.genTangents = jsonBoolOr(j, "genTangents", true);
+            options.embedTextures = jsonBoolOr(j, "embedTextures", true);
+            return options;
+        }
+    };
+
+    /// The bump-on-incompatible-translator version stamped into a container's import recipe; a reimport
+    /// whose stored value differs is re-baked rather than skipped (phase 13).
+    inline constexpr u32 ImporterVersion = 1;
+
+    /// What bakeModel produces: the new container's id, its on-disk path, and the catalog rows it
+    /// contributes (one AssetType::Model parent + one row per embedded sub-asset). No GPU, no spawn.
+    struct BakeResult
+    {
+        Uuid modelId;
+        std::string path;  // project-relative path to the .smodel
+        std::vector<AssetEntry> rows;
+    };
+
+    /// What a scan changed relative to the live catalog: rows added (newly discovered on disk) and ids
+    /// removed (their backing file is gone). The filesystem is the source of truth, so an unsaved import
+    /// can never become a dead orphan — its `.smodel` is rediscovered on the next scan.
+    struct ScanDelta
+    {
+        std::vector<AssetEntry> added;
+        std::vector<Uuid> removed;
+    };
+
+    auto scanAssets(AssetServer& assets) -> Result<ScanDelta>;
+    auto loadCatalog(AssetServer& assets) -> Result<ScanDelta>;
+    void writeCatalogCache(const AssetServer& assets);
 
     struct ProjectInfo
     {
@@ -272,6 +354,10 @@ export namespace se
         {
             return "material";
         }
+        if (type == AssetType::Model)
+        {
+            return "model";
+        }
         return "mesh";
     }
 
@@ -293,6 +379,10 @@ export namespace se
         {
             return AssetType::Material;
         }
+        if (name == "model")
+        {
+            return AssetType::Model;
+        }
         if (name == "mesh")
         {
             return AssetType::Mesh;
@@ -300,6 +390,40 @@ export namespace se
         // An unknown type-string is a forward-compat entry from a newer build; keep it
         // around as Other rather than mis-treating it as a renderable mesh.
         return AssetType::Other;
+    }
+
+    auto colorspaceName(Colorspace space) -> const char*
+    {
+        if (space == Colorspace::Srgb)
+        {
+            return "srgb";
+        }
+        if (space == Colorspace::Linear)
+        {
+            return "linear";
+        }
+        if (space == Colorspace::Hdr)
+        {
+            return "hdr";
+        }
+        return "auto";
+    }
+
+    auto colorspaceFromName(const std::string& name) -> Colorspace
+    {
+        if (name == "srgb")
+        {
+            return Colorspace::Srgb;
+        }
+        if (name == "linear")
+        {
+            return Colorspace::Linear;
+        }
+        if (name == "hdr")
+        {
+            return Colorspace::Hdr;
+        }
+        return Colorspace::Auto;
     }
 
     auto catalogToJson(const AssetCatalog& catalog) -> nlohmann::json
@@ -319,6 +443,20 @@ export namespace se
             if (entry.type == AssetType::Animation)
             {
                 record["duration"] = entry.duration;
+            }
+            // Container linkage + colorspace: omitted when default so standalone rows stay
+            // byte-identical to before this field set existed.
+            if (entry.container.value != 0)
+            {
+                record["container"] = uuidToJson(entry.container.value);
+            }
+            if (entry.chunk >= 0)
+            {
+                record["chunk"] = entry.chunk;
+            }
+            if (entry.colorspace != Colorspace::Auto)
+            {
+                record["colorspace"] = colorspaceName(entry.colorspace);
             }
             assets.push_back(std::move(record));
         }
@@ -374,9 +512,320 @@ export namespace se
             parsed.hdr = jsonBoolOr(entry, "hdr", false);
             parsed.linear = jsonBoolOr(entry, "linear", false);
             parsed.duration = jsonF32Or(entry, "duration", 0.0f);
+            parsed.container = Uuid{ jsonU64Or(entry, "container", 0) };
+            if (auto it = entry.find("chunk"); it != entry.end() && it->is_number_integer())
+            {
+                parsed.chunk = it->get<i32>();
+            }
+            parsed.colorspace = colorspaceFromName(jsonStringOr(entry, "colorspace", std::string{ "auto" }));
             if (parsed.id.value != 0)
             {
                 putAsset(catalog, std::move(parsed));
+            }
+        }
+    }
+
+    /// Headless check: a catalog with a model parent + embedded sub-assets + a standalone asset
+    /// round-trips through json with container linkage, chunk index, and colorspace intact.
+    void runCatalogLinkageSelfTest()
+    {
+        AssetCatalog catalog;
+        putAsset(
+            catalog,
+            AssetEntry{ .id = Uuid{ 100 }, .name = "town", .type = AssetType::Model, .path = "models/100.smodel" });
+        putAsset(catalog, AssetEntry{ .id = Uuid{ 101 },
+                                      .name = "town_mesh",
+                                      .type = AssetType::Mesh,
+                                      .path = "models/100.smodel",
+                                      .container = Uuid{ 100 },
+                                      .chunk = 1 });
+        putAsset(catalog, AssetEntry{ .id = Uuid{ 102 },
+                                      .name = "town_albedo",
+                                      .type = AssetType::Texture,
+                                      .path = "models/100.smodel",
+                                      .container = Uuid{ 100 },
+                                      .chunk = 2,
+                                      .colorspace = Colorspace::Srgb });
+        putAsset(catalog,
+                 AssetEntry{
+                     .id = Uuid{ 200 }, .name = "loose", .type = AssetType::Material, .path = "materials/200.smat" });
+
+        AssetCatalog restored;
+        catalogFromJson(restored, catalogToJson(catalog));
+
+        const AssetEntry* model = findAsset(restored, Uuid{ 100 });
+        const AssetEntry* mesh = findAsset(restored, Uuid{ 101 });
+        const AssetEntry* tex = findAsset(restored, Uuid{ 102 });
+        const AssetEntry* loose = findAsset(restored, Uuid{ 200 });
+        const bool ok = restored.entries.size() == 4 && model != nullptr && mesh != nullptr && tex != nullptr &&
+                        loose != nullptr && model->type == AssetType::Model && model->container.value == 0 &&
+                        model->chunk == -1 && mesh->container.value == 100 && mesh->chunk == 1 &&
+                        tex->container.value == 100 && tex->chunk == 2 && tex->colorspace == Colorspace::Srgb &&
+                        loose->container.value == 0 && loose->chunk == -1 && loose->colorspace == Colorspace::Auto;
+        if (ok)
+        {
+            logInfo("catalog model + sub-asset linkage round-trip OK");
+        }
+        else
+        {
+            logError("catalog model + sub-asset linkage round-trip MISMATCH");
+        }
+    }
+
+    /// The parsed MetadataChunk of a `.smodel` — the header-first record a catalog scan and a
+    /// deterministic reimport need without touching payloads. On disk, uuids are decimal strings;
+    /// nodes/skin/materials/remap stay as json (parsed on demand by instantiate/reimport).
+    struct ContainerMetadata
+    {
+        struct Import
+        {
+            std::string sourcePath;  // project-relative source file
+            std::string sourceHash;  // content hash of the source bytes (NOT mtime)
+            u32 importerVersion = 1;
+            nlohmann::json options;  // ImportOptions::toJson(), stored verbatim
+        };
+        struct SubAsset
+        {
+            Uuid subId;
+            AssetType type = AssetType::Mesh;
+            std::string name;
+            u32 chunk = 0;           // TOC chunk index inside the container
+            std::string colorspace;  // texture: srgb|linear|hdr|auto (empty otherwise)
+            f32 duration = 0.0f;     // animation: clip length in seconds
+        };
+        u32 schema = MetadataSchemaVersion;
+        Uuid modelId;
+        std::string name;
+        std::string sourceFormat;  // "gltf" | "obj"
+        Import import;
+        std::vector<SubAsset> subAssets;
+        nlohmann::json materials = nlohmann::json::array();  // [{subId, baseColor, metallic, roughness}]
+        nlohmann::json nodes = nlohmann::json::array();      // glTF nodes-block shape; index-referenced
+        nlohmann::json skin;                                 // null when unskinned
+        nlohmann::json remap = nlohmann::json::object();     // {subId: {external: relPath}} (empty at bake)
+    };
+
+    /// Build the META-chunk bytes from a populated ContainerMetadata. Object keys serialize in a
+    /// stable (sorted) order, so the bytes are deterministic for source hashing and the contract test.
+    auto encodeContainerMetadata(const ContainerMetadata& meta) -> std::vector<std::byte>
+    {
+        nlohmann::json doc;
+        doc["schema"] = meta.schema;
+        doc["model"] = { { "id", uuidToJson(meta.modelId.value) },
+                         { "name", meta.name },
+                         { "sourceFormat", meta.sourceFormat } };
+        doc["import"] = { { "sourcePath", meta.import.sourcePath },
+                          { "sourceHash", meta.import.sourceHash },
+                          { "importerVersion", meta.import.importerVersion },
+                          { "options",
+                            meta.import.options.is_null() ? nlohmann::json::object() : meta.import.options } };
+        nlohmann::json subs = nlohmann::json::array();
+        for (const ContainerMetadata::SubAsset& sub : meta.subAssets)
+        {
+            nlohmann::json record{ { "subId", uuidToJson(sub.subId.value) },
+                                   { "type", assetTypeName(sub.type) },
+                                   { "name", sub.name },
+                                   { "chunk", sub.chunk } };
+            if (!sub.colorspace.empty())
+            {
+                record["colorspace"] = sub.colorspace;
+            }
+            if (sub.type == AssetType::Animation)
+            {
+                record["duration"] = sub.duration;
+            }
+            subs.push_back(std::move(record));
+        }
+        doc["subAssets"] = std::move(subs);
+        doc["materials"] = meta.materials.is_null() ? nlohmann::json::array() : meta.materials;
+        doc["nodes"] = meta.nodes.is_null() ? nlohmann::json::array() : meta.nodes;
+        if (!meta.skin.is_null())
+        {
+            doc["skin"] = meta.skin;
+        }
+        doc["remap"] = meta.remap.is_null() ? nlohmann::json::object() : meta.remap;
+
+        const std::string text = dumpJson(doc);
+        std::vector<std::byte> bytes(text.size());
+        std::memcpy(bytes.data(), text.data(), text.size());
+        return bytes;
+    }
+
+    /// Prefix read: parse only the 64-byte header + the META chunk; touches no payload bytes. Forward
+    /// compatible (ignores unknown keys) so a v1 reader survives a later schema growing new fields.
+    auto readContainerMetadata(const std::string& path) -> Result<ContainerMetadata>
+    {
+        auto header = readContainerHeader(path);
+        if (!header)
+        {
+            return Err(header.error());
+        }
+        if (header->metaLength == 0)
+        {
+            return Err(std::format("'{}' has no metadata chunk", path));
+        }
+        if (header->metaOffset < sizeof(SModelHeader) || header->metaOffset + header->metaLength > header->totalLength)
+        {
+            return Err(std::format("'{}' metadata chunk is out of bounds", path));
+        }
+
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+        {
+            return Err(std::format("cannot open '{}'", path));
+        }
+        std::string text(static_cast<std::size_t>(header->metaLength), '\0');
+        in.seekg(static_cast<std::streamoff>(header->metaOffset));
+        in.read(text.data(), static_cast<std::streamsize>(header->metaLength));
+        if (!in)
+        {
+            return Err(std::format("read failed for the metadata of '{}'", path));
+        }
+        auto doc = parseJson(text);
+        if (!doc || !doc->is_object())
+        {
+            return Err(std::format("'{}' has an invalid metadata chunk", path));
+        }
+
+        ContainerMetadata meta;
+        meta.schema = static_cast<u32>(jsonU64Or(*doc, "schema", MetadataSchemaVersion));
+        if (auto it = doc->find("model"); it != doc->end() && it->is_object())
+        {
+            meta.modelId = Uuid{ jsonU64Or(*it, "id", 0) };
+            meta.name = jsonStringOr(*it, "name", std::string{});
+            meta.sourceFormat = jsonStringOr(*it, "sourceFormat", std::string{});
+        }
+        if (auto it = doc->find("import"); it != doc->end() && it->is_object())
+        {
+            meta.import.sourcePath = jsonStringOr(*it, "sourcePath", std::string{});
+            meta.import.sourceHash = jsonStringOr(*it, "sourceHash", std::string{});
+            meta.import.importerVersion = static_cast<u32>(jsonU64Or(*it, "importerVersion", 1));
+            meta.import.options = it->value("options", nlohmann::json::object());
+        }
+        if (auto it = doc->find("subAssets"); it != doc->end() && it->is_array())
+        {
+            for (const nlohmann::json& record : *it)
+            {
+                if (!record.is_object())
+                {
+                    continue;
+                }
+                ContainerMetadata::SubAsset sub;
+                sub.subId = Uuid{ jsonU64Or(record, "subId", 0) };
+                sub.type = assetTypeFromName(jsonStringOr(record, "type", std::string{ "mesh" }));
+                sub.name = jsonStringOr(record, "name", std::string{});
+                sub.chunk = static_cast<u32>(jsonU64Or(record, "chunk", 0));
+                sub.colorspace = jsonStringOr(record, "colorspace", std::string{});
+                sub.duration = jsonF32Or(record, "duration", 0.0f);
+                meta.subAssets.push_back(std::move(sub));
+            }
+        }
+        meta.materials = doc->value("materials", nlohmann::json::array());
+        meta.nodes = doc->value("nodes", nlohmann::json::array());
+        meta.skin = doc->value("skin", nlohmann::json{});
+        meta.remap = doc->value("remap", nlohmann::json::object());
+        return meta;
+    }
+
+    /// Headless check: round-trip a hand-built ContainerMetadata through a `.smodel`, asserting
+    /// field-exact recovery and that an oversized metadata length is rejected (not crashed).
+    void runContainerMetadataSelfTest()
+    {
+        ContainerMetadata meta;
+        meta.modelId = Uuid{ 4242 };
+        meta.name = "town";
+        meta.sourceFormat = "gltf";
+        meta.import.sourcePath = "raw/town.glb";
+        meta.import.sourceHash = "abc123";
+        meta.import.importerVersion = 1;
+        meta.import.options = nlohmann::json{ { "scale", 1.0 }, { "axis", "y-up" } };
+        meta.subAssets.push_back({ .subId = Uuid{ 11 }, .type = AssetType::Mesh, .name = "town_mesh", .chunk = 1 });
+        meta.subAssets.push_back({ .subId = Uuid{ 12 },
+                                   .type = AssetType::Texture,
+                                   .name = "town_albedo",
+                                   .chunk = 2,
+                                   .colorspace = "srgb" });
+        meta.subAssets.push_back({ .subId = Uuid{ 13 }, .type = AssetType::Material, .name = "stone", .chunk = 3 });
+        meta.subAssets.push_back(
+            { .subId = Uuid{ 14 }, .type = AssetType::Animation, .name = "walk", .chunk = 4, .duration = 1.2f });
+
+        nlohmann::json material;
+        material["subId"] = "13";
+        material["baseColor"] = { 1.0, 1.0, 1.0, 1.0 };
+        material["metallic"] = 0.0;
+        material["roughness"] = 1.0;
+        meta.materials.push_back(material);
+
+        nlohmann::json node;
+        node["name"] = "root";
+        node["parent"] = -1;
+        node["mesh"] = 0;
+        meta.nodes.push_back(node);
+
+        meta.skin = nlohmann::json::object();
+        meta.skin["joints"] = nlohmann::json::array({ 0 });
+        meta.skin["skeletonRoot"] = 0;
+        meta.skin["meshNode"] = 1;
+
+        std::vector<std::byte> metaBytes = encodeContainerMetadata(meta);
+
+        // A large payload chunk proves the prefix read never touches payloads.
+        std::vector<std::byte> payload(8192, std::byte{ 0x5A });
+        const std::array<ContainerChunk, 2> chunks{
+            ContainerChunk{ .kind = ChunkKind::Meta, .subId = 0, .flags = 0, .bytes = metaBytes },
+            ContainerChunk{ .kind = ChunkKind::Mesh, .subId = 11, .flags = 0, .bytes = payload },
+        };
+        const std::string path = "/tmp/saffron_meta.smodel";
+        if (auto wrote = writeContainer(path, chunks); !wrote)
+        {
+            logError(std::format("container-metadata self-test: write failed: {}", wrote.error()));
+            return;
+        }
+        auto read = readContainerMetadata(path);
+        if (!read)
+        {
+            logError(std::format("container-metadata self-test: read failed: {}", read.error()));
+            return;
+        }
+        const f32 durationDelta = read->subAssets.size() == 4 ? read->subAssets[3].duration - 1.2f : 1.0f;
+        const bool ok = read->modelId.value == meta.modelId.value && read->name == meta.name &&
+                        read->sourceFormat == meta.sourceFormat && read->import.sourcePath == meta.import.sourcePath &&
+                        read->import.sourceHash == meta.import.sourceHash && read->subAssets.size() == 4 &&
+                        read->subAssets[0].type == AssetType::Mesh && read->subAssets[1].type == AssetType::Texture &&
+                        read->subAssets[1].colorspace == "srgb" && read->subAssets[3].type == AssetType::Animation &&
+                        durationDelta > -1e-4f && durationDelta < 1e-4f && read->nodes.is_array() &&
+                        read->nodes.size() == 1 && !read->skin.is_null() && read->materials.is_array() &&
+                        read->materials.size() == 1;
+        if (ok)
+        {
+            logInfo(".smodel metadata round-trip OK");
+        }
+        else
+        {
+            logError(".smodel metadata round-trip MISMATCH");
+        }
+
+        std::ifstream raw(path, std::ios::binary | std::ios::ate);
+        if (raw)
+        {
+            const std::streamsize size = raw.tellg();
+            raw.seekg(0);
+            std::vector<char> bytes(static_cast<std::size_t>(size));
+            raw.read(bytes.data(), size);
+            const u64 hugeMeta = static_cast<u64>(bytes.size()) * 4;
+            std::memcpy(bytes.data() + offsetof(SModelHeader, metaLength), &hugeMeta, sizeof(hugeMeta));
+            const std::string badPath = "/tmp/saffron_meta_badlen.smodel";
+            if (std::ofstream out(badPath, std::ios::binary); out)
+            {
+                out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            }
+            if (!readContainerMetadata(badPath).has_value())
+            {
+                logInfo(".smodel rejects an oversized metadata length");
+            }
+            else
+            {
+                logError(".smodel oversized-metadata check FAILED");
             }
         }
     }
@@ -451,6 +900,7 @@ export namespace se
         clearThumbnailQueue(assets);  // abandon stale worker jobs for the old project (GPU is idle here)
         assets.meshRefByUuid.clear();
         assets.textureRefByUuid.clear();
+        assets.modelRefByUuid.clear();
     }
 
     // --- On-disk thumbnail cache (engine-owned, one PNG per entry) ---
@@ -977,6 +1427,23 @@ return {0}
         ensureScriptSrc(project.root);
         catalogFromJson(assets.catalog, doc.value("assets", nlohmann::json::array()));
         catalogFoldersFromJson(assets.catalog, doc.value("assetFolders", nlohmann::json::array()));
+        // The filesystem is the source of truth: build the catalog from disk via the regenerable cache
+        // (a cold scan when the cache misses), so a never-saved import (a .smodel on disk the
+        // project.json never recorded) is rediscovered and a deleted file's row is dropped. The project
+        // .json names loaded just above seed the scan's name preservation. Caches were just cleared, so
+        // no GPU patch is needed here.
+        if (auto scan = loadCatalog(assets); scan)
+        {
+            if (!scan->added.empty() || !scan->removed.empty())
+            {
+                logInfo(std::format("scan: reconciled catalog with disk (+{} -{})", scan->added.size(),
+                                    scan->removed.size()));
+            }
+        }
+        else
+        {
+            logWarn(std::format("scan: {}", scan.error()));
+        }
         sweepThumbnailCacheOrphans(assets);  // drop cache files for uuids no longer in the catalog
         // Older projects have no renderSettings block; the current settings stay.
         if (doc.contains("renderSettings"))
@@ -2079,6 +2546,301 @@ return {0}
         return registerTextureBytes(assets, renderer, encoded, ext, fsPath.stem().string());
     }
 
+    /// A whole file, or a byte slice of one. `length == 0` means the whole file; a non-zero length
+    /// reads exactly [offset, offset+length) — a `.smodel` chunk. Lets the loaders below treat a
+    /// standalone file and an embedded chunk identically.
+    struct ByteSource
+    {
+        std::string path;
+        u64 offset = 0;
+        u64 length = 0;
+
+        auto read() const -> Result<std::vector<std::byte>>
+        {
+            std::ifstream in(path, std::ios::binary | std::ios::ate);
+            if (!in)
+            {
+                return Err(std::format("cannot open '{}'", path));
+            }
+            const auto fileSize = static_cast<u64>(in.tellg());
+            u64 begin = offset;
+            u64 count = length;
+            if (count == 0)
+            {
+                begin = 0;
+                count = fileSize;
+            }
+            if (begin + count > fileSize)
+            {
+                return Err(std::format("slice [{}, {}) exceeds '{}' ({} bytes)", begin, begin + count, path, fileSize));
+            }
+            std::vector<std::byte> bytes(static_cast<std::size_t>(count));
+            in.seekg(static_cast<std::streamoff>(begin));
+            in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(count));
+            if (!in)
+            {
+                return Err(std::format("read failed for '{}'", path));
+            }
+            return bytes;
+        }
+    };
+
+    /// An opened `.smodel`: its prefix metadata plus a chunk reader that slices payloads lazily.
+    /// Negative-cached in modelRefByUuid like a mesh; dropped on a project switch with the GPU idle.
+    struct ModelAsset
+    {
+        ContainerMetadata meta;
+        ContainerReader reader;
+    };
+
+    auto loadModelAsset(AssetServer& assets, Uuid modelId) -> Ref<ModelAsset>
+    {
+        auto cached = assets.modelRefByUuid.find(modelId.value);
+        if (cached != assets.modelRefByUuid.end())
+        {
+            return cached->second;
+        }
+        const AssetEntry* entry = findAsset(assets.catalog, modelId);
+        if (entry == nullptr || entry->type != AssetType::Model)
+        {
+            assets.modelRefByUuid[modelId.value] = nullptr;
+            return nullptr;
+        }
+        const std::string fullPath = assets.root + "/" + entry->path;
+        auto meta = readContainerMetadata(fullPath);
+        if (!meta)
+        {
+            logWarn(std::format("model {}: {}", modelId.value, meta.error()));
+            assets.modelRefByUuid[modelId.value] = nullptr;
+            return nullptr;
+        }
+        auto reader = readContainer(fullPath);
+        if (!reader)
+        {
+            logWarn(std::format("model {}: {}", modelId.value, reader.error()));
+            assets.modelRefByUuid[modelId.value] = nullptr;
+            return nullptr;
+        }
+        auto model = std::make_shared<ModelAsset>(ModelAsset{ .meta = std::move(*meta), .reader = std::move(*reader) });
+        assets.modelRefByUuid[modelId.value] = model;
+        return model;
+    }
+
+    // Resolution order for a sub-id: a remap (extracted/external file) wins, falling back to the
+    // embedded chunk with a warning if the external file is gone; otherwise the embedded chunk. An
+    // empty path means the sub-id has no such chunk.
+    auto chunkSourceFor(const AssetServer& assets, const ModelAsset& model, ChunkKind kind, Uuid subId) -> ByteSource
+    {
+        const std::string key = std::to_string(subId.value);
+        if (model.meta.remap.is_object() && model.meta.remap.contains(key))
+        {
+            const nlohmann::json& entry = model.meta.remap[key];
+            if (entry.is_object() && entry.contains("external") && entry["external"].is_string())
+            {
+                const std::string external = entry["external"].get<std::string>();
+                const std::string externalPath = assets.root + "/" + external;
+                if (std::filesystem::exists(externalPath))
+                {
+                    return ByteSource{ .path = externalPath };
+                }
+                logWarn(std::format("model {}: remap target '{}' for sub-asset {} is missing; using the embedded chunk",
+                                    model.meta.modelId.value, external, subId.value));
+            }
+        }
+        const TocEntry* entry = model.reader.find(kind, subId.value);
+        if (entry == nullptr)
+        {
+            return ByteSource{};
+        }
+        return ByteSource{ .path = model.reader.path, .offset = entry->offset, .length = entry->length };
+    }
+
+    // Loads + uploads a mesh from any byte source (file or chunk slice), caching the GPU Ref under
+    // the sub-id. A failure is negative-cached so a broken sub-asset is not retried each frame.
+    auto loadMeshFromSource(AssetServer& assets, Renderer& renderer, Uuid subId, const ByteSource& source)
+        -> Ref<GpuMesh>
+    {
+        auto cached = assets.meshRefByUuid.find(subId.value);
+        if (cached != assets.meshRefByUuid.end())
+        {
+            return cached->second;
+        }
+        auto bytes = source.read();
+        if (!bytes)
+        {
+            logWarn(std::format("mesh {}: {}", subId.value, bytes.error()));
+            assets.meshRefByUuid[subId.value] = nullptr;
+            return nullptr;
+        }
+        auto mesh = loadMeshFromBytes(std::span<const std::byte>{ *bytes });
+        if (!mesh)
+        {
+            logWarn(std::format("mesh {}: {}", subId.value, mesh.error()));
+            assets.meshRefByUuid[subId.value] = nullptr;
+            return nullptr;
+        }
+        std::vector<VertexSkin> skin;
+        if (auto loadedSkin = loadMeshSkinFromBytes(std::span<const std::byte>{ *bytes }))
+        {
+            skin = std::move(*loadedSkin);
+        }
+        auto meshRef = uploadMesh(renderer, *mesh, skin);
+        if (!meshRef)
+        {
+            logWarn(std::format("mesh {}: {}", subId.value, meshRef.error()));
+            assets.meshRefByUuid[subId.value] = nullptr;
+            return nullptr;
+        }
+        assets.meshRefByUuid[subId.value] = *meshRef;
+        return *meshRef;
+    }
+
+    // Loads + uploads a texture from any byte source, picking the upload format from the colorspace
+    // (Hdr → float; Linear → unorm; Srgb/Auto → sRGB). Caches the GPU Ref under the sub-id.
+    auto loadTextureFromSource(AssetServer& assets, Renderer& renderer, Uuid subId, const ByteSource& source,
+                               Colorspace space) -> Ref<GpuTexture>
+    {
+        auto cached = assets.textureRefByUuid.find(subId.value);
+        if (cached != assets.textureRefByUuid.end())
+        {
+            return cached->second;
+        }
+        auto bytes = source.read();
+        if (!bytes)
+        {
+            logWarn(std::format("texture {}: {}", subId.value, bytes.error()));
+            assets.textureRefByUuid[subId.value] = nullptr;
+            return nullptr;
+        }
+        std::vector<u8> encoded(bytes->size());
+        if (!bytes->empty())
+        {
+            std::memcpy(encoded.data(), bytes->data(), bytes->size());
+        }
+        if (space == Colorspace::Hdr)
+        {
+            auto decoded = decodeImageFromMemoryHdr(encoded);
+            if (decoded)
+            {
+                auto texture = uploadTextureFloat(renderer, decoded->rgba.data(), decoded->width, decoded->height);
+                if (texture)
+                {
+                    assets.textureRefByUuid[subId.value] = *texture;
+                    return *texture;
+                }
+                logWarn(std::format("texture {}: {}", subId.value, texture.error()));
+            }
+            else
+            {
+                logWarn(std::format("texture {}: {}", subId.value, decoded.error()));
+            }
+            assets.textureRefByUuid[subId.value] = nullptr;
+            return nullptr;
+        }
+        auto decoded = decodeImageFromMemory(encoded);
+        if (decoded)
+        {
+            const bool srgb = space != Colorspace::Linear;
+            auto texture = uploadTexture(renderer, decoded->rgba.data(), decoded->width, decoded->height, srgb);
+            if (texture)
+            {
+                assets.textureRefByUuid[subId.value] = *texture;
+                return *texture;
+            }
+            logWarn(std::format("texture {}: {}", subId.value, texture.error()));
+        }
+        else
+        {
+            logWarn(std::format("texture {}: {}", subId.value, decoded.error()));
+        }
+        assets.textureRefByUuid[subId.value] = nullptr;
+        return nullptr;
+    }
+
+    /// Resolve an embedded mesh sub-asset to a live GPU mesh, honoring the remap table; keyed by sub-id.
+    auto resolveMesh(AssetServer& assets, Renderer& renderer, Uuid modelId, Uuid subId) -> Ref<GpuMesh>
+    {
+        auto cached = assets.meshRefByUuid.find(subId.value);
+        if (cached != assets.meshRefByUuid.end())
+        {
+            return cached->second;
+        }
+        auto model = loadModelAsset(assets, modelId);
+        if (!model)
+        {
+            assets.meshRefByUuid[subId.value] = nullptr;
+            return nullptr;
+        }
+        const ByteSource source = chunkSourceFor(assets, *model, ChunkKind::Mesh, subId);
+        if (source.path.empty())
+        {
+            logWarn(std::format("model {}: no mesh sub-asset {}", modelId.value, subId.value));
+            assets.meshRefByUuid[subId.value] = nullptr;
+            return nullptr;
+        }
+        return loadMeshFromSource(assets, renderer, subId, source);
+    }
+
+    /// Resolve an embedded texture sub-asset to a live GPU texture (colorspace from the chunk flags).
+    auto resolveTexture(AssetServer& assets, Renderer& renderer, Uuid modelId, Uuid subId) -> Ref<GpuTexture>
+    {
+        auto cached = assets.textureRefByUuid.find(subId.value);
+        if (cached != assets.textureRefByUuid.end())
+        {
+            return cached->second;
+        }
+        auto model = loadModelAsset(assets, modelId);
+        if (!model)
+        {
+            assets.textureRefByUuid[subId.value] = nullptr;
+            return nullptr;
+        }
+        Colorspace space = Colorspace::Srgb;
+        if (const TocEntry* texEntry = model->reader.find(ChunkKind::Texture, subId.value); texEntry != nullptr)
+        {
+            space = static_cast<Colorspace>(texEntry->flags);
+        }
+        const ByteSource source = chunkSourceFor(assets, *model, ChunkKind::Texture, subId);
+        if (source.path.empty())
+        {
+            logWarn(std::format("model {}: no texture sub-asset {}", modelId.value, subId.value));
+            assets.textureRefByUuid[subId.value] = nullptr;
+            return nullptr;
+        }
+        return loadTextureFromSource(assets, renderer, subId, source, space);
+    }
+
+    /// Resolve an embedded material sub-asset to a CPU MaterialAsset (parsed from the .smat chunk).
+    auto resolveMaterial(AssetServer& assets, Uuid modelId, Uuid subId) -> Result<MaterialAsset>
+    {
+        auto model = loadModelAsset(assets, modelId);
+        if (!model)
+        {
+            return Err(std::format("model {} is not loadable", modelId.value));
+        }
+        const ByteSource source = chunkSourceFor(assets, *model, ChunkKind::Material, subId);
+        if (source.path.empty())
+        {
+            return Err(std::format("model {} has no material sub-asset {}", modelId.value, subId.value));
+        }
+        auto bytes = source.read();
+        if (!bytes)
+        {
+            return Err(bytes.error());
+        }
+        std::string text(bytes->size(), '\0');
+        if (!bytes->empty())
+        {
+            std::memcpy(text.data(), bytes->data(), bytes->size());
+        }
+        auto doc = parseJson(text);
+        if (!doc)
+        {
+            return Err(doc.error());
+        }
+        return materialAssetFromJson(*doc);
+    }
+
     // Resolves a texture id to a GPU texture, decoding + uploading the copied file on
     // a cache miss. Returns a null Ref (negative-cached) for an unregistered or
     // unreadable asset.
@@ -2098,192 +2860,1860 @@ return {0}
             assets.textureRefByUuid[id.value] = nullptr;
             return nullptr;
         }
-        const std::string fullPath = assets.root + "/" + entry->path;
-        if (entry->hdr)
+        // An embedded sub-asset resolves through its container's chunk (colorspace from the flags).
+        if (entry->container.value != 0)
         {
-            auto decoded = decodeImageHdr(fullPath);
-            if (decoded)
-            {
-                auto texture = uploadTextureFloat(renderer, decoded->rgba.data(), decoded->width, decoded->height);
-                if (texture)
-                {
-                    assets.textureRefByUuid[id.value] = *texture;
-                    return *texture;
-                }
-                logWarn(std::format("texture {}: {}", id.value, texture.error()));
-            }
-            else
-            {
-                logWarn(std::format("texture {}: {}", id.value, decoded.error()));
-            }
-            assets.textureRefByUuid[id.value] = nullptr;  // negative-cache the failure
-            return nullptr;
+            return resolveTexture(assets, renderer, entry->container, id);
         }
-        auto decoded = decodeImage(fullPath);
-        if (decoded)
+        // A standalone image file: an explicit colorspace (from a .smeta) wins; otherwise fall back to
+        // the row's hdr/linear provenance (engine-written textures set those at registration).
+        Colorspace space = Colorspace::Srgb;
+        if (entry->colorspace != Colorspace::Auto)
         {
-            auto texture =
-                uploadTexture(renderer, decoded->rgba.data(), decoded->width, decoded->height, !entry->linear);
-            if (texture)
+            space = entry->colorspace;
+        }
+        else if (entry->hdr)
+        {
+            space = Colorspace::Hdr;
+        }
+        else if (entry->linear)
+        {
+            space = Colorspace::Linear;
+        }
+        return loadTextureFromSource(assets, renderer, id, ByteSource{ .path = assets.root + "/" + entry->path },
+                                     space);
+    }
+
+    /// Loads an animation clip by id into a CPU AnimClip. An embedded clip reads its SANM chunk through
+    /// the owning container; a standalone clip reads its file. The animation runtime calls this on a
+    /// cache miss (the Host injects it, since the container reader lives here).
+    auto loadAnimationClipAsset(AssetServer& assets, Uuid id) -> Result<AnimClip>
+    {
+        const AssetEntry* entry = findAsset(assets.catalog, id);
+        if (entry == nullptr || entry->type != AssetType::Animation)
+        {
+            return Err(std::format("animation clip {} not in catalog", id.value));
+        }
+        if (entry->container.value != 0)
+        {
+            auto model = loadModelAsset(assets, entry->container);
+            if (!model)
             {
-                assets.textureRefByUuid[id.value] = *texture;
-                return *texture;
+                return Err(std::format("clip {}: container {} is not loadable", id.value, entry->container.value));
             }
-            logWarn(std::format("texture {}: {}", id.value, texture.error()));
+            const ByteSource source = chunkSourceFor(assets, *model, ChunkKind::Animation, id);
+            if (source.path.empty())
+            {
+                return Err(std::format("container {} has no animation sub-asset {}", entry->container.value, id.value));
+            }
+            auto bytes = source.read();
+            if (!bytes)
+            {
+                return Err(bytes.error());
+            }
+            return loadAnimationFromBytes(std::as_bytes(std::span{ *bytes }));
+        }
+        return loadAnimation(assets.root + "/" + entry->path);
+    }
+
+
+    // FNV-1a 64-bit of a file's bytes, as a decimal string. Content-addressed (not mtime) so a
+    // reimport whose source is byte-identical is skipped (phase 13). Empty string on a read failure.
+    auto hashFileFnv(const std::string& path) -> std::string
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+        {
+            return std::string{};
+        }
+        u64 hash = 1469598103934665603ull;
+        std::array<char, 8192> buffer{};
+        while (in)
+        {
+            in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const std::streamsize got = in.gcount();
+            for (std::streamsize i = 0; i < got; i = i + 1)
+            {
+                hash = hash ^ static_cast<u8>(buffer[static_cast<std::size_t>(i)]);
+                hash = hash * 1099511628211ull;
+            }
+        }
+        return std::to_string(hash);
+    }
+
+    // The import node forest as the MetadataChunk `nodes` block (glTF-shaped; quaternion as w,x,y,z).
+    auto importedNodesToJson(const std::vector<ImportedNode>& nodes) -> nlohmann::json
+    {
+        nlohmann::json array = nlohmann::json::array();
+        for (const ImportedNode& node : nodes)
+        {
+            nlohmann::json record;
+            record["name"] = node.name;
+            record["parent"] = node.parent;
+            record["t"] = { node.translation.x, node.translation.y, node.translation.z };
+            record["r"] = { node.rotation.w, node.rotation.x, node.rotation.y, node.rotation.z };
+            record["s"] = { node.scale.x, node.scale.y, node.scale.z };
+            array.push_back(std::move(record));
+        }
+        return array;
+    }
+
+    // The skin descriptor as the MetadataChunk `skin` block; inverse-bind matrices are 16 floats
+    // each, column-major (the glm layout), so the reader can memcpy them straight back.
+    auto importedSkinToJson(const ImportedSkin& skin) -> nlohmann::json
+    {
+        nlohmann::json record;
+        record["joints"] = skin.joints;
+        nlohmann::json inverseBind = nlohmann::json::array();
+        for (const glm::mat4& matrix : skin.inverseBind)
+        {
+            nlohmann::json flat = nlohmann::json::array();
+            for (int column = 0; column < 4; column = column + 1)
+            {
+                for (int row = 0; row < 4; row = row + 1)
+                {
+                    flat.push_back(matrix[column][row]);
+                }
+            }
+            inverseBind.push_back(std::move(flat));
+        }
+        record["inverseBind"] = std::move(inverseBind);
+        record["skeletonRoot"] = skin.skeletonRoot;
+        record["meshNode"] = skin.meshNode;
+        return record;
+    }
+
+    // Inverse of importedNodesToJson: the MetadataChunk `nodes` block back into the spawn input.
+    auto importedNodesFromJson(const nlohmann::json& nodes) -> std::vector<ImportedNode>
+    {
+        std::vector<ImportedNode> out;
+        if (!nodes.is_array())
+        {
+            return out;
+        }
+        for (const nlohmann::json& record : nodes)
+        {
+            if (!record.is_object())
+            {
+                continue;
+            }
+            ImportedNode node;
+            node.name = record.value("name", std::string{});
+            node.parent = record.value("parent", -1);
+            if (auto it = record.find("t"); it != record.end() && it->is_array() && it->size() == 3)
+            {
+                node.translation = glm::vec3((*it)[0].get<f32>(), (*it)[1].get<f32>(), (*it)[2].get<f32>());
+            }
+            if (auto it = record.find("r"); it != record.end() && it->is_array() && it->size() == 4)
+            {
+                node.rotation =
+                    glm::quat((*it)[0].get<f32>(), (*it)[1].get<f32>(), (*it)[2].get<f32>(), (*it)[3].get<f32>());
+            }
+            if (auto it = record.find("s"); it != record.end() && it->is_array() && it->size() == 3)
+            {
+                node.scale = glm::vec3((*it)[0].get<f32>(), (*it)[1].get<f32>(), (*it)[2].get<f32>());
+            }
+            out.push_back(std::move(node));
+        }
+        return out;
+    }
+
+    // Inverse of importedSkinToJson: the MetadataChunk `skin` block back into the spawn descriptor.
+    auto importedSkinFromJson(const nlohmann::json& skin) -> ImportedSkin
+    {
+        ImportedSkin out;
+        if (!skin.is_object())
+        {
+            return out;
+        }
+        if (auto it = skin.find("joints"); it != skin.end() && it->is_array())
+        {
+            for (const nlohmann::json& joint : *it)
+            {
+                out.joints.push_back(joint.get<i32>());
+            }
+        }
+        out.skeletonRoot = skin.value("skeletonRoot", -1);
+        out.meshNode = skin.value("meshNode", -1);
+        if (auto it = skin.find("inverseBind"); it != skin.end() && it->is_array())
+        {
+            for (const nlohmann::json& flat : *it)
+            {
+                glm::mat4 matrix(1.0f);
+                if (flat.is_array() && flat.size() == 16)
+                {
+                    for (int column = 0; column < 4; column = column + 1)
+                    {
+                        for (int row = 0; row < 4; row = row + 1)
+                        {
+                            matrix[column][row] = flat[static_cast<std::size_t>(column * 4 + row)].get<f32>();
+                        }
+                    }
+                }
+                out.inverseBind.push_back(matrix);
+            }
+        }
+        return out;
+    }
+
+    // The catalog rows a container contributes: one AssetType::Model parent + one row per embedded
+    // sub-asset (container linkage + chunk index + colorspace). Shared by bakeModel and the scan so
+    // a freshly baked container and a rediscovered one yield identical rows.
+    auto catalogRowsForModel(const ContainerMetadata& meta, const std::string& relativePath) -> std::vector<AssetEntry>
+    {
+        std::vector<AssetEntry> rows;
+        rows.push_back(
+            AssetEntry{ .id = meta.modelId, .name = meta.name, .type = AssetType::Model, .path = relativePath });
+        for (const ContainerMetadata::SubAsset& sub : meta.subAssets)
+        {
+            AssetEntry row;
+            row.id = sub.subId;
+            row.name = sub.name;
+            row.type = sub.type;
+            row.colorspace = colorspaceFromName(sub.colorspace);
+            row.duration = sub.duration;
+            // An extracted (remapped) sub-asset is a standalone file: its row points at the external
+            // path, not the container, so a scan agrees with the resolver and the ids never alias.
+            const std::string key = std::to_string(sub.subId.value);
+            bool remapped = false;
+            if (meta.remap.is_object() && meta.remap.contains(key))
+            {
+                const nlohmann::json& entry = meta.remap.at(key);
+                if (entry.is_object() && entry.contains("external") && entry.at("external").is_string())
+                {
+                    row.path = entry.at("external").get<std::string>();
+                    row.container = Uuid{ 0 };
+                    row.chunk = -1;
+                    remapped = true;
+                }
+            }
+            if (!remapped)
+            {
+                row.path = relativePath;
+                row.container = meta.modelId;
+                row.chunk = static_cast<i32>(sub.chunk);
+            }
+            rows.push_back(std::move(row));
+        }
+        return rows;
+    }
+
+    // Bakes an import graph into one self-contained assets/models/<uuid>.smodel: the mesh, each
+    // material as a first-class .smat-JSON chunk, each texture as a raw chunk (colorspace in the
+    // chunk flags), each clip as a .sanim chunk, and a MetadataChunk carrying the node/skin
+    // hierarchy plus the deterministic reimport recipe. No GPU upload, no entity spawn. modelId is
+    // reused on reimport (0 mints a fresh one). Sub-ids are stable (subIdFor), keyed by source name.
+    auto bakeModel(AssetServer& assets, const ImportedModel& graph, const ImportOptions& options,
+                   const std::string& sourcePath, Uuid modelId) -> Result<BakeResult>
+    {
+        if (modelId.value == 0)
+        {
+            modelId = newUuid();
+        }
+        const std::filesystem::path source(sourcePath);
+        const std::string modelKey = source.stem().string();
+        std::string sourceFormat = "obj";
+        const std::string ext = source.extension().string();
+        if (ext == ".gltf" || ext == ".glb")
+        {
+            sourceFormat = "gltf";
+        }
+
+        // Each chunk's bytes are owned here; META sits at index 0 (front-loaded by writeContainer),
+        // its bytes filled in last once every sub-asset's TOC index is known.
+        struct Pending
+        {
+            ChunkKind kind;
+            u64 subId;
+            u32 flags;
+            std::vector<std::byte> bytes;
+        };
+        std::vector<Pending> pending;
+        pending.push_back(Pending{ ChunkKind::Meta, 0, 0, {} });
+
+        ContainerMetadata meta;
+        meta.modelId = modelId;
+        meta.name = modelKey;
+        meta.sourceFormat = sourceFormat;
+        meta.import.sourcePath = sourcePath;
+        meta.import.sourceHash = hashFileFnv(sourcePath);
+        meta.import.importerVersion = ImporterVersion;
+        meta.import.options = options.toJson();
+
+        const Uuid meshSubId = subIdFor(modelKey, "mesh", "0", 0);
+        std::vector<std::byte> meshBytes;
+        if (graph.hasSkin)
+        {
+            auto buffer = saveMeshSkinnedToBuffer(graph.mesh, graph.skin);
+            if (!buffer)
+            {
+                return Err(buffer.error());
+            }
+            meshBytes = std::move(*buffer);
         }
         else
         {
-            logWarn(std::format("texture {}: {}", id.value, decoded.error()));
+            meshBytes = saveMeshToBuffer(graph.mesh);
         }
-        assets.textureRefByUuid[id.value] = nullptr;  // negative-cache the failure
-        return nullptr;
-    }
+        const u32 meshChunk = static_cast<u32>(pending.size());
+        pending.push_back(Pending{ ChunkKind::Mesh, meshSubId.value, 0, std::move(meshBytes) });
+        meta.subAssets.push_back(
+            { .subId = meshSubId, .type = AssetType::Mesh, .name = modelKey + "_mesh", .chunk = meshChunk });
 
-    // Imports a source model: bakes its mesh to a .smesh, uploads it, imports its
-    // primary material's albedo texture (if any), and adds catalog entries (named by
-    // the source filename stem). Does not spawn an entity or save the project.
-    auto importModel(AssetServer& assets, Renderer& renderer, const std::string& path) -> Result<ImportResult>
-    {
-        auto model = importModelWithMaterial(path);
-        if (!model)
+        for (std::size_t m = 0; m < graph.materials.size(); m = m + 1)
         {
-            return Err(model.error());
-        }
-        const std::string baseName = std::filesystem::path(path).stem().string();
-        const Uuid meshId = newUuid();
-        ensureAssetDirectories(assets);
-        const std::string relativePath = "models/" + std::to_string(meshId.value) + ".smesh";
-        Result<void> baked = model->hasSkin
-                                 ? saveMeshSkinned(model->mesh, model->skin, assets.root + "/" + relativePath)
-                                 : saveMesh(model->mesh, assets.root + "/" + relativePath);
-        if (!baked)
-        {
-            return Err(baked.error());
-        }
-        auto meshRef =
-            model->hasSkin ? uploadMesh(renderer, model->mesh, model->skin) : uploadMesh(renderer, model->mesh);
-        if (!meshRef)
-        {
-            return Err(meshRef.error());
-        }
-        putAsset(assets.catalog, AssetEntry{ meshId, uniqueName(assets.catalog, baseName), AssetType::Mesh,
-                                             relativePath, std::string{} });
-        assets.meshRefByUuid[meshId.value] = *meshRef;
-
-        ImportResult result;
-        result.mesh = meshId;
-        if (model->hasSkin)
-        {
-            result.hasSkin = true;
-            result.nodes = std::move(model->nodes);
-            result.skinDesc = std::move(model->skinDesc);
-            // Bake each clip to a sidecar .sanim (uuid-named, beside the .smesh) and
-            // register an AssetType::Animation entry the player resolves by id.
-            for (const AnimClip& clip : model->animations)
+            const ImportedMaterial& src = graph.materials[m];
+            std::string materialName = src.name;
+            if (materialName.empty())
             {
-                const Uuid clipId = newUuid();
-                const std::string clipPath = "models/" + std::to_string(clipId.value) + ".sanim";
-                if (Result<void> bakedClip = saveAnimation(clip, assets.root + "/" + clipPath); !bakedClip)
-                {
-                    logWarn(std::format("model '{}': clip '{}' bake failed: {}", path, clip.name, bakedClip.error()));
-                    continue;
-                }
-                AssetEntry entry{ clipId, uniqueName(assets.catalog, clip.name.empty() ? baseName : clip.name),
-                                  AssetType::Animation, clipPath, std::string{} };
-                entry.duration = clip.duration;
-                putAsset(assets.catalog, std::move(entry));
-                result.animations.push_back(clipId);
+                materialName = std::format("material_{}", m);
             }
-        }
-        // Register each material's albedo and lower the factors into a MaterialSlot.
-        result.materials.reserve(model->materials.size());
-        for (std::size_t i = 0; i < model->materials.size(); i = i + 1)
-        {
-            const ImportedMaterial& src = model->materials[i];
-            MaterialSlot slot;
-            slot.baseColor = src.baseColor;
-            slot.metallic = src.metallic;
-            slot.roughness = src.roughness;
-            slot.emissive = src.emissive;
-            slot.emissiveStrength = src.emissiveStrength;
+
+            MaterialAsset materialAsset;
+            materialAsset.baseColor = src.baseColor;
+            materialAsset.metallic = src.metallic;
+            materialAsset.roughness = src.roughness;
+            materialAsset.emissive = src.emissive;
+            materialAsset.emissiveStrength = src.emissiveStrength;
+
+            auto emitTexture = [&](const std::vector<u8>& bytes, MaterialMapRole role, const char* roleName) -> Uuid
+            {
+                const Uuid texId = subIdFor(modelKey, "texture", std::format("{}_{}", m, roleName), 0);
+                const Colorspace space = options.colorspaceFor(role);
+                std::vector<std::byte> chunk(bytes.size());
+                if (!bytes.empty())
+                {
+                    std::memcpy(chunk.data(), bytes.data(), bytes.size());
+                }
+                const u32 index = static_cast<u32>(pending.size());
+                pending.push_back(
+                    Pending{ ChunkKind::Texture, texId.value, static_cast<u32>(space), std::move(chunk) });
+                meta.subAssets.push_back({ .subId = texId,
+                                           .type = AssetType::Texture,
+                                           .name = std::format("{}_{}", materialName, roleName),
+                                           .chunk = index,
+                                           .colorspace = colorspaceName(space) });
+                return texId;
+            };
+
             if (src.hasAlbedo)
             {
-                const std::string label = std::format("{} albedo {}", baseName, i);
-                auto texture = registerTextureBytes(assets, renderer, src.albedoBytes, src.albedoExt, label);
-                if (texture)
-                {
-                    slot.albedoTexture = *texture;
-                }
-                else
-                {
-                    logWarn(std::format("model '{}': albedo texture failed: {}", path, texture.error()));
-                }
+                materialAsset.albedoTexture = emitTexture(src.albedoBytes, MaterialMapRole::Albedo, "albedo");
             }
             if (src.hasMetallicRoughness)
             {
-                // Metallic-roughness maps are linear data, not sRGB color.
-                const std::string label = std::format("{} metallic-roughness {}", baseName, i);
-                auto texture = registerTextureBytes(assets, renderer, src.metallicRoughnessBytes,
-                                                    src.metallicRoughnessExt, label, /*srgb=*/false);
-                if (texture)
-                {
-                    slot.metallicRoughnessTexture = *texture;
-                }
-                else
-                {
-                    logWarn(std::format("model '{}': metallic-roughness texture failed: {}", path, texture.error()));
-                }
+                materialAsset.ormTexture =
+                    emitTexture(src.metallicRoughnessBytes, MaterialMapRole::MetallicRoughness, "orm");
             }
             if (src.hasNormal)
             {
-                // Normal maps are linear data, not sRGB color.
-                const std::string label = std::format("{} normal {}", baseName, i);
-                auto texture =
-                    registerTextureBytes(assets, renderer, src.normalBytes, src.normalExt, label, /*srgb=*/false);
-                if (texture)
-                {
-                    slot.normalTexture = *texture;
-                }
-                else
-                {
-                    logWarn(std::format("model '{}': normal texture failed: {}", path, texture.error()));
-                }
-            }
-            if (src.hasOcclusion)
-            {
-                const std::string label = std::format("{} occlusion {}", baseName, i);
-                auto texture =
-                    registerTextureBytes(assets, renderer, src.occlusionBytes, src.occlusionExt, label, /*srgb=*/false);
-                if (texture)
-                {
-                    slot.occlusionTexture = *texture;
-                }
-                else
-                {
-                    logWarn(std::format("model '{}': occlusion texture failed: {}", path, texture.error()));
-                }
+                materialAsset.normalTexture = emitTexture(src.normalBytes, MaterialMapRole::Normal, "normal");
             }
             if (src.hasEmissiveTex)
             {
-                const std::string label = std::format("{} emissive {}", baseName, i);
-                auto texture = registerTextureBytes(assets, renderer, src.emissiveTexBytes, src.emissiveTexExt, label);
-                if (texture)
+                materialAsset.emissiveTexture =
+                    emitTexture(src.emissiveTexBytes, MaterialMapRole::Emissive, "emissive");
+            }
+            // Occlusion has no dedicated .smat slot in v1 (the format packs AO into orm); its bytes
+            // are not embedded — a documented v1 gap, not a silent drop.
+
+            const Uuid materialId = subIdFor(modelKey, "material", materialName, static_cast<u32>(m));
+            const std::string materialJson = dumpJson(materialAssetToJson(materialAsset));
+            std::vector<std::byte> materialChunk(materialJson.size());
+            std::memcpy(materialChunk.data(), materialJson.data(), materialJson.size());
+            const u32 materialChunkIndex = static_cast<u32>(pending.size());
+            pending.push_back(Pending{ ChunkKind::Material, materialId.value, 0, std::move(materialChunk) });
+            meta.subAssets.push_back({ .subId = materialId,
+                                       .type = AssetType::Material,
+                                       .name = materialName,
+                                       .chunk = materialChunkIndex });
+
+            nlohmann::json summary;
+            summary["subId"] = uuidToJson(materialId.value);
+            summary["baseColor"] = { src.baseColor.x, src.baseColor.y, src.baseColor.z, src.baseColor.w };
+            summary["metallic"] = src.metallic;
+            summary["roughness"] = src.roughness;
+            meta.materials.push_back(std::move(summary));
+        }
+
+        for (std::size_t a = 0; a < graph.animations.size(); a = a + 1)
+        {
+            const AnimClip& clip = graph.animations[a];
+            std::string clipName = clip.name;
+            if (clipName.empty())
+            {
+                clipName = std::format("clip_{}", a);
+            }
+            const Uuid clipId = subIdFor(modelKey, "animation", clipName, static_cast<u32>(a));
+            std::vector<std::byte> clipBytes = saveAnimationToBuffer(clip);
+            const u32 clipChunk = static_cast<u32>(pending.size());
+            pending.push_back(Pending{ ChunkKind::Animation, clipId.value, 0, std::move(clipBytes) });
+            ContainerMetadata::SubAsset sub;
+            sub.subId = clipId;
+            sub.type = AssetType::Animation;
+            sub.name = clipName;
+            sub.chunk = clipChunk;
+            sub.duration = clip.duration;
+            meta.subAssets.push_back(std::move(sub));
+        }
+
+        meta.nodes = importedNodesToJson(graph.nodes);
+        if (graph.hasSkin)
+        {
+            meta.skin = importedSkinToJson(graph.skinDesc);
+        }
+
+        pending[0].bytes = encodeContainerMetadata(meta);
+
+        std::vector<ContainerChunk> chunks;
+        chunks.reserve(pending.size());
+        for (const Pending& chunk : pending)
+        {
+            chunks.push_back(
+                ContainerChunk{ .kind = chunk.kind, .subId = chunk.subId, .flags = chunk.flags, .bytes = chunk.bytes });
+        }
+        const std::string relativePath = "models/" + std::to_string(modelId.value) + ".smodel";
+        ensureAssetDirectories(assets);
+        if (auto wrote = writeContainer(assets.root + "/" + relativePath, chunks); !wrote)
+        {
+            return Err(wrote.error());
+        }
+
+        BakeResult bake;
+        bake.modelId = modelId;
+        bake.path = relativePath;
+        bake.rows = catalogRowsForModel(meta, relativePath);
+        return bake;
+    }
+
+    // Imports a model source by translating it, baking it into one `.smodel`, and adding the catalog
+    // rows it contributes. Produces an asset; does not upload to the GPU or spawn an entity. Pair with
+    // instantiateModel to place it. (No renderer — baking is pure disk + catalog.)
+    auto importModel(AssetServer& assets, const std::string& path, const ImportOptions& options)
+        -> Result<BakeResult>
+    {
+        auto graph = translateModel(path);
+        if (!graph)
+        {
+            return Err(graph.error());
+        }
+        auto bake = bakeModel(assets, *graph, options, path, Uuid{ 0 });
+        if (!bake)
+        {
+            return Err(bake.error());
+        }
+        for (const AssetEntry& row : bake->rows)
+        {
+            putAsset(assets.catalog, row);
+        }
+        return bake;
+    }
+
+    /// Ensures a built-in model asset (the editor's add-entity cube preset) exists, baking it once under
+    /// a deterministic id derived from its source name so repeated use reuses the same container rather
+    /// than re-baking or colliding on the source-name sub-ids. Returns the model id to instantiate.
+    auto ensureBuiltinModelAsset(AssetServer& assets, const std::string& sourcePath) -> Result<Uuid>
+    {
+        const std::string key = std::filesystem::path(sourcePath).stem().string();
+        const Uuid modelId = subIdFor(key, "model", "0", 0);
+        if (findAsset(assets.catalog, modelId) != nullptr)
+        {
+            return modelId;
+        }
+        auto graph = translateModel(sourcePath);
+        if (!graph)
+        {
+            return Err(graph.error());
+        }
+        auto bake = bakeModel(assets, *graph, ImportOptions{}, sourcePath, modelId);
+        if (!bake)
+        {
+            return Err(bake.error());
+        }
+        for (const AssetEntry& row : bake->rows)
+        {
+            putAsset(assets.catalog, row);
+        }
+        return modelId;
+    }
+
+    /// The `.smeta` sidecar for a foreign/headerless file (a raw `.png` dropped into assets/): the one
+    /// place a file with no room in its own bytes can carry a stable id + colorspace. Engine-written
+    /// files (`.smodel`, extracted `.smat`/`.smesh`) never get one — their identity is the bytes/name.
+    struct SmetaData
+    {
+        Uuid id;
+        AssetType type = AssetType::Texture;
+        Colorspace colorspace = Colorspace::Auto;
+        std::string folder;
+        std::string name;
+    };
+
+    auto readSmeta(const std::string& path) -> Result<SmetaData>
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+        {
+            return Err(std::format("cannot open '{}'", path));
+        }
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        auto doc = parseJson(text);
+        if (!doc || !doc->is_object())
+        {
+            return Err(std::format("'{}' is not a valid .smeta", path));
+        }
+        SmetaData meta;
+        meta.id = Uuid{ jsonU64Or(*doc, "id", 0) };
+        meta.type = assetTypeFromName(jsonStringOr(*doc, "type", std::string{ "texture" }));
+        meta.colorspace = colorspaceFromName(jsonStringOr(*doc, "colorspace", std::string{ "auto" }));
+        meta.folder = jsonStringOr(*doc, "folder", std::string{});
+        meta.name = jsonStringOr(*doc, "name", std::string{});
+        if (meta.id.value == 0)
+        {
+            return Err(std::format("'{}' has no id", path));
+        }
+        return meta;
+    }
+
+    auto writeSmeta(const std::string& path, const SmetaData& meta) -> Result<void>
+    {
+        nlohmann::json doc;
+        doc["version"] = 1;
+        doc["id"] = uuidToJson(meta.id.value);
+        doc["type"] = assetTypeName(meta.type);
+        doc["colorspace"] = colorspaceName(meta.colorspace);
+        if (!meta.folder.empty())
+        {
+            doc["folder"] = meta.folder;
+        }
+        if (!meta.name.empty())
+        {
+            doc["name"] = meta.name;
+        }
+        std::ofstream out(path, std::ios::binary);
+        if (!out)
+        {
+            return Err(std::format("cannot write '{}'", path));
+        }
+        out << dumpJson(doc, 2);
+        if (!out)
+        {
+            return Err(std::format("write failed for '{}'", path));
+        }
+        return {};
+    }
+
+    // Walk assets/ (skipping .cache/), rebuild the catalog from disk, and diff it against the live one.
+    // Containers contribute a Model row + sub-asset rows via the prefix read; engine-written standalone
+    // files identify by their uuid filename stem; foreign/non-uuid files identify via a `.smeta` sidecar
+    // (minted + written on first sight). Display names + folders are preserved from the prior catalog by
+    // id. The caller owns GPU-cache invalidation (loadProject just cleared them; scan-assets idles +
+    // clears before this).
+    auto scanAssets(AssetServer& assets) -> Result<ScanDelta>
+    {
+        ScanDelta delta;
+        if (assets.root.empty())
+        {
+            return delta;
+        }
+        const std::filesystem::path root(assets.root);
+        std::error_code ec;
+        if (!std::filesystem::exists(root, ec))
+        {
+            return delta;
+        }
+
+        const AssetCatalog previous = assets.catalog;
+        AssetCatalog rebuilt;
+        rebuilt.folders = previous.folders;
+
+        auto preserveNameFolder = [&](AssetEntry& row)
+        {
+            if (const AssetEntry* prev = findAsset(previous, row.id); prev != nullptr)
+            {
+                row.name = prev->name;
+                if (!prev->folder.empty())
                 {
-                    slot.emissiveTexture = *texture;
+                    row.folder = prev->folder;
+                }
+            }
+        };
+        auto parseUuidStem = [](const std::filesystem::path& path, u64& out) -> bool
+        {
+            const std::string stem = path.stem().string();
+            if (stem.empty())
+            {
+                return false;
+            }
+            char* endPointer = nullptr;
+            out = std::strtoull(stem.c_str(), &endPointer, 10);
+            return endPointer != nullptr && *endPointer == '\0';
+        };
+
+        for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
+             it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+        {
+            if (ec)
+            {
+                break;
+            }
+            if (it->is_directory(ec))
+            {
+                if (it->path().filename() == ".cache")
+                {
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
+            const std::filesystem::path path = it->path();
+            std::string ext = path.extension().string();
+            for (char& ch : ext)
+            {
+                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+            const std::string rel = std::filesystem::relative(path, root, ec).generic_string();
+
+            if (ext == ".smodel")
+            {
+                auto meta = readContainerMetadata(path.string());
+                if (!meta)
+                {
+                    logWarn(std::format("scan: skipping '{}': {}", rel, meta.error()));
+                    continue;
+                }
+                for (AssetEntry row : catalogRowsForModel(*meta, rel))
+                {
+                    preserveNameFolder(row);
+                    putAsset(rebuilt, std::move(row));
+                }
+                continue;
+            }
+
+            AssetType type = AssetType::Other;
+            bool recognized = false;
+            bool hdr = false;
+            if (ext == ".smesh")
+            {
+                type = AssetType::Mesh;
+                recognized = true;
+            }
+            else if (ext == ".smat")
+            {
+                type = AssetType::Material;
+                recognized = true;
+            }
+            else if (ext == ".sanim")
+            {
+                type = AssetType::Animation;
+                recognized = true;
+            }
+            else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp")
+            {
+                type = AssetType::Texture;
+                recognized = true;
+            }
+            else if (ext == ".hdr")
+            {
+                type = AssetType::Texture;
+                recognized = true;
+                hdr = true;
+            }
+            if (!recognized)
+            {
+                continue;
+            }
+            u64 id = 0;
+            if (parseUuidStem(path, id))
+            {
+                // Engine-written standalone file (uuid name). A known one keeps its catalog row verbatim
+                // (name/folder/duration/colorspace are not recoverable from the filename) — only its
+                // path is refreshed. A genuinely new one infers type/hdr from the extension.
+                if (const AssetEntry* prev = findAsset(previous, Uuid{ id }); prev != nullptr)
+                {
+                    AssetEntry row = *prev;
+                    row.path = rel;
+                    row.container = Uuid{ 0 };
+                    row.chunk = -1;
+                    putAsset(rebuilt, std::move(row));
                 }
                 else
                 {
-                    logWarn(std::format("model '{}': emissive texture failed: {}", path, texture.error()));
+                    AssetEntry row;
+                    row.id = Uuid{ id };
+                    row.name = path.stem().string();
+                    row.type = type;
+                    row.path = rel;
+                    row.hdr = hdr;
+                    putAsset(rebuilt, std::move(row));
+                }
+                continue;
+            }
+
+            // A foreign / headerless file (a raw .png dropped in): identity + colorspace come from a
+            // sibling .smeta, minted + written on first sight (a wrong-colorspace guess is warned).
+            const std::string smetaPath = path.string() + ".smeta";
+            SmetaData sidecar;
+            bool haveSidecar = false;
+            if (std::filesystem::exists(smetaPath))
+            {
+                if (auto loaded = readSmeta(smetaPath))
+                {
+                    sidecar = *loaded;
+                    haveSidecar = true;
+                }
+                else
+                {
+                    logWarn(std::format("scan: ignoring bad .smeta '{}.smeta': {}", rel, loaded.error()));
                 }
             }
-            result.materials.push_back(slot);
+            if (!haveSidecar)
+            {
+                sidecar.id = newUuid();
+                sidecar.type = type;
+                sidecar.colorspace = Colorspace::Srgb;
+                if (hdr)
+                {
+                    sidecar.colorspace = Colorspace::Hdr;
+                }
+                sidecar.name = path.stem().string();
+                if (auto wrote = writeSmeta(smetaPath, sidecar); !wrote)
+                {
+                    logWarn(std::format("scan: could not write '{}.smeta': {}", rel, wrote.error()));
+                }
+                logWarn(std::format("scan: minted .smeta for foreign file '{}' (colorspace {} — verify it for "
+                                    "data maps like normals)",
+                                    rel, colorspaceName(sidecar.colorspace)));
+            }
+            AssetEntry row;
+            row.id = sidecar.id;
+            row.name = path.stem().string();
+            if (!sidecar.name.empty())
+            {
+                row.name = sidecar.name;
+            }
+            row.type = sidecar.type;
+            row.path = rel;
+            row.folder = sidecar.folder;
+            row.colorspace = sidecar.colorspace;
+            row.hdr = sidecar.colorspace == Colorspace::Hdr;
+            row.linear = sidecar.colorspace == Colorspace::Linear;
+            preserveNameFolder(row);
+            putAsset(rebuilt, std::move(row));
         }
-        if (!result.materials.empty())
+
+        for (const auto& [id, index] : rebuilt.byId)
         {
-            result.baseColor = result.materials.front().baseColor;
-            result.albedoTexture = result.materials.front().albedoTexture;
+            if (!previous.byId.contains(id))
+            {
+                delta.added.push_back(rebuilt.entries[index]);
+            }
         }
+        for (const auto& [id, index] : previous.byId)
+        {
+            if (!rebuilt.byId.contains(id))
+            {
+                delta.removed.push_back(Uuid{ id });
+            }
+        }
+        assets.catalog = std::move(rebuilt);
+        return delta;
+    }
+
+    auto catalogCachePath(const AssetServer& assets) -> std::filesystem::path
+    {
+        return std::filesystem::path(assets.root) / ".cache" / "catalog.json";
+    }
+
+    // A cheap fingerprint of assets/: an FNV-1a fold over sorted (relpath, mtime, size) for every file
+    // (including .smeta sidecars; excluding .cache/). Stat-only — no file contents read. Any add /
+    // remove / touch / sidecar edit changes it, so it is a sound trigger for invalidating the cache.
+    auto assetSignature(const std::string& root) -> u64
+    {
+        std::vector<std::string> entries;
+        const std::filesystem::path base(root);
+        std::error_code ec;
+        if (!std::filesystem::exists(base, ec))
+        {
+            return 0;
+        }
+        for (auto it = std::filesystem::recursive_directory_iterator(base, ec);
+             it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+        {
+            if (ec)
+            {
+                break;
+            }
+            if (it->is_directory(ec))
+            {
+                if (it->path().filename() == ".cache")
+                {
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
+            const std::string rel = std::filesystem::relative(it->path(), base, ec).generic_string();
+            const auto size = static_cast<u64>(it->file_size(ec));
+            const auto mtime = static_cast<u64>(it->last_write_time(ec).time_since_epoch().count());
+            entries.push_back(std::format("{}|{}|{}", rel, mtime, size));
+        }
+        std::ranges::sort(entries);
+        u64 hash = 1469598103934665603ull;
+        for (const std::string& entry : entries)
+        {
+            for (const char ch : entry)
+            {
+                hash = hash ^ static_cast<u8>(ch);
+                hash = hash * 1099511628211ull;
+            }
+            hash = hash * 1099511628211ull;  // separator between entries
+        }
+        return hash;
+    }
+
+    // Persists the catalog + the current asset signature to assets/.cache/catalog.json. Regenerable and
+    // gitignored: deleting it is always safe (the next load falls back to a cold scan).
+    void writeCatalogCache(const AssetServer& assets)
+    {
+        const std::filesystem::path path = catalogCachePath(assets);
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        nlohmann::json doc;
+        doc["version"] = 1;
+        doc["signature"] = std::to_string(assetSignature(assets.root));
+        doc["assets"] = catalogToJson(assets.catalog);
+        doc["assetFolders"] = catalogFoldersToJson(assets.catalog);
+        std::ofstream out(path, std::ios::binary);
+        if (out)
+        {
+            out << dumpJson(doc, 0);
+        }
+    }
+
+    // Builds the catalog with the cache as a latency shortcut: if assets/.cache/catalog.json exists and
+    // its stored signature still matches the on-disk signature, reuse its rows (skipping every .smodel
+    // prefix read); on any mismatch, a missing or corrupt cache, fall back to a full scanAssets. The
+    // cache is NEVER load-bearing — a cold scan always yields the identical catalog. Refreshes the cache.
+    auto loadCatalog(AssetServer& assets) -> Result<ScanDelta>
+    {
+        const std::filesystem::path path = catalogCachePath(assets);
+        std::error_code ec;
+        if (std::filesystem::exists(path, ec))
+        {
+            std::ifstream in(path, std::ios::binary);
+            if (in)
+            {
+                std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                if (auto doc = parseJson(text); doc && doc->is_object())
+                {
+                    const std::string cached = jsonStringOr(*doc, "signature", std::string{});
+                    if (!cached.empty() && cached == std::to_string(assetSignature(assets.root)))
+                    {
+                        catalogFromJson(assets.catalog, doc->value("assets", nlohmann::json::array()));
+                        catalogFoldersFromJson(assets.catalog, doc->value("assetFolders", nlohmann::json::array()));
+                        return ScanDelta{};
+                    }
+                }
+            }
+        }
+        auto delta = scanAssets(assets);
+        if (!delta)
+        {
+            return Err(delta.error());
+        }
+        writeCatalogCache(assets);
+        return delta;
+    }
+
+    // Default standalone destination (project-relative) for an extracted sub-asset, by type.
+    auto defaultExtractDest(AssetType type, Uuid subId, std::string_view imageExt) -> std::string
+    {
+        const std::string id = std::to_string(subId.value);
+        if (type == AssetType::Material)
+        {
+            return "materials/" + id + ".smat";
+        }
+        if (type == AssetType::Mesh)
+        {
+            return "models/" + id + ".smesh";
+        }
+        if (type == AssetType::Animation)
+        {
+            return "models/" + id + ".sanim";
+        }
+        std::string ext{ imageExt };
+        if (ext.empty())
+        {
+            ext = "png";
+        }
+        return "textures/" + id + "." + ext;
+    }
+
+    // The image extension implied by a texture chunk's leading bytes (png/jpg/hdr), default png.
+    auto imageExtFromBytes(std::span<const std::byte> bytes) -> std::string
+    {
+        auto at = [&](std::size_t i) { return static_cast<u8>(bytes[i]); };
+        if (bytes.size() >= 8 && at(0) == 0x89 && at(1) == 0x50 && at(2) == 0x4E && at(3) == 0x47)
+        {
+            return "png";
+        }
+        if (bytes.size() >= 3 && at(0) == 0xFF && at(1) == 0xD8 && at(2) == 0xFF)
+        {
+            return "jpg";
+        }
+        if (bytes.size() >= 2 && at(0) == 0x23 && at(1) == 0x3F)  // "#?" — Radiance HDR
+        {
+            return "hdr";
+        }
+        return "png";
+    }
+
+    // Rewrites a container with a fresh META chunk, preserving every payload chunk verbatim. The
+    // simplest correct way to grow/shrink the metadata (remap edits) without tracking payload offsets.
+    auto rewriteContainerMeta(const std::string& fullPath, const ContainerReader& reader,
+                              const ContainerMetadata& newMeta) -> Result<void>
+    {
+        std::vector<std::vector<std::byte>> owned;
+        owned.push_back(encodeContainerMetadata(newMeta));
+        for (const TocEntry& entry : reader.toc)
+        {
+            if (entry.fourcc == static_cast<u32>(ChunkKind::Meta))
+            {
+                continue;
+            }
+            auto bytes = reader.readChunk(entry);
+            if (!bytes)
+            {
+                return Err(bytes.error());
+            }
+            owned.push_back(std::move(*bytes));
+        }
+        std::vector<ContainerChunk> chunks;
+        chunks.push_back(ContainerChunk{ .kind = ChunkKind::Meta, .subId = 0, .flags = 0, .bytes = owned[0] });
+        std::size_t ownedIndex = 1;
+        for (const TocEntry& entry : reader.toc)
+        {
+            if (entry.fourcc == static_cast<u32>(ChunkKind::Meta))
+            {
+                continue;
+            }
+            chunks.push_back(ContainerChunk{ .kind = static_cast<ChunkKind>(entry.fourcc),
+                                             .subId = entry.subId,
+                                             .flags = entry.flags,
+                                             .bytes = owned[ownedIndex] });
+            ownedIndex = ownedIndex + 1;
+        }
+        return writeContainer(fullPath, chunks);
+    }
+
+    // Slices a sub-asset's chunk out of its container to a standalone file (keeping the same sub-id),
+    // registers a standalone catalog row for it, and writes a remap entry so resolution prefers the
+    // external file. The container's bytes are otherwise untouched; clearExtraction reverts. Returns the
+    // standalone asset's id (== subId). dest is project-relative; "" picks the per-type default.
+    auto extractSubAsset(AssetServer& assets, Uuid modelId, Uuid subId, const std::string& dest) -> Result<Uuid>
+    {
+        auto model = loadModelAsset(assets, modelId);
+        if (!model)
+        {
+            return Err(std::format("model {} is not loadable", modelId.value));
+        }
+        const ContainerMetadata::SubAsset* sub = nullptr;
+        for (const ContainerMetadata::SubAsset& candidate : model->meta.subAssets)
+        {
+            if (candidate.subId.value == subId.value)
+            {
+                sub = &candidate;
+                break;
+            }
+        }
+        if (sub == nullptr)
+        {
+            return Err(std::format("model {} has no sub-asset {}", modelId.value, subId.value));
+        }
+        const TocEntry* entry = nullptr;
+        for (const TocEntry& candidate : model->reader.toc)
+        {
+            if (candidate.subId == subId.value && candidate.fourcc != static_cast<u32>(ChunkKind::Meta))
+            {
+                entry = &candidate;
+                break;
+            }
+        }
+        if (entry == nullptr)
+        {
+            return Err(std::format("model {} has no chunk for sub-asset {}", modelId.value, subId.value));
+        }
+        auto bytes = model->reader.readChunk(*entry);
+        if (!bytes)
+        {
+            return Err(bytes.error());
+        }
+
+        std::string relativeDest = dest;
+        if (relativeDest.empty())
+        {
+            std::string imageExt;
+            if (sub->type == AssetType::Texture)
+            {
+                imageExt = imageExtFromBytes(*bytes);
+            }
+            relativeDest = defaultExtractDest(sub->type, subId, imageExt);
+        }
+        const std::string fullDest = assets.root + "/" + relativeDest;
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(fullDest).parent_path(), ec);
+        std::ofstream out(fullDest, std::ios::binary);
+        if (!out)
+        {
+            return Err(std::format("cannot write '{}'", relativeDest));
+        }
+        out.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
+        if (!out)
+        {
+            return Err(std::format("write failed for '{}'", relativeDest));
+        }
+
+        ContainerMetadata updated = model->meta;
+        if (!updated.remap.is_object())
+        {
+            updated.remap = nlohmann::json::object();
+        }
+        updated.remap[std::to_string(subId.value)] = { { "external", relativeDest } };
+        const std::string containerPath = assets.root + "/" + findAsset(assets.catalog, modelId)->path;
+        if (auto wrote = rewriteContainerMeta(containerPath, model->reader, updated); !wrote)
+        {
+            return Err(wrote.error());
+        }
+
+        AssetEntry row;
+        row.id = subId;
+        row.name = sub->name;
+        row.type = sub->type;
+        row.path = relativeDest;
+        row.colorspace = colorspaceFromName(sub->colorspace);
+        row.duration = sub->duration;
+        putAsset(assets.catalog, std::move(row));
+
+        // Drop the stale reader (its TOC offsets shifted) and the sub-asset's GPU ref so the next
+        // resolve reads the external file.
+        assets.modelRefByUuid.erase(modelId.value);
+        assets.meshRefByUuid.erase(subId.value);
+        assets.textureRefByUuid.erase(subId.value);
+        return subId;
+    }
+
+    // Drops a sub-asset's extraction: removes the remap entry, deletes the external file (so its uuid
+    // name can never alias the embedded chunk on a later scan), reverts the catalog row to the embedded
+    // chunk, and refreshes caches. The embedded chunk has been the dormant fallback all along.
+    auto clearExtraction(AssetServer& assets, Uuid modelId, Uuid subId) -> Result<void>
+    {
+        auto model = loadModelAsset(assets, modelId);
+        if (!model)
+        {
+            return Err(std::format("model {} is not loadable", modelId.value));
+        }
+        const std::string key = std::to_string(subId.value);
+        std::string external;
+        if (model->meta.remap.is_object() && model->meta.remap.contains(key))
+        {
+            const nlohmann::json& entry = model->meta.remap.at(key);
+            if (entry.is_object() && entry.contains("external") && entry.at("external").is_string())
+            {
+                external = entry.at("external").get<std::string>();
+            }
+        }
+
+        ContainerMetadata updated = model->meta;
+        if (updated.remap.is_object())
+        {
+            updated.remap.erase(key);
+        }
+        const std::string containerPath = assets.root + "/" + findAsset(assets.catalog, modelId)->path;
+        if (auto wrote = rewriteContainerMeta(containerPath, model->reader, updated); !wrote)
+        {
+            return Err(wrote.error());
+        }
+        if (!external.empty())
+        {
+            std::error_code ec;
+            std::filesystem::remove(assets.root + "/" + external, ec);
+        }
+
+        // Revert the catalog row to the embedded sub-asset (container + chunk).
+        for (const ContainerMetadata::SubAsset& sub : model->meta.subAssets)
+        {
+            if (sub.subId.value == subId.value)
+            {
+                AssetEntry row;
+                row.id = subId;
+                row.name = sub.name;
+                row.type = sub.type;
+                row.path = findAsset(assets.catalog, modelId)->path;
+                row.container = modelId;
+                row.chunk = static_cast<i32>(sub.chunk);
+                row.colorspace = colorspaceFromName(sub.colorspace);
+                row.duration = sub.duration;
+                putAsset(assets.catalog, std::move(row));
+                break;
+            }
+        }
+        assets.modelRefByUuid.erase(modelId.value);
+        assets.meshRefByUuid.erase(subId.value);
+        assets.textureRefByUuid.erase(subId.value);
+        return {};
+    }
+
+    /// What a reimport changed, diffed by stable sub-id. `skipped` is true when the source bytes +
+    /// importer version are unchanged (the content-addressed fast path). `removedFromSource` lists
+    /// sub-assets the source no longer produces — kept + reported (cleanup decides their fate), never
+    /// silently dropped.
+    struct ReimportDelta
+    {
+        std::vector<Uuid> updated;
+        std::vector<Uuid> added;
+        std::vector<Uuid> removedFromSource;
+        bool skipped = false;
+    };
+
+    // Re-bakes a container from its stored source + options when the source bytes changed (else a
+    // content-addressed skip). Sub-ids are stable (subIdFor by source name), so the diff matches; an
+    // extracted (remapped) sub-asset's external override is preserved — the freshly baked chunk is the
+    // dormant fallback, never clobbering the user's edit. Live instances resolve by (modelId, subId), so
+    // they pick up the new bytes with no re-instantiation. Caller idles the GPU; this drops sub-id caches.
+    auto reimportModel(AssetServer& assets, Uuid modelId) -> Result<ReimportDelta>
+    {
+        ReimportDelta delta;
+        auto model = loadModelAsset(assets, modelId);
+        if (!model)
+        {
+            return Err(std::format("model {} is not loadable", modelId.value));
+        }
+        const ContainerMetadata oldMeta = model->meta;
+        const std::string source = oldMeta.import.sourcePath;
+        const std::string currentHash = hashFileFnv(source);
+        if (currentHash.empty())
+        {
+            return Err(std::format("source '{}' is unreadable", source));
+        }
+        if (currentHash == oldMeta.import.sourceHash && oldMeta.import.importerVersion == ImporterVersion)
+        {
+            delta.skipped = true;
+            return delta;
+        }
+
+        std::unordered_set<u64> oldSubs;
+        for (const ContainerMetadata::SubAsset& sub : oldMeta.subAssets)
+        {
+            oldSubs.insert(sub.subId.value);
+        }
+
+        auto graph = translateModel(source);
+        if (!graph)
+        {
+            return Err(graph.error());
+        }
+        auto bake = bakeModel(assets, *graph, ImportOptions::fromJson(oldMeta.import.options), source, modelId);
+        if (!bake)
+        {
+            return Err(bake.error());
+        }
+
+        const std::string containerPath = assets.root + "/" + bake->path;
+        auto newMeta = readContainerMetadata(containerPath);
+        if (!newMeta)
+        {
+            return Err(newMeta.error());
+        }
+        std::unordered_set<u64> newSubs;
+        for (const ContainerMetadata::SubAsset& sub : newMeta->subAssets)
+        {
+            newSubs.insert(sub.subId.value);
+        }
+
+        // Preserve the remap for sub-assets that still exist (the extracted edit survives the reimport).
+        nlohmann::json keptRemap = nlohmann::json::object();
+        if (oldMeta.remap.is_object())
+        {
+            for (const auto& [key, value] : oldMeta.remap.items())
+            {
+                const u64 sid = std::strtoull(key.c_str(), nullptr, 10);
+                if (newSubs.contains(sid))
+                {
+                    keptRemap[key] = value;
+                }
+            }
+        }
+        if (!keptRemap.empty())
+        {
+            newMeta->remap = keptRemap;
+            auto reader = readContainer(containerPath);
+            if (reader)
+            {
+                if (auto wrote = rewriteContainerMeta(containerPath, *reader, *newMeta); !wrote)
+                {
+                    logWarn(std::format("reimport: could not preserve remap for model {}: {}", modelId.value,
+                                        wrote.error()));
+                }
+            }
+        }
+
+        for (const u64 sid : newSubs)
+        {
+            if (oldSubs.contains(sid))
+            {
+                delta.updated.push_back(Uuid{ sid });
+            }
+            else
+            {
+                delta.added.push_back(Uuid{ sid });
+            }
+        }
+        for (const u64 sid : oldSubs)
+        {
+            if (!newSubs.contains(sid))
+            {
+                delta.removedFromSource.push_back(Uuid{ sid });
+            }
+        }
+
+        // Refresh the catalog rows (remap-aware) and drop the stale reader + every affected sub-id's GPU
+        // ref so live instances re-resolve the new bytes without re-instantiation.
+        auto finalMeta = readContainerMetadata(containerPath);
+        if (finalMeta)
+        {
+            for (const AssetEntry& row : catalogRowsForModel(*finalMeta, bake->path))
+            {
+                putAsset(assets.catalog, row);
+            }
+        }
+        assets.modelRefByUuid.erase(modelId.value);
+        for (const u64 sid : newSubs)
+        {
+            assets.meshRefByUuid.erase(sid);
+            assets.textureRefByUuid.erase(sid);
+        }
+        for (const u64 sid : oldSubs)
+        {
+            assets.meshRefByUuid.erase(sid);
+            assets.textureRefByUuid.erase(sid);
+        }
+        return delta;
+    }
+
+    /// One node in the asset dependency graph: an asset and its on-disk byte cost.
+    struct RefNode
+    {
+        Uuid id;
+        AssetType type = AssetType::Other;
+        Uuid container;
+        u64 bytes = 0;
+    };
+
+    /// One directed edge: `from` references `to`. `from` may be an entity uuid (EntityAsset) rather
+    /// than a catalog asset.
+    struct RefEdge
+    {
+        Uuid from;
+        Uuid to;
+        enum class Kind : u8
+        {
+            ContainerChild,
+            MaterialTexture,
+            EntityAsset
+        } kind = Kind::ContainerChild;
+    };
+
+    /// The scene → asset → sub-asset reference graph. Read-only/diagnostic (UE's Reference Viewer +
+    /// Size Map): who-references-this, what-this-references, and a byte footprint. Rebuilt on demand.
+    struct DependencyGraph
+    {
+        std::vector<RefNode> nodes;
+        std::vector<RefEdge> edges;
+
+        auto referencedBy(Uuid id) const -> std::vector<Uuid>
+        {
+            std::vector<Uuid> out;
+            for (const RefEdge& edge : edges)
+            {
+                if (edge.to.value == id.value)
+                {
+                    out.push_back(edge.from);
+                }
+            }
+            return out;
+        }
+        auto referencesOf(Uuid id) const -> std::vector<Uuid>
+        {
+            std::vector<Uuid> out;
+            for (const RefEdge& edge : edges)
+            {
+                if (edge.from.value == id.value)
+                {
+                    out.push_back(edge.to);
+                }
+            }
+            return out;
+        }
+        auto bytesOf(Uuid id) const -> u64
+        {
+            for (const RefNode& node : nodes)
+            {
+                if (node.id.value == id.value)
+                {
+                    return node.bytes;
+                }
+            }
+            return 0;
+        }
+        // The on-disk footprint: a container's `.smodel` size already counts its embedded sub-assets,
+        // so the honest footprint is just the node's own bytes (no double-counting within a container).
+        auto footprint(Uuid id) const -> u64
+        {
+            return bytesOf(id);
+        }
+    };
+
+    // The on-disk bytes of a catalog row: a model / standalone file's size, or an embedded sub-asset's
+    // chunk length (read from its container's TOC).
+    auto assetBytes(AssetServer& assets, const AssetEntry& entry) -> u64
+    {
+        std::error_code ec;
+        if (entry.container.value == 0)
+        {
+            return static_cast<u64>(std::filesystem::file_size(assets.root + "/" + entry.path, ec));
+        }
+        auto model = loadModelAsset(assets, entry.container);
+        if (!model)
+        {
+            return 0;
+        }
+        ChunkKind kind = ChunkKind::Texture;
+        if (entry.type == AssetType::Mesh)
+        {
+            kind = ChunkKind::Mesh;
+        }
+        else if (entry.type == AssetType::Material)
+        {
+            kind = ChunkKind::Material;
+        }
+        else if (entry.type == AssetType::Animation)
+        {
+            kind = ChunkKind::Animation;
+        }
+        const TocEntry* toc = model->reader.find(kind, entry.id.value);
+        if (toc == nullptr)
+        {
+            return 0;
+        }
+        return toc->length;
+    }
+
+    // Builds the dependency graph: catalog assets as nodes; container→child, material→texture, and
+    // scene-entity→asset edges. A snapshot — rebuilt on demand, never cached stale.
+    auto buildDependencyGraph(Scene& scene, const AssetCatalog& catalog, AssetServer& assets) -> DependencyGraph
+    {
+        DependencyGraph graph;
+        for (const AssetEntry& entry : catalog.entries)
+        {
+            graph.nodes.push_back(RefNode{
+                .id = entry.id, .type = entry.type, .container = entry.container, .bytes = assetBytes(assets, entry) });
+        }
+        for (const AssetEntry& entry : catalog.entries)
+        {
+            if (entry.type == AssetType::Model)
+            {
+                for (const AssetEntry& child : catalog.entries)
+                {
+                    if (child.container.value == entry.id.value)
+                    {
+                        graph.edges.push_back(
+                            RefEdge{ .from = entry.id, .to = child.id, .kind = RefEdge::Kind::ContainerChild });
+                    }
+                }
+            }
+            if (entry.type == AssetType::Material)
+            {
+                MaterialAsset material;
+                bool resolved = false;
+                if (entry.container.value != 0)
+                {
+                    if (auto loaded = resolveMaterial(assets, entry.container, entry.id))
+                    {
+                        material = *loaded;
+                        resolved = true;
+                    }
+                }
+                else if (auto loaded = loadMaterialAsset(assets, entry.id))
+                {
+                    material = *loaded;
+                    resolved = true;
+                }
+                if (resolved)
+                {
+                    for (const Uuid texture : { material.albedoTexture, material.ormTexture, material.normalTexture,
+                                                material.emissiveTexture, material.heightTexture })
+                    {
+                        if (texture.value != 0)
+                        {
+                            graph.edges.push_back(
+                                RefEdge{ .from = entry.id, .to = texture, .kind = RefEdge::Kind::MaterialTexture });
+                        }
+                    }
+                }
+            }
+        }
+        auto entityEdge = [&](Entity entity, Uuid asset)
+        {
+            if (asset.value == 0)
+            {
+                return;
+            }
+            graph.edges.push_back(RefEdge{
+                .from = getComponent<IdComponent>(scene, entity).id, .to = asset, .kind = RefEdge::Kind::EntityAsset });
+        };
+        forEach<MeshComponent>(scene, [&](Entity entity, MeshComponent& mesh) { entityEdge(entity, mesh.mesh); });
+        forEach<SkinnedMeshComponent>(scene, [&](Entity entity, SkinnedMeshComponent& skin)
+                                      { entityEdge(entity, skin.mesh); });
+        forEach<MaterialAssetComponent>(scene, [&](Entity entity, MaterialAssetComponent& material)
+                                        { entityEdge(entity, material.material); });
+        forEach<ModelInstanceComponent>(scene, [&](Entity entity, ModelInstanceComponent& instance)
+                                        { entityEdge(entity, instance.modelId); });
+        forEach<MaterialSetComponent>(scene,
+                                      [&](Entity entity, MaterialSetComponent& set)
+                                      {
+                                          for (const MaterialSlot& slot : set.slots)
+                                          {
+                                              entityEdge(entity, slot.albedoTexture);
+                                              entityEdge(entity, slot.metallicRoughnessTexture);
+                                              entityEdge(entity, slot.normalTexture);
+                                              entityEdge(entity, slot.occlusionTexture);
+                                              entityEdge(entity, slot.emissiveTexture);
+                                          }
+                                      });
+        return graph;
+    }
+
+    /// How a cleanup candidate is classified. Reported separately (the Unity Broken/Missing/Unused
+    /// split); only `Unused` is ever auto-deletable, and even then only after explicit confirm.
+    enum class CleanCategory : u8
+    {
+        Unused,
+        OrphanedFile,
+        BrokenReference,
+        IndirectReview
+    };
+
+    auto cleanCategoryName(CleanCategory category) -> const char*
+    {
+        if (category == CleanCategory::OrphanedFile)
+        {
+            return "orphaned";
+        }
+        if (category == CleanCategory::BrokenReference)
+        {
+            return "broken";
+        }
+        if (category == CleanCategory::IndirectReview)
+        {
+            return "review";
+        }
+        return "unused";
+    }
+
+    struct CleanCandidate
+    {
+        Uuid id;
+        std::string path;
+        CleanCategory category = CleanCategory::Unused;
+        u64 bytes = 0;
+        std::string reason;
+    };
+
+    struct CleanReportData
+    {
+        std::vector<CleanCandidate> candidates;
+        u64 reclaimableBytes = 0;
+    };
+
+    // Every catalog-id string referenced (recursively) by a ScriptComponent override field. These are
+    // invisible to the static dependency graph, so an asset only reachable this way is review, not unused.
+    auto collectScriptReferencedIds(Scene& scene) -> std::unordered_set<u64>
+    {
+        std::unordered_set<u64> referenced;
+        std::function<void(const nlohmann::json&)> walk = [&](const nlohmann::json& value)
+        {
+            if (value.is_string())
+            {
+                const std::string text = value.get<std::string>();
+                char* endPointer = nullptr;
+                const u64 id = std::strtoull(text.c_str(), &endPointer, 10);
+                if (id != 0 && endPointer != nullptr && *endPointer == '\0')
+                {
+                    referenced.insert(id);
+                }
+            }
+            else if (value.is_object())
+            {
+                for (const auto& [key, child] : value.items())
+                {
+                    walk(child);
+                }
+            }
+            else if (value.is_array())
+            {
+                for (const nlohmann::json& child : value)
+                {
+                    walk(child);
+                }
+            }
+        };
+        forEach<ScriptComponent>(scene,
+                                 [&](Entity, ScriptComponent& component)
+                                 {
+                                     for (const ScriptSlot& slot : component.scripts)
+                                     {
+                                         walk(slot.overrides);
+                                     }
+                                 });
+        return referenced;
+    }
+
+    // Classifies every catalog asset as kept or a cleanup candidate, by reachability from roots (the
+    // active scene's asset refs + `exclude`). Unused = unreachable + not script-referenced; a
+    // script-referenced unreachable asset is IndirectReview (never auto-deleted); a scene/material edge
+    // to a missing id is a BrokenReference. Read-only — produces a report, deletes nothing.
+    auto analyzeClean(Scene& scene, const AssetCatalog& catalog, AssetServer& assets, std::span<const Uuid> exclude)
+        -> CleanReportData
+    {
+        CleanReportData report;
+        DependencyGraph graph = buildDependencyGraph(scene, catalog, assets);
+
+        std::unordered_set<u64> reachable;
+        for (const RefEdge& edge : graph.edges)
+        {
+            if (edge.kind == RefEdge::Kind::EntityAsset)
+            {
+                reachable.insert(edge.to.value);
+            }
+        }
+        for (const Uuid id : exclude)
+        {
+            reachable.insert(id.value);
+        }
+        std::vector<u64> work(reachable.begin(), reachable.end());
+        while (!work.empty())
+        {
+            const u64 id = work.back();
+            work.pop_back();
+            for (const Uuid target : graph.referencesOf(Uuid{ id }))
+            {
+                if (reachable.insert(target.value).second)
+                {
+                    work.push_back(target.value);
+                }
+            }
+        }
+        // A container and its embedded sub-assets are one deletable unit: keeping any one keeps all.
+        std::unordered_set<u64> keptContainers;
+        for (const AssetEntry& entry : catalog.entries)
+        {
+            if (reachable.contains(entry.id.value))
+            {
+                if (entry.type == AssetType::Model)
+                {
+                    keptContainers.insert(entry.id.value);
+                }
+                if (entry.container.value != 0)
+                {
+                    keptContainers.insert(entry.container.value);
+                }
+            }
+        }
+        for (const AssetEntry& entry : catalog.entries)
+        {
+            if (keptContainers.contains(entry.id.value) ||
+                (entry.container.value != 0 && keptContainers.contains(entry.container.value)))
+            {
+                reachable.insert(entry.id.value);
+            }
+        }
+
+        const std::unordered_set<u64> scriptRefs = collectScriptReferencedIds(scene);
+
+        for (const RefEdge& edge : graph.edges)
+        {
+            if (edge.kind == RefEdge::Kind::ContainerChild)
+            {
+                continue;
+            }
+            if (!catalog.byId.contains(edge.to.value))
+            {
+                report.candidates.push_back(CleanCandidate{ .id = edge.to,
+                                                            .category = CleanCategory::BrokenReference,
+                                                            .reason = std::format("referenced by {} but not in the "
+                                                                                  "catalog",
+                                                                                  edge.from.value) });
+            }
+        }
+
+        for (const AssetEntry& entry : catalog.entries)
+        {
+            if (reachable.contains(entry.id.value) || entry.container.value != 0)
+            {
+                continue;  // kept, or an embedded sub-asset (the container is the deletable unit)
+            }
+            CleanCandidate candidate;
+            candidate.id = entry.id;
+            candidate.path = entry.path;
+            candidate.bytes = graph.bytesOf(entry.id);
+            if (scriptRefs.contains(entry.id.value))
+            {
+                candidate.category = CleanCategory::IndirectReview;
+                candidate.reason = "referenced only by a script field — review before deleting";
+            }
+            else
+            {
+                candidate.category = CleanCategory::Unused;
+                candidate.reason = "not reachable from the active scene";
+                report.reclaimableBytes = report.reclaimableBytes + candidate.bytes;
+            }
+            report.candidates.push_back(std::move(candidate));
+        }
+        return report;
+    }
+
+    struct DeleteUnusedData
+    {
+        i32 deleted = 0;
+        u64 reclaimedBytes = 0;
+    };
+
+    // Deletes only the listed ids that analyzeClean classifies as Unused (refusing without confirm),
+    // then rescans so any newly-orphaned cascade resurfaces. Outward-facing + irreversible: every
+    // deletion is logged. The caller idles the GPU + clears caches before calling.
+    auto deleteUnused(AssetServer& assets, Scene& scene, std::span<const Uuid> ids, bool confirm)
+        -> Result<DeleteUnusedData>
+    {
+        if (!confirm)
+        {
+            return Err(std::string{ "delete-unused requires confirm=true" });
+        }
+        const CleanReportData report = analyzeClean(scene, assets.catalog, assets, {});
+        std::unordered_set<u64> deletable;
+        for (const CleanCandidate& candidate : report.candidates)
+        {
+            if (candidate.category == CleanCategory::Unused)
+            {
+                deletable.insert(candidate.id.value);
+            }
+        }
+        DeleteUnusedData result;
+        for (const Uuid id : ids)
+        {
+            if (!deletable.contains(id.value))
+            {
+                logWarn(std::format("delete-unused: refusing {} (not classified Unused)", id.value));
+                continue;
+            }
+            const AssetEntry* entry = findAsset(assets.catalog, id);
+            if (entry == nullptr)
+            {
+                continue;
+            }
+            std::error_code ec;
+            const std::string full = assets.root + "/" + entry->path;
+            const auto bytes = static_cast<u64>(std::filesystem::file_size(full, ec));
+            std::filesystem::remove(full, ec);
+            std::filesystem::remove(full + ".smeta", ec);  // foreign-file sidecar, if any
+            result.deleted = result.deleted + 1;
+            result.reclaimedBytes = result.reclaimedBytes + bytes;
+            logInfo(std::format("delete-unused: removed '{}' ({} bytes)", entry->path, bytes));
+        }
+        static_cast<void>(scanAssets(assets));  // rebuild the catalog + surface any cascade
+        writeCatalogCache(assets);
         return result;
+    }
+
+    // Headless check: bake a synthetic skinned multi-material graph into a .smodel, prefix-read it
+    // back (sub-asset count, materials, nodes/skin), and confirm the embedded MESH chunk is a valid
+    // standalone .smesh image (loadMesh round-trips its counts). No GPU, no spawn.
+    void runBakeModelSelfTest()
+    {
+        Mesh mesh;
+        mesh.vertices.resize(4);
+        for (std::size_t i = 0; i < mesh.vertices.size(); i = i + 1)
+        {
+            mesh.vertices[i].position = glm::vec3(static_cast<f32>(i), 0.0f, 0.0f);
+        }
+        mesh.indices = { 0, 1, 2, 0, 2, 3 };
+        mesh.submeshes = { Submesh{ .firstIndex = 0, .indexCount = 3, .vertexOffset = 0, .materialSlot = 0 },
+                           Submesh{ .firstIndex = 3, .indexCount = 3, .vertexOffset = 0, .materialSlot = 1 } };
+
+        ImportedModel graph;
+        graph.mesh = mesh;
+        graph.hasSkin = true;
+        graph.skin.resize(4);
+        graph.nodes = { ImportedNode{ .name = "root", .parent = -1 }, ImportedNode{ .name = "joint", .parent = 0 } };
+        graph.skinDesc.joints = { 0, 1 };
+        graph.skinDesc.inverseBind = { glm::mat4(1.0f), glm::mat4(1.0f) };
+        graph.skinDesc.skeletonRoot = 0;
+        graph.skinDesc.meshNode = 1;
+
+        ImportedMaterial stone;
+        stone.name = "stone";
+        stone.hasAlbedo = true;
+        stone.albedoBytes = { 1, 2, 3, 4 };
+        stone.albedoExt = "png";
+        stone.hasNormal = true;
+        stone.normalBytes = { 5, 6, 7 };
+        stone.normalExt = "png";
+        ImportedMaterial metal;
+        metal.name = "metal";
+        metal.hasMetallicRoughness = true;
+        metal.metallicRoughnessBytes = { 8, 9 };
+        metal.metallicRoughnessExt = "png";
+        graph.materials = { stone, metal };
+
+        AnimClip clip;
+        clip.name = "idle";
+        clip.duration = 1.0f;
+        clip.tracks.push_back(AnimTrack{ .joint = 1, .jointName = "joint" });
+        graph.animations = { clip };
+
+        AssetServer testAssets;
+        testAssets.root = "/tmp/saffron_bake_test";
+        auto bake = bakeModel(testAssets, graph, ImportOptions{}, "/tmp/town.glb", Uuid{ 0 });
+        if (!bake)
+        {
+            logError(std::format("bake self-test: bakeModel failed: {}", bake.error()));
+            return;
+        }
+
+        const std::string fullPath = testAssets.root + "/" + bake->path;
+        auto meta = readContainerMetadata(fullPath);
+        if (!meta)
+        {
+            logError(std::format("bake self-test: prefix read failed: {}", meta.error()));
+            return;
+        }
+        // 1 mesh + 2 materials + 3 textures + 1 animation = 7 sub-assets; 8 catalog rows (+ the Model).
+        bool ok = meta->subAssets.size() == 7 && meta->materials.size() == 2 && meta->nodes.is_array() &&
+                  meta->nodes.size() == 2 && !meta->skin.is_null() && bake->rows.size() == 8 &&
+                  bake->rows.front().type == AssetType::Model;
+
+        auto reader = readContainer(fullPath);
+        if (!reader)
+        {
+            logError(std::format("bake self-test: readContainer failed: {}", reader.error()));
+            return;
+        }
+        const Uuid meshSubId = subIdFor("town", "mesh", "0", 0);
+        const TocEntry* meshEntry = reader->find(ChunkKind::Mesh, meshSubId.value);
+        ok = ok && meshEntry != nullptr;
+        if (meshEntry != nullptr)
+        {
+            auto meshBytes = reader->readChunk(*meshEntry);
+            if (meshBytes)
+            {
+                const std::string tempMesh = "/tmp/saffron_bake_mesh.smesh";
+                if (std::ofstream out(tempMesh, std::ios::binary); out)
+                {
+                    out.write(reinterpret_cast<const char*>(meshBytes->data()),
+                              static_cast<std::streamsize>(meshBytes->size()));
+                }
+                auto loaded = loadMesh(tempMesh);
+                ok = ok && loaded && loaded->vertices.size() == 4 && loaded->indices.size() == 6 &&
+                     loaded->submeshes.size() == 2;
+            }
+            else
+            {
+                ok = false;
+            }
+        }
+
+        if (ok)
+        {
+            logInfo(".smodel bake round-trip OK (one container, embedded materials, mesh chunk loads)");
+        }
+        else
+        {
+            logError(".smodel bake round-trip MISMATCH");
+        }
+    }
+
+    // Headless check (GPU-free): bake a container, open it via loadModelAsset, slice the mesh chunk
+    // through ByteSource + loadMeshFromBytes, parse a material via resolveMaterial, and confirm a
+    // remap pointing at a missing file falls back to the embedded chunk. The GPU half of resolveMesh/
+    // resolveTexture (the upload) is exercised by the phase 07/08 instantiate + render e2e.
+    void runChunkLoaderSelfTest()
+    {
+        Mesh mesh;
+        mesh.vertices.resize(3);
+        mesh.indices = { 0, 1, 2 };
+        mesh.submeshes = { Submesh{ .firstIndex = 0, .indexCount = 3, .vertexOffset = 0, .materialSlot = 0 } };
+        ImportedModel graph;
+        graph.mesh = mesh;
+        ImportedMaterial wood;
+        wood.name = "wood";
+        wood.baseColor = glm::vec4(0.25f, 0.5f, 0.75f, 1.0f);
+        wood.metallic = 0.3f;
+        wood.roughness = 0.6f;
+        wood.hasAlbedo = true;
+        wood.albedoBytes = { 10, 20, 30, 40, 50 };
+        wood.albedoExt = "png";
+        graph.materials = { wood };
+
+        AssetServer testAssets;
+        testAssets.root = "/tmp/saffron_chunk_test";
+        auto bake = bakeModel(testAssets, graph, ImportOptions{}, "/tmp/crate.glb", Uuid{ 0 });
+        if (!bake)
+        {
+            logError(std::format("chunk-loader self-test: bake failed: {}", bake.error()));
+            return;
+        }
+        for (const AssetEntry& row : bake->rows)
+        {
+            putAsset(testAssets.catalog, row);
+        }
+
+        auto model = loadModelAsset(testAssets, bake->modelId);
+        if (!model)
+        {
+            logError("chunk-loader self-test: loadModelAsset returned null");
+            return;
+        }
+
+        const Uuid meshSubId = subIdFor("crate", "mesh", "0", 0);
+        const ByteSource meshSource = chunkSourceFor(testAssets, *model, ChunkKind::Mesh, meshSubId);
+        bool ok = meshSource.path == (testAssets.root + "/" + bake->path) && meshSource.length != 0;
+        if (auto bytes = meshSource.read(); bytes)
+        {
+            auto sliced = loadMeshFromBytes(std::span<const std::byte>{ *bytes });
+            ok = ok && sliced && sliced->vertices.size() == 3 && sliced->indices.size() == 3;
+        }
+        else
+        {
+            ok = false;
+        }
+
+        const Uuid materialSubId = subIdFor("crate", "material", "wood", 0);
+        auto material = resolveMaterial(testAssets, bake->modelId, materialSubId);
+        ok = ok && material && material->metallic > 0.29f && material->metallic < 0.31f &&
+             material->albedoTexture.value == subIdFor("crate", "texture", "0_albedo", 0).value;
+
+        // A remap whose external file is missing must fall back to the embedded chunk (with a warning).
+        model->meta.remap = nlohmann::json::object();
+        model->meta.remap[std::to_string(meshSubId.value)] = { { "external", "models/missing-extracted.smesh" } };
+        const ByteSource fallback = chunkSourceFor(testAssets, *model, ChunkKind::Mesh, meshSubId);
+        ok = ok && fallback.path == (testAssets.root + "/" + bake->path) && fallback.length != 0;
+
+        if (ok)
+        {
+            logInfo(".smodel chunk-slice loaders OK (slice load, resolveMaterial, remap fallback)");
+        }
+        else
+        {
+            logError(".smodel chunk-slice loaders MISMATCH");
+        }
     }
 
     // Resolves an id to a GPU mesh, loading + uploading the baked .smesh on a cache
@@ -2300,36 +4730,17 @@ return {0}
         {
             return nullptr;
         }
+        // An embedded sub-asset resolves through its container's chunk slice.
+        if (entry->container.value != 0)
+        {
+            return resolveMesh(assets, renderer, entry->container, id);
+        }
         std::string fullPath = assets.root + "/" + entry->path;
         if (!std::filesystem::exists(fullPath) && entry->path.starts_with("meshes/"))
         {
             fullPath = assets.root + "/models/" + entry->path.substr(std::string{ "meshes/" }.size());
         }
-        auto mesh = loadMesh(fullPath);
-        if (mesh)
-        {
-            // A v2 .smesh carries a VertexSkin stream; uploading it arms the GPU
-            // skinning path for this mesh (v1 files return an empty stream).
-            std::vector<VertexSkin> skin;
-            if (auto loadedSkin = loadMeshSkin(fullPath))
-            {
-                skin = std::move(*loadedSkin);
-            }
-            auto meshRef = uploadMesh(renderer, *mesh, skin);
-            if (meshRef)
-            {
-                assets.meshRefByUuid[id.value] = *meshRef;
-                return *meshRef;
-            }
-            logWarn(std::format("asset {}: {}", id.value, meshRef.error()));
-        }
-        else
-        {
-            logWarn(std::format("asset {}: {}", id.value, mesh.error()));
-        }
-        // Negative-cache so a broken registered asset is not retried + re-logged each frame.
-        assets.meshRefByUuid[id.value] = nullptr;
-        return nullptr;
+        return loadMeshFromSource(assets, renderer, id, ByteSource{ .path = fullPath });
     }
 
     // Creates an entity carrying the given mesh asset.
@@ -2343,7 +4754,7 @@ return {0}
     // Attaches an import's material(s) to an entity: a single MaterialComponent when the
     // model has zero or one material, or a MaterialSetComponent (the slot table) when it
     // has more than one. Submesh.materialSlot indexes the set at render time.
-    void applyImportedMaterials(Scene& scene, Entity entity, const ImportResult& result)
+    void applyImportedMaterials(Scene& scene, Entity entity, const ModelSpawnInput& result)
     {
         if (result.materials.size() > 1)
         {
@@ -2379,7 +4790,7 @@ return {0}
     // Instantiates a rigged import: one entity per glTF node (local TRS, parented by
     // uuid), BoneComponent tags on the joints, and a SkinnedMeshComponent on the mesh
     // node listing the joints in glTF joint order. Returns the skinned mesh entity.
-    auto spawnSkinnedModel(Scene& scene, std::string name, const ImportResult& result) -> Entity
+    auto spawnSkinnedModel(Scene& scene, std::string name, const ModelSpawnInput& result) -> Entity
     {
         std::vector<Entity> nodeEntities;
         std::vector<Uuid> nodeUuids;
@@ -2455,7 +4866,7 @@ return {0}
         return meshEntity;
     }
 
-    auto spawnModel(Scene& scene, std::string name, const ImportResult& result) -> Entity
+    auto spawnModel(Scene& scene, std::string name, const ModelSpawnInput& result) -> Entity
     {
         if (result.hasSkin)
         {
@@ -2465,6 +4876,302 @@ return {0}
         addComponent<MeshComponent>(scene, entity).mesh = result.mesh;
         applyImportedMaterials(scene, entity, result);
         return entity;
+    }
+
+    // Expands a `.smodel` container's stored hierarchy into the scene by reconstructing the spawn
+    // input from the MetadataChunk (mesh/material/animation sub-ids, node forest, skin) and reusing
+    // spawnModel/spawnSkinnedModel. Holds SOFT references: components store sub-ids resolved at draw
+    // time through the container (phase 06), so reimport/extract changes flow through. No GPU upload.
+    // One asset instantiates into many independent entity trees (or never). Returns the root entity.
+    auto instantiateModel(Scene& scene, AssetServer& assets, Uuid modelId, std::string_view name) -> Result<Entity>
+    {
+        auto model = loadModelAsset(assets, modelId);
+        if (!model)
+        {
+            return Err(std::format("model {} is not loadable", modelId.value));
+        }
+        const ContainerMetadata& meta = model->meta;
+
+        ModelSpawnInput result;
+        for (const ContainerMetadata::SubAsset& sub : meta.subAssets)
+        {
+            if (sub.type == AssetType::Mesh)
+            {
+                result.mesh = sub.subId;
+                break;
+            }
+        }
+        for (const ContainerMetadata::SubAsset& sub : meta.subAssets)
+        {
+            if (sub.type != AssetType::Material)
+            {
+                continue;
+            }
+            MaterialSlot slot;
+            if (auto material = resolveMaterial(assets, modelId, sub.subId))
+            {
+                slot.baseColor = material->baseColor;
+                slot.metallic = material->metallic;
+                slot.roughness = material->roughness;
+                slot.emissive = material->emissive;
+                slot.emissiveStrength = material->emissiveStrength;
+                slot.albedoTexture = material->albedoTexture;
+                slot.metallicRoughnessTexture = material->ormTexture;
+                slot.normalTexture = material->normalTexture;
+                slot.emissiveTexture = material->emissiveTexture;
+                slot.heightTexture = material->heightTexture;
+                slot.normalStrength = material->normalStrength;
+                slot.uvTiling = material->uvTiling;
+                slot.uvOffset = material->uvOffset;
+                slot.heightScale = material->heightScale;
+                slot.unlit = material->unlit;
+                slot.alphaClip = material->blend == "masked";
+                slot.alphaCutoff = material->alphaCutoff;
+            }
+            else
+            {
+                logWarn(std::format("model {}: material {} unresolved: {}", modelId.value, sub.subId.value,
+                                    material.error()));
+            }
+            result.materials.push_back(slot);
+        }
+        for (const ContainerMetadata::SubAsset& sub : meta.subAssets)
+        {
+            if (sub.type == AssetType::Animation)
+            {
+                result.animations.push_back(sub.subId);
+            }
+        }
+        result.nodes = importedNodesFromJson(meta.nodes);
+        if (!meta.skin.is_null())
+        {
+            result.skinDesc = importedSkinFromJson(meta.skin);
+            result.hasSkin = !result.skinDesc.joints.empty();
+        }
+        if (!result.materials.empty())
+        {
+            result.baseColor = result.materials.front().baseColor;
+            result.albedoTexture = result.materials.front().albedoTexture;
+        }
+
+        Entity root = spawnModel(scene, std::string(name), result);
+        addComponent<ModelInstanceComponent>(scene, root).modelId = modelId;
+        return root;
+    }
+
+    // Headless check (GPU-free): bake an unskinned and a skinned container, instantiate each twice
+    // into a scene, and assert two independent entity trees per model with the right mesh sub-id,
+    // material slots, skinning, and a ModelInstanceComponent marking each root.
+    void runInstantiateSelfTest()
+    {
+        AssetServer testAssets;
+        testAssets.root = "/tmp/saffron_inst_test";
+
+        ImportedModel flat;
+        flat.mesh.vertices.resize(3);
+        flat.mesh.indices = { 0, 1, 2 };
+        flat.mesh.submeshes = { Submesh{ .firstIndex = 0, .indexCount = 3, .vertexOffset = 0, .materialSlot = 0 } };
+        ImportedMaterial paint;
+        paint.name = "paint";
+        paint.baseColor = glm::vec4(0.2f, 0.4f, 0.6f, 1.0f);
+        flat.materials = { paint };
+        auto flatBake = bakeModel(testAssets, flat, ImportOptions{}, "/tmp/paintbox.glb", Uuid{ 0 });
+
+        ImportedModel rigged;
+        rigged.mesh.vertices.resize(4);
+        rigged.mesh.indices = { 0, 1, 2, 0, 2, 3 };
+        rigged.mesh.submeshes = { Submesh{ .firstIndex = 0, .indexCount = 6, .vertexOffset = 0, .materialSlot = 0 } };
+        rigged.hasSkin = true;
+        rigged.skin.resize(4);
+        rigged.nodes = { ImportedNode{ .name = "root", .parent = -1 }, ImportedNode{ .name = "joint", .parent = 0 } };
+        rigged.skinDesc.joints = { 0, 1 };
+        rigged.skinDesc.inverseBind = { glm::mat4(1.0f), glm::mat4(1.0f) };
+        rigged.skinDesc.skeletonRoot = 0;
+        rigged.skinDesc.meshNode = 1;
+        ImportedMaterial skin;
+        skin.name = "skin";
+        rigged.materials = { skin };
+        auto riggedBake = bakeModel(testAssets, rigged, ImportOptions{}, "/tmp/dummy.glb", Uuid{ 0 });
+
+        if (!flatBake || !riggedBake)
+        {
+            logError("instantiate self-test: bake failed");
+            return;
+        }
+        for (const AssetEntry& row : flatBake->rows)
+        {
+            putAsset(testAssets.catalog, row);
+        }
+        for (const AssetEntry& row : riggedBake->rows)
+        {
+            putAsset(testAssets.catalog, row);
+        }
+
+        Scene scene;
+        auto flatA = instantiateModel(scene, testAssets, flatBake->modelId, "Paint A");
+        auto flatB = instantiateModel(scene, testAssets, flatBake->modelId, "Paint B");
+        auto riggedA = instantiateModel(scene, testAssets, riggedBake->modelId, "Rig A");
+        auto riggedB = instantiateModel(scene, testAssets, riggedBake->modelId, "Rig B");
+        if (!flatA || !flatB || !riggedA || !riggedB)
+        {
+            logError("instantiate self-test: instantiateModel failed");
+            return;
+        }
+
+        const Uuid flatMeshSubId = subIdFor("paintbox", "mesh", "0", 0);
+        bool ok =
+            getComponent<IdComponent>(scene, *flatA).id.value != getComponent<IdComponent>(scene, *flatB).id.value &&
+            getComponent<IdComponent>(scene, *riggedA).id.value != getComponent<IdComponent>(scene, *riggedB).id.value;
+        ok = ok && hasComponent<MeshComponent>(scene, *flatA) &&
+             getComponent<MeshComponent>(scene, *flatA).mesh.value == flatMeshSubId.value &&
+             hasComponent<MaterialComponent>(scene, *flatA) && hasComponent<ModelInstanceComponent>(scene, *flatA) &&
+             getComponent<ModelInstanceComponent>(scene, *flatA).modelId.value == flatBake->modelId.value;
+        ok = ok && hasComponent<SkinnedMeshComponent>(scene, *riggedA) &&
+             getComponent<SkinnedMeshComponent>(scene, *riggedA).bones.size() == 2 &&
+             hasComponent<ModelInstanceComponent>(scene, *riggedA) &&
+             getComponent<ModelInstanceComponent>(scene, *riggedB).modelId.value == riggedBake->modelId.value;
+
+        if (ok)
+        {
+            logInfo(".smodel instantiate OK (one asset -> two independent trees, materials + skinning intact)");
+        }
+        else
+        {
+            logError(".smodel instantiate MISMATCH");
+        }
+    }
+
+    // Headless check (GPU-free): bake a model, extract its material to a standalone .smat keeping the
+    // sub-id, confirm the remap + standalone row + that the resolver now reads the external file; then
+    // clearExtraction reverts (remap gone, external deleted, row back to the embedded chunk).
+    void runExtractSelfTest()
+    {
+        AssetServer testAssets;
+        testAssets.root = "/tmp/saffron_extract_test";
+        std::error_code ec;
+        std::filesystem::remove_all(testAssets.root, ec);
+
+        ImportedModel graph;
+        graph.mesh.vertices.resize(3);
+        graph.mesh.indices = { 0, 1, 2 };
+        graph.mesh.submeshes = { Submesh{ .firstIndex = 0, .indexCount = 3, .vertexOffset = 0, .materialSlot = 0 } };
+        ImportedMaterial brick;
+        brick.name = "brick";
+        brick.metallic = 0.7f;
+        graph.materials = { brick };
+        auto bake = bakeModel(testAssets, graph, ImportOptions{}, "/tmp/wall.glb", Uuid{ 0 });
+        if (!bake)
+        {
+            logError(std::format("extract self-test: bake failed: {}", bake.error()));
+            return;
+        }
+        for (const AssetEntry& row : bake->rows)
+        {
+            putAsset(testAssets.catalog, row);
+        }
+
+        const Uuid materialSubId = subIdFor("wall", "material", "brick", 0);
+        auto extracted = extractSubAsset(testAssets, bake->modelId, materialSubId, std::string{});
+        if (!extracted)
+        {
+            logError(std::format("extract self-test: extractSubAsset failed: {}", extracted.error()));
+            return;
+        }
+
+        const std::string externalRel = "materials/" + std::to_string(materialSubId.value) + ".smat";
+        const std::string externalFull = testAssets.root + "/" + externalRel;
+        const AssetEntry* row = findAsset(testAssets.catalog, materialSubId);
+        bool ok = extracted->value == materialSubId.value && std::filesystem::exists(externalFull) && row != nullptr &&
+                  row->container.value == 0 && row->path == externalRel;
+        if (auto meta = readContainerMetadata(testAssets.root + "/" + bake->path); meta)
+        {
+            ok = ok && meta->remap.is_object() && meta->remap.contains(std::to_string(materialSubId.value));
+        }
+        else
+        {
+            ok = false;
+        }
+        // The resolver prefers the external file now (metallic survives the round-trip through it).
+        if (auto material = resolveMaterial(testAssets, bake->modelId, materialSubId); material)
+        {
+            ok = ok && material->metallic > 0.69f && material->metallic < 0.71f;
+        }
+        else
+        {
+            ok = false;
+        }
+
+        auto cleared = clearExtraction(testAssets, bake->modelId, materialSubId);
+        const AssetEntry* reverted = findAsset(testAssets.catalog, materialSubId);
+        bool revertOk = cleared.has_value() && !std::filesystem::exists(externalFull) && reverted != nullptr &&
+                        reverted->container.value == bake->modelId.value;
+        if (auto meta = readContainerMetadata(testAssets.root + "/" + bake->path); meta)
+        {
+            revertOk =
+                revertOk && (!meta->remap.is_object() || !meta->remap.contains(std::to_string(materialSubId.value)));
+        }
+        else
+        {
+            revertOk = false;
+        }
+
+        if (ok && revertOk)
+        {
+            logInfo(".smodel extract + clear OK (standalone keeps sub-id, remap drives resolution, revert restores)");
+        }
+        else
+        {
+            logError(std::format(".smodel extract/clear MISMATCH (extract={}, revert={})", ok, revertOk));
+        }
+    }
+
+    // Headless check: import a real glTF into a container, then exercise reimport's three outcomes —
+    // an unchanged source skips, a drifted sourceHash re-bakes (same stable sub-ids → all `updated`),
+    // and the refreshed hash makes the next reimport skip again.
+    void runReimportSelfTest()
+    {
+        AssetServer testAssets;
+        testAssets.root = "/tmp/saffron_reimport_test";
+        std::error_code ec;
+        std::filesystem::remove_all(testAssets.root, ec);
+
+        const std::string source = assetPath("models/cube.gltf");
+        auto bake = importModel(testAssets, source, ImportOptions{});
+        if (!bake)
+        {
+            logError(std::format("reimport self-test: import failed: {}", bake.error()));
+            return;
+        }
+        const std::string containerPath = testAssets.root + "/" + bake->path;
+
+        auto first = reimportModel(testAssets, bake->modelId);
+        const bool skipUnchanged = first && first->skipped;
+
+        // Force a re-bake by staling the stored source hash.
+        if (auto reader = readContainer(containerPath); reader)
+        {
+            if (auto meta = readContainerMetadata(containerPath); meta)
+            {
+                meta->import.sourceHash = "stale";
+                static_cast<void>(rewriteContainerMeta(containerPath, *reader, *meta));
+                testAssets.modelRefByUuid.erase(bake->modelId.value);
+            }
+        }
+        auto second = reimportModel(testAssets, bake->modelId);
+        const bool rebaked = second && !second->skipped && !second->updated.empty();
+
+        auto third = reimportModel(testAssets, bake->modelId);
+        const bool reskipped = third && third->skipped;
+
+        if (skipUnchanged && rebaked && reskipped)
+        {
+            logInfo(".smodel reimport OK (skip-if-unchanged, re-bake on drift with stable sub-ids)");
+        }
+        else
+        {
+            logError(std::format(".smodel reimport MISMATCH (skip={}, rebake={}, reskip={})", skipUnchanged, rebaked,
+                                 reskipped));
+        }
     }
 
     // The per-submesh materials for one renderable, plus the entity-level unlit flag
@@ -2657,7 +5364,7 @@ return {0}
             return visual.mesh ? &visual : nullptr;
         }
         visual.attempted = true;
-        auto model = importModelWithMaterial(assetPath("models/editor-camera.glb"));
+        auto model = translateModel(assetPath("models/editor-camera.glb"));
         if (!model)
         {
             logWarn(std::format("editor camera model: {}", model.error()));
@@ -3245,7 +5952,8 @@ return {0}
         AssetType type = AssetType::Texture;
         std::string cachePath;                                 // <projectRoot>/cache/thumbnails/<…>.png
         ThumbnailTextureSource texture;                        // type == Texture
-        std::string meshPath;                                  // type == Mesh (.smesh, absolute)
+        std::string meshPath;                                  // type == Mesh (standalone .smesh, absolute)
+        std::vector<std::byte> meshBytes;                      // type == Mesh, embedded: the .smesh chunk image
         MaterialAsset material;                                // type == Material (parent-resolved)
         std::vector<ThumbnailTextureSource> materialTextures;  // the material's referenced textures
     };
@@ -3327,7 +6035,10 @@ return {0}
         }
         if (job.type == AssetType::Mesh)
         {
-            auto mesh = loadMesh(job.meshPath);
+            // Embedded sub-assets ship the .smesh chunk image in meshBytes (resolved on the main thread,
+            // since the worker has no AssetServer); standalone meshes load from their file path.
+            auto mesh = job.meshBytes.empty() ? loadMesh(job.meshPath)
+                                              : loadMeshFromBytes(std::span<const std::byte>{ job.meshBytes });
             if (!mesh)
             {
                 return Err(mesh.error());
@@ -3554,10 +6265,56 @@ return {0}
             stamp = thumbnailSourceStamp(assets, *match);
             job.texture = ThumbnailTextureSource{ id, assets.root + "/" + match->path, match->hdr, !match->linear };
         }
-        else if (match->type == AssetType::Mesh)
+        else if (match->type == AssetType::Mesh && match->container.value == 0)
         {
             stamp = thumbnailSourceStamp(assets, *match);
             job.meshPath = assets.root + "/" + match->path;
+        }
+        else if (match->type == AssetType::Mesh || match->type == AssetType::Model)
+        {
+            // An embedded mesh, or a model (previewed as its primary mesh sub-asset): resolve the
+            // .smesh chunk bytes from the container on this (main) thread — the worker has no
+            // AssetServer, so it parses the bytes we hand it rather than touching the catalog.
+            Uuid containerId = match->container;
+            Uuid meshSubId = id;
+            if (match->type == AssetType::Model)
+            {
+                containerId = id;
+                meshSubId = Uuid{ 0 };
+                if (auto model = loadModelAsset(assets, id))
+                {
+                    for (const ContainerMetadata::SubAsset& sub : model->meta.subAssets)
+                    {
+                        if (sub.type == AssetType::Mesh)
+                        {
+                            meshSubId = sub.subId;
+                            break;
+                        }
+                    }
+                }
+                if (meshSubId.value == 0)
+                {
+                    return Err(std::format("model {} has no mesh to preview", id.value));
+                }
+            }
+            auto container = loadModelAsset(assets, containerId);
+            if (!container)
+            {
+                return Err(std::format("model {} is not loadable", containerId.value));
+            }
+            const ByteSource source = chunkSourceFor(assets, *container, ChunkKind::Mesh, meshSubId);
+            if (source.path.empty())
+            {
+                return Err(std::format("no mesh chunk for sub-asset {}", meshSubId.value));
+            }
+            auto bytes = source.read();
+            if (!bytes)
+            {
+                return Err(bytes.error());
+            }
+            stamp = thumbnailSourceStamp(assets, *match);
+            job.type = AssetType::Mesh;
+            job.meshBytes = std::move(*bytes);
         }
         else
         {

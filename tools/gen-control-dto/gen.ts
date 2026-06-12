@@ -85,7 +85,7 @@ const enumWireNames = new Map<string, Record<string, string>>([
   ["GiModeDto", { Off: "off", Ddgi: "ddgi" }],
   ["AssetSlotDto", { Mesh: "mesh", Albedo: "albedo", MetallicRoughness: "metallic-roughness", Normal: "normal", Occlusion: "occlusion", Emissive: "emissive", Height: "height" }],
   ["ScreenshotTargetDto", { Viewport: "viewport", Window: "window" }],
-  ["AssetTypeDto", { Mesh: "mesh", Texture: "texture", Other: "other", Animation: "animation" }],
+  ["AssetTypeDto", { Mesh: "mesh", Texture: "texture", Other: "other", Animation: "animation", Material: "material", Model: "model" }],
   ["ProfilerModeDto", { Off: "off", Timestamps: "timestamps", PipelineStats: "pipeline-stats" }],
   ["ProfileLaneDto", { Cpu: "cpu", Gpu: "gpu" }],
   ["CaptureModeDto", { Single: "single", Frames: "frames", Rolling: "rolling" }],
@@ -573,6 +573,12 @@ const commands: CommandDef[] = [
     summary: "import-model {path}",
   },
   {
+    name: "instantiate-model",
+    params: "InstantiateModelParams",
+    result: "EntityRef",
+    summary: "instantiate-model {asset} [name]",
+  },
+  {
     name: "import-texture",
     params: "PathParams",
     result: "ImportTextureResult",
@@ -583,6 +589,54 @@ const commands: CommandDef[] = [
     params: "EmptyParams",
     result: "AssetList",
     summary: "list project asset catalog",
+  },
+  {
+    name: "scan-assets",
+    params: "EmptyParams",
+    result: "ScanAssetsResult",
+    summary: "rescan assets/ and reconcile the catalog from disk",
+  },
+  {
+    name: "extract-subasset",
+    params: "ExtractSubAssetParams",
+    result: "AssetRef",
+    summary: "extract-subasset {asset, subAsset} [dest] — slice an embedded sub-asset to a standalone file",
+  },
+  {
+    name: "clear-extraction",
+    params: "ClearExtractionParams",
+    result: "AssetRef",
+    summary: "clear-extraction {asset, subAsset} — revert an extracted sub-asset to the embedded chunk",
+  },
+  {
+    name: "reimport-model",
+    params: "ReimportModelParams",
+    result: "ReimportModelResult",
+    summary: "reimport-model {asset} — re-bake from source (skip if unchanged), preserving extractions",
+  },
+  {
+    name: "model-info",
+    params: "ModelInfoParams",
+    result: "ModelInfoResult",
+    summary: "model-info {asset} — a container's sub-assets, source recipe, and byte footprint",
+  },
+  {
+    name: "asset-references",
+    params: "AssetReferencesParams",
+    result: "AssetReferencesResult",
+    summary: "asset-references {asset} — what references this / what this references + footprint",
+  },
+  {
+    name: "clean-assets",
+    params: "CleanAssetsParams",
+    result: "CleanReport",
+    summary: "clean-assets [exclude] — categorized cleanup report (dry-run; never deletes)",
+  },
+  {
+    name: "delete-unused",
+    params: "DeleteUnusedParams",
+    result: "DeleteUnusedResult",
+    summary: "delete-unused {ids} {confirm} — delete confirmed-unused assets, then rescan",
   },
   {
     name: "rename-asset",
@@ -841,10 +895,19 @@ const commandFixtures = new Map<string, string>([
   ["get-thumbnail", "mesh-asset"],
   ["view-asset", "mesh-asset-view"],
   ["thumbnail-cache", "thumbnail-cache-stats"],
+  ["scan-assets", "empty"],
+  ["clean-assets", "empty"],
 ]);
 
 const commandSkips = new Map<string, string>([
   ["import-model", "requires an external model fixture path"],
+  ["instantiate-model", "requires a model asset id from a prior import"],
+  ["extract-subasset", "requires a model + sub-asset id from a prior import"],
+  ["clear-extraction", "requires an extracted sub-asset from a prior import"],
+  ["reimport-model", "requires a model asset id from a prior import"],
+  ["model-info", "requires a model asset id from a prior import"],
+  ["asset-references", "requires an asset id from a prior import"],
+  ["delete-unused", "destructive: requires confirmed-unused asset ids"],
   ["import-texture", "requires an external texture fixture path"],
   ["create-asset-folder", "mutates the project asset catalog"],
   ["rename-asset-folder", "mutates the project asset catalog"],
@@ -1509,7 +1572,7 @@ function tsType(type: string): string {
     case "ScreenshotTargetDto":
       return '"viewport" | "window"';
     case "AssetTypeDto":
-      return '"mesh" | "texture" | "other" | "animation"';
+      return '"mesh" | "texture" | "other" | "animation" | "material" | "model"';
     case "ProfilerModeDto":
       return '"off" | "timestamps" | "pipeline-stats"';
     case "ProfileLaneDto":
@@ -1659,6 +1722,10 @@ export interface SkinnedMesh {
 
 export interface Bone {}
 
+export interface ModelInstance {
+  modelId: WireUuid;
+}
+
 export interface FootChainDto {
   upper: number;
   mid: number;
@@ -1734,6 +1801,7 @@ export type ComponentBody =
   | Relationship
   | SkinnedMesh
   | Bone
+  | ModelInstance
   | FootIk
   | BonePhysics
   | Record<string, unknown>;`;
@@ -1847,6 +1915,7 @@ function componentSchemas(): Record<string, unknown> {
     "Relationship",
     "SkinnedMesh",
     "Bone",
+    "ModelInstance",
     "FootIk",
     "BonePhysics",
   ];
@@ -2010,6 +2079,12 @@ function componentSchemas(): Record<string, unknown> {
       type: "object",
       additionalProperties: false,
       properties: {},
+    },
+    ModelInstance: {
+      type: "object",
+      additionalProperties: false,
+      properties: { modelId: uuid },
+      required: ["modelId"],
     },
     FootIk: {
       type: "object",

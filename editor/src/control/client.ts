@@ -416,14 +416,52 @@ export const client = {
   materialCompileGraph(material: string) {
     return call("material-compile-graph", { material });
   },
-  /// Import a model from a filesystem path; the engine spawns + selects an entity
-  /// and returns its ref plus the created mesh/albedo asset ids.
-  importModel(path: string): Promise<EntityRef & { mesh: string; albedoTexture: string }> {
+  /// Import a model from a filesystem path: bakes one .smodel asset + catalog rows and returns the
+  /// model asset ref. instantiateModel places it into the scene.
+  importModel(path: string): Promise<CommandResultMap["import-model"]> {
     return call("import-model", { path });
   },
-  /// Import a texture from a filesystem path into the catalog (no spawn).
+  /// Import a texture from a filesystem path into the catalog.
   importTexture(path: string): Promise<{ texture: string }> {
     return call("import-texture", { path });
+  },
+  /// Expand a model asset's stored hierarchy into the scene; returns the new root entity.
+  instantiateModel(asset: string, name?: string): Promise<EntityRef> {
+    return name === undefined ? call("instantiate-model", { asset }) : call("instantiate-model", { asset, name });
+  },
+  /// Rescan assets/ and reconcile the catalog from disk; returns added/removed counts.
+  scanAssets(): Promise<CommandResultMap["scan-assets"]> {
+    return call("scan-assets");
+  },
+  /// Slice an embedded sub-asset to a standalone file (keeping its id) + remap the container.
+  extractSubAsset(asset: string, subAsset: string, dest?: string): Promise<CommandResultMap["extract-subasset"]> {
+    return dest === undefined
+      ? call("extract-subasset", { asset, subAsset })
+      : call("extract-subasset", { asset, subAsset, dest });
+  },
+  /// Revert an extracted sub-asset to the embedded chunk.
+  clearExtraction(asset: string, subAsset: string): Promise<CommandResultMap["clear-extraction"]> {
+    return call("clear-extraction", { asset, subAsset });
+  },
+  /// Re-bake a model from its source (skip if unchanged), preserving extractions.
+  reimportModel(asset: string): Promise<CommandResultMap["reimport-model"]> {
+    return call("reimport-model", { asset });
+  },
+  /// A container's sub-assets, source recipe, and byte footprint.
+  modelInfo(asset: string): Promise<CommandResultMap["model-info"]> {
+    return call("model-info", { asset });
+  },
+  /// What references this / what this references + footprint.
+  assetReferences(asset: string): Promise<CommandResultMap["asset-references"]> {
+    return call("asset-references", { asset });
+  },
+  /// A categorized cleanup report (dry-run; never deletes).
+  cleanAssets(exclude?: string[]): Promise<CommandResultMap["clean-assets"]> {
+    return exclude === undefined ? call("clean-assets", {}) : call("clean-assets", { exclude });
+  },
+  /// Delete confirmed-unused assets (requires confirm), then rescan.
+  deleteUnused(ids: string[], confirm: boolean): Promise<CommandResultMap["delete-unused"]> {
+    return call("delete-unused", { ids, confirm });
   },
 
   // --- projects ---

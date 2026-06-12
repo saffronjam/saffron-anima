@@ -6,6 +6,7 @@ module;
 #include <glm/gtc/quaternion.hpp>
 
 #include <expected>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -103,6 +104,9 @@ export namespace se
     struct AnimationRuntime
     {
         std::unordered_map<u64, AnimClip> clipCache;
+        /// Resolves a clip Uuid to its CPU AnimClip on a cache miss. The Host installs it, since clip
+        /// bytes live in a `.smodel` container whose reader is in Saffron.Assets; unset, no clip loads.
+        std::function<Result<AnimClip>(Uuid)> clipLoader;
         std::unordered_map<u64, TransitionState> transitions;  // active clip switches by entity uuid
         // Each rig's previous-frame final local pose (by entity uuid). Snapshotted at the end
         // of every tick; the eventual physics handoff finite-differences it for per-bone
@@ -113,11 +117,10 @@ export namespace se
     /// Sample and (when playing) advance every AnimationPlayerComponent on a SkinnedMesh
     /// rig, writing a PoseOverrideComponent onto each driven bone — and removing it from an
     /// inactive rig's bones so they fall back to the authored rest pose. In Play every rig
-    /// animates; in Edit only a `previewInEdit` rig does. `catalog` + `assetRoot` resolve a
-    /// clip Uuid to its `.sanim` (loaded once into `runtime`). Never writes a bone's
+    /// animates; in Edit only a `previewInEdit` rig does. A clip Uuid resolves through the
+    /// runtime's `clipLoader` (loaded once into `runtime`). Never writes a bone's
     /// TransformComponent, so the rest pose and the project's dirty state stay untouched.
-    void tickAnimation(AnimationRuntime& runtime, Scene& scene, const AssetCatalog& catalog, std::string_view assetRoot,
-                       f32 dt, AnimMode mode);
+    void tickAnimation(AnimationRuntime& runtime, Scene& scene, f32 dt, AnimMode mode);
 
     /// Headless unit gate (mirrors the jointMatrices self-test): samples known STEP/
     /// LINEAR/CUBICSPLINE keys and asserts endpoints are exact and midpoints match

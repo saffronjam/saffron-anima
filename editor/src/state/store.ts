@@ -235,6 +235,17 @@ export interface EditorState {
   /// Re-fetch the catalog from the engine into `assets`. Called by the reconcile
   /// poll on a sceneVersion change and eagerly after an import/rename.
   refreshAssets(): Promise<void>;
+  /// Instantiate a model asset into the scene (the decoupled "import once, instance many"
+  /// path), then refresh the catalog. Returns the new root entity id, or null on failure.
+  instantiateModel(modelId: string, name?: string): Promise<string | null>;
+  /// Extract an embedded sub-asset to a standalone file (keeping its id), then refresh.
+  extractSubAsset(modelId: string, subAssetId: string): Promise<void>;
+  /// Revert an extracted sub-asset to the embedded chunk, then refresh.
+  clearExtraction(modelId: string, subAssetId: string): Promise<void>;
+  /// Rescan assets/ and reconcile the catalog from disk, then refresh.
+  scanAssets(): Promise<void>;
+  /// Re-bake a model from its source (skip if unchanged), then refresh.
+  reimportModel(modelId: string): Promise<void>;
   /// Click selection for Assets-grid tiles: plain replaces, toggle (ctrl/meta)
   /// flips membership, shift unions the anchor→key range along `gridOrder` (an
   /// absent anchor falls through to the plain/toggle path).
@@ -494,6 +505,28 @@ export const useEditorStore = create<EditorState>((set) => ({
     } catch {
       // Engine may be briefly busy; the next reconcile tick recovers.
     }
+  },
+  // The decoupled-flow actions let a rejected control call propagate, so the calling panel
+  // surfaces it through notifyError (the AGENTS toast rule); they refresh the catalog on success.
+  instantiateModel: async (modelId, name) => {
+    const entity = await client.instantiateModel(modelId, name);
+    return entity.id ?? null;
+  },
+  extractSubAsset: async (modelId, subAssetId) => {
+    await client.extractSubAsset(modelId, subAssetId);
+    await useEditorStore.getState().refreshAssets();
+  },
+  clearExtraction: async (modelId, subAssetId) => {
+    await client.clearExtraction(modelId, subAssetId);
+    await useEditorStore.getState().refreshAssets();
+  },
+  scanAssets: async () => {
+    await client.scanAssets();
+    await useEditorStore.getState().refreshAssets();
+  },
+  reimportModel: async (modelId) => {
+    await client.reimportModel(modelId);
+    await useEditorStore.getState().refreshAssets();
   },
   selectAssetGridItem: (kind, key, modifiers, gridOrder) =>
     set((s) => {

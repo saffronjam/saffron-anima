@@ -618,6 +618,12 @@ export namespace se
             state->control = se::newControlContext();
             state->assets = se::newAssetServer(se::assetPath("assets"));
 
+            // The animation evaluator lives below Saffron.Assets, so it can't read a clip out of its
+            // `.smodel` container itself; the Host hands it a loader that resolves a clip id to bytes.
+            // The runtime and the AssetServer are siblings in HostState, so a raw pointer is lifetime-safe.
+            se::AssetServer* assets = &state->assets;
+            state->animation.clipLoader = [assets](se::Uuid id) { return se::loadAnimationClipAsset(*assets, id); };
+
             // Registered here, not in Saffron.Control: the handler needs the Lua
             // schema reader, and the Host is the only TU that may import Script.
             se::registerCommand<se::GetScriptSchemaParams, se::GetScriptSchemaResult>(
@@ -715,6 +721,13 @@ export namespace se
                 se::runSceneHierarchySelfTest();
                 se::runPlayModeSelfTest();
                 se::runGeometrySelfTest(se::assetPath("models"));
+                se::runContainerMetadataSelfTest();
+                se::runCatalogLinkageSelfTest();
+                se::runBakeModelSelfTest();
+                se::runChunkLoaderSelfTest();
+                se::runInstantiateSelfTest();
+                se::runExtractSelfTest();
+                se::runReimportSelfTest();
                 if (auto animation = se::runAnimationSelfTest(); !animation)
                 {
                     se::logError(animation.error());
@@ -844,8 +857,7 @@ export namespace se
                 // writes runtime PoseOverrideComponents, never the authored rest pose.
                 const se::AnimMode animMode =
                     state->editor->playState == se::PlayState::Edit ? se::AnimMode::Edit : se::AnimMode::Play;
-                se::tickAnimation(state->animation, se::activeScene(*state->editor), state->assets.catalog,
-                                  state->assets.root, dt.seconds, animMode);
+                se::tickAnimation(state->animation, se::activeScene(*state->editor), dt.seconds, animMode);
                 // Control first, tick second: a play/pause/step command that arrives this
                 // frame takes effect this frame (a step runs its tick the same frame).
                 se::tickPlay(*state->editor, dt.seconds);
