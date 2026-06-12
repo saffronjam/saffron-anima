@@ -2130,6 +2130,24 @@
       }
     },
     {
+      "name": "thumbnail-cache",
+      "summary": "inspect or empty the thumbnail disk cache",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ThumbnailCacheParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ThumbnailCacheResult"
+        }
+      }
+    },
+    {
       "name": "quit",
       "summary": "close the running app",
       "params": [
@@ -5793,6 +5811,34 @@
         },
         "required": []
       },
+      "ThumbnailCacheParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "ThumbnailCacheResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "type": "integer"
+          },
+          "bytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entries",
+          "bytes"
+        ]
+      },
       "ThumbnailParams": {
         "type": "object",
         "additionalProperties": false,
@@ -5833,6 +5879,9 @@
           },
           "base64": {
             "type": "string"
+          },
+          "pending": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -5840,7 +5889,8 @@
           "format",
           "width",
           "height",
-          "base64"
+          "base64",
+          "pending"
         ]
       },
       "ToggleParams": {

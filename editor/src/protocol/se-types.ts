@@ -1221,6 +1221,16 @@ export interface ThumbnailResult {
   width: number;
   height: number;
   base64: string;
+  pending: boolean;
+}
+
+export interface ThumbnailCacheParams {
+  action: string;
+}
+
+export interface ThumbnailCacheResult {
+  entries: number;
+  bytes: number;
 }
 
 export interface QuitResult {
@@ -1346,6 +1356,7 @@ export interface CommandParamsMap {
   "screenshot": ScreenshotParams;
   "get-thumbnail": ThumbnailParams;
   "view-asset": ThumbnailParams;
+  "thumbnail-cache": ThumbnailCacheParams;
   "quit": EmptyParams;
 }
 
@@ -1468,5 +1479,6 @@ export interface CommandResultMap {
   "screenshot": ScreenshotResult;
   "get-thumbnail": ThumbnailResult;
   "view-asset": ThumbnailResult;
+  "thumbnail-cache": ThumbnailCacheResult;
   "quit": QuitResult;
 }

@@ -828,6 +828,13 @@
       "fixture": "mesh-asset-view"
     },
     {
+      "name": "thumbnail-cache",
+      "params": "ThumbnailCacheParams",
+      "result": "ThumbnailCacheResult",
+      "status": "typed",
+      "fixture": "thumbnail-cache-stats"
+    },
+    {
       "name": "quit",
       "params": "EmptyParams",
       "result": "QuitResult",

@@ -743,6 +743,12 @@ const commands: CommandDef[] = [
     result: "ThumbnailResult",
     summary: "view asset thumbnail",
   },
+  {
+    name: "thumbnail-cache",
+    params: "ThumbnailCacheParams",
+    result: "ThumbnailCacheResult",
+    summary: "inspect or empty the thumbnail disk cache",
+  },
   { name: "quit", params: "EmptyParams", result: "QuitResult", summary: "close the running app" },
 ];
 
@@ -834,6 +840,7 @@ const commandFixtures = new Map<string, string>([
   ["load-project", "project-name"],
   ["get-thumbnail", "mesh-asset"],
   ["view-asset", "mesh-asset-view"],
+  ["thumbnail-cache", "thumbnail-cache-stats"],
 ]);
 
 const commandSkips = new Map<string, string>([

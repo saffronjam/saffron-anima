@@ -299,6 +299,8 @@ async function paramsForFixture(fixture: string, state: { cubeId: string }): Pro
       return { asset: await meshAssetId() };
     case "mesh-asset-view":
       return { asset: await meshAssetId(), size: 64 };
+    case "thumbnail-cache-stats":
+      return { action: "stats" };
     case "mesh-asset-rename":
       return { asset: await meshAssetId(), name: `contract-mesh-${process.pid}` };
     case "cube-mesh-asset": {
