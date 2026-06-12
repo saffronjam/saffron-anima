@@ -4,23 +4,14 @@
 /// the engine over the control plane. A <LoadingOverlay/> sibling covers the region
 /// while the renderer is not yet ready.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { client, type ViewportBounds } from "../control/client";
+import { client } from "../control/client";
 import { makeCoalescer } from "../control/coalesce";
 import { useEditorStore } from "../state/store";
 import { LoadingOverlay } from "../app/LoadingOverlay";
-import { onLayoutSettled } from "../app/layoutBus";
+import { useSubsurfaceBounds } from "../lib/useSubsurfaceBounds";
 import { bindingFor } from "../lib/keybindings";
-
-/// Resize-end commit debounce: after the last layout/resize change settles, send one
-/// final exact bounds — this is the tier that also resizes the engine's render target
-/// (expensive offscreen recreation, so never on live drag ticks).
-const RESIZE_END_DEBOUNCE_MS = 150;
-
-/// Live-sync throttle during a drag: the subsurface geometry (position + stretched
-/// destination) tracks the host div at this cadence; the engine keeps rendering at the
-/// old size until the end commit.
-const LIVE_SYNC_THROTTLE_MS = 16;
+import { assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
+import { errorText, notify, notifyError } from "../lib/flash";
 
 /// Pointer travel (CSS px) below which a press-release is treated as a click
 /// (ray-pick) rather than a gizmo drag.
@@ -32,34 +23,6 @@ const FLY_STREAM_MS = 16;
 
 /// Throttle for streamed gizmo pointer phases (hover/drag), in milliseconds.
 const GIZMO_STREAM_MS = 16;
-
-/// Read the div's logical CSS rect + the window scale factor. Rust positions the
-/// subsurface in logical units and derives the engine's device-pixel render size.
-async function computeBounds(el: HTMLElement): Promise<ViewportBounds | null> {
-  const rect = el.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) {
-    return null;
-  }
-  const scale = await getCurrentWindow().scaleFactor();
-  return {
-    x: Math.round(rect.x),
-    y: Math.round(rect.y),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height),
-    scale,
-  };
-}
-
-function boundsEqual(a: ViewportBounds | null, b: ViewportBounds): boolean {
-  return (
-    a !== null &&
-    a.x === b.x &&
-    a.y === b.y &&
-    a.width === b.width &&
-    a.height === b.height &&
-    a.scale === b.scale
-  );
-}
 
 /// Normalized [0,1] viewport coordinate, (0,0) = top-left.
 interface Uv {
@@ -189,95 +152,9 @@ export function ViewportPanel() {
     };
   }, [setPhase]);
 
-  // Bounds-sync: keep the subsurface glued on resize / dock split changes. Two tiers:
-  //   - a THROTTLED live sync (~50ms) on every host-div geometry change (the
-  //     ResizeObserver fires during a drag) so the subsurface roughly tracks;
-  //   - a single DEBOUNCED resize-end commit (~150ms) so the final bounds land
-  //     exactly even if the throttle dropped the last drag frame.
-  // The layout bus (Layout's onLayoutChanged) drives the same resize-end commit so a
-  // panel-split that settles without further div mutation still commits.
-  useEffect(() => {
-    const el = hostRef.current;
-    if (!el) {
-      return;
-    }
-    let cancelled = false;
-    let lastSent: ViewportBounds | null = null;
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    let lastLiveSent = 0;
-    let liveTimer: ReturnType<typeof setTimeout> | null = null;
-
-    // Live tier moves/stretches the subsurface only; the end tier (resizeEngine) also
-    // commits the device-pixel render size so the engine re-renders sharp at the final
-    // rect — once per gesture instead of per drag tick.
-    const commit = async (resizeEngine: boolean, force = false): Promise<void> => {
-      if (cancelled) {
-        return;
-      }
-      const bounds = await computeBounds(el);
-      if (cancelled || !bounds) {
-        return;
-      }
-      if (!force && !resizeEngine && boundsEqual(lastSent, bounds)) {
-        return;
-      }
-      lastSent = bounds;
-      try {
-        await client.setViewportBounds(bounds, resizeEngine);
-      } catch {
-        // The bridge may be briefly unavailable; the next sync recovers.
-      }
-    };
-
-    const scheduleEndCommit = (force = false): void => {
-      if (debounceTimer !== null) {
-        clearTimeout(debounceTimer);
-      }
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null;
-        void commit(true, force);
-      }, RESIZE_END_DEBOUNCE_MS);
-    };
-
-    const liveSync = (): void => {
-      const now = Date.now();
-      const elapsed = now - lastLiveSent;
-      if (elapsed >= LIVE_SYNC_THROTTLE_MS) {
-        lastLiveSent = now;
-        void commit(false);
-      } else if (liveTimer === null) {
-        liveTimer = setTimeout(() => {
-          liveTimer = null;
-          lastLiveSent = Date.now();
-          void commit(false);
-        }, LIVE_SYNC_THROTTLE_MS - elapsed);
-      }
-    };
-
-    const onGeometryChange = (): void => {
-      liveSync();
-      scheduleEndCommit();
-    };
-
-    void commit(true, true);
-    const observer = new ResizeObserver(onGeometryChange);
-    observer.observe(el);
-    window.addEventListener("resize", onGeometryChange);
-    const offLayout = onLayoutSettled((event) => scheduleEndCommit(event.force === true));
-
-    return () => {
-      cancelled = true;
-      observer.disconnect();
-      window.removeEventListener("resize", onGeometryChange);
-      offLayout();
-      if (debounceTimer !== null) {
-        clearTimeout(debounceTimer);
-      }
-      if (liveTimer !== null) {
-        clearTimeout(liveTimer);
-      }
-    };
-  }, []);
+  // Bounds-sync: keep the engine's subsurface glued to the host div on resize / dock-split / layout
+  // changes (extracted so the rig editor's preview pane can drive the same single subsurface).
+  useSubsurfaceBounds(hostRef);
 
   useEffect(() => {
     const pressed = new Set<string>();
@@ -618,6 +495,32 @@ export function ViewportPanel() {
       className={`relative h-full w-full overflow-hidden ${
         viewportHidden ? "bg-background" : "bg-transparent"
       }`}
+      // Dropping a model asset from the catalog onto the viewport instantiates it into the scene.
+      // The webview composites over the subsurface, so this transparent region is a valid HTML5
+      // drop target even though the rendered pixels live below it. Asset drags carry
+      // `application/x-se-asset`; other drags fall through.
+      onDragOver={(e) => {
+        if (readAssetPayload(e.dataTransfer)) {
+          e.preventDefault();
+        }
+      }}
+      onDrop={(e) => {
+        const ids = assetIdsFromPayload(readAssetPayload(e.dataTransfer));
+        if (ids.length === 0) {
+          return;
+        }
+        e.preventDefault();
+        const state = useEditorStore.getState();
+        const models = ids.filter(
+          (id) => state.assets.find((asset) => asset.id === id)?.type === "model",
+        );
+        for (const id of models) {
+          void state
+            .instantiateModel(id)
+            .then(() => notify("Added to scene"))
+            .catch((err: unknown) => notifyError(errorText(err)));
+        }
+      }}
     >
       <div ref={hostRef} className="viewport-host" />
       <LoadingOverlay />
