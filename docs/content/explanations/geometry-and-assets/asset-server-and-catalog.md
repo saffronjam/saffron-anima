@@ -64,6 +64,22 @@ to a `const AssetEntry*`; `uniqueName` appends ` (2)`, ` (3)`, … so two import
 so the registry-driven inspector can read it without depending on the renderer; the `Scene`
 borrows a `const AssetCatalog*` for inspector pickers.
 
+`AssetEntry` also carries optional container linkage — `container` (the owning
+[`.smodel`](../smodel-container/)) and `chunk` — so one row can be the model and another a
+mesh/material/texture embedded inside it, resolved by `(container, sub-id)`. `colorspace`
+records how a texture's bytes are interpreted, recovered from a chunk flag or a `.smeta`.
+
+## The filesystem is the source of truth
+
+The catalog is **derived from a scan**, not authored in `project.json`. `scanAssets` walks
+`assets/`, prefix-reads every `.smodel` into a `Model` row plus a row per sub-asset, and
+identifies engine-written standalone files by their uuid filename. A foreign file with no
+identity in its bytes (a raw `.png` dropped in) gets a `.smeta` sidecar holding its id and
+colorspace, minted on first sight. `loadProject` reconciles the loaded catalog against the
+scan, so an import you never saved is rediscovered rather than orphaned. `assets/.cache/
+catalog.json` memoizes the scan keyed by a signature of the tree; it is a latency shortcut
+only — delete it and a cold scan rebuilds an identical catalog.
+
 ## Resolving an id to a GPU resource
 
 `loadMeshAsset` and `loadTextureAsset` are the resolve-on-demand front doors. Both share a
@@ -103,10 +119,12 @@ asset from flooding the log and re-hitting the disk many times a second.
 | The server | `assets.cppm` | `AssetServer`, `newAssetServer` |
 | Catalog type | `scene.cppm` | `AssetCatalog`, `AssetEntry`, `AssetType` |
 | Catalog ops | `scene.cppm` | `putAsset`, `findAsset`, `renameAsset`, `uniqueName` |
-| Resolve + cache | `assets.cppm` | `loadMeshAsset`, `loadTextureAsset` |
+| Resolve + cache | `assets.cppm` | `loadMeshAsset`, `loadTextureAsset`, `resolveMesh` |
+| Scan + sidecar + cache | `assets.cppm` | `scanAssets`, `readSmeta`, `loadCatalog` |
 
 ## Related
 
+- [The .smodel container](../smodel-container/) — the scanned, self-describing model file
 - [Import pipeline](../import-pipeline/) — how entries get into the catalog
 - [Project files](../project-serialization/) — how the catalog persists
 - [Draw list](../draw-list/) — calls the resolvers per entity per frame

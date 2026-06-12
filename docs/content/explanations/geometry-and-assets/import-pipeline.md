@@ -6,62 +6,52 @@ weight = 7
 # Import pipeline
 
 The import pipeline is the write side of the asset system: it turns an external file into a
-project asset. An import copies or bakes the source into the project's asset directory,
-uploads it to the GPU, and adds a named entry to the [catalog](../asset-server-and-catalog/).
+project asset. Importing a model bakes the source into one [`.smodel` container](../smodel-container/)
+under the project's asset directory and adds the catalog entries it contributes. It does not touch
+the GPU and does not spawn anything; placing the asset in a scene is a separate step.
 
 Resolution — turning a cached id back into a `Ref` — is the read side. This page covers
 import alone.
 
 ## Importing a model
 
-`importModel` is the full chain from a source file to a ready-to-draw asset:
+`importModel` is the full chain from a source file to a stored asset:
 
 ```cpp
-auto model = importModelWithMaterial(path);          // parse glTF/OBJ
-const Uuid meshId = newUuid();
-const std::string relativePath = "meshes/" + std::to_string(meshId.value) + ".smesh";
-saveMesh(model->mesh, assets.root + "/" + relativePath);   // bake
-auto meshRef = uploadMesh(renderer, model->mesh);          // upload
-putAsset(assets.catalog, AssetEntry{ meshId, uniqueName(...), AssetType::Mesh, relativePath });
-assets.meshRefByUuid[meshId.value] = *meshRef;             // seed the cache
+auto graph = translateModel(path);                       // parse glTF/OBJ into a format-neutral graph
+auto bake = bakeModel(assets, *graph, options, path, Uuid{ 0 });   // write one .smodel
+for (const AssetEntry& row : bake->rows) putAsset(assets.catalog, row);   // catalog the container + sub-assets
 ```
 
 The steps run in order:
 
-1. Parse the source through the [importer](../gltf-and-obj-import/).
-2. Mint a UUID.
-3. Bake the mesh to a [`.smesh`](../smesh-format/) named by that UUID.
-4. Upload it to the GPU.
-5. Add a catalog entry named by the source filename stem, deduped by `uniqueName`.
-6. Seed the GPU cache so the just-uploaded `Ref` is reused rather than reloaded.
+1. Parse the source through the [importer](../gltf-and-obj-import/) into a format-neutral graph.
+2. Bake the graph into one `assets/models/<uuid>.smodel`: the mesh as a [`.smesh`](../smesh-format/)
+   chunk, each material as a `.smat`-JSON chunk, each texture as a raw chunk (colorspace in the chunk
+   flags), each animation clip as a `.sanim` chunk, and a metadata chunk holding the node hierarchy,
+   skin, and the deterministic reimport recipe.
+3. Add the catalog rows the container contributes: one `Model` row plus one row per embedded
+   sub-asset, each linked back to the container by id and chunk index.
 
-The on-disk asset is the baked `.smesh`. The source glTF/OBJ is read once and never
-referenced again.
+The on-disk asset is the single `.smodel`. The source glTF/OBJ is read once and never referenced
+again, and nothing loose lands beside the container. This is the read→decide→build split — the
+translator knows formats, `ImportOptions` owns the decisions, and the bake is the build.
 
-Each imported material's albedo bytes run through `registerTextureBytes`, and the resulting
-slots are reported on the `ImportResult` as a material table (slot 0 mirrored into the legacy
-`baseColor`/`albedoTexture` fields):
+## Placing a model
 
-```cpp
-struct ImportResult
-{
-    Uuid mesh;
-    glm::vec4 baseColor{ 1.0f };
-    Uuid albedoTexture;            // 0 == none
-    std::vector<MaterialSlot> materials;  // the imported table
-};
-```
-
-`importModel` does not spawn an entity or save the project; it only populates the catalog.
-Spawning is a separate step: `spawnModel` builds the entity with a `MeshComponent`, then
-`applyImportedMaterials` attaches either a `MaterialComponent` (one material) or a
-`MaterialSetComponent` (more than one) from the `ImportResult`.
+Import populates the catalog; it never spawns. `instantiateModel` (the `instantiate-model` command)
+reconstructs the spawn input from the container's metadata and expands the stored hierarchy into
+entities: `spawnModel` builds the mesh entity (`spawnSkinnedModel` for a rig, with its bone entities,
+joints, and a stopped `AnimationPlayer`), and `applyImportedMaterials` attaches a `MaterialComponent`
+(one material) or a `MaterialSetComponent` (several). The root carries a `ModelInstanceComponent`
+naming its source asset. One `.smodel` instantiates into many independent entity trees, so the
+`add-entity cube` preset is just an instantiate of the built-in cube model.
 
 ## Importing a texture
 
-A standalone texture follows the same shape through `registerTextureBytes`, which
-`importModel` also reuses for embedded albedo. It decodes the bytes to confirm they are a
-valid image, uploads, then writes the original encoded bytes to disk:
+A standalone texture import is its own path: `importTexture` reads a file into bytes and calls
+`registerTextureBytes`, which decodes to confirm a valid image, uploads, then writes the original
+encoded bytes to a loose `textures/<uuid>.<ext>`:
 
 ```cpp
 auto decoded = decodeImageFromMemory(encoded);
@@ -72,32 +62,33 @@ putAsset(assets.catalog, AssetEntry{ id, uniqueName(...), AssetType::Texture, re
 ```
 
 The disk copy is the encoded PNG/JPG, so reloading it re-runs [the decode](../image-decoding/)
-rather than storing bulky raw RGBA. The `true` argument requests sRGB, since albedo is
-authored in sRGB. `importTexture` is the thin wrapper that reads a file off disk into bytes
-and calls `registerTextureBytes` with the filename stem as the name.
+rather than storing bulky raw RGBA. The `true` argument requests sRGB, since albedo is authored in
+sRGB. A model's textures, by contrast, ride inside the `.smodel` as chunks rather than loose files.
 
 ## Deduplication
 
-Deduplication is per import, not per file. Each import mints a fresh `newUuid()`, so importing
-`cube.gltf` twice produces two catalog entries (`cube`, `cube (2)`), two `.smesh` files, and two
-uploads. Deduplication happens at
-resolve time: multiple entities referencing the same UUID share one GPU upload via the
-cache. There is no content hashing to collapse two imports of identical bytes into one
-asset.
+A fresh `importModel` mints a new model id, so importing `cube.gltf` twice writes two `.smodel`
+containers and two catalog entries (`cube`, `cube (2)`). Within a container the sub-asset ids are
+stable (`subIdFor`, keyed by source name), and `reimportModel` reuses the model id and skips a
+byte-identical source by its content hash. Otherwise there is no cross-import content dedup;
+GPU-side sharing happens at resolve time, where entities referencing the same sub-id share one
+upload through the cache.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Model import | `assets.cppm` | `importModel`, `ImportResult` |
+| Model import → `.smodel` | `geometry.cppm`; `assets.cppm` | `translateModel`, `bakeModel`, `importModel` |
+| Catalog rows a container contributes | `assets.cppm` | `catalogRowsForModel` |
+| Reimport (content-hash skip) | `assets.cppm` | `reimportModel` |
 | Texture import | `assets.cppm` | `importTexture`, `registerTextureBytes` |
-| Spawn from an import | `assets.cppm` | `spawnModel`, `spawnMesh`, `applyImportedMaterials` |
-| Bake + upload it calls | `geometry.cppm`, `renderer_drawlist.cpp` | `saveMesh`, `uploadMesh`, `uploadTexture` |
+| Place a model in the scene | `assets.cppm` | `instantiateModel`, `spawnModel`, `spawnSkinnedModel`, `applyImportedMaterials` |
 
 ## Related
 
 - [Model import](../gltf-and-obj-import/) — the parse step
-- [.smesh format](../smesh-format/) — what the bake produces
+- [The .smodel container](../smodel-container/) — the one-file asset the bake produces
+- [.smesh format](../smesh-format/) — the mesh chunk format
 - [Image decoding](../image-decoding/) — the texture decode
 - [Asset catalog](../asset-server-and-catalog/) — the read side
 - [Project files](../project-serialization/) — persisting the catalog the import filled

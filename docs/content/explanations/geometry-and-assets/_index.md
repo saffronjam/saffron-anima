@@ -24,3 +24,4 @@ textures by UUID, caches their GPU resources, names them in a catalog, and feeds
 | `import-pipeline` | `importModel` / `importTexture`, baking, negative caching | `assets.cppm` |
 | `draw-list` | `renderScene` → flat `DrawItem` list, `(mesh, albedo)` buckets, per-submesh materials | `assets.cppm`; `renderer_drawlist.cpp` · `submitDrawList` |
 | `project-serialization` | project folders, `project.json`, app-data startup, local assets | `assets.cppm`; `control_commands_asset.cpp` |
+| `smodel-container` | one self-contained model container; header/TOC/metadata, scan, extract, reimport | `geometry.cppm`; `assets.cppm` · `writeContainer`, `bakeModel`, `scanAssets` |
