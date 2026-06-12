@@ -7,8 +7,7 @@
 /// through store and wire never gates the handle. The panel owns coalescing and
 /// drag-gating.
 import { RgbaColorPicker, RgbColorPicker } from "react-colorful";
-import { formatNumber } from "./NumberDrag";
-import { Input } from "@/components/ui/input";
+import { VectorEditor } from "./VectorEditor";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useScrubValue } from "@/lib/useScrubValue";
@@ -35,7 +34,7 @@ function channelToHex(c: number): string {
 export function ColorField({ kind, value, onChange, onDragStart, onDragEnd }: ColorFieldProps) {
   const hasAlpha = kind === "color4";
   const channels = hasAlpha ? (["x", "y", "z", "w"] as const) : (["x", "y", "z"] as const);
-  const labels: Record<string, string> = { x: "R", y: "G", z: "B", w: "A" };
+  const channelLabels = hasAlpha ? ["R", "G", "B", "A"] : ["R", "G", "B"];
   const scrub = useScrubValue(value, onChange);
   const color = scrub.value;
 
@@ -97,28 +96,16 @@ export function ColorField({ kind, value, onChange, onDragStart, onDragEnd }: Co
           </div>
         </PopoverContent>
       </Popover>
-      <div className="flex min-w-0 flex-1 gap-0.5">
-        {channels.map((axis) => (
-          <label
-            key={axis}
-            className="flex min-w-0 flex-1 items-center rounded-sm border border-border bg-background"
-          >
-            <span className="px-0.5 text-[9px] font-semibold text-muted-foreground">
-              {labels[axis]}
-            </span>
-            <Input
-              type="number"
-              step={0.01}
-              min={0}
-              max={axis === "w" ? 1 : undefined}
-              value={formatNumber(color[axis] ?? 0)}
-              className="h-7 rounded-none border-0 bg-transparent px-0.5 py-0.5 font-mono text-[11px] shadow-none focus-visible:ring-0"
-              onChange={(event) =>
-                scrub.set({ ...color, [axis]: Number(event.currentTarget.value) })
-              }
-            />
-          </label>
-        ))}
+      <div className="min-w-0 flex-1">
+        <VectorEditor
+          axes={channels}
+          labels={channelLabels}
+          value={color}
+          step={0.01}
+          onChange={onChange}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+        />
       </div>
     </div>
   );

@@ -25,6 +25,11 @@ export interface VectorEditorProps {
   axes: readonly string[];
   value: Record<string, number>;
   step?: number;
+  /// Display text per axis (defaults to the axis key uppercased). Lets a color reuse the gizmo axis
+  /// colors as R/G/B/A labels (axes ["x","y","z","w"], labels ["R","G","B","A"]).
+  labels?: readonly string[];
+  /// Tint the labels with the gizmo axis colors (X red, Y green, Z blue); off → neutral labels.
+  coloredLabels?: boolean;
   /// One atomic patch per edit (the changed axes), never per-axis calls racing
   /// onto a stale base.
   onChange(patch: Record<string, number>): void;
@@ -36,6 +41,8 @@ export function VectorEditor({
   axes,
   value,
   step = 0.05,
+  labels,
+  coloredLabels = true,
   onChange,
   onDragStart,
   onDragEnd,
@@ -76,7 +83,7 @@ export function VectorEditor({
 
   return (
     <div className="flex gap-1">
-      {axes.map((axis) => (
+      {axes.map((axis, i) => (
         <label
           key={axis}
           className="flex min-w-0 flex-1 cursor-ew-resize items-center overflow-hidden rounded-sm border border-border bg-background"
@@ -88,10 +95,12 @@ export function VectorEditor({
           <span
             className={cn(
               "flex items-center self-stretch px-1 text-[10px] font-semibold select-none",
-              AXIS_COLORS[axis] ?? "bg-muted text-muted-foreground",
+              coloredLabels
+                ? (AXIS_COLORS[axis] ?? "bg-muted text-muted-foreground")
+                : "bg-muted text-muted-foreground",
             )}
           >
-            {axis.toUpperCase()}
+            {labels?.[i] ?? axis.toUpperCase()}
           </span>
           <Input
             type="number"
