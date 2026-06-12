@@ -1,7 +1,17 @@
 # Phase 18 — Docs, e2e hardening, gate
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 17
+
+> Implementation note: new docs pages `smodel-container.md` (explanation) + `clean-unused-assets.md`
+> (how-to), with the import-pipeline + asset-catalog explanation pages and both hub `_index.md` rows
+> updated; hugo builds both new pages clean. The full-flow e2e is `tests/e2e/model_flow.test.ts`
+> (import → reload-survives → instantiate ×2 → extract → reimport-skip → references → clean, all
+> validation-clean). Gate: engine build green; present-only smoke renders 10 frames validation-clean
+> (the VMA teardown abort is the pre-existing, unrelated leak the plan flagged); control-schema contract
+> = 135 checks; `bun run check` + `bun run lint` clean; frontend `bun run build` green; full e2e 182
+> pass / 1 fail (the pre-existing camera `frustumMaxDistance` default mismatch, no `.smodel` involvement).
+> Prose ran through a humanizer self-review. **Git left unstaged per the repo rule.**
 
 ## Goal
 

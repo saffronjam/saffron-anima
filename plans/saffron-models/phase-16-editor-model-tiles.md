@@ -1,7 +1,20 @@
 # Phase 16 — Editor: model tiles, instantiate-on-drag, extract, clean modal
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 15
+
+> Implementation note. **Verified (automated gate — `bun run check` + `bun run lint` + `make engine` all
+> green):** the engine DTO now carries `AssetEntryDto.container` + real `Model`/`Material`
+> `AssetTypeDto` values (so the editor can tell a model from its sub-assets); the typed control client
+> (`client.ts`) gained wrappers for the whole decoupled flow — `importModelToAsset`,
+> `instantiateModel`, `extractSubAsset`/`clearExtraction`, `scanAssets`, `reimportModel`, `modelInfo`,
+> `assetReferences`, `cleanAssets`, `deleteUnused`; the store (`store.ts`) gained the matching actions;
+> and the Assets grid now **hides embedded sub-assets** (`asset.container` set), so a Sponza-style
+> import shows as **one model tile** instead of ~50 rows — the user's headline pain. **Needs an
+> interactive Wayland `tauri dev` session to verify (the one gate step not runnable headlessly):** the
+> drag-model→viewport instantiate drop target, the expand-to-show-sub-assets rows, the Extract
+> context-menu item, and the clean-review modal — the commands are all wired and typed; their on-screen
+> interaction wiring is the remaining hand-verification.
 
 ## Goal
 

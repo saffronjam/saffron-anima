@@ -1,7 +1,18 @@
 # Phase 17 — Thumbnails baked at import + async per-chunk
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 16
+
+> Implementation note: because sub-ids are globally unique catalog ids, the existing flat-uuid
+> thumbnail cache already addresses an embedded sub-asset by its `(modelId, subId)` — the sub-id alone
+> keys it. The two real gaps were filled in `requestThumbnail`: a **Model** id renders a preview from
+> its primary mesh sub-asset, and an **embedded mesh** loads from its `.smodel` chunk (the chunk bytes
+> are resolved on the main thread into `ThumbnailJob.meshBytes`, since the worker has no `AssetServer`;
+> `generateThumbnail` parses them with `loadMeshFromBytes`). Async generation already runs off the frame
+> loop via the existing `ThumbnailWorker` (when started). Verified by `tests/e2e/model_thumbnail.test.ts`
+> (model id + embedded mesh sub-id both render a PNG). **Deferred (composes with
+> `plans/thumbnails-efficiency` 5–7):** the optional embedded `THMB` chunk + pre-warming the cache at
+> import time, and embedded texture/material previews (those fall back to a type icon for now).
 
 ## Goal
 
