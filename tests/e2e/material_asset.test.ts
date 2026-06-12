@@ -42,7 +42,7 @@ async function screenshot(tag: string): Promise<Buffer> {
 }
 
 test("a created .smat material assigned to an entity drives the render", async () => {
-  const e = await engine.call<EntityRef>("import-model", { path: MAPPED });
+  const e = await engine.importEntity(MAPPED);
   await engine.call("set-camera", { position: { x: 0.35, y: 0.35, z: 2 }, yaw: 0, pitch: 0 });
   await engine.settle(300);
   const gltfShot = await screenshot("gltf");

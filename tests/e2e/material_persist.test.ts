@@ -18,7 +18,7 @@ afterAll(async () => {
 });
 
 test("an assigned normal map survives project save + reload", async () => {
-  const e = await engine.call<EntityRef>("import-model", { path: MAPPED });
+  const e = await engine.importEntity(MAPPED);
   const before = await engine.call<InspectResult>("inspect", { entity: e.id });
   const albedo = (before.components.Material as { albedoTexture?: string }).albedoTexture;
   expect(albedo).toBeDefined();

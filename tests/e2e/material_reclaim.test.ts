@@ -27,7 +27,7 @@ afterAll(async () => {
 });
 
 test("destroyed textures return their bindless slots to the free-list", async () => {
-  await engine.call<EntityRef>("import-model", { path: MAPPED });
+  await engine.importEntity(MAPPED);
   await engine.settle(300);
   const before = await engine.call<Stats>("render-stats");
   expect(before.bindlessTextures).toBeGreaterThan(0);

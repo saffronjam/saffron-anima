@@ -17,7 +17,7 @@ afterAll(async () => {
 });
 
 test("material-update assigns a texture slot to a material asset", async () => {
-  const e = await engine.call<EntityRef>("import-model", { path: MAPPED });
+  const e = await engine.importEntity(MAPPED);
   const info = await engine.call<InspectResult>("inspect", { entity: e.id });
   const tex = (info.components.Material as { albedoTexture?: string }).albedoTexture;
   expect(tex).toBeDefined();
