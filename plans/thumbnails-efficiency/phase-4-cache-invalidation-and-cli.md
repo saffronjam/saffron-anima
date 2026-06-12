@@ -1,6 +1,6 @@
 # Phase 4 — cache invalidation and CLI
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 After phase 3. The stat-stamp key self-invalidates for file edits, but three lifecycle
 paths leave wrong or dead entries: deleting an asset orphans its PNGs, re-import mints a

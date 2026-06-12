@@ -1,6 +1,6 @@
 # Phase 1 — GPU downscale before readback
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 The single biggest win. `encodeTextureThumbnailPng` (`renderer_thumbnail.cpp:672-734`)
 ignores its `size` parameter (`renderer_thumbnail.cpp:675`) and reads the texture back at

@@ -1,6 +1,6 @@
 # Phase 3 — disk thumbnail cache
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 Nothing survives a restart today: the engine regenerates every thumbnail from scratch on
 each `get-thumbnail`, and the editor's in-memory blob-URL cache

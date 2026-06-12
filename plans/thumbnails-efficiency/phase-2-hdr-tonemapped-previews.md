@@ -1,6 +1,6 @@
 # Phase 2 — tonemapped HDR previews
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 After phase 1. `convertToRgb` (`renderer_detail.cppm:1209-1248`) clamps RGBA16F values to
 [0,1] before the ×255 encode. That is correct for the screenshot/capture path — the

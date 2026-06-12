@@ -1,6 +1,6 @@
 # Thumbnails efficiency plan
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 Thumbnail generation freezes the editor. Every `get-thumbnail` runs synchronously on the
 engine main thread inside the per-frame control drain (`pollControl` in `host.cppm:834` →
@@ -35,13 +35,13 @@ only *after* it is `COMPLETED` and merged.
 
 | Phase | What | Status |
 |---|---|---|
-| [1 — GPU downscale before readback](phase-1-gpu-downscale-readback.md) | respect the `size` hint: blit textures down on the GPU before readback; truthful `ThumbnailResult` dimensions | NOT STARTED |
-| [2 — tonemapped HDR previews](phase-2-hdr-tonemapped-previews.md) | tonemap HDR asset thumbnails instead of clamping to white | NOT STARTED |
-| [3 — disk thumbnail cache](phase-3-disk-thumbnail-cache.md) | engine-side PNG cache keyed by asset id + source stat, survives restarts | NOT STARTED |
-| [4 — cache invalidation + CLI](phase-4-cache-invalidation-and-cli.md) | invalidate on delete/material edits, orphan cleanup, `se` cache command | NOT STARTED |
-| [5 — editor loading states](phase-5-editor-loading-states.md) | distinguish loading from no-thumbnail in `AssetTile`; spinner while fetching | NOT STARTED |
-| [6 — scoped GPU waits](phase-6-scoped-gpu-waits.md) | replace the thumbnail path's `device.waitIdle()` calls with per-submit fences | NOT STARTED |
-| [7 — async thumbnail generation](phase-7-async-thumbnail-generation.md) | worker-thread generation + pending/re-poll protocol; the frame loop never blocks | NOT STARTED |
+| [1 — GPU downscale before readback](phase-1-gpu-downscale-readback.md) | respect the `size` hint: blit textures down on the GPU before readback; truthful `ThumbnailResult` dimensions | COMPLETED |
+| [2 — tonemapped HDR previews](phase-2-hdr-tonemapped-previews.md) | tonemap HDR asset thumbnails instead of clamping to white | COMPLETED |
+| [3 — disk thumbnail cache](phase-3-disk-thumbnail-cache.md) | engine-side PNG cache keyed by asset id + source stat, survives restarts | COMPLETED |
+| [4 — cache invalidation + CLI](phase-4-cache-invalidation-and-cli.md) | invalidate on delete/material edits, orphan cleanup, `se` cache command | COMPLETED |
+| [5 — editor loading states](phase-5-editor-loading-states.md) | distinguish loading from no-thumbnail in `AssetTile`; spinner while fetching | COMPLETED |
+| [6 — scoped GPU waits](phase-6-scoped-gpu-waits.md) | replace the thumbnail path's `device.waitIdle()` calls with per-submit fences | COMPLETED |
+| [7 — async thumbnail generation](phase-7-async-thumbnail-generation.md) | worker-thread generation + pending/re-poll protocol; the frame loop never blocks | COMPLETED |
 
 Phases 1–2 are one task (right-size the work), 3–4 one task (persistence), 5 one task
 (editor UX), 6–7 one task (unblock the frame loop). 1–5 have no ordering constraints

@@ -1,6 +1,6 @@
 # Phase 5 — editor loading states
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 Editor-only, no ordering dependency on the engine phases. `AssetTile` conflates "still
 fetching" with "has no thumbnail": `url === null` renders the type icon in both cases

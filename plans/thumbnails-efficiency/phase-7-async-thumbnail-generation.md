@@ -1,6 +1,19 @@
 # Phase 7 — async thumbnail generation
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
+
+## Gate measurement (after phases 1–4)
+
+Re-measured on the llvmpipe software GPU: a warm thumbnail (disk-cache hit) round-trips in ~47 ms
+(dominated by control-socket latency — effectively instant). A **cold 4k HDR** (4096×2048, the
+headline asset) cost **~1026 ms** end-to-end, ~979 ms of it real work (stb HDR decode + 33.5M
+`floatToHalf` + 64 MB upload + render). That is two orders of magnitude over the gate's ~10 ms skip
+threshold, and it ran inside the per-frame control drain — a ~1 s viewport freeze on first generation.
+So the gate said *proceed*, and phase 7 was implemented.
+
+(Phase 3 had already turned the *per-startup* freeze into a one-time-per-asset cost — warm starts are
+disk reads — but the one-time cold freeze was still real, and a folder of fresh imports pays it once
+per asset.)
 
 After phase 6. The structural fix: even a cheap thumbnail still runs inside
 `drainControlServer` (`control_server.cpp:241-317`) on the main thread, ahead of the

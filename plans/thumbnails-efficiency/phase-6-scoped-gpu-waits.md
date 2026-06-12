@@ -1,6 +1,6 @@
 # Phase 6 — scoped GPU waits
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 Groundwork for phase 7, and a win on its own. The thumbnail/upload paths call
 `device.waitIdle()` after every submit — draining the *entire* GPU, including the in-flight
