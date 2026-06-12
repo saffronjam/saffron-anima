@@ -11,19 +11,24 @@ app is the UI shell composited over the live viewport.
 ```
 src/
   app/         shell (App.tsx), docking layout, menu/topbar, lifecycle wiring
-  panels/      Hierarchy, Inspector, Assets, Environment, RenderStats, Viewport, Topbar
+  panels/      Hierarchy, Inspector, Assets, Environment, Render(+Stats), Viewport, Topbar,
+               MaterialEditor + MaterialGraph, Profiler, Timeline (+ BottomDock/RightSidebar, tree helpers)
   components/  shadcn/ui + field renderers (NumberDrag, ColorField, VectorEditor, …)
   control/     typed control client over the Tauri bridge (client.ts)
   state/       Zustand store + the reconcile poll (store.ts)
+  materials/   material node-graph model shared with the engine wire format (graph.ts) — backs the React Flow editor
   protocol/    GENERATED TypeScript types — do not edit by hand
   lib/         utilities
+  assets/      static assets (fonts)
 scripts/gen-protocol.ts   re-runs tools/gen-control-dto → src/protocol/se-types.ts
 src-tauri/     Rust bridge (lib.rs + wayland_viewport.rs): engine spawn, control passthrough, subsurface presenter
 ```
 
 Stack (see `package.json`): React 19, Tauri 2, Zustand 5, Vite 7, Tailwind v4
-(`@tailwindcss/vite`), shadcn/ui (Radix), `react-resizable-panels`. Lint/format via
-**oxc** (`oxlint` + `oxfmt`, configs in `.oxlintrc.json` / `.oxfmtrc.json`) and prettier.
+(`@tailwindcss/vite`), shadcn/ui (Radix), `react-resizable-panels` (docking), `@xyflow/react`
+(material node graph), `flame-chart-js` + `uplot` (profiler / frame-time stats), `react-colorful`,
+and `sonner` (toasts). Lint/format via **oxc** (`oxlint` + `oxfmt`, configs in
+`.oxlintrc.json` / `.oxfmtrc.json`) and prettier.
 
 ## Workflow
 
@@ -34,7 +39,8 @@ bun run build    # gen:protocol + tsc + vite build
 bun run tauri:dev  # launches the app; needs a Wayland session for the subsurface presenter
 ```
 
-`bun run gen:protocol` regenerates `src/protocol/index.ts` from `schemas/control/`.
+`bun run gen:protocol` regenerates `src/protocol/se-types.ts` from `control_dto.cppm` (and also emits the
+OpenRPC + command-manifest JSON under `schemas/control/`). `index.ts` is the hand-kept re-export shim.
 
 ## Rules that are easy to break
 
@@ -92,6 +98,55 @@ bun run tauri:dev  # launches the app; needs a Wayland session for the subsurfac
   tooltip that repeats the element's own visible text or adjacent labels, and none on
   universally understood controls (window min/max/close, an X in a panel corner, back/forward
   arrows) — give those an `aria-label` instead.
+- **Panel surfaces paint with the semantic theme tokens, never raw `neutral`.** A panel's
+  opaque region is `bg-background` (every sibling panel uses it) with `text-foreground` /
+  `text-muted-foreground` and `border-border`; inset surfaces (cards, node bodies, recessed
+  inputs) use `bg-card` / `bg-muted`. Never `bg-neutral-*` / `text-neutral-*` /
+  `border-neutral-*` — those bypass the dark theme in `styles.css` and render the wrong shade
+  (the Material panel's original `bg-neutral-900` read as a lighter grey than the rest). Accent
+  fills that *encode meaning* (a graph pin's `!bg-sky-500`/`!bg-emerald-500`, a recording tint)
+  are not theme neutrals and stay.
+- **Field labels are Sentence case via `humanizeFieldName()`**, never the raw camelCase key and
+  never the `capitalize` class. A component/material field key (`emissiveStrength`,
+  `albedoTexture`) renders through `humanizeFieldName()` from `lib/humanize.ts` ("Emissive
+  strength", "Albedo texture") — the same helper the Inspector and ScriptSlots use. `capitalize`
+  only upper-cases the first letter of a run-together word ("EmissiveStrength"), so it is wrong.
+- **A major view is a main tab via the `ViewTab` system, never a `fixed inset-0` overlay.**
+  Anything that owns the whole work area (asset viewer, flame graph, material graph) is a
+  `ViewTab` variant in `store.ts` with an `open…Tab` action and a workspace body rendered in
+  `App.tsx` (gated by `activeKind`); closing it is `closeViewTab`, and the `sceneTabActive`
+  effect parks the viewport for free. A `fixed inset-0` full-screen overlay is only for transient
+  modals/dialogs (startup, settings, delete-confirm) — a persistent view rendered as an overlay
+  loses the tab strip, the viewport-park wiring, and its state across navigation.
+- **Control calls are serialized; high-frequency or expensive ones must be coalesced.** Every
+  control-plane request goes through the one Rust socket helper (`control_request_with_params`)
+  under the `CONTROL_IO` mutex, so exactly one round-trip is outstanding at a time — concurrent
+  invokes otherwise pile into the engine's per-frame drain and trip the 5 s read timeout
+  ("read control reply: Resource temporarily unavailable (os error 11)"). On the UI side never
+  fire a control call per keystroke/scrub-tick: buffer through a `makeCoalescer` (one
+  `preview-render` per edit-burst, not one per field) and keep the heavy GPU calls
+  (`preview-render`, thumbnail readback) off the hot path.
+- **A large list re-renders only the rows that changed, never the whole list.** A grid/tree
+  whose rows number in the hundreds (Assets tiles, Hierarchy rows) follows three rules so a
+  selection click costs two row renders, not N (verify with the dev-mode `logRender` counters
+  — the titlebar chip; `[renders/s] AssetTile×2` is healthy, `×300` is the bug). (1) Each row
+  is a `memo()` component that subscribes to its OWN derived primitive
+  (`useEditorStore((s) => s.selectedAssetIds.has(id))`, `(s) => s.selectedId === id`) — never
+  the whole `Set`/array, and never a slice every row shares (the old `TreeRow` read
+  `componentsBySelected`, so every row re-rendered on each inspect poll; that list now lives in
+  its own `ComponentSubrows` child). Per-row varying state that drives this lives in the store
+  (`store.ts` — UI-only state there is fine, like `selectedAssetIds`/`devMode`), with actions
+  that bail out identity-stable (`return {}` when nothing changed, a fresh `Set` only on
+  change). (2) Every prop the row receives is referentially stable: `useMemo` the derived list
+  (`visibleAssets`), `useCallback` every handler, and bind the row's own key inside the row
+  (`FolderTile`/`TreeRow` take `path`/`id` and call `onSelect(path, e)`) so one function
+  identity serves all rows. (3) ONE shared context menu per surface, not a Radix root per row:
+  the row carries a `data-*` id (`data-asset-tile-id`, `data-entity-id`), a single
+  `onContextMenu` on the trigger resolves the target via `closest()` into a ref, and the menu
+  body renders at open time (Radix unmounts closed content) reading that ref. Never switch a
+  row's element *tree shape* on a selection-dependent prop (the old per-tile
+  `contextMenuDisabled` flipped `<div>` ↔ `<ContextMenu>`, remounting every thumbnail `<img>`
+  on each 0↔1 selection crossing).
 
 The Rust bridge sets a per-PID socket under `$XDG_RUNTIME_DIR` and a per-PID shm segment,
 spawns `$SAFFRON_ENGINE_BIN` (default `build/debug/bin/SaffronEngine`) with

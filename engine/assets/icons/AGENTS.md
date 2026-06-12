@@ -31,3 +31,4 @@ Browse names at https://lucide.dev/icons/ — the URL slug is the filename witho
 | `lightbulb.svg` | lightbulb | PointLight billboard |
 | `flashlight.svg` | flashlight | SpotLight billboard |
 | `camera.svg` | camera | Camera billboard |
+| `eye.svg` | eye | Entity visibility toggle (legacy) |

@@ -112,7 +112,7 @@ With `bun` on PATH inside the toolbox:
 cd editor && bun install && bun run check && bun run tauri dev
 ```
 
-`bun run check` regenerates `@saffron/protocol` from `schemas/control` and typechecks; `bun run format`
+`bun run check` regenerates `@saffron/protocol` from the control DTOs in `control_dto.cppm` and typechecks; `bun run format`
 (oxfmt) and `bun run lint` (oxlint) cover style. `tauri dev` spawns `build/debug/bin/SaffronEngine`
 (override with `SAFFRON_ENGINE_BIN`) and needs a Wayland session for the subsurface presenter.
 
@@ -152,7 +152,7 @@ Script   → {Core, Scene}                          (Lua 5.5 + LuaBridge3; only 
 Rendering→ {Core, Window, Geometry}              partitions :Types :Detail :RenderGraph
 Assets   → {Core, Json, Geometry, Rendering, Scene}
 SceneEdit→ {Core, Signal, Scene, Json}            partition :Context
-Control  → {Core, Json, Window, Rendering, Scene, SceneEdit, Assets}   partition :Command
+Control  → {Core, Json, Window, Rendering, Scene, SceneEdit, Assets}   partitions :Dto :Command
 App      → {Core, Window, Rendering}
 Host     → {Core, App, Window, Rendering, SceneEdit, Control, Scene, Animation, Script, Assets}   (the SaffronEngine exe)
 ```
@@ -173,9 +173,10 @@ engine/source/saffron/  one dir per module above (core, rendering, host, sceneed
 engine/source/main.cpp  the SaffronEngine host stub: int main(){ return se::runHost(...); }
 engine/assets/          shaders (*.slang → SPIR-V in CMake), models, fonts, icons (copied next to the exe)
 editor/                 Tauri/React/TS editor — src/ (React + Zustand + typed control client), src-tauri/ (Rust bridge)
-schemas/control/        hand-authored JSON Schemas (draft 2020-12) — the wire contract → @saffron/protocol
+schemas/control/        DTO-first wire contract → @saffron/protocol: hand-authored envelope.schema.json + generated openrpc/command-manifest JSON (from control_dto.cppm)
 tools/se/               the `se` control CLI (json over the unix socket; no engine dep)
-tools/ci/, tools/check-control-schema/   the reproducible gate + the live-vs-schema contract test
+tools/gen-control-dto/  gen.ts: control_dto.cppm → C++ serde + @saffron/protocol types + OpenRPC + manifest (the wire-contract generator)
+tools/ci/, tools/check-control-schema/, tools/check-projects/   the reproducible gate, the live-vs-schema contract test, the project-feature smoke
 tests/e2e/              end-to-end tests (bun) driving a headless engine over the control plane
 cmake/                  Dependencies.cmake (FetchContent deps + vma target) + vma/stb impl TUs
 docs/                   Hugo (hugo-book) docs site — per-concept explanations + how-to/reference/tutorials
@@ -243,7 +244,12 @@ a feature — follow and update a matching plan rather than starting cold.
 - **Built** (per-concept reference is `docs/`): the full forward+ PBR pipeline — clustered lighting, IBL,
   shadows (directional/spot/point/contact/ray-traced), DDGI + voxel GI + SSGI + ReSTIR, GTAO, TAA, motion
   vectors, tonemap, MSAA/FXAA; bindless + instanced rendering with an übershader/PSO cache; the render
-  graph; entt scene + registry-driven JSON project format; glTF/OBJ import + asset catalog; the control
+  graph; entt scene + registry-driven JSON project format; glTF/OBJ import + asset catalog; a native
+  material system (`.smat` PBR assets + params buffer, importer, instances/overrides, thumbnails) with a
+  node-graph editor (React Flow model → Slang codegen for preview and scene entities); skeletal animation
+  behind `Saffron.Animation` (glTF clip import, an animation-player runtime with transitions/blending, a
+  compute-skinning prepass feeding motion vectors + skinned-BLAS rebuild, foot IK, a native skeleton
+  overlay, animation control commands, and the editor timeline panel); the control
   plane + `se` CLI; the Tauri editor; per-entity Lua scripting (Lua 5.5 + LuaBridge3 behind
   `Saffron.Script`: ScriptComponent slots, script-declared fields + overrides, Inspector UI, project
   `src/` scaffold).

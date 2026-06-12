@@ -15,7 +15,7 @@ cd tests/e2e && bun test       # inside the toolbox (host bun on PATH)
 | File | Role |
 |---|---|
 | `harness.ts` | `Engine.boot()` spawns a headless weston + the engine on a per-run control socket, captures stdout/stderr into `.log`, and exposes `call(cmd, params)` + `validationErrors()`. Always `shutdown()`. |
-| `rendering.test.ts` | Control-plane + rendering cases (boot-clean, model import, MSAA validation-clean regression). |
+| `*.test.ts` | The suite (~46 files), grouped by area: control plane + rendering (`rendering`, `control`, `scene`, `camera`, `picking`, `play`, `perf`, `profiler`, `toggles`, `assets`, `hierarchy`, …), animation (`animation*`, `foot-ik`), skinning (`skinning`, `skinned-*`, `skeleton-overlay`), scripting (`script`), materials (`material*`), and pixel/golden render checks (`*_render`, `material_scene_codegen`). |
 
 ## Conventions
 
@@ -25,7 +25,9 @@ cd tests/e2e && bun test       # inside the toolbox (host bun on PATH)
 - **Assert on `validationErrors()`.** The engine runs with validation layers on; a test that
   exercises a feature should assert the log stays free of `[saffron:vulkan] error: [validation]`
   lines — that is what catches GPU-state bugs (e.g. the MSAA sample-count regression) headlessly.
-- **Two tiers.** Behavioral/state tests work today (zero-dep). Pixel/golden-image tests need the
-  `screenshot` control command to actually write a file first, plus an image-diff dependency.
+- **Two tiers.** Behavioral/state tests assert on control responses + `validationErrors()` (zero-dep).
+  Pixel tests drive the `screenshot` command (`target: "viewport"`, a path), wait for the PNG, read it
+  back, and compare buffers directly (`Buffer.equals`, no image-diff dep) — see the `*_render.test.ts`
+  files. Golden-image baselines are not wired up yet.
 - Type results via `@saffron/protocol` (`engine.call<RenderStats>("render-stats")`) so a schema
   change that breaks an assertion shows up at typecheck.

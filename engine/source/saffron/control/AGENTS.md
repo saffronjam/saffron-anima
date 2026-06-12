@@ -16,6 +16,7 @@ namespace `se`. Uses classic `#include` in the global module fragment and does *
 | `control_commands_render.cpp` | Render stats, AA/clustering/GI toggles, native viewport bridge commands. |
 | `control_commands_scene.cpp` | Entity lifecycle, components, selection, picking, camera, gizmo, environment. |
 | `control_commands_asset.cpp` | Import, catalog, thumbnails, project/scene save and load. |
+| `control_commands_animation.cpp` | Animation playback, clip/skeleton, and foot-IK commands. |
 
 ## Protocol
 
@@ -45,8 +46,11 @@ registerCommand<MyParams, MyResult>(registry, "my-command", "one-line help",
     });
 ```
 
-4. Run `bun run tools/gen-control-dto/gen.ts` and commit the generated serde, TypeScript, OpenRPC,
-   and manifest outputs.
+4. Run `bun run tools/gen-control-dto/gen.ts` and commit all five generated outputs: the control DTO
+   serde (`control_dto_serde.generated.cpp`), the scene-component serde
+   (`engine/source/saffron/scene/scene_component_serde.generated.cpp`), the TypeScript
+   (`editor/src/protocol/se-types.ts`), the OpenRPC (`schemas/control/openrpc.generated.json`), and the
+   manifest (`schemas/control/command-manifest.generated.json`).
 
 Conventions:
 

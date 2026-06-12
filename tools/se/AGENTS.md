@@ -1,8 +1,8 @@
 # tools/se — SaffronEngine control CLI
 
-A minimal C++20 single-file binary (`source/main.cpp`) that speaks JSON over the
-unix socket exposed by the running `SaffronEngine`. No engine dependency — it only
-links `nlohmann_json`.
+A minimal C++20 binary (`source/main.cpp` plus the vendored header-only `args.hxx`)
+that speaks JSON over the unix socket exposed by the running `SaffronEngine`. No
+engine dependency — it only links `nlohmann_json` (`args.hxx` is header-only).
 
 ## Usage
 
@@ -10,9 +10,11 @@ links `nlohmann_json`.
 se <command> [positional...] [-o text|json] [--flag value|--flag=value]
 ```
 
-`cmd/se` in the repo root is a thin Python wrapper that invokes the built binary
-via `toolbox run -c saffron-build` (not needed for the binary itself; the host can
-reach the socket directly). It also adds a `start` subcommand that is wrapper-only.
+`cmd/se` in the repo root is a thin Python wrapper that runs the host-built binary
+directly (`os.execv` of `build/debug/bin/se`) — no toolbox involved, since the host
+reaches the control socket directly. Only its wrapper-only `start` subcommand uses
+`toolbox run -c saffron-build`, and that launches the *engine* (`SaffronEngine`, and
+optionally `cmake --build` it), never the `se` binary.
 
 ## Output modes (`-o` / `--output`)
 
@@ -25,6 +27,10 @@ The flag is stripped before building the params sent to the engine, so the engin
 never sees it.
 
 ## Argument parsing
+
+Top-level flags (`-o`/`--output`, `-h`/`--help`) are parsed by the vendored header-only
+Taywee/`args` library (`args::ArgumentParser` + `args::MapFlag`). Everything after the
+command name is coerced into engine params by the hand-rolled `buildParams`/`coerce`:
 
 - Bare tokens → `params["args"]` array (positionals).
 - `--key value` or `--key=value` → `params["key"]`.
