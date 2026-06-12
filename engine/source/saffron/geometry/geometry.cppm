@@ -10,15 +10,20 @@ module;
 #include <glm/gtc/type_precision.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <cstring>
 #include <expected>
 #include <format>
 #include <fstream>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 export module Saffron.Geometry;
@@ -130,6 +135,7 @@ export namespace se
     // normal, and emissive textures are not imported — the engine material has no slots.
     struct ImportedMaterial
     {
+        std::string name;  // source material name (the stable key for its baked sub-id)
         glm::vec4 baseColor{ 1.0f };
         f32 metallic = 0.0f;
         f32 roughness = 1.0f;
@@ -192,7 +198,30 @@ export namespace se
     auto importObj(const std::string& path) -> Result<Mesh>;
     auto importModelFile(const std::string& path) -> Result<Mesh>;  // dispatch by extension
 
-    auto importModelWithMaterial(const std::string& path) -> Result<ImportedModel>;
+    /// A material texture slot's semantic role. The import-options colorspace policy keys on it
+    /// (albedo/emissive → sRGB color; the rest → linear data), so one source of truth decides how
+    /// a baked or scanned texture is interpreted.
+    enum class MaterialMapRole : u8
+    {
+        Albedo,
+        MetallicRoughness,
+        Normal,
+        Occlusion,
+        Emissive,
+        Height
+    };
+
+    /// Format-neutral translator: parse a source file (.gltf/.glb/.obj) into the in-memory import
+    /// graph (`ImportedModel`). Pure — no GPU, no disk writes, no catalog mutation, no spawn. The
+    /// read half of the read→decide→build split; the same source bytes always yield the same graph.
+    auto translateModel(const std::string& source) -> Result<ImportedModel>;
+
+    /// A stable sub-asset id derived from a source key, NOT from enumeration order or `newUuid`, so
+    /// a reimport that reorders meshes/materials still resolves the same sub-id. `dupIndex`
+    /// disambiguates duplicate source names (assigned in source declaration order). Folded into the
+    /// non-reserved id range (>= 1024) so it never collides with a built-in id.
+    auto subIdFor(std::string_view modelKey, std::string_view kind, std::string_view sourceName, u32 dupIndex) -> Uuid;
+
     auto decodeImage(const std::string& path) -> Result<DecodedImage>;
     auto decodeImageFromMemory(const std::vector<u8>& encoded) -> Result<DecodedImage>;
 
@@ -218,10 +247,109 @@ export namespace se
     // The skin stream of a v2 .smesh; empty (not an error) for a v1 file.
     auto loadMeshSkin(const std::string& path) -> Result<std::vector<VertexSkin>>;
 
+    /// The `.smesh` image as an in-memory buffer (the same bytes saveMesh writes to a file), so it can
+    /// be embedded verbatim as a `.smodel` MESH chunk. saveMesh is `saveMeshToBuffer` + a file write.
+    auto saveMeshToBuffer(const Mesh& mesh) -> std::vector<std::byte>;
+    /// The skinned (v2) `.smesh` image as a buffer; errors if the skin does not parallel the vertices.
+    auto saveMeshSkinnedToBuffer(const Mesh& mesh, const std::vector<VertexSkin>& skin)
+        -> Result<std::vector<std::byte>>;
+    /// Parse a `.smesh` image from a memory span (a `.smodel` chunk slice or a whole file's bytes).
+    /// Header offsets are validated against the span length, so a chunk reads exactly like a file.
+    auto loadMeshFromBytes(std::span<const std::byte> bytes) -> Result<Mesh>;
+    /// The v2 skin stream from a `.smesh` image in memory; empty (not an error) for a v1 image.
+    auto loadMeshSkinFromBytes(std::span<const std::byte> bytes) -> Result<std::vector<VertexSkin>>;
+
     // One animation clip baked to a sidecar `.sanim` (magic `SANM`), never folded into
     // the `.smesh`. Little-endian raw, versioned, mirroring the `.smesh` shape.
     auto saveAnimation(const AnimClip& clip, const std::string& path) -> Result<void>;
     auto loadAnimation(const std::string& path) -> Result<AnimClip>;
+    /// The `.sanim` image as a buffer, for embedding as a `.smodel` SANM chunk.
+    auto saveAnimationToBuffer(const AnimClip& clip) -> std::vector<std::byte>;
+    /// Parse a `.sanim` image from a memory span (a `.smodel` SANM chunk slice or a whole file).
+    auto loadAnimationFromBytes(std::span<const std::byte> bytes) -> Result<AnimClip>;
+
+    /// Container framing version (the SMDL header layout). Bumped only when the byte
+    /// framing changes; independent of the metadata-chunk schema version.
+    inline constexpr u32 ContainerFormatVersion = 1;
+    /// Metadata-chunk schema version, stamped into the header for cheap gating.
+    inline constexpr u32 MetadataSchemaVersion = 1;
+
+    /// Four-character chunk tag packed little-endian into a u32 (tag[0] in the low byte).
+    constexpr auto fourcc(const char (&tag)[5]) -> u32
+    {
+        return u32(static_cast<u8>(tag[0])) | (u32(static_cast<u8>(tag[1])) << 8) |
+               (u32(static_cast<u8>(tag[2])) << 16) | (u32(static_cast<u8>(tag[3])) << 24);
+    }
+
+    /// The kind of a `.smodel` chunk; the value is its on-disk fourcc tag.
+    enum class ChunkKind : u32
+    {
+        Meta = fourcc("META"),
+        Mesh = fourcc("MESH"),
+        Texture = fourcc("STEX"),
+        Material = fourcc("SMAT"),
+        Animation = fourcc("SANM"),
+        Thumbnail = fourcc("THMB"),
+    };
+
+    /// One `.smodel` container header (64 bytes, little-endian). Mirrors SMeshHeader's
+    /// discipline: fixed magic, version gate, 64-bit offsets, file-size validation.
+    struct SModelHeader
+    {
+        char magic[4];         // 'S','M','D','L'
+        u32 containerVersion;  // framing version; ContainerFormatVersion
+        u32 schemaVersion;     // metadata-chunk schema version
+        u32 flags;             // reserved framing flags
+        u32 tocCount;          // number of TocEntry records
+        u32 reserved0;         // pad to align the following u64s
+        u64 tocOffset;         // byte offset of the chunk table
+        u64 metaOffset;        // byte offset of the META chunk (front-loaded; 0 if absent)
+        u64 metaLength;        // META chunk byte length (0 if absent)
+        u64 totalLength;       // total file size, validated on read
+        u32 reserved[2];       // pad to 64 bytes
+    };
+    static_assert(sizeof(SModelHeader) == 64, "SModelHeader must be exactly 64 bytes");
+
+    /// One chunk-table record (32 bytes, fixed stride); offset/length address the payload.
+    struct TocEntry
+    {
+        u32 fourcc;  // ChunkKind value
+        u32 flags;   // per-chunk flags (colorspace, hasSkin, ...)
+        u64 subId;   // stable sub-asset Uuid (0 for META/THMB)
+        u64 offset;  // absolute byte offset of the payload
+        u64 length;  // payload byte length
+    };
+    static_assert(sizeof(TocEntry) == 32, "TocEntry must stay 32 bytes (the .smodel TOC stride)");
+
+    /// A chunk to write. The caller owns the bytes; writeContainer only frames them.
+    struct ContainerChunk
+    {
+        ChunkKind kind;
+        u64 subId = 0;
+        u32 flags = 0;
+        std::span<const std::byte> bytes;
+    };
+
+    /// An opened container: its validated header + chunk table, able to slice any chunk's
+    /// bytes lazily from disk. Holds the path; drop it before device teardown like a Ref.
+    struct ContainerReader
+    {
+        std::string path;
+        SModelHeader header{};
+        std::vector<TocEntry> toc;
+        /// Read [entry.offset, entry.offset+entry.length) from the file, bounds-checked.
+        auto readChunk(const TocEntry& entry) const -> Result<std::vector<std::byte>>;
+        /// First TOC entry matching (kind, subId), or nullptr.
+        auto find(ChunkKind kind, u64 subId) const -> const TocEntry*;
+    };
+
+    /// Write all chunks into one `.smodel`. The META chunk (if any) is placed first after
+    /// the TOC and recorded in metaOffset/metaLength; payloads are 16-byte aligned.
+    auto writeContainer(const std::string& path, std::span<const ContainerChunk> chunks) -> Result<void>;
+    /// Cheap: read + validate only the 64-byte header (magic, version, totalLength vs size).
+    auto readContainerHeader(const std::string& path) -> Result<SModelHeader>;
+    /// Full: header + chunk table, returning a reader that can slice chunks lazily.
+    auto readContainer(const std::string& path) -> Result<ContainerReader>;
 
     // Recomputes smooth vertex normals from the triangles. Used when a source omits them.
     void generateNormals(Mesh& mesh);
@@ -447,6 +575,10 @@ namespace se
     auto extractGltfMaterial(const cgltf_material& src, const std::string& path) -> ImportedMaterial
     {
         ImportedMaterial material;
+        if (src.name != nullptr)
+        {
+            material.name = src.name;
+        }
         material.emissive = glm::vec3(src.emissive_factor[0], src.emissive_factor[1], src.emissive_factor[2]);
         material.emissiveStrength = src.has_emissive_strength ? src.emissive_strength.emissive_strength : 1.0f;
         material.hasNormal =
@@ -1024,17 +1156,47 @@ namespace se
         return Err(std::format("unsupported model format: '{}' (expected .gltf/.glb/.obj)", path));
     }
 
-    auto importModelWithMaterial(const std::string& path) -> Result<ImportedModel>
+    auto translateModel(const std::string& source) -> Result<ImportedModel>
     {
-        if (endsWithIgnoreCase(path, ".gltf") || endsWithIgnoreCase(path, ".glb"))
+        if (endsWithIgnoreCase(source, ".gltf") || endsWithIgnoreCase(source, ".glb"))
         {
-            return importGltfModel(path);
+            return importGltfModel(source);
         }
-        if (endsWithIgnoreCase(path, ".obj"))
+        if (endsWithIgnoreCase(source, ".obj"))
         {
-            return importObjModel(path);
+            return importObjModel(source);
         }
-        return Err(std::format("unsupported model format: '{}' (expected .gltf/.glb/.obj)", path));
+        return Err(std::format("unsupported model format: '{}' (expected .gltf/.glb/.obj)", source));
+    }
+
+    auto subIdFor(std::string_view modelKey, std::string_view kind, std::string_view sourceName, u32 dupIndex) -> Uuid
+    {
+        constexpr u64 fnvOffset = 1469598103934665603ull;
+        constexpr u64 fnvPrime = 1099511628211ull;
+        u64 hash = fnvOffset;
+        auto mix = [&](std::string_view part)
+        {
+            for (const char ch : part)
+            {
+                hash = hash ^ static_cast<u8>(ch);
+                hash = hash * fnvPrime;
+            }
+            hash = hash ^ u64{ 0 };  // a NUL separator between fields keeps "ab|c" != "a|bc"
+            hash = hash * fnvPrime;
+        };
+        mix(modelKey);
+        mix(kind);
+        mix(sourceName);
+        for (u32 i = 0; i < 4; i = i + 1)
+        {
+            hash = hash ^ static_cast<u8>(dupIndex >> (i * 8));
+            hash = hash * fnvPrime;
+        }
+        if (hash < 1024)
+        {
+            hash = hash + 1024;
+        }
+        return Uuid{ hash };
     }
 
     auto decodeImage(const std::string& path) -> Result<DecodedImage>
@@ -1133,95 +1295,147 @@ namespace se
         }
     }
 
-    auto saveMesh(const Mesh& mesh, const std::string& path) -> Result<void>
+    namespace
     {
-        SMeshHeader header{};
-        std::memcpy(header.magic, "SMSH", 4);
-        header.version = MeshFormatVersion;
-        header.flags = 0;
-        header.vertexStride = sizeof(Vertex);
-        header.vertexCount = static_cast<u32>(mesh.vertices.size());
-        header.indexCount = static_cast<u32>(mesh.indices.size());
-        header.indexWidth = sizeof(u32);
-        header.submeshCount = static_cast<u32>(mesh.submeshes.size());
-        header.verticesOffset = sizeof(SMeshHeader);
-        header.indicesOffset = header.verticesOffset + static_cast<u64>(header.vertexCount) * sizeof(Vertex);
-        header.submeshesOffset = header.indicesOffset + static_cast<u64>(header.indexCount) * sizeof(u32);
+        // The `.smesh` byte image. An empty skin yields a v1 (unskinned) layout; a skin parallel to
+        // the vertices appends the VertexSkin section and stamps the v2 version. Header offsets are
+        // self-relative so the image is valid both as a file and as a `.smodel` chunk payload.
+        auto encodeMeshImage(const Mesh& mesh, const std::vector<VertexSkin>& skin) -> std::vector<std::byte>
+        {
+            SMeshHeader header{};
+            std::memcpy(header.magic, "SMSH", 4);
+            header.version = MeshFormatVersion;
+            if (!skin.empty())
+            {
+                header.version = MeshFormatVersionSkinned;
+            }
+            header.flags = 0;
+            header.vertexStride = sizeof(Vertex);
+            header.vertexCount = static_cast<u32>(mesh.vertices.size());
+            header.indexCount = static_cast<u32>(mesh.indices.size());
+            header.indexWidth = sizeof(u32);
+            header.submeshCount = static_cast<u32>(mesh.submeshes.size());
+            header.verticesOffset = sizeof(SMeshHeader);
+            header.indicesOffset = header.verticesOffset + static_cast<u64>(header.vertexCount) * sizeof(Vertex);
+            header.submeshesOffset = header.indicesOffset + static_cast<u64>(header.indexCount) * sizeof(u32);
+            const u64 submeshesEnd = header.submeshesOffset + static_cast<u64>(header.submeshCount) * sizeof(Submesh);
+            u64 total = submeshesEnd;
+            if (!skin.empty())
+            {
+                total = total + static_cast<u64>(skin.size()) * sizeof(VertexSkin);
+            }
 
-        std::ofstream out(path, std::ios::binary);
-        if (!out)
-        {
-            return Err(std::format("cannot open '{}' for writing", path));
+            std::vector<std::byte> bytes(static_cast<std::size_t>(total));
+            auto put = [&](u64 offset, const void* src, std::size_t count)
+            {
+                if (count != 0)
+                {
+                    std::memcpy(bytes.data() + offset, src, count);
+                }
+            };
+            put(0, &header, sizeof(header));
+            put(header.verticesOffset, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
+            put(header.indicesOffset, mesh.indices.data(), mesh.indices.size() * sizeof(u32));
+            put(header.submeshesOffset, mesh.submeshes.data(), mesh.submeshes.size() * sizeof(Submesh));
+            if (!skin.empty())
+            {
+                put(submeshesEnd, skin.data(), skin.size() * sizeof(VertexSkin));
+            }
+            return bytes;
         }
-        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
-        out.write(reinterpret_cast<const char*>(mesh.vertices.data()),
-                  static_cast<std::streamsize>(mesh.vertices.size() * sizeof(Vertex)));
-        out.write(reinterpret_cast<const char*>(mesh.indices.data()),
-                  static_cast<std::streamsize>(mesh.indices.size() * sizeof(u32)));
-        out.write(reinterpret_cast<const char*>(mesh.submeshes.data()),
-                  static_cast<std::streamsize>(mesh.submeshes.size() * sizeof(Submesh)));
-        if (!out)
+
+        auto writeBytesToFile(const std::string& path, std::span<const std::byte> bytes) -> Result<void>
         {
-            return Err(std::format("write failed for '{}'", path));
+            std::ofstream out(path, std::ios::binary);
+            if (!out)
+            {
+                return Err(std::format("cannot open '{}' for writing", path));
+            }
+            out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            if (!out)
+            {
+                return Err(std::format("write failed for '{}'", path));
+            }
+            return {};
         }
-        return {};
     }
 
-    auto loadMesh(const std::string& path) -> Result<Mesh>
+    auto saveMeshToBuffer(const Mesh& mesh) -> std::vector<std::byte>
     {
-        std::ifstream in(path, std::ios::binary | std::ios::ate);
-        if (!in)
-        {
-            return Err(std::format("cannot open '{}'", path));
-        }
-        const std::streamsize fileSize = in.tellg();
-        in.seekg(0);
-        if (fileSize < static_cast<std::streamsize>(sizeof(SMeshHeader)))
-        {
-            return Err(std::format("'{}' is too small to be a .smesh", path));
-        }
+        return encodeMeshImage(mesh, {});
+    }
 
+    auto saveMeshSkinnedToBuffer(const Mesh& mesh, const std::vector<VertexSkin>& skin)
+        -> Result<std::vector<std::byte>>
+    {
+        if (skin.size() != mesh.vertices.size())
+        {
+            return Err(
+                std::format("skin stream ({}) does not parallel the vertices ({})", skin.size(), mesh.vertices.size()));
+        }
+        return encodeMeshImage(mesh, skin);
+    }
+
+    auto saveMesh(const Mesh& mesh, const std::string& path) -> Result<void>
+    {
+        return writeBytesToFile(path, saveMeshToBuffer(mesh));
+    }
+
+    auto loadMeshFromBytes(std::span<const std::byte> bytes) -> Result<Mesh>
+    {
+        if (bytes.size() < sizeof(SMeshHeader))
+        {
+            return Err(std::string{ "buffer is too small to be a .smesh" });
+        }
         SMeshHeader header{};
-        in.read(reinterpret_cast<char*>(&header), sizeof(header));
+        std::memcpy(&header, bytes.data(), sizeof(header));
         if (std::memcmp(header.magic, "SMSH", 4) != 0)
         {
-            return Err(std::format("'{}' is not a .smesh (bad magic)", path));
+            return Err(std::string{ "not a .smesh (bad magic)" });
         }
         if (header.version != MeshFormatVersion && header.version != MeshFormatVersionSkinned)
         {
-            return Err(std::format("'{}' has unsupported mesh version {}", path, header.version));
+            return Err(std::format("unsupported mesh version {}", header.version));
         }
         if (header.vertexStride != sizeof(Vertex) || header.indexWidth != sizeof(u32))
         {
-            return Err(std::format("'{}' has an incompatible vertex/index layout", path));
+            return Err(std::string{ "incompatible vertex/index layout" });
         }
-        // Recompute the layout from the counts and require the header offsets to match
-        // and the file to be large enough. This rejects a malformed huge count before
-        // it reaches resize() (which would otherwise abort on a giant allocation).
+        // Recompute the layout from the counts and require the header offsets to match and the buffer
+        // to be large enough. Validated against the span length (the chunk length, not a file size),
+        // so an embedded chunk reads identically to a standalone file.
         const u64 verticesEnd =
             static_cast<u64>(sizeof(SMeshHeader)) + static_cast<u64>(header.vertexCount) * sizeof(Vertex);
         const u64 indicesEnd = verticesEnd + static_cast<u64>(header.indexCount) * sizeof(u32);
         const u64 submeshesEnd = indicesEnd + static_cast<u64>(header.submeshCount) * sizeof(Submesh);
         if (header.verticesOffset != sizeof(SMeshHeader) || header.indicesOffset != verticesEnd ||
-            header.submeshesOffset != indicesEnd || static_cast<u64>(fileSize) < submeshesEnd)
+            header.submeshesOffset != indicesEnd || static_cast<u64>(bytes.size()) < submeshesEnd)
         {
-            return Err(std::format("'{}' has an inconsistent or truncated layout", path));
+            return Err(std::string{ "inconsistent or truncated .smesh layout" });
         }
 
         Mesh mesh;
         mesh.vertices.resize(header.vertexCount);
         mesh.indices.resize(header.indexCount);
         mesh.submeshes.resize(header.submeshCount);
-        in.seekg(static_cast<std::streamoff>(header.verticesOffset));
-        in.read(reinterpret_cast<char*>(mesh.vertices.data()),
-                static_cast<std::streamsize>(header.vertexCount * sizeof(Vertex)));
-        in.read(reinterpret_cast<char*>(mesh.indices.data()),
-                static_cast<std::streamsize>(header.indexCount * sizeof(u32)));
-        in.read(reinterpret_cast<char*>(mesh.submeshes.data()),
-                static_cast<std::streamsize>(header.submeshCount * sizeof(Submesh)));
-        if (!in)
+        std::memcpy(mesh.vertices.data(), bytes.data() + header.verticesOffset, header.vertexCount * sizeof(Vertex));
+        std::memcpy(mesh.indices.data(), bytes.data() + header.indicesOffset, header.indexCount * sizeof(u32));
+        std::memcpy(mesh.submeshes.data(), bytes.data() + header.submeshesOffset,
+                    header.submeshCount * sizeof(Submesh));
+        return mesh;
+    }
+
+    auto loadMesh(const std::string& path) -> Result<Mesh>
+    {
+        auto bytes = readBinaryFile(path);
+        if (!bytes)
         {
-            return Err(std::format("read failed for '{}'", path));
+            return Err(bytes.error());
+        }
+        auto mesh = loadMeshFromBytes(std::as_bytes(std::span{ *bytes }));
+        if (!mesh)
+        {
+            return Err(std::format("'{}': {}", path, mesh.error()));
         }
         return mesh;
     }
@@ -1244,63 +1458,25 @@ namespace se
 
     auto saveMeshSkinned(const Mesh& mesh, const std::vector<VertexSkin>& skin, const std::string& path) -> Result<void>
     {
-        if (skin.size() != mesh.vertices.size())
+        auto bytes = saveMeshSkinnedToBuffer(mesh, skin);
+        if (!bytes)
         {
-            return Err(
-                std::format("skin stream ({}) does not parallel the vertices ({})", skin.size(), mesh.vertices.size()));
+            return Err(bytes.error());
         }
-        SMeshHeader header{};
-        std::memcpy(header.magic, "SMSH", 4);
-        header.version = MeshFormatVersionSkinned;
-        header.flags = 0;
-        header.vertexStride = sizeof(Vertex);
-        header.vertexCount = static_cast<u32>(mesh.vertices.size());
-        header.indexCount = static_cast<u32>(mesh.indices.size());
-        header.indexWidth = sizeof(u32);
-        header.submeshCount = static_cast<u32>(mesh.submeshes.size());
-        header.verticesOffset = sizeof(SMeshHeader);
-        header.indicesOffset = header.verticesOffset + static_cast<u64>(header.vertexCount) * sizeof(Vertex);
-        header.submeshesOffset = header.indicesOffset + static_cast<u64>(header.indexCount) * sizeof(u32);
-
-        std::ofstream out(path, std::ios::binary);
-        if (!out)
-        {
-            return Err(std::format("cannot open '{}' for writing", path));
-        }
-        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
-        out.write(reinterpret_cast<const char*>(mesh.vertices.data()),
-                  static_cast<std::streamsize>(mesh.vertices.size() * sizeof(Vertex)));
-        out.write(reinterpret_cast<const char*>(mesh.indices.data()),
-                  static_cast<std::streamsize>(mesh.indices.size() * sizeof(u32)));
-        out.write(reinterpret_cast<const char*>(mesh.submeshes.data()),
-                  static_cast<std::streamsize>(mesh.submeshes.size() * sizeof(Submesh)));
-        out.write(reinterpret_cast<const char*>(skin.data()),
-                  static_cast<std::streamsize>(skin.size() * sizeof(VertexSkin)));
-        if (!out)
-        {
-            return Err(std::format("write failed for '{}'", path));
-        }
-        return {};
+        return writeBytesToFile(path, *bytes);
     }
 
-    auto loadMeshSkin(const std::string& path) -> Result<std::vector<VertexSkin>>
+    auto loadMeshSkinFromBytes(std::span<const std::byte> bytes) -> Result<std::vector<VertexSkin>>
     {
-        std::ifstream in(path, std::ios::binary | std::ios::ate);
-        if (!in)
+        if (bytes.size() < sizeof(SMeshHeader))
         {
-            return Err(std::format("cannot open '{}'", path));
-        }
-        const std::streamsize fileSize = in.tellg();
-        in.seekg(0);
-        if (fileSize < static_cast<std::streamsize>(sizeof(SMeshHeader)))
-        {
-            return Err(std::format("'{}' is too small to be a .smesh", path));
+            return Err(std::string{ "buffer is too small to be a .smesh" });
         }
         SMeshHeader header{};
-        in.read(reinterpret_cast<char*>(&header), sizeof(header));
+        std::memcpy(&header, bytes.data(), sizeof(header));
         if (std::memcmp(header.magic, "SMSH", 4) != 0)
         {
-            return Err(std::format("'{}' is not a .smesh (bad magic)", path));
+            return Err(std::string{ "not a .smesh (bad magic)" });
         }
         if (header.version != MeshFormatVersionSkinned)
         {
@@ -1308,36 +1484,46 @@ namespace se
         }
         const u64 submeshesEnd = header.submeshesOffset + static_cast<u64>(header.submeshCount) * sizeof(Submesh);
         const u64 skinEnd = submeshesEnd + static_cast<u64>(header.vertexCount) * sizeof(VertexSkin);
-        if (static_cast<u64>(fileSize) < skinEnd)
+        if (static_cast<u64>(bytes.size()) < skinEnd)
         {
-            return Err(std::format("'{}' is missing its skin section", path));
+            return Err(std::string{ ".smesh is missing its skin section" });
         }
         std::vector<VertexSkin> skin(header.vertexCount);
-        in.seekg(static_cast<std::streamoff>(submeshesEnd));
-        in.read(reinterpret_cast<char*>(skin.data()),
-                static_cast<std::streamsize>(header.vertexCount * sizeof(VertexSkin)));
-        if (!in)
+        std::memcpy(skin.data(), bytes.data() + submeshesEnd, header.vertexCount * sizeof(VertexSkin));
+        return skin;
+    }
+
+    auto loadMeshSkin(const std::string& path) -> Result<std::vector<VertexSkin>>
+    {
+        auto bytes = readBinaryFile(path);
+        if (!bytes)
         {
-            return Err(std::format("read failed for '{}'", path));
+            return Err(bytes.error());
+        }
+        auto skin = loadMeshSkinFromBytes(std::as_bytes(std::span{ *bytes }));
+        if (!skin)
+        {
+            return Err(std::format("'{}': {}", path, skin.error()));
         }
         return skin;
     }
 
-    auto saveAnimation(const AnimClip& clip, const std::string& path) -> Result<void>
+    auto saveAnimationToBuffer(const AnimClip& clip) -> std::vector<std::byte>
     {
-        std::ofstream out(path, std::ios::binary);
-        if (!out)
+        std::vector<std::byte> bytes;
+        auto append = [&](const void* src, std::size_t count)
         {
-            return Err(std::format("cannot open '{}' for writing", path));
-        }
+            const auto* first = reinterpret_cast<const std::byte*>(src);
+            bytes.insert(bytes.end(), first, first + count);
+        };
         SANimHeader header{};
         std::memcpy(header.magic, "SANM", 4);
         header.version = AnimFormatVersion;
         header.trackCount = static_cast<u32>(clip.tracks.size());
         header.duration = clip.duration;
         header.nameLen = static_cast<u32>(clip.name.size());
-        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
-        out.write(clip.name.data(), static_cast<std::streamsize>(clip.name.size()));
+        append(&header, sizeof(header));
+        append(clip.name.data(), clip.name.size());
         for (const AnimTrack& track : clip.tracks)
         {
             SANimTrackRecord record{};
@@ -1347,69 +1533,62 @@ namespace se
             record.nameLen = static_cast<u32>(track.jointName.size());
             record.timeCount = static_cast<u32>(track.times.size());
             record.valueCount = static_cast<u32>(track.values.size());
-            out.write(reinterpret_cast<const char*>(&record), sizeof(record));
-            out.write(track.jointName.data(), static_cast<std::streamsize>(track.jointName.size()));
-            out.write(reinterpret_cast<const char*>(track.times.data()),
-                      static_cast<std::streamsize>(track.times.size() * sizeof(f32)));
-            out.write(reinterpret_cast<const char*>(track.values.data()),
-                      static_cast<std::streamsize>(track.values.size() * sizeof(f32)));
+            append(&record, sizeof(record));
+            append(track.jointName.data(), track.jointName.size());
+            append(track.times.data(), track.times.size() * sizeof(f32));
+            append(track.values.data(), track.values.size() * sizeof(f32));
         }
-        if (!out)
-        {
-            return Err(std::format("write failed for '{}'", path));
-        }
-        return {};
+        return bytes;
     }
 
-    auto loadAnimation(const std::string& path) -> Result<AnimClip>
+    auto saveAnimation(const AnimClip& clip, const std::string& path) -> Result<void>
     {
-        auto raw = readBinaryFile(path);
-        if (!raw)
-        {
-            return Err(raw.error());
-        }
-        const std::vector<u8>& bytes = *raw;
+        return writeBytesToFile(path, saveAnimationToBuffer(clip));
+    }
+
+    auto loadAnimationFromBytes(std::span<const std::byte> bytes) -> Result<AnimClip>
+    {
         if (bytes.size() < sizeof(SANimHeader))
         {
-            return Err(std::format("'{}' is too small to be a .sanim", path));
+            return Err(std::string{ "buffer is too small to be a .sanim" });
         }
         SANimHeader header{};
         std::memcpy(&header, bytes.data(), sizeof(header));
         if (std::memcmp(header.magic, "SANM", 4) != 0)
         {
-            return Err(std::format("'{}' is not a .sanim (bad magic)", path));
+            return Err(std::string{ "not a .sanim (bad magic)" });
         }
         if (header.version != AnimFormatVersion)
         {
-            return Err(std::format("'{}' has unsupported animation version {}", path, header.version));
+            return Err(std::format("unsupported animation version {}", header.version));
         }
 
         // Cursor over the byte buffer; `take` bounds-checks every field so a malformed
         // count can never drive a giant allocation (same defence as loadMesh).
         std::size_t cursor = sizeof(SANimHeader);
         bool overran = false;
-        auto take = [&](std::size_t count) -> const u8*
+        auto take = [&](std::size_t count) -> const std::byte*
         {
             if (overran || count > bytes.size() - cursor)
             {
                 overran = true;
                 return nullptr;
             }
-            const u8* at = bytes.data() + cursor;
+            const std::byte* at = bytes.data() + cursor;
             cursor = cursor + count;
             return at;
         };
 
         AnimClip clip;
         clip.duration = header.duration;
-        if (const u8* name = take(header.nameLen))
+        if (const std::byte* name = take(header.nameLen))
         {
             clip.name.assign(reinterpret_cast<const char*>(name), header.nameLen);
         }
         clip.tracks.reserve(header.trackCount);
         for (u32 t = 0; t < header.trackCount && !overran; t = t + 1)
         {
-            const u8* recordBytes = take(sizeof(SANimTrackRecord));
+            const std::byte* recordBytes = take(sizeof(SANimTrackRecord));
             if (recordBytes == nullptr)
             {
                 break;
@@ -1420,16 +1599,16 @@ namespace se
             track.joint = record.joint;
             track.path = static_cast<AnimTrack::Path>(record.path);
             track.interp = static_cast<AnimTrack::Interp>(record.interp);
-            if (const u8* name = take(record.nameLen))
+            if (const std::byte* name = take(record.nameLen))
             {
                 track.jointName.assign(reinterpret_cast<const char*>(name), record.nameLen);
             }
-            if (const u8* times = take(static_cast<std::size_t>(record.timeCount) * sizeof(f32)))
+            if (const std::byte* times = take(static_cast<std::size_t>(record.timeCount) * sizeof(f32)))
             {
                 track.times.resize(record.timeCount);
                 std::memcpy(track.times.data(), times, static_cast<std::size_t>(record.timeCount) * sizeof(f32));
             }
-            if (const u8* values = take(static_cast<std::size_t>(record.valueCount) * sizeof(f32)))
+            if (const std::byte* values = take(static_cast<std::size_t>(record.valueCount) * sizeof(f32)))
             {
                 track.values.resize(record.valueCount);
                 std::memcpy(track.values.data(), values, static_cast<std::size_t>(record.valueCount) * sizeof(f32));
@@ -1438,9 +1617,412 @@ namespace se
         }
         if (overran)
         {
-            return Err(std::format("'{}' is truncated or malformed", path));
+            return Err(std::string{ ".sanim is truncated or malformed" });
         }
         return clip;
+    }
+
+    auto loadAnimation(const std::string& path) -> Result<AnimClip>
+    {
+        auto raw = readBinaryFile(path);
+        if (!raw)
+        {
+            return Err(raw.error());
+        }
+        auto clip = loadAnimationFromBytes(std::as_bytes(std::span{ *raw }));
+        if (!clip)
+        {
+            return Err(std::format("'{}': {}", path, clip.error()));
+        }
+        return clip;
+    }
+
+    namespace
+    {
+        auto align16(u64 value) -> u64
+        {
+            return (value + 15) & ~u64{ 15 };
+        }
+    }
+
+    auto writeContainer(const std::string& path, std::span<const ContainerChunk> chunks) -> Result<void>
+    {
+        // META is front-loaded (placed first after the TOC) so a prefix read reaches it
+        // without scanning payloads; everything else keeps its caller-given order.
+        std::vector<const ContainerChunk*> ordered;
+        ordered.reserve(chunks.size());
+        for (const ContainerChunk& chunk : chunks)
+        {
+            if (chunk.kind == ChunkKind::Meta)
+            {
+                ordered.push_back(&chunk);
+            }
+        }
+        for (const ContainerChunk& chunk : chunks)
+        {
+            if (chunk.kind != ChunkKind::Meta)
+            {
+                ordered.push_back(&chunk);
+            }
+        }
+
+        const u64 tocOffset = sizeof(SModelHeader);
+        const u64 tocBytes = static_cast<u64>(ordered.size()) * sizeof(TocEntry);
+
+        std::vector<TocEntry> toc(ordered.size());
+        u64 cursor = align16(tocOffset + tocBytes);
+        u64 metaOffset = 0;
+        u64 metaLength = 0;
+        for (std::size_t i = 0; i < ordered.size(); i = i + 1)
+        {
+            const ContainerChunk& chunk = *ordered[i];
+            cursor = align16(cursor);
+            TocEntry& entry = toc[i];
+            entry.fourcc = static_cast<u32>(chunk.kind);
+            entry.flags = chunk.flags;
+            entry.subId = chunk.subId;
+            entry.offset = cursor;
+            entry.length = static_cast<u64>(chunk.bytes.size());
+            if (chunk.kind == ChunkKind::Meta)
+            {
+                metaOffset = entry.offset;
+                metaLength = entry.length;
+            }
+            cursor = cursor + entry.length;
+        }
+        const u64 totalLength = cursor;
+
+        std::vector<std::byte> buffer(static_cast<std::size_t>(totalLength), std::byte{ 0 });
+        SModelHeader header{};
+        std::memcpy(header.magic, "SMDL", 4);
+        header.containerVersion = ContainerFormatVersion;
+        header.schemaVersion = MetadataSchemaVersion;
+        header.flags = 0;
+        header.tocCount = static_cast<u32>(ordered.size());
+        header.tocOffset = tocOffset;
+        header.metaOffset = metaOffset;
+        header.metaLength = metaLength;
+        header.totalLength = totalLength;
+        std::memcpy(buffer.data(), &header, sizeof(header));
+        if (!toc.empty())
+        {
+            std::memcpy(buffer.data() + tocOffset, toc.data(), static_cast<std::size_t>(tocBytes));
+        }
+        for (std::size_t i = 0; i < ordered.size(); i = i + 1)
+        {
+            const ContainerChunk& chunk = *ordered[i];
+            if (!chunk.bytes.empty())
+            {
+                std::memcpy(buffer.data() + toc[i].offset, chunk.bytes.data(), chunk.bytes.size());
+            }
+        }
+
+        std::ofstream out(path, std::ios::binary);
+        if (!out)
+        {
+            return Err(std::format("cannot open '{}' for writing", path));
+        }
+        out.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        if (!out)
+        {
+            return Err(std::format("write failed for '{}'", path));
+        }
+        return {};
+    }
+
+    auto readContainerHeader(const std::string& path) -> Result<SModelHeader>
+    {
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (!in)
+        {
+            return Err(std::format("cannot open '{}'", path));
+        }
+        const std::streamsize fileSize = in.tellg();
+        in.seekg(0);
+        if (fileSize < static_cast<std::streamsize>(sizeof(SModelHeader)))
+        {
+            return Err(std::format("'{}' is too small to be a .smodel", path));
+        }
+        SModelHeader header{};
+        in.read(reinterpret_cast<char*>(&header), sizeof(header));
+        if (!in)
+        {
+            return Err(std::format("read failed for '{}'", path));
+        }
+        if (std::memcmp(header.magic, "SMDL", 4) != 0)
+        {
+            return Err(std::format("'{}' is not a .smodel (bad magic)", path));
+        }
+        if (header.containerVersion != ContainerFormatVersion)
+        {
+            return Err(std::format("'{}' has unsupported container version {}", path, header.containerVersion));
+        }
+        if (header.totalLength != static_cast<u64>(fileSize))
+        {
+            return Err(std::format("'{}' totalLength {} disagrees with file size {}", path, header.totalLength,
+                                   static_cast<u64>(fileSize)));
+        }
+        return header;
+    }
+
+    auto readContainer(const std::string& path) -> Result<ContainerReader>
+    {
+        auto header = readContainerHeader(path);
+        if (!header)
+        {
+            return Err(header.error());
+        }
+        const u64 tocBytes = static_cast<u64>(header->tocCount) * sizeof(TocEntry);
+        if (header->tocOffset < sizeof(SModelHeader) || header->tocOffset + tocBytes > header->totalLength)
+        {
+            return Err(std::format("'{}' has an out-of-bounds chunk table", path));
+        }
+
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+        {
+            return Err(std::format("cannot open '{}'", path));
+        }
+        std::vector<TocEntry> toc(header->tocCount);
+        if (header->tocCount != 0)
+        {
+            in.seekg(static_cast<std::streamoff>(header->tocOffset));
+            in.read(reinterpret_cast<char*>(toc.data()), static_cast<std::streamsize>(tocBytes));
+            if (!in)
+            {
+                return Err(std::format("read failed for the chunk table of '{}'", path));
+            }
+        }
+
+        // Bounds + overlap validation: every payload sits past the header and inside the file,
+        // and no two payloads cover the same bytes (sort a copy by offset and check gaps).
+        for (const TocEntry& entry : toc)
+        {
+            if (entry.length == 0)
+            {
+                continue;
+            }
+            if (entry.offset < sizeof(SModelHeader) || entry.offset + entry.length > header->totalLength)
+            {
+                return Err(std::format("'{}' has a chunk that spills outside the file", path));
+            }
+        }
+        std::vector<std::pair<u64, u64>> ranges;  // (offset, length), payload chunks only
+        ranges.reserve(toc.size());
+        for (const TocEntry& entry : toc)
+        {
+            if (entry.length != 0)
+            {
+                ranges.emplace_back(entry.offset, entry.length);
+            }
+        }
+        std::ranges::sort(ranges);
+        for (std::size_t i = 1; i < ranges.size(); i = i + 1)
+        {
+            if (ranges[i].first < ranges[i - 1].first + ranges[i - 1].second)
+            {
+                return Err(std::format("'{}' has overlapping chunk payloads", path));
+            }
+        }
+
+        ContainerReader reader;
+        reader.path = path;
+        reader.header = *header;
+        reader.toc = std::move(toc);
+        return reader;
+    }
+
+    auto ContainerReader::readChunk(const TocEntry& entry) const -> Result<std::vector<std::byte>>
+    {
+        if (entry.offset + entry.length > header.totalLength)
+        {
+            return Err(std::format("chunk in '{}' spills outside the file", path));
+        }
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+        {
+            return Err(std::format("cannot open '{}'", path));
+        }
+        std::vector<std::byte> bytes(static_cast<std::size_t>(entry.length));
+        if (entry.length != 0)
+        {
+            in.seekg(static_cast<std::streamoff>(entry.offset));
+            in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(entry.length));
+            if (!in)
+            {
+                return Err(std::format("read failed for a chunk of '{}'", path));
+            }
+        }
+        return bytes;
+    }
+
+    auto ContainerReader::find(ChunkKind kind, u64 subId) const -> const TocEntry*
+    {
+        for (const TocEntry& entry : toc)
+        {
+            if (entry.fourcc == static_cast<u32>(kind) && entry.subId == subId)
+            {
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+
+    namespace
+    {
+        void runTranslateDeterminismSelfTest(const std::string& modelsDir)
+        {
+            auto first = translateModel(modelsDir + "/cube.gltf");
+            auto second = translateModel(modelsDir + "/cube.gltf");
+            if (!first || !second)
+            {
+                logError("translate determinism self-test: cube.gltf translate failed");
+                return;
+            }
+            bool sameGraph = first->mesh.vertices.size() == second->mesh.vertices.size() &&
+                             first->mesh.indices.size() == second->mesh.indices.size() &&
+                             first->mesh.submeshes.size() == second->mesh.submeshes.size() &&
+                             first->materials.size() == second->materials.size() &&
+                             first->nodes.size() == second->nodes.size() && first->hasSkin == second->hasSkin;
+            if (sameGraph && !first->mesh.vertices.empty())
+            {
+                sameGraph = first->mesh.vertices.front().position == second->mesh.vertices.front().position &&
+                            first->mesh.vertices.back().position == second->mesh.vertices.back().position;
+            }
+            for (std::size_t i = 0; sameGraph && i < first->nodes.size(); i = i + 1)
+            {
+                sameGraph = first->nodes[i].name == second->nodes[i].name;
+            }
+
+            const Uuid stone = subIdFor("town", "material", "stone", 0);
+            const Uuid stoneAgain = subIdFor("town", "material", "stone", 0);
+            const Uuid stoneDup = subIdFor("town", "material", "stone", 1);
+            const Uuid stoneMesh = subIdFor("town", "mesh", "stone", 0);
+            const Uuid marble = subIdFor("town", "material", "marble", 0);
+            const bool stableIds = stone.value == stoneAgain.value && stone.value != stoneDup.value &&
+                                   stone.value != stoneMesh.value && stone.value != marble.value && stone.value >= 1024;
+
+            if (sameGraph && stableIds)
+            {
+                logInfo("translate determinism + stable sub-ids OK");
+            }
+            else
+            {
+                logError(
+                    std::format("translate determinism self-test FAILED (graph={}, ids={})", sameGraph, stableIds));
+            }
+        }
+
+        void runContainerSelfTest()
+        {
+            std::array<std::byte, 12> metaBytes{};
+            for (std::size_t i = 0; i < metaBytes.size(); i = i + 1)
+            {
+                metaBytes[i] = static_cast<std::byte>(0xA0 + i);
+            }
+            std::vector<std::byte> meshBytes(40);
+            for (std::size_t i = 0; i < meshBytes.size(); i = i + 1)
+            {
+                meshBytes[i] = static_cast<std::byte>(i * 3 + 1);
+            }
+            std::vector<std::byte> texBytes(33);
+            for (std::size_t i = 0; i < texBytes.size(); i = i + 1)
+            {
+                texBytes[i] = static_cast<std::byte>(i * 7 + 2);
+            }
+
+            // Mesh first in caller order so the META front-loading is actually exercised.
+            const std::array<ContainerChunk, 3> chunks{
+                ContainerChunk{ .kind = ChunkKind::Mesh, .subId = 111, .flags = 0, .bytes = meshBytes },
+                ContainerChunk{ .kind = ChunkKind::Meta, .subId = 0, .flags = 0, .bytes = metaBytes },
+                ContainerChunk{ .kind = ChunkKind::Texture, .subId = 222, .flags = 1, .bytes = texBytes },
+            };
+
+            const std::string containerPath = "/tmp/saffron_container.smodel";
+            if (auto wrote = writeContainer(containerPath, chunks); !wrote)
+            {
+                logError(std::format("container self-test: write failed: {}", wrote.error()));
+                return;
+            }
+
+            auto reader = readContainer(containerPath);
+            if (!reader)
+            {
+                logError(std::format("container self-test: read failed: {}", reader.error()));
+                return;
+            }
+
+            auto sameBytes = [](const std::vector<std::byte>& got, std::span<const std::byte> want)
+            { return got.size() == want.size() && std::memcmp(got.data(), want.data(), want.size()) == 0; };
+
+            bool ok = reader->toc.size() == 3 && reader->header.metaLength == metaBytes.size() &&
+                      reader->header.metaOffset != 0;
+            const TocEntry* metaEntry = reader->find(ChunkKind::Meta, 0);
+            const TocEntry* meshEntry = reader->find(ChunkKind::Mesh, 111);
+            const TocEntry* texEntry = reader->find(ChunkKind::Texture, 222);
+            ok = ok && metaEntry != nullptr && meshEntry != nullptr && texEntry != nullptr;
+            if (metaEntry != nullptr && meshEntry != nullptr && texEntry != nullptr)
+            {
+                ok = ok && metaEntry->offset < meshEntry->offset && metaEntry->offset < texEntry->offset;
+            }
+            if (meshEntry != nullptr)
+            {
+                ok = ok && (meshEntry->offset % 16 == 0);
+                auto got = reader->readChunk(*meshEntry);
+                ok = ok && got && sameBytes(*got, meshBytes);
+            }
+            if (texEntry != nullptr)
+            {
+                ok = ok && (texEntry->offset % 16 == 0) && texEntry->flags == 1;
+                auto got = reader->readChunk(*texEntry);
+                ok = ok && got && sameBytes(*got, texBytes);
+            }
+            if (ok)
+            {
+                logInfo(".smodel container round-trip OK");
+            }
+            else
+            {
+                logError(".smodel container round-trip MISMATCH");
+            }
+
+            // Rejection cases: a corrupted magic and a lying totalLength must both error, not crash.
+            auto raw = readBinaryFile(containerPath);
+            if (!raw)
+            {
+                return;
+            }
+            std::vector<u8> badMagic = *raw;
+            badMagic[0] = static_cast<u8>('X');
+            const std::string badMagicPath = "/tmp/saffron_container_badmagic.smodel";
+            if (std::ofstream out(badMagicPath, std::ios::binary); out)
+            {
+                out.write(reinterpret_cast<const char*>(badMagic.data()),
+                          static_cast<std::streamsize>(badMagic.size()));
+            }
+
+            std::vector<u8> badLength = *raw;
+            const u64 wrongLength = static_cast<u64>(badLength.size()) + 4096;
+            std::memcpy(badLength.data() + offsetof(SModelHeader, totalLength), &wrongLength, sizeof(wrongLength));
+            const std::string badLengthPath = "/tmp/saffron_container_badlen.smodel";
+            if (std::ofstream out(badLengthPath, std::ios::binary); out)
+            {
+                out.write(reinterpret_cast<const char*>(badLength.data()),
+                          static_cast<std::streamsize>(badLength.size()));
+            }
+
+            const bool magicRejected = !readContainerHeader(badMagicPath).has_value();
+            const bool lengthRejected = !readContainerHeader(badLengthPath).has_value();
+            if (magicRejected && lengthRejected)
+            {
+                logInfo(".smodel rejects corrupted magic + totalLength");
+            }
+            else
+            {
+                logError(
+                    std::format(".smodel rejection check FAILED (magic={}, length={})", magicRejected, lengthRejected));
+            }
+        }
     }
 
     void runGeometrySelfTest(const std::string& modelsDir)
@@ -1491,7 +2073,7 @@ namespace se
 
         // Skeletal clip import (Phase 2): the rigged+animated fixture yields a skin plus at
         // least one decoded clip, and that clip survives a .sanim round-trip.
-        if (auto rigged = importModelWithMaterial(modelsDir + "/animated-strip.gltf"); !rigged)
+        if (auto rigged = translateModel(modelsDir + "/animated-strip.gltf"); !rigged)
         {
             logError(std::format("geometry self-test: animated-strip import failed: {}", rigged.error()));
         }
@@ -1523,5 +2105,8 @@ namespace se
                 logError(".sanim round-trip MISMATCH");
             }
         }
+
+        runTranslateDeterminismSelfTest(modelsDir);
+        runContainerSelfTest();
     }
 }
