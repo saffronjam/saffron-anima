@@ -67,14 +67,26 @@ export function RightSidebar() {
           );
         })}
       </div>
+      {/* Each opened tool stays mounted and is hidden (display:none) when not active, so the
+          Material panel keeps its selected material + preview across tool switches instead of
+          remounting and re-fetching. None of these panels self-polls (metrics polling lives in
+          store.ts keyed on rightTools, not on which tool is active), so hiding is cost-free. */}
       <div className="min-h-0 flex-1">
-        {active === "stats" ? (
-          <RenderStatsPanel />
-        ) : active === "profiler" ? (
-          <ProfilerPanel />
-        ) : active === "material" ? (
-          <MaterialEditorPanel />
-        ) : null}
+        {rightTools.includes("stats") && (
+          <div className={cn("h-full", active !== "stats" && "hidden")}>
+            <RenderStatsPanel />
+          </div>
+        )}
+        {rightTools.includes("profiler") && (
+          <div className={cn("h-full", active !== "profiler" && "hidden")}>
+            <ProfilerPanel />
+          </div>
+        )}
+        {rightTools.includes("material") && (
+          <div className={cn("h-full", active !== "material" && "hidden")}>
+            <MaterialEditorPanel />
+          </div>
+        )}
       </div>
     </div>
   );

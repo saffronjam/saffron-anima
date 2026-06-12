@@ -9,6 +9,7 @@ import {
   Maximize2,
   Minus,
   Square,
+  Workflow,
   X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -427,6 +428,9 @@ function tabIcon(tab: ViewTab) {
   }
   if (tab.kind === "flamegraph") {
     return Flame;
+  }
+  if (tab.kind === "materialGraph") {
+    return Workflow;
   }
   if (tab.assetType === "mesh") {
     return Box;

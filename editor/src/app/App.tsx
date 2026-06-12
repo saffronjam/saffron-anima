@@ -22,6 +22,7 @@ import { SettingsModal } from "./SettingsModal";
 import type { ProjectInfo } from "../control/client";
 import { AssetPreview } from "../components/AssetViewer";
 import { CaptureFlame } from "../components/CaptureFlame";
+import { MaterialGraphEditor } from "../panels/MaterialGraphEditor";
 import { emitLayoutSettled } from "./layoutBus";
 import { logRender } from "../lib/renderLog";
 import { Toaster } from "@/components/ui/sonner";
@@ -59,6 +60,10 @@ export function App() {
     return tab?.kind === "asset"
       ? (s.assets.find((asset) => asset.id === tab.assetId) ?? null)
       : null;
+  });
+  const activeGraphMaterialId = useEditorStore((s) => {
+    const tab = s.viewTabs.find((candidate) => candidate.id === s.activeViewTabId);
+    return tab?.kind === "materialGraph" ? tab.materialId : null;
   });
   const [revealed, setRevealed] = useState(didRevealWindow);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -217,6 +222,9 @@ export function App() {
         </div>
         {activeKind === "asset" && <AssetWorkspace asset={activeAsset} />}
         {activeKind === "flamegraph" && <FlameGraphWorkspace />}
+        {activeKind === "materialGraph" && (
+          <MaterialGraphWorkspace materialId={activeGraphMaterialId} />
+        )}
         <ProjectStartupModal open={projectModalOpen} onProjectLoaded={handleProjectLoaded} />
         <SettingsModal />
         <Toaster />
@@ -268,6 +276,22 @@ function FlameGraphWorkspace() {
   return (
     <main className="min-h-0 flex-1 overflow-hidden bg-background p-3">
       <CaptureFlame />
+    </main>
+  );
+}
+
+/// The Material graph main tab: the node-graph editor for one material, filling the work area.
+function MaterialGraphWorkspace({ materialId }: { materialId: string | null }) {
+  if (materialId === null) {
+    return (
+      <main className="flex min-h-0 flex-1 items-center justify-center bg-background text-xs italic text-muted-foreground">
+        Material not found
+      </main>
+    );
+  }
+  return (
+    <main className="min-h-0 flex-1 overflow-hidden bg-background">
+      <MaterialGraphEditor materialId={materialId} />
     </main>
   );
 }

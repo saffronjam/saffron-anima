@@ -2,10 +2,12 @@
 /// image, else a lucide type icon), an in-place rename input, and an HTML5 drag
 /// SOURCE carrying `application/x-se-asset` (the React analog of the C++ `SE_ASSET`
 /// / `AssetDragPayload`). Double-click opens the View modal; the Delete key on a
-/// focused tile starts the same delete flow as the context menu. Parity target:
-/// `assetCatalogPanel` (editor_panels.cpp:226-325) + the `thumbnailFor` fallbacks.
-import { useEffect, useRef, useState } from "react";
-import { Box, Eye, File, Image as ImageIcon, Pencil, Trash } from "lucide-react";
+/// focused tile starts the same delete flow as the grid's shared context menu
+/// (the panel owns that menu — a tile renders no Radix root of its own). Parity
+/// target: `assetCatalogPanel` (editor_panels.cpp:226-325) + the `thumbnailFor`
+/// fallbacks.
+import { memo, useEffect, useRef, useState } from "react";
+import { Box, File, Image as ImageIcon } from "lucide-react";
 import { client } from "../control/client";
 import { getCachedThumbnailUrl, getThumbnailUrl, useEditorStore } from "../state/store";
 import { matchesBinding } from "../lib/keybindings";
@@ -14,13 +16,6 @@ import { cn } from "@/lib/utils";
 import { useOutsideCommit } from "../lib/useOutsideCommit";
 import { logRender } from "../lib/renderLog";
 import { Input } from "@/components/ui/input";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
 
 /// The DnD payload written to `application/x-se-asset` (distinct from an OS file
 /// drop). `type` lets a drop target type-gate the accept (parity with the C++
@@ -107,32 +102,41 @@ function TypeIcon({ type }: { type: AssetEntry["type"] }) {
 
 export interface AssetTileProps {
   entry: AssetEntry;
-  selected?: boolean;
+  /// True while the panel has this tile in inline-rename mode (entered from the
+  /// grid's shared context menu).
+  renaming?: boolean;
   onView(entry: AssetEntry): void;
   onDelete(entry: AssetEntry): void;
   onSelect(entry: AssetEntry, event: React.MouseEvent): void;
   /// Write the drag payload (the panel owns selection, so it assembles the asset +
   /// folder ids the drag carries).
   onBeginDrag(entry: AssetEntry, event: React.DragEvent): void;
+  /// The rename input settled (commit or cancel); the panel clears its rename state.
+  onRenameEnd(): void;
 }
 
 /// Render the grid thumbnail at 128 px (parity with editor_app.cppm:138) and
 /// display it at the 72-px tile size (parity with `tileSize`).
 const THUMBNAIL_FETCH_SIZE = 128;
 
-export function AssetTile({
+/// memo'd so a parent (grid) render skips tiles whose props are unchanged; the
+/// callers keep every callback prop referentially stable for that reason.
+export const AssetTile = memo(function AssetTile({
   entry,
-  selected = false,
+  renaming = false,
   onView,
   onDelete,
   onSelect,
   onBeginDrag,
+  onRenameEnd,
 }: AssetTileProps) {
   logRender("AssetTile");
+  // Membership-only subscription: the tile re-renders when ITS selected bit flips,
+  // never on unrelated selection changes.
+  const selected = useEditorStore((s) => s.selectedAssetIds.has(entry.id));
   const [url, setUrl] = useState<string | null>(() =>
     getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE),
   );
-  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.name);
   const refreshAssets = useEditorStore((s) => s.refreshAssets);
 
@@ -157,15 +161,15 @@ export function AssetTile({
   }, [entry.id]);
 
   // Keep the rename draft in sync when the catalog name changes externally
-  // (e.g. an `se rename-asset` reflected by the poll), but not while editing.
+  // (e.g. an `se rename-asset` reflected by the poll), but not while renaming.
   useEffect(() => {
-    if (!editing) {
+    if (!renaming) {
       setDraft(entry.name);
     }
-  }, [entry.name, editing]);
+  }, [entry.name, renaming]);
 
   const commitRename = (): void => {
-    setEditing(false);
+    onRenameEnd();
     const next = draft.trim();
     if (next.length === 0 || next === entry.name) {
       setDraft(entry.name);
@@ -177,101 +181,68 @@ export function AssetTile({
       .catch(() => setDraft(entry.name));
   };
 
-  const beginRename = (): void => {
-    setDraft(entry.name);
-    setEditing(true);
-  };
-
   return (
-    <div className="relative w-[72px]" onContextMenu={(event) => event.stopPropagation()}>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div
-            data-asset-tile-id={entry.id}
-            data-asset-item="true"
-            // Focusable so a click lands keyboard focus on the tile and the Delete
-            // key can run the same delete flow as the context menu item.
-            tabIndex={0}
-            // Editing disables the drag so a tile-drag never starts while typing.
-            draggable={!editing}
-            onDragStart={(event) => onBeginDrag(entry, event)}
-            onClick={(event) => onSelect(entry, event)}
-            onDoubleClick={() => onView(entry)}
-            onKeyDown={(event) => {
-              if (
-                !editing &&
-                matchesBinding(event, "assets.delete", useEditorStore.getState().keyBindings)
-              ) {
-                event.preventDefault();
-                onDelete(entry);
-              }
+    <div className="relative w-[72px]">
+      <div
+        data-asset-tile-id={entry.id}
+        data-asset-item="true"
+        // Focusable so a click lands keyboard focus on the tile and the Delete
+        // key can run the same delete flow as the context menu item.
+        tabIndex={0}
+        // Renaming disables the drag so a tile-drag never starts while typing.
+        draggable={!renaming}
+        onDragStart={(event) => onBeginDrag(entry, event)}
+        onClick={(event) => onSelect(entry, event)}
+        onDoubleClick={() => onView(entry)}
+        onKeyDown={(event) => {
+          if (
+            !renaming &&
+            matchesBinding(event, "assets.delete", useEditorStore.getState().keyBindings)
+          ) {
+            event.preventDefault();
+            onDelete(entry);
+          }
+        }}
+        className={cn(
+          "group flex w-[72px] cursor-grab flex-col gap-1 rounded-md border border-transparent p-1",
+          "transition-colors hover:border-ring hover:bg-accent/40 active:cursor-grabbing",
+          selected && "border-ring bg-accent/60 ring-1 ring-ring",
+        )}
+      >
+        <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
+          {url ? (
+            <img
+              src={url}
+              alt={entry.name}
+              className="size-full object-contain"
+              draggable={false}
+            />
+          ) : (
+            <TypeIcon type={entry.type} />
+          )}
+        </div>
+        {renaming ? (
+          <RenameInput
+            value={draft}
+            onChange={setDraft}
+            onCommit={commitRename}
+            onCancel={() => {
+              onRenameEnd();
+              setDraft(entry.name);
             }}
-            className={cn(
-              "group flex w-[72px] cursor-grab flex-col gap-1 rounded-md border border-transparent p-1",
-              "transition-colors hover:border-ring hover:bg-accent/40 active:cursor-grabbing",
-              selected && "border-ring bg-accent/60 ring-1 ring-ring",
-            )}
+          />
+        ) : (
+          <button
+            type="button"
+            className="truncate rounded-sm px-0.5 text-center text-[11px] leading-tight text-foreground"
           >
-            <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
-              {url ? (
-                <img
-                  src={url}
-                  alt={entry.name}
-                  className="size-full object-contain"
-                  draggable={false}
-                />
-              ) : (
-                <TypeIcon type={entry.type} />
-              )}
-            </div>
-            {editing ? (
-              <RenameInput
-                value={draft}
-                onChange={setDraft}
-                onCommit={commitRename}
-                onCancel={() => {
-                  setEditing(false);
-                  setDraft(entry.name);
-                }}
-              />
-            ) : (
-              <button
-                type="button"
-                className="truncate rounded-sm px-0.5 text-center text-[11px] leading-tight text-foreground"
-              >
-                {entry.name}
-              </button>
-            )}
-          </div>
-        </ContextMenuTrigger>
-        {/* No focus restore on close: it lands after the inline rename input takes
-            focus (the menu unmounts post-exit-animation) and would blur-commit it. */}
-        <ContextMenuContent
-          className="min-w-32"
-          onCloseAutoFocus={(event) => event.preventDefault()}
-        >
-          <ContextMenuItem onSelect={() => onView(entry)}>
-            <Eye />
-            View
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={beginRename}>
-            <Pencil />
-            Rename
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            variant="destructive"
-            className="bg-destructive/10 text-destructive focus:bg-destructive focus:text-destructive-foreground"
-            onSelect={() => onDelete(entry)}
-          >
-            <Trash />
-            Delete
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+            {entry.name}
+          </button>
+        )}
+      </div>
     </div>
   );
-}
+});
 
 interface RenameInputProps {
   value: string;

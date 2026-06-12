@@ -118,6 +118,17 @@
   }
 }
 
+/* React Flow (the material node graph) ships its own node styles; pin the whole subtree to the app
+   font and force native form controls inside nodes (which don't inherit font-family) to match. */
+.react-flow {
+  font-family: var(--font-sans);
+}
+.react-flow input,
+.react-flow select,
+.react-flow button {
+  font: inherit;
+}
+
 /* The viewport host marks the rect the engine's subsurface is glued to: a plain
    positioned transparent layer the render shows through. Not a shadcn/Tailwind
    concern, so it keeps explicit positioning here. */

@@ -1,8 +1,9 @@
-/// The node-graph material editor: a full-screen React Flow canvas over the live preview. Loads a
-/// material's stored graph (material-get), lets you add/connect/edit nodes from the palette, and
-/// auto-applies changes (debounced) via material-set-graph — re-rendering the studio-lit preview
-/// sphere so the surface morphs as you edit. "Compile" forces codegen (material-compile-graph) for
-/// procedural graphs that don't fold to params. Node types mirror the engine emitter (materials/graph.ts).
+/// The node-graph material editor: a React Flow canvas + live preview, hosted as a main tab (see
+/// App.tsx / openMaterialGraphTab). Loads a material's stored graph (material-get), lets you
+/// add (right-click the canvas) / connect / edit nodes, and auto-applies changes (debounced) via
+/// material-set-graph — re-rendering the studio-lit preview sphere so the surface morphs as you
+/// edit. "Compile" forces codegen (material-compile-graph) for procedural graphs that don't fold to
+/// params. Node types mirror the engine emitter (materials/graph.ts).
 import {
   createContext,
   useCallback,
@@ -26,128 +27,189 @@ import {
   ReactFlowProvider,
   useEdgesState,
   useNodesState,
+  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { Hammer } from "lucide-react";
 import { client } from "../control/client";
+import { ColorField } from "../components/ColorField";
 import { errorText, notifyError } from "../lib/flash";
+import { humanizeFieldName } from "../lib/humanize";
 import {
   type FlowNode,
   flowToGraph,
   freshNodeId,
   graphToFlow,
+  type NodeCategory,
   NODE_SPECS,
   type SaffronNodeData,
   TEXTURE_SLOTS,
 } from "../materials/graph";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+/// Last rendered preview PNG per material, kept module-level so it survives the tab unmounting:
+/// switching to the Scene tab and back shows the cached sphere immediately instead of re-rendering.
+const previewCache = new Map<string, string>();
 
 interface NodeCallbacks {
   updateProps: (id: string, props: Record<string, unknown>) => void;
 }
 const NodeCallbacksContext = createContext<NodeCallbacks>({ updateProps: () => {} });
 
-function handleTop(index: number, count: number): string {
-  return `${((index + 1) / (count + 1)) * 100}%`;
+/// Pin labels are Sentence case (humanizeFieldName), but single-letter math pins (a/b/t) stay lowercase.
+function pinLabel(pin: string): string {
+  return pin.length === 1 ? pin : humanizeFieldName(pin);
 }
 
-/// One graph node card: a header, a left handle per input pin, a right handle per output pin, and a
-/// minimal inline editor for the leaf nodes that carry data (constant value, texture slot).
+/// The single output handle + label, vertically centered in its row (used by the editor-node layout so
+/// the anchor sits beside the editor, not in a separate pin row above it).
+function OutputAnchor({ pin }: { pin: string }) {
+  return (
+    <>
+      <span className="ml-auto pr-3 text-muted-foreground">{pinLabel(pin)}</span>
+      <Handle
+        type="source"
+        position={Position.Right}
+        id={pin}
+        className="!h-2 !w-2 !border-muted-foreground !bg-emerald-500"
+      />
+    </>
+  );
+}
+
+/// One graph node card. Editor nodes (constant → color picker, texture → slot select) put the editor in a
+/// single body row with the output anchor centered on its right. Other nodes are pins only: a row per pin,
+/// inputs on the left + outputs on the right, the handle centered on its label.
 function SaffronNode({ id, data }: NodeProps<FlowNode>) {
   const { spec, props } = data as SaffronNodeData;
   const { updateProps } = useContext(NodeCallbacksContext);
-  const rows = Math.max(spec.inputs.length, 1);
+  const hasEditor = spec.type === "constant" || spec.type === "textureSlot";
+  const editorOutput = spec.outputs[0];
 
   return (
-    <div className="min-w-[140px] rounded border border-neutral-600 bg-neutral-800 text-[11px] text-neutral-200 shadow">
-      <div className="rounded-t border-b border-neutral-600 bg-neutral-700 px-2 py-1 font-medium">
+    <div className="min-w-[150px] rounded border border-border bg-card text-[11px] text-foreground shadow">
+      <div className="rounded-t border-b border-border bg-muted px-2 py-1 font-medium">
         {spec.label}
       </div>
-      <div className="relative px-2 py-2" style={{ minHeight: `${rows * 18}px` }}>
-        {spec.inputs.map((pin, i) => (
-          <div key={pin} className="flex h-[18px] items-center">
-            <Handle
-              type="target"
-              position={Position.Left}
-              id={pin}
-              style={{ top: handleTop(i, spec.inputs.length) }}
-              className="!h-2 !w-2 !border-neutral-400 !bg-sky-500"
-            />
-            <span className="text-neutral-400">{pin}</span>
-          </div>
-        ))}
-        {spec.outputs.map((pin, i) => (
-          <Handle
-            key={pin}
-            type="source"
-            position={Position.Right}
-            id={pin}
-            style={{ top: handleTop(i, spec.outputs.length) }}
-            className="!h-2 !w-2 !border-neutral-400 !bg-emerald-500"
-          />
-        ))}
-
-        {spec.type === "constant"
-          ? (() => {
+      {hasEditor ? (
+        <div className="relative flex items-center gap-2 py-2 pl-2">
+          {spec.type === "constant" ? (
+            (() => {
               const value = (props.value as number[] | undefined) ?? [1, 1, 1, 1];
-              // Swatch clamps to [0,1] for display; the inputs keep the real (possibly HDR) values.
-              const ch = (i: number) => Math.round(Math.min(1, Math.max(0, value[i] ?? 0)) * 255);
+              // Fixed width so the inline rgba channels shrink to fit instead of expanding to the
+              // native number-input width (which blows the node out to ~600px).
               return (
-                <div className="mt-1 flex items-center gap-1">
-                  <div
-                    className="h-5 w-5 shrink-0 rounded border border-neutral-600"
-                    style={{ backgroundColor: `rgb(${ch(0)}, ${ch(1)}, ${ch(2)})` }}
+                <div className="nodrag w-44">
+                  <ColorField
+                    kind="color4"
+                    value={{
+                      x: value[0] ?? 0,
+                      y: value[1] ?? 0,
+                      z: value[2] ?? 0,
+                      w: value[3] ?? 1,
+                    }}
+                    onChange={(patch) => {
+                      const next = [...value];
+                      if (patch.x !== undefined) next[0] = patch.x;
+                      if (patch.y !== undefined) next[1] = patch.y;
+                      if (patch.z !== undefined) next[2] = patch.z;
+                      if (patch.w !== undefined) next[3] = patch.w;
+                      updateProps(id, { ...props, value: next });
+                    }}
                   />
-                  <div className="grid grid-cols-4 gap-1">
-                    {[0, 1, 2, 3].map((c) => (
-                      <input
-                        key={c}
-                        type="number"
-                        step={0.1}
-                        value={value[c] ?? 0}
-                        onChange={(e) => {
-                          const next = [...value];
-                          next[c] = Number(e.target.value);
-                          updateProps(id, { ...props, value: next });
-                        }}
-                        className="w-full rounded border border-neutral-600 bg-neutral-900 px-1 text-[10px]"
-                      />
-                    ))}
-                  </div>
                 </div>
               );
             })()
-          : null}
-
-        {spec.type === "textureSlot" ? (
-          <select
-            value={(props.slot as string | undefined) ?? "albedo"}
-            onChange={(e) => updateProps(id, { ...props, slot: e.target.value })}
-            className="mt-1 w-full rounded border border-neutral-600 bg-neutral-900 px-1 text-[10px]"
-          >
-            {TEXTURE_SLOTS.map((slot) => (
-              <option key={slot} value={slot}>
-                {slot}
-              </option>
-            ))}
-          </select>
-        ) : null}
-      </div>
+          ) : (
+            <Select
+              value={(props.slot as string | undefined) ?? "albedo"}
+              onValueChange={(slot) => updateProps(id, { ...props, slot })}
+            >
+              <SelectTrigger size="sm" className="nodrag h-7 w-36 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TEXTURE_SLOTS.map((slot) => (
+                  <SelectItem key={slot} value={slot} className="text-[11px]">
+                    {humanizeFieldName(slot)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {editorOutput ? <OutputAnchor pin={editorOutput} /> : null}
+        </div>
+      ) : (
+        <div className="py-1">
+          {Array.from({ length: Math.max(spec.inputs.length, spec.outputs.length) }).map((_, k) => {
+            const inPin = spec.inputs[k];
+            const outPin = spec.outputs[k];
+            return (
+              <div
+                key={`${inPin ?? ""}|${outPin ?? ""}`}
+                className="relative flex h-6 items-center justify-between"
+              >
+                {inPin ? (
+                  <Handle
+                    type="target"
+                    position={Position.Left}
+                    id={inPin}
+                    className="!h-2 !w-2 !border-muted-foreground !bg-sky-500"
+                  />
+                ) : null}
+                <span className="pl-3 text-muted-foreground">{inPin ? pinLabel(inPin) : ""}</span>
+                <span className="pr-3 text-muted-foreground">{outPin ? pinLabel(outPin) : ""}</span>
+                {outPin ? (
+                  <Handle
+                    type="source"
+                    position={Position.Right}
+                    id={outPin}
+                    className="!h-2 !w-2 !border-muted-foreground !bg-emerald-500"
+                  />
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
 
 const NODE_TYPES: NodeTypes = { saffron: SaffronNode };
+const PALETTE_CATEGORIES: NodeCategory[] = ["input", "math", "output"];
 
-function GraphCanvas({ materialId, onClose }: { materialId: string; onClose: () => void }) {
+function GraphCanvas({ materialId }: { materialId: string }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(() => previewCache.get(materialId) ?? null);
   const [status, setStatus] = useState<string>("");
   const loadedRef = useRef(false);
+  // The screen point of the last right-click, so the context menu creates a node under the cursor.
+  const menuPosRef = useRef<{ x: number; y: number } | null>(null);
+  const reactFlow = useReactFlow();
 
-  // Load the material's stored graph into the canvas.
+  // Load the material's stored graph into the canvas. Show the cached preview immediately, then
+  // re-render to refresh it (and cache the result so the next tab switch is instant).
   useEffect(() => {
     loadedRef.current = false;
+    setPreview(previewCache.get(materialId) ?? null);
     void (async () => {
       try {
         const material = await client.materialGet(materialId);
@@ -157,6 +219,7 @@ function GraphCanvas({ materialId, onClose }: { materialId: string; onClose: () 
         setNodes(n);
         setEdges(e);
         const result = await client.previewRender(materialId, 256);
+        previewCache.set(materialId, result.png);
         setPreview(result.png);
       } catch (err) {
         notifyError(errorText(err));
@@ -190,21 +253,24 @@ function GraphCanvas({ materialId, onClose }: { materialId: string; onClose: () 
   // Reject a self-loop during the drag (visual feedback); onConnect enforces the rest.
   const isValidConnection = useCallback((c: Connection | Edge) => c.source !== c.target, []);
 
+  // Create a node from the context menu at the last right-click position (flow coordinates).
   const addNode = useCallback(
     (type: string) => {
       const spec = NODE_SPECS[type];
       if (!spec) {
         return;
       }
+      const screen = menuPosRef.current;
+      const position = screen ? reactFlow.screenToFlowPosition(screen) : { x: 200, y: 120 };
       const node: FlowNode = {
         id: freshNodeId(type),
         type: "saffron",
-        position: { x: 200 + Math.random() * 120, y: 120 + Math.random() * 120 },
+        position,
         data: { spec, props: { ...(spec.defaultProps ?? {}) } },
       };
       setNodes((ns) => [...ns, node]);
     },
-    [setNodes],
+    [reactFlow, setNodes],
   );
 
   // Debounced auto-apply: push the graph to the engine and re-render the preview as it changes. Skip
@@ -221,6 +287,7 @@ function GraphCanvas({ materialId, onClose }: { materialId: string; onClose: () 
           const set = await client.materialSetGraph(materialId, graph);
           setStatus(set.foldable ? "applied (folded to params)" : "applied (codegen)");
           const result = await client.previewRender(materialId, 256);
+          previewCache.set(materialId, result.png);
           setPreview(result.png);
         } catch (err) {
           notifyError(errorText(err));
@@ -242,96 +309,100 @@ function GraphCanvas({ materialId, onClose }: { materialId: string; onClose: () 
   }, [materialId]);
 
   const palette = useMemo(() => {
-    const cats: Record<string, string[]> = { input: [], math: [], output: [] };
+    const cats: Record<NodeCategory, string[]> = { input: [], math: [], output: [] };
     for (const spec of Object.values(NODE_SPECS)) {
-      cats[spec.category]?.push(spec.type);
+      cats[spec.category].push(spec.type);
     }
     return cats;
   }, []);
 
   return (
-    <div className="flex h-full w-full flex-col bg-neutral-950 text-[12px] text-neutral-200">
-      <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
-        <span className="font-medium">Material Graph</span>
-        <span className="text-neutral-500">{status}</span>
+    <div className="flex h-full w-full flex-col bg-background text-[12px] text-foreground">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <span className="font-medium">Material graph</span>
+        <span className="text-muted-foreground">{status}</span>
         <div className="ml-auto flex gap-2">
           <Button size="sm" variant="secondary" onClick={() => void compile()}>
+            <Hammer className="size-3.5" />
             Compile
           </Button>
-          <Button size="sm" onClick={onClose}>
-            Close
-          </Button>
         </div>
       </div>
-      <div className="flex min-h-0 flex-1">
-        <div className="w-40 shrink-0 overflow-y-auto border-r border-neutral-800 p-2">
-          {(["input", "math", "output"] as const).map((cat) => (
-            <div key={cat} className="mb-2">
-              <div className="mb-1 text-[10px] uppercase text-neutral-500">{cat}</div>
-              <div className="flex flex-col gap-1">
-                {palette[cat].map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => addNode(type)}
-                    className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-left text-[11px] hover:bg-neutral-700"
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+        <ResizablePanel defaultSize={76} minSize={40} className="min-w-0">
+          {/* modal=false: the default modal overlay swallows a second right-click, so the menu
+              wouldn't reposition until dismissed. Without it, each right-click re-anchors here. */}
+          <ContextMenu modal={false}>
+            <ContextMenuTrigger asChild>
+              <div
+                className="h-full w-full"
+                onContextMenu={(e) => {
+                  menuPosRef.current = { x: e.clientX, y: e.clientY };
+                }}
+              >
+                <NodeCallbacksContext.Provider value={nodeCallbacks}>
+                  <ReactFlow
+                    nodes={nodes}
+                    edges={edges}
+                    onNodesChange={onNodesChange}
+                    onEdgesChange={onEdgesChange}
+                    onConnect={onConnect}
+                    isValidConnection={isValidConnection}
+                    nodeTypes={NODE_TYPES}
+                    colorMode="dark"
+                    fitView
+                    fitViewOptions={{ maxZoom: 1, padding: 0.3 }}
+                    proOptions={{ hideAttribution: true }}
                   >
-                    {NODE_SPECS[type].label}
-                  </button>
-                ))}
+                    <Background />
+                    <Controls />
+                  </ReactFlow>
+                </NodeCallbacksContext.Provider>
               </div>
-            </div>
-          ))}
-        </div>
-        <div className="min-w-0 flex-1">
-          <NodeCallbacksContext.Provider value={nodeCallbacks}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              isValidConnection={isValidConnection}
-              nodeTypes={NODE_TYPES}
-              fitView
-              proOptions={{ hideAttribution: true }}
-            >
-              <Background />
-              <Controls />
-            </ReactFlow>
-          </NodeCallbacksContext.Provider>
-        </div>
-        <div className="w-64 shrink-0 border-l border-neutral-800 p-3">
-          <div className="mb-2 text-[10px] uppercase text-neutral-500">Preview</div>
-          {preview ? (
-            <img
-              src={`data:image/png;base64,${preview}`}
-              alt="material preview"
-              className="aspect-square w-full rounded border border-neutral-700 object-cover"
-            />
-          ) : (
-            <div className="flex aspect-square w-full items-center justify-center rounded border border-dashed border-neutral-700 text-neutral-500">
-              Rendering…
-            </div>
-          )}
-        </div>
-      </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="w-44">
+              {PALETTE_CATEGORIES.map((cat) => (
+                <ContextMenuGroup key={cat}>
+                  <ContextMenuLabel className="text-[10px] uppercase text-muted-foreground">
+                    {cat}
+                  </ContextMenuLabel>
+                  {palette[cat].map((type) => (
+                    <ContextMenuItem key={type} onSelect={() => addNode(type)}>
+                      {NODE_SPECS[type].label}
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuGroup>
+              ))}
+            </ContextMenuContent>
+          </ContextMenu>
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel defaultSize={24} minSize={12} className="min-w-0">
+          <div className="h-full overflow-y-auto p-3">
+            <div className="mb-2 text-[10px] uppercase text-muted-foreground">Preview</div>
+            {preview ? (
+              <img
+                src={`data:image/png;base64,${preview}`}
+                alt="material preview"
+                className="aspect-square w-full rounded border border-border object-cover"
+              />
+            ) : (
+              <div className="flex aspect-square w-full items-center justify-center rounded border border-dashed border-border text-muted-foreground">
+                Rendering…
+              </div>
+            )}
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
 }
 
-/// Full-screen overlay host. Paints opaque so the viewport subsurface stays covered while open.
-export function MaterialGraphEditor({
-  materialId,
-  onClose,
-}: {
-  materialId: string;
-  onClose: () => void;
-}) {
+/// The material-graph main-tab body (mounted by App.tsx when a `materialGraph` ViewTab is active).
+export function MaterialGraphEditor({ materialId }: { materialId: string }) {
   return (
-    <div className="fixed inset-0 z-50 bg-neutral-950">
-      <ReactFlowProvider>
-        <GraphCanvas materialId={materialId} onClose={onClose} />
-      </ReactFlowProvider>
-    </div>
+    <ReactFlowProvider>
+      <GraphCanvas materialId={materialId} />
+    </ReactFlowProvider>
   );
 }

@@ -55,6 +55,7 @@ export type CaptureState = "idle" | "arming" | "recording" | "ready";
 export type ViewTab =
   | { id: "scene"; kind: "scene"; title: "Scene"; closable: false }
   | { id: "flamegraph"; kind: "flamegraph"; title: "Flame graph"; closable: true }
+  | { id: string; kind: "materialGraph"; materialId: string; title: string; closable: true }
   | {
       id: string;
       kind: "asset";
@@ -73,10 +74,20 @@ export interface EngineStatus {
 /// The editor's play-mode state, mirrored from the engine.
 export type PlayState = "edit" | "playing" | "paused";
 
+/// The Assets-grid shift anchor: the last clicked tile, folder or asset.
+export type AssetSelectionAnchor = { kind: "asset" | "folder"; key: string } | null;
+
+/// One Assets-grid tile in the body's render order (folders sorted first, then
+/// assets) — the coordinate space for shift-range selection.
+export interface AssetGridItem {
+  kind: "asset" | "folder";
+  key: string;
+}
+
 export interface EditorState {
   entities: EntityListEntry[];
   selectedId: string | null;
-  selectedMaterialId: string | null;  // the material asset open in the Material editor panel
+  selectedMaterialId: string | null; // the material asset open in the Material editor panel
   /// Hierarchy rows whose children are shown. Plain UI state, deliberately outside
   /// the sceneVersion/selectionVersion keying so a scene mutation never collapses
   /// the tree; setEntities prunes ids that vanished from the scene.
@@ -87,6 +98,16 @@ export interface EditorState {
   componentsBySelected: InspectResult | null;
   assets: AssetEntry[];
   assetFolders: string[];
+  /// Assets-grid selection (UI-only, like devMode/viewTabs). Tiles subscribe to
+  /// their own membership (`(s) => s.selectedAssetIds.has(id)`), so a selection
+  /// delta re-renders only the flipped tiles, never the grid.
+  selectedAssetIds: Set<string>;
+  selectedFolderPaths: Set<string>;
+  /// The shift-range anchor: the last clicked grid tile, folder or asset.
+  assetSelectionAnchor: AssetSelectionAnchor;
+  /// True while the Assets-grid marquee is sweeping; gates the details overlay so
+  /// it opens once on release instead of flickering per crossed tile.
+  assetMarqueeActive: boolean;
   viewTabs: ViewTab[];
   activeViewTabId: string;
   /// Performance tools open in the right sidebar (order = tab order); empty ⇒ the sidebar is
@@ -214,9 +235,31 @@ export interface EditorState {
   /// Re-fetch the catalog from the engine into `assets`. Called by the reconcile
   /// poll on a sceneVersion change and eagerly after an import/rename.
   refreshAssets(): Promise<void>;
+  /// Click selection for Assets-grid tiles: plain replaces, toggle (ctrl/meta)
+  /// flips membership, shift unions the anchor→key range along `gridOrder` (an
+  /// absent anchor falls through to the plain/toggle path).
+  selectAssetGridItem(
+    kind: "asset" | "folder",
+    key: string,
+    modifiers: { shift: boolean; toggle: boolean },
+    gridOrder: AssetGridItem[],
+  ): void;
+  /// Replace the grid selection outright (marquee sweep, drag-collapse, clear);
+  /// the anchor becomes the last asset, else the last folder, else null.
+  setAssetSelection(assetIds: string[], folderPaths: string[]): void;
+  /// Drop selected assets that left the visible grid and selected folders that no
+  /// longer exist (plus a dangling anchor); identity-stable when nothing changed.
+  pruneAssetSelection(visibleAssets: AssetEntry[], folders: readonly string[]): void;
+  /// Drop just-deleted assets from the selection eagerly, before the refresh.
+  removeFromAssetSelection(assetIds: ReadonlySet<string>): void;
+  /// Rewrite selected folder paths through a folder move (prefix rename).
+  rewriteSelectedFolderPaths(rewrite: (path: string) => string): void;
+  setAssetMarqueeActive(assetMarqueeActive: boolean): void;
   openAssetTab(asset: AssetEntry): void;
   /// Open (or focus) the Flame graph main tab.
   openFlameTab(): void;
+  /// Open (or focus) the node-graph editor for a material as a main tab.
+  openMaterialGraphTab(materialId: string): void;
   closeViewTab(id: string): void;
   setActiveViewTab(id: string): void;
   moveViewTab(id: string, index: number): void;
@@ -301,6 +344,10 @@ export const useEditorStore = create<EditorState>((set) => ({
   componentsBySelected: null,
   assets: [],
   assetFolders: [],
+  selectedAssetIds: new Set<string>(),
+  selectedFolderPaths: new Set<string>(),
+  assetSelectionAnchor: null,
+  assetMarqueeActive: false,
   viewTabs: [{ id: "scene", kind: "scene", title: "Scene", closable: false }],
   activeViewTabId: "scene",
   rightTools: [],
@@ -448,6 +495,108 @@ export const useEditorStore = create<EditorState>((set) => ({
       // Engine may be briefly busy; the next reconcile tick recovers.
     }
   },
+  selectAssetGridItem: (kind, key, modifiers, gridOrder) =>
+    set((s) => {
+      const index = gridOrder.findIndex((item) => item.kind === kind && item.key === key);
+      if (index < 0) {
+        return {};
+      }
+      const anchor = s.assetSelectionAnchor;
+      if (modifiers.shift && anchor) {
+        const anchorIndex = gridOrder.findIndex(
+          (item) => item.kind === anchor.kind && item.key === anchor.key,
+        );
+        if (anchorIndex >= 0) {
+          const range = gridOrder.slice(
+            Math.min(anchorIndex, index),
+            Math.max(anchorIndex, index) + 1,
+          );
+          const selectedAssetIds = new Set(s.selectedAssetIds);
+          const selectedFolderPaths = new Set(s.selectedFolderPaths);
+          for (const item of range) {
+            (item.kind === "asset" ? selectedAssetIds : selectedFolderPaths).add(item.key);
+          }
+          return { selectedAssetIds, selectedFolderPaths, assetSelectionAnchor: { kind, key } };
+        }
+      }
+      if (modifiers.toggle) {
+        const next = new Set(kind === "asset" ? s.selectedAssetIds : s.selectedFolderPaths);
+        if (!next.delete(key)) {
+          next.add(key);
+        }
+        return {
+          ...(kind === "asset" ? { selectedAssetIds: next } : { selectedFolderPaths: next }),
+          assetSelectionAnchor: { kind, key },
+        };
+      }
+      return {
+        selectedAssetIds: kind === "asset" ? new Set([key]) : new Set<string>(),
+        selectedFolderPaths: kind === "folder" ? new Set([key]) : new Set<string>(),
+        assetSelectionAnchor: { kind, key },
+      };
+    }),
+  setAssetSelection: (assetIds, folderPaths) =>
+    set((s) => {
+      if (
+        assetIds.length === 0 &&
+        folderPaths.length === 0 &&
+        s.selectedAssetIds.size === 0 &&
+        s.selectedFolderPaths.size === 0 &&
+        s.assetSelectionAnchor === null
+      ) {
+        return {};
+      }
+      const lastAsset = assetIds.at(-1);
+      const lastFolder = folderPaths.at(-1);
+      return {
+        selectedAssetIds: new Set(assetIds),
+        selectedFolderPaths: new Set(folderPaths),
+        assetSelectionAnchor: lastAsset
+          ? { kind: "asset", key: lastAsset }
+          : lastFolder
+            ? { kind: "folder", key: lastFolder }
+            : null,
+      };
+    }),
+  pruneAssetSelection: (visibleAssets, folders) =>
+    set((s) => {
+      const visibleIds = new Set(visibleAssets.map((asset) => asset.id));
+      const folderSet = new Set(folders);
+      const patch: Partial<EditorState> = {};
+      const assetIds = [...s.selectedAssetIds].filter((id) => visibleIds.has(id));
+      if (assetIds.length !== s.selectedAssetIds.size) {
+        patch.selectedAssetIds = new Set(assetIds);
+      }
+      const folderPaths = [...s.selectedFolderPaths].filter((path) => folderSet.has(path));
+      if (folderPaths.length !== s.selectedFolderPaths.size) {
+        patch.selectedFolderPaths = new Set(folderPaths);
+      }
+      const anchor = s.assetSelectionAnchor;
+      if (
+        anchor &&
+        (anchor.kind === "asset" ? !visibleIds.has(anchor.key) : !folderSet.has(anchor.key))
+      ) {
+        patch.assetSelectionAnchor = null;
+      }
+      return patch;
+    }),
+  removeFromAssetSelection: (assetIds) =>
+    set((s) => {
+      const next = new Set([...s.selectedAssetIds].filter((id) => !assetIds.has(id)));
+      return next.size === s.selectedAssetIds.size ? {} : { selectedAssetIds: next };
+    }),
+  rewriteSelectedFolderPaths: (rewrite) =>
+    set((s) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const path of s.selectedFolderPaths) {
+        const to = rewrite(path);
+        changed ||= to !== path;
+        next.add(to);
+      }
+      return changed ? { selectedFolderPaths: next } : {};
+    }),
+  setAssetMarqueeActive: (assetMarqueeActive) => set({ assetMarqueeActive }),
   openAssetTab: (asset) =>
     set((s) => {
       const id = `asset:${asset.id}`;
@@ -479,6 +628,20 @@ export const useEditorStore = create<EditorState>((set) => ({
           : [
               ...s.viewTabs,
               { id: "flamegraph", kind: "flamegraph", title: "Flame graph", closable: true },
+            ],
+      };
+    }),
+  openMaterialGraphTab: (materialId) =>
+    set((s) => {
+      const id = `materialGraph:${materialId}`;
+      const existing = s.viewTabs.some((tab) => tab.id === id);
+      return {
+        activeViewTabId: id,
+        viewTabs: existing
+          ? s.viewTabs
+          : [
+              ...s.viewTabs,
+              { id, kind: "materialGraph", materialId, title: "Material graph", closable: true },
             ],
       };
     }),
@@ -635,6 +798,10 @@ export const useEditorStore = create<EditorState>((set) => ({
       componentsBySelected: null,
       assets: [],
       assetFolders: [],
+      selectedAssetIds: new Set<string>(),
+      selectedFolderPaths: new Set<string>(),
+      assetSelectionAnchor: null,
+      assetMarqueeActive: false,
       viewTabs: [{ id: "scene", kind: "scene", title: "Scene", closable: false }],
       activeViewTabId: "scene",
       environment: null,
