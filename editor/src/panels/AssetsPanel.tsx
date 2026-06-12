@@ -192,7 +192,6 @@ export function AssetsPanel() {
   // this panel deliberately never reads it at render time (event handlers use
   // getState()), so a selection delta re-renders tiles, not the panel.
   const selectAssetGridItem = useEditorStore((s) => s.selectAssetGridItem);
-  const setAssetSelection = useEditorStore((s) => s.setAssetSelection);
   const pruneAssetSelection = useEditorStore((s) => s.pruneAssetSelection);
   const removeFromAssetSelection = useEditorStore((s) => s.removeFromAssetSelection);
   const rewriteSelectedFolderPaths = useEditorStore((s) => s.rewriteSelectedFolderPaths);
@@ -525,7 +524,7 @@ export function AssetsPanel() {
 
   // Assemble the drag payload from the live selection (read at event time, so the
   // callback identity never tracks it). If the dragged tile is not part of it, the
-  // drag (and selection) collapses to just that tile.
+  // drag carries just that tile without changing selection; click owns selection.
   const beginDrag = useCallback(
     (kind: "asset" | "folder", key: string, event: ReactDragEvent): void => {
       const state = useEditorStore.getState();
@@ -535,7 +534,6 @@ export function AssetsPanel() {
       if (!sel.has(key)) {
         assetIds = kind === "asset" ? [key] : [];
         folderPaths = kind === "folder" ? [key] : [];
-        setAssetSelection(assetIds, folderPaths);
       }
       const visibleIds = new Set(
         state.assets
@@ -553,7 +551,7 @@ export function AssetsPanel() {
       }
       event.dataTransfer.effectAllowed = "move";
     },
-    [currentFolder, setAssetSelection],
+    [currentFolder],
   );
 
   const requestDeleteAsset = useCallback(async (asset: AssetEntry): Promise<void> => {
@@ -1227,7 +1225,10 @@ const AssetPanelBody = memo(function AssetPanelBody({
 }) {
   logRender("AssetPanelBody");
   const folderItems = sortedFolderItems(folders, currentFolder, creatingFolder);
-  const blank = !creatingFolder && folderItems.length === 0 && assets.length === 0;
+  const parentFolder = currentFolder !== null ? parentFolderPath(currentFolder) : null;
+  const hasParentTile = currentFolder !== null;
+  const blank =
+    !hasParentTile && !creatingFolder && folderItems.length === 0 && assets.length === 0;
   const empty = blank && !currentFolder;
   const folderEmpty = blank && currentFolder !== null;
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -1443,6 +1444,14 @@ const AssetPanelBody = memo(function AssetPanelBody({
               className="grid gap-2"
               style={{ gridTemplateColumns: "repeat(auto-fill, minmax(72px, 1fr))" }}
             >
+              {hasParentTile ? (
+                <ParentFolderTile
+                  target={parentFolder}
+                  onOpen={onOpenFolder}
+                  onMoveAssets={onMoveAssets}
+                  onMoveFolders={onMoveFolders}
+                />
+              ) : null}
               {folderItems.map((item) =>
                 item.kind === "new" ? (
                   <NewFolderTile
@@ -1584,6 +1593,70 @@ function NewFolderTile({
     </div>
   );
 }
+
+const ParentFolderTile = memo(function ParentFolderTile({
+  target,
+  onOpen,
+  onMoveAssets,
+  onMoveFolders,
+}: {
+  target: string | null;
+  onOpen(folder: string | null): void;
+  onMoveAssets(assetIds: string[], folder: string | null): void;
+  onMoveFolders(paths: string[], parent: string | null): void;
+}) {
+  logRender("ParentFolderTile");
+  const [dragActive, setDragActive] = useState(false);
+  return (
+    <div className="relative w-[72px]">
+      <button
+        type="button"
+        data-asset-parent-folder="true"
+        className={cn(
+          "flex w-[72px] flex-col gap-1 rounded-md border border-transparent p-1 text-left transition-colors hover:border-ring hover:bg-accent/40",
+          dragActive && "border-ring bg-accent/60 ring-1 ring-ring",
+        )}
+        onClick={() => onOpen(target)}
+        onDragEnter={(event) => {
+          if (isCatalogDrag(event.dataTransfer)) {
+            setDragActive(true);
+          }
+        }}
+        onDragOver={(event) => {
+          if (isCatalogDrag(event.dataTransfer)) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            setDragActive(true);
+          }
+        }}
+        onDragLeave={() => setDragActive(false)}
+        onDrop={(event) => {
+          const ids = assetIdsFromPayload(readAssetPayload(event.dataTransfer));
+          const folderPaths = readFolderPayload(event.dataTransfer);
+          if (ids.length === 0 && folderPaths.length === 0) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          setDragActive(false);
+          if (folderPaths.length > 0) {
+            onMoveFolders(folderPaths, target);
+          }
+          if (ids.length > 0) {
+            onMoveAssets(ids, target);
+          }
+        }}
+      >
+        <div className="flex aspect-square w-full items-center justify-center">
+          <Folder className="size-16 fill-current stroke-current text-yellow-500" />
+        </div>
+        <span className="truncate px-0.5 text-center font-mono text-[11px] leading-tight text-foreground">
+          ../
+        </span>
+      </button>
+    </div>
+  );
+});
 
 /// memo'd like AssetTile: the body passes one function identity per callback to
 /// every folder tile (the tile binds its own `path` at call time).
