@@ -24,6 +24,7 @@ import type {
   DrainAlarmsResult,
   DrainScriptErrorsResult,
   EditorCamera,
+  EnterRigPreviewResult,
   GetScriptSchemaResult,
   SetScriptOverrideResult,
   EntityList,
@@ -39,8 +40,11 @@ import type {
   ProfilerModeResult,
   RenderPassTimingsDto,
   RenderStats,
+  RigPreviewOptionsResult,
+  RigResult,
   Selection,
   SetPerfConfigParams,
+  SkeletonOverlayResult,
   Thumbnail,
   Transform,
   Vec3,
@@ -237,11 +241,12 @@ export const client = {
   getAnimationState(entity: string): Promise<AnimationStateResult> {
     return call("get-animation-state", { entity });
   },
-  /// Play a clip (previews in Edit too); `blend` cross-fades/inertializes from the current clip.
+  /// Play a clip (previews in Edit too); `blend` cross-fades/inertializes from the current clip,
+  /// `paused` loads it at frame 0 without playing (the clip-list pick semantics).
   playAnimation(
     entity: string,
     clip: string,
-    opts?: { speed?: number; loop?: boolean; blend?: number },
+    opts?: { speed?: number; loop?: boolean; blend?: number; paused?: boolean },
   ): Promise<AnimationStateResult> {
     return call("play-animation", { entity, clip, ...opts });
   },
@@ -261,6 +266,37 @@ export const client = {
   /// Clear the Edit preview and stop, reverting the rig to its rest pose.
   stopPreview(entity: string): Promise<AnimationStateResult> {
     return call("stop-preview", { entity });
+  },
+
+  // --- rig editor ---
+  /// A model's bone tree + clips, read from its .smodel container. Accepts the model, a mesh
+  /// sub-asset, or a clip sub-asset — all resolve to the same owning container.
+  getRig(asset: string): Promise<RigResult> {
+    return call("get-rig", { asset });
+  },
+  /// Open a model's rig in the isolated preview scene; returns the spawned rig entity + bone table.
+  enterRigPreview(asset: string): Promise<EnterRigPreviewResult> {
+    return call("enter-rig-preview", { asset });
+  },
+  /// Close the rig preview and restore the authored scene + camera.
+  exitRigPreview(): Promise<PlayStateResult> {
+    return call("exit-rig-preview");
+  },
+  /// The selected/previewed rig's line-skeleton overlay toggles (master show, per-joint axes, joint size).
+  setSkeletonOverlay(opts: {
+    show?: boolean;
+    axes?: boolean;
+    jointSize?: number;
+  }): Promise<SkeletonOverlayResult> {
+    return call("set-skeleton-overlay", opts);
+  },
+  /// Tint a previewed rig's joint by its get-rig node index (-1 clears the highlight).
+  setSkeletonHighlight(joint: number): Promise<SkeletonOverlayResult> {
+    return call("set-skeleton-highlight", { joint });
+  },
+  /// Preview-scene settings (v1: show floor).
+  setRigPreviewOptions(opts: { floor?: boolean }): Promise<RigPreviewOptionsResult> {
+    return call("set-rig-preview-options", opts);
   },
 
   // --- scripting ---
@@ -427,14 +463,20 @@ export const client = {
   },
   /// Expand a model asset's stored hierarchy into the scene; returns the new root entity.
   instantiateModel(asset: string, name?: string): Promise<EntityRef> {
-    return name === undefined ? call("instantiate-model", { asset }) : call("instantiate-model", { asset, name });
+    return name === undefined
+      ? call("instantiate-model", { asset })
+      : call("instantiate-model", { asset, name });
   },
   /// Rescan assets/ and reconcile the catalog from disk; returns added/removed counts.
   scanAssets(): Promise<CommandResultMap["scan-assets"]> {
     return call("scan-assets");
   },
   /// Slice an embedded sub-asset to a standalone file (keeping its id) + remap the container.
-  extractSubAsset(asset: string, subAsset: string, dest?: string): Promise<CommandResultMap["extract-subasset"]> {
+  extractSubAsset(
+    asset: string,
+    subAsset: string,
+    dest?: string,
+  ): Promise<CommandResultMap["extract-subasset"]> {
     return dest === undefined
       ? call("extract-subasset", { asset, subAsset })
       : call("extract-subasset", { asset, subAsset, dest });

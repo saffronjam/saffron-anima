@@ -56,6 +56,10 @@ export type ViewTab =
   | { id: "scene"; kind: "scene"; title: "Scene"; closable: false }
   | { id: "flamegraph"; kind: "flamegraph"; title: "Flame graph"; closable: true }
   | { id: string; kind: "materialGraph"; materialId: string; title: string; closable: true }
+  // The rig editor is keyed by the resolved rig (the mesh/model uuid), not the clicked asset, so a
+  // mesh and any of its clips open or focus the SAME tab — and the engine's one-previewScene
+  // constraint can never be violated by two tabs of one rig.
+  | { id: string; kind: "rigEditor"; rigMeshId: string; title: string; closable: true }
   | {
       id: string;
       kind: "asset";
@@ -271,6 +275,13 @@ export interface EditorState {
   openFlameTab(): void;
   /// Open (or focus) the node-graph editor for a material as a main tab.
   openMaterialGraphTab(materialId: string): void;
+  /// Open (or focus) the rig editor for a rig, keyed by its resolved mesh/model uuid. The caller
+  /// resolves an asset (mesh or clip) to its rig mesh id before opening.
+  openRigEditorTab(rigMeshId: string, title: string): void;
+  /// Route an asset (a mesh or a clip) to the rig editor: resolve its rig via get-rig (both share the
+  /// owning .smodel container), then open/focus that rig's tab. On a resolution failure the tab opens
+  /// keyed by the asset so the workspace surfaces the not-a-rig error state (rather than a dead toast).
+  openRigEditorForAsset(assetId: string, fallbackName: string): void;
   closeViewTab(id: string): void;
   setActiveViewTab(id: string): void;
   moveViewTab(id: string, index: number): void;
@@ -491,6 +502,10 @@ export const useEditorStore = create<EditorState>((set) => ({
       assets,
       assetFolders,
       viewTabs: s.viewTabs.map((tab) => {
+        if (tab.kind === "rigEditor") {
+          const mesh = assets.find((entry) => entry.id === tab.rigMeshId);
+          return mesh ? { ...tab, title: mesh.name } : tab;
+        }
         if (tab.kind !== "asset") {
           return tab;
         }
@@ -678,6 +693,29 @@ export const useEditorStore = create<EditorState>((set) => ({
             ],
       };
     }),
+  openRigEditorTab: (rigMeshId, title) =>
+    set((s) => {
+      const id = `rigEditor:${rigMeshId}`;
+      const existing = s.viewTabs.some((tab) => tab.id === id);
+      return {
+        activeViewTabId: id,
+        viewTabs: existing
+          ? s.viewTabs
+          : [...s.viewTabs, { id, kind: "rigEditor", rigMeshId, title, closable: true }],
+      };
+    }),
+  openRigEditorForAsset: (assetId, fallbackName) => {
+    void (async () => {
+      try {
+        const rig = await client.getRig(assetId);
+        useEditorStore.getState().openRigEditorTab(rig.mesh, rig.name);
+      } catch {
+        // Not a rig (or resolution failed): key the tab by the asset; the workspace's enter then
+        // surfaces the not-a-rig error state.
+        useEditorStore.getState().openRigEditorTab(assetId, fallbackName);
+      }
+    })();
+  },
   closeViewTab: (id) =>
     set((s) => {
       if (id === "scene") {
