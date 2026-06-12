@@ -1654,8 +1654,10 @@ export function getCachedThumbnailUrl(assetId: string, size: number): string | n
 
 /// Resolve a blob URL for an asset's thumbnail at (at least) `size` px. Cache hit
 /// (same or larger cached size) returns immediately; a miss fetches once over the
-/// socket, decodes the base64 PNG, and stores the object URL. Rejects to let the
-/// caller fall back to a type icon.
+/// socket, decodes the base64 PNG, and stores the object URL. A `pending` reply means
+/// the engine is generating it on a worker thread (cold cache) — re-request with
+/// backoff until it lands (a pure disk-cache hit). Rejects (engine error) to let the
+/// caller fall back to a type icon. The in-flight map keeps one retry loop per asset.
 export async function getThumbnailUrl(assetId: string, size: number): Promise<string> {
   const cached = getCachedThumbnailUrl(assetId, size);
   if (cached) {
@@ -1666,14 +1668,21 @@ export async function getThumbnailUrl(assetId: string, size: number): Promise<st
     return inflight;
   }
   const promise = (async (): Promise<string> => {
-    const thumb = await client.getThumbnail(assetId, size);
-    const url = URL.createObjectURL(base64ToBlob(thumb.base64));
-    const prev = thumbnailCache.get(assetId);
-    if (prev) {
-      URL.revokeObjectURL(prev.url);
+    let delayMs = 60;
+    for (;;) {
+      const thumb = await client.getThumbnail(assetId, size);
+      if (!thumb.pending) {
+        const url = URL.createObjectURL(base64ToBlob(thumb.base64));
+        const prev = thumbnailCache.get(assetId);
+        if (prev) {
+          URL.revokeObjectURL(prev.url);
+        }
+        thumbnailCache.set(assetId, { url, size });
+        return url;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      delayMs = Math.min(delayMs * 2, 1000); // exponential backoff, capped at 1s
     }
-    thumbnailCache.set(assetId, { url, size });
-    return url;
   })();
   thumbnailInflight.set(assetId, promise);
   try {

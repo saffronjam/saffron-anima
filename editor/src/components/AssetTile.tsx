@@ -7,7 +7,7 @@
 /// target: `assetCatalogPanel` (editor_panels.cpp:226-325) + the `thumbnailFor`
 /// fallbacks.
 import { memo, useEffect, useRef, useState } from "react";
-import { Box, File, Image as ImageIcon } from "lucide-react";
+import { Box, File, Image as ImageIcon, Loader2 } from "lucide-react";
 import { client } from "../control/client";
 import { getCachedThumbnailUrl, getThumbnailUrl, useEditorStore } from "../state/store";
 import { matchesBinding } from "../lib/keybindings";
@@ -100,6 +100,26 @@ function TypeIcon({ type }: { type: AssetEntry["type"] }) {
   return <File className={className} />;
 }
 
+/// A tile's thumbnail fetch state: `loading` while the get-thumbnail promise is
+/// outstanding, `ready` once a blob URL resolves, `none` on a reject (unsupported
+/// type / failed render) — `none` falls back to the bare type icon, like the engine's
+/// `thumbnailFor` did before. `ready` from the start when the shared cache already
+/// has the blob, so a cache hit never flashes the spinner.
+type ThumbStatus = "loading" | "ready" | "none";
+
+/// The loading affordance shown in the thumbnail square: a spinner over a dimmed
+/// type icon, theme tokens only.
+function ThumbnailLoading({ type }: { type: AssetEntry["type"] }) {
+  return (
+    <div className="relative flex size-full items-center justify-center">
+      <span className="opacity-30">
+        <TypeIcon type={type} />
+      </span>
+      <Loader2 className="absolute size-4 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
 export interface AssetTileProps {
   entry: AssetEntry;
   /// True while the panel has this tile in inline-rename mode (entered from the
@@ -137,23 +157,31 @@ export const AssetTile = memo(function AssetTile({
   const [url, setUrl] = useState<string | null>(() =>
     getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE),
   );
+  const [status, setStatus] = useState<ThumbStatus>(() =>
+    getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE) ? "ready" : "loading",
+  );
   const [draft, setDraft] = useState(entry.name);
   const refreshAssets = useEditorStore((s) => s.refreshAssets);
 
   // Lazy thumbnail: fetch on mount / id change. The shared cache dedupes across
-  // tiles; a rejection leaves `url` null so the type icon shows (parity with the
-  // `*Icon.id` fallback in thumbnailFor).
+  // tiles; `loading` shows a spinner, a rejection settles to `none` (the type icon),
+  // and a warm cache starts `ready` so re-opening a folder never flashes the spinner.
   useEffect(() => {
     let cancelled = false;
-    setUrl(getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE));
+    const cached = getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE);
+    setUrl(cached);
+    setStatus(cached ? "ready" : "loading");
     void getThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE)
       .then((resolved) => {
         if (!cancelled) {
           setUrl(resolved);
+          setStatus("ready");
         }
       })
       .catch(() => {
-        // Keep the type-icon fallback.
+        if (!cancelled) {
+          setStatus("none"); // a missing thumbnail is not an error toast; the icon is the result
+        }
       });
     return () => {
       cancelled = true;
@@ -210,13 +238,15 @@ export const AssetTile = memo(function AssetTile({
         )}
       >
         <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
-          {url ? (
+          {status === "ready" && url ? (
             <img
               src={url}
               alt={entry.name}
               className="size-full object-contain"
               draggable={false}
             />
+          ) : status === "loading" ? (
+            <ThumbnailLoading type={entry.type} />
           ) : (
             <TypeIcon type={entry.type} />
           )}

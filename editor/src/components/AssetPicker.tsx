@@ -11,7 +11,7 @@
 ///
 /// Lives in the side docks (inspector / environment); the popover anchors there.
 import { useEffect, useState } from "react";
-import { Box, Check, ChevronsUpDown, File, Image as ImageIcon } from "lucide-react";
+import { Box, Check, ChevronsUpDown, File, Image as ImageIcon, Loader2 } from "lucide-react";
 import { getCachedThumbnailUrl, getThumbnailUrl, useEditorStore } from "../state/store";
 import { readAssetPayload } from "./AssetTile";
 import type { AssetEntry } from "../protocol";
@@ -32,23 +32,33 @@ export type PickerAssetKind = "mesh" | "texture" | "material";
 /// remounts its rows on every open).
 function AssetSwatch({ asset, size }: { asset: AssetEntry; size: number }) {
   const [url, setUrl] = useState<string | null>(() => getCachedThumbnailUrl(asset.id, 64));
+  const [status, setStatus] = useState<"loading" | "ready" | "none">(() =>
+    getCachedThumbnailUrl(asset.id, 64) ? "ready" : "loading",
+  );
   useEffect(() => {
     let cancelled = false;
-    setUrl(getCachedThumbnailUrl(asset.id, 64));
+    const cached = getCachedThumbnailUrl(asset.id, 64);
+    setUrl(cached);
+    setStatus(cached ? "ready" : "loading");
     void getThumbnailUrl(asset.id, 64)
       .then((resolved) => {
         if (!cancelled) {
           setUrl(resolved);
+          setStatus("ready");
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) {
+          setStatus("none");
+        }
+      });
     return () => {
       cancelled = true;
     };
   }, [asset.id]);
 
   const style = { width: size, height: size } as const;
-  if (url) {
+  if (status === "ready" && url) {
     return (
       <img
         src={url}
@@ -65,7 +75,11 @@ function AssetSwatch({ asset, size }: { asset: AssetEntry; size: number }) {
       style={style}
       className="flex flex-none items-center justify-center rounded-sm bg-muted text-muted-foreground"
     >
-      <Icon className="size-3" />
+      {status === "loading" ? (
+        <Loader2 className="size-3 animate-spin" />
+      ) : (
+        <Icon className="size-3" />
+      )}
     </span>
   );
 }

@@ -7,6 +7,7 @@
 /// ViewportPanel reacts to by parking the native window off-screen. The preview is
 /// a base64 PNG fetched over the socket and rendered in the webview.
 import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
 import type { AssetEntry } from "../protocol";
@@ -54,6 +55,7 @@ export function AssetViewer({ entry, onClose }: AssetViewerProps) {
 
 export function AssetPreview({ entry, className }: { entry: AssetEntry; className?: string }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "none">("loading");
   const setViewportHidden = useEditorStore((s) => s.setViewportHidden);
 
   // Park the native viewport off-screen while a webview preview occupies the main
@@ -70,18 +72,32 @@ export function AssetPreview({ entry, className }: { entry: AssetEntry; classNam
   useEffect(() => {
     let cancelled = false;
     let created: string | null = null;
-    void client
-      .viewAsset(entry.id, VIEW_SIZE)
-      .then((thumb) => {
-        if (cancelled) {
-          return;
+    setStatus("loading");
+    setUrl(null);
+    // A cold cache-miss replies `pending` while the engine worker generates it; retry with backoff.
+    void (async () => {
+      let delayMs = 60;
+      try {
+        for (;;) {
+          const thumb = await client.viewAsset(entry.id, VIEW_SIZE);
+          if (cancelled) {
+            return;
+          }
+          if (!thumb.pending) {
+            created = base64ToBlobUrl(thumb.base64);
+            setUrl(created);
+            setStatus("ready");
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          delayMs = Math.min(delayMs * 2, 1000);
         }
-        created = base64ToBlobUrl(thumb.base64);
-        setUrl(created);
-      })
-      .catch(() => {
-        // Leave `url` null; the dialog shows the empty preview frame.
-      });
+      } catch {
+        if (!cancelled) {
+          setStatus("none"); // no preview for this asset; not an error toast
+        }
+      }
+    })();
     return () => {
       cancelled = true;
       if (created) {
@@ -98,10 +114,12 @@ export function AssetPreview({ entry, className }: { entry: AssetEntry; classNam
         className,
       )}
     >
-      {url ? (
+      {status === "ready" && url ? (
         <img src={url} alt={entry.name} className="size-full object-contain" draggable={false} />
+      ) : status === "loading" ? (
+        <Loader2 className="size-6 animate-spin text-muted-foreground" />
       ) : (
-        <span className="text-xs italic text-muted-foreground">Rendering preview...</span>
+        <span className="text-xs italic text-muted-foreground">Preview unavailable</span>
       )}
     </div>
   );
