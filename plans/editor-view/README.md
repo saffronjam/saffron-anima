@@ -1,8 +1,12 @@
 # rig editor — a Persona-style asset editor view
 
-**Status:** NOT STARTED — depends on `plans/saffron-models`, which is built first. That plan owns the
-model import, the `.smodel` container, and the asset scan; this plan builds the editor view on top of
-it.
+**Status:** COMPLETED — built on top of `plans/saffron-models` (model import, the `.smodel` container,
+the asset scan). Kept as a build record. The shipped editor was subsequently generalized from a
+rigged-only **rig editor** into the capability-aware **Asset editor** that opens *every* model (static
+or rigged) — the `get-rig`/`enter-rig-preview` wire became `get-asset-model`/`enter-asset-preview`, the
+panels gate on an `AssetCapabilitiesDto`, and the docs reference is
+`docs/content/explanations/ui-and-editor/asset-editor.md`. The phase prose below predates that rename
+and still uses the original "rig editor" naming; read it as history, not the current API.
 
 This plan adds a **rig editor**: a full work-area editor tab that opens a rigged mesh (or one of its
 animation clips) from the Assets panel and lets you **view, inspect, and preview it outside the scene**
@@ -109,17 +113,17 @@ test). Phases are dependency-ordered.
 
 | Phase | Delivers | Status |
 |---|---|---|
-| [1 — rig query commands](phase-01-rig-query-commands.md) | `get-rig` / `list-clips` read the rig and its clips from the `.smodel` container metadata. | NOT STARTED |
-| [2 — the preview scene](phase-02-preview-scene.md) | `previewScene` on `SceneEditContext` + the `activeScene` branch; `enter`/`exit-rig-preview` spawning via `instantiateModel`; authored-scene byte-identity. | NOT STARTED |
-| [3 — preview furnishing + chrome](phase-03-preview-furnishing-and-chrome.md) | floor + lighting + environment seeding; edit-chrome off in preview; rig-keyed skeleton overlay + highlighted-joint channel; rig framing. | NOT STARTED |
-| [4 — the subsurface bounds hook](phase-04-subsurface-bounds-hook.md) | extract `useSubsurfaceBounds(hostRef)` from `ViewportPanel` (pure refactor) so a second host rect can drive the subsurface. | NOT STARTED |
-| [5 — the rigEditor ViewTab + workspace shell](phase-05-rig-editor-viewtab.md) | `ViewTab` variant keyed by the rig + `openRigEditorTab`; workspace `<main>` with the subsurface in its preview pane; enter/exit lifecycle; orbit; open-from-Assets routing. | NOT STARTED |
-| [6 — the skeleton tree panel](phase-06-skeleton-tree-panel.md) | left panel: the rig's bone hierarchy from `get-rig`; clicking a bone highlights the joint via the highlight channel, never scene selection. | NOT STARTED |
-| [7 — clip list + details panel](phase-07-clip-list-and-details.md) | right panel: the rig's linked clips (click to switch the previewed clip), clip/rig details, empty/edge states. | NOT STARTED |
-| [8 — timeline extraction](phase-08-timeline-extraction.md) | parameterize `TimelinePanel`'s store couplings into shared transport/canvas components; the dock Timeline behaves identically. | NOT STARTED |
-| [9 — the timeline in the rig editor](phase-09-timeline-in-rig-editor.md) | mount the shared timeline against the preview rig: scrub/play/loop/step at full rate through the existing coalescer pipeline. | NOT STARTED |
-| [10 — animation-asset affordances](phase-10-animation-asset-affordances.md) | animation tiles/tabs get real icons + duration badges; rigged-mesh double-click routes to the rig editor (`rigged` on the DTO). | NOT STARTED |
-| [11 — docs, e2e hardening, gate](phase-11-docs-e2e-hardening.md) | the full-flow e2e (open → scrub → close → byte-identical scene), docs pages + hub rows, `make check` green, polish pass. | NOT STARTED |
+| [1 — rig query commands](phase-01-rig-query-commands.md) | `get-rig` / `list-clips` read the rig and its clips from the `.smodel` container metadata. | COMPLETED |
+| [2 — the preview scene](phase-02-preview-scene.md) | `previewScene` on `SceneEditContext` + the `activeScene` branch; `enter`/`exit-rig-preview` spawning via `instantiateModel`; authored-scene byte-identity. | COMPLETED |
+| [3 — preview furnishing + chrome](phase-03-preview-furnishing-and-chrome.md) | floor + lighting + environment seeding; edit-chrome off in preview; rig-keyed skeleton overlay + highlighted-joint channel; rig framing. | COMPLETED |
+| [4 — the subsurface bounds hook](phase-04-subsurface-bounds-hook.md) | extract `useSubsurfaceBounds(hostRef)` from `ViewportPanel` (pure refactor) so a second host rect can drive the subsurface. | COMPLETED |
+| [5 — the rigEditor ViewTab + workspace shell](phase-05-rig-editor-viewtab.md) | `ViewTab` variant keyed by the rig + `openRigEditorTab`; workspace `<main>` with the subsurface in its preview pane; enter/exit lifecycle; orbit; open-from-Assets routing. | COMPLETED |
+| [6 — the skeleton tree panel](phase-06-skeleton-tree-panel.md) | left panel: the rig's bone hierarchy from `get-rig`; clicking a bone highlights the joint via the highlight channel, never scene selection. | COMPLETED |
+| [7 — clip list + details panel](phase-07-clip-list-and-details.md) | right panel: the rig's linked clips (click to switch the previewed clip), clip/rig details, empty/edge states. | COMPLETED |
+| [8 — timeline extraction](phase-08-timeline-extraction.md) | parameterize `TimelinePanel`'s store couplings into shared transport/canvas components; the dock Timeline behaves identically. | COMPLETED |
+| [9 — the timeline in the rig editor](phase-09-timeline-in-rig-editor.md) | mount the shared timeline against the preview rig: scrub/play/loop/step at full rate through the existing coalescer pipeline. | COMPLETED |
+| [10 — animation-asset affordances](phase-10-animation-asset-affordances.md) | animation tiles/tabs get real icons + duration badges; rigged-mesh double-click routes to the rig editor (`rigged` on the DTO). | COMPLETED |
+| [11 — docs, e2e hardening, gate](phase-11-docs-e2e-hardening.md) | the full-flow e2e (open → scrub → close → byte-identical scene), docs pages + hub rows, `make check` green, polish pass. | COMPLETED |
 
 ## Explicitly OUT (deferred)
 
