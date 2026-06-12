@@ -7,7 +7,7 @@
 /// target: `assetCatalogPanel` (editor_panels.cpp:226-325) + the `thumbnailFor`
 /// fallbacks.
 import { memo, useEffect, useRef, useState } from "react";
-import { Box, File, Image as ImageIcon, Loader2 } from "lucide-react";
+import { Box, Clapperboard, File, Image as ImageIcon, Loader2 } from "lucide-react";
 import { client } from "../control/client";
 import { getCachedThumbnailUrl, getThumbnailUrl, useEditorStore } from "../state/store";
 import { matchesBinding } from "../lib/keybindings";
@@ -97,7 +97,14 @@ function TypeIcon({ type }: { type: AssetEntry["type"] }) {
   if (type === "texture") {
     return <ImageIcon className={className} />;
   }
+  if (type === "animation") {
+    return <Clapperboard className={className} />;
+  }
   return <File className={className} />;
+}
+
+function formatDurationBadge(sec: number): string {
+  return `${(Number.isFinite(sec) && sec > 0 ? sec : 0).toFixed(1)}s`;
 }
 
 /// A tile's thumbnail fetch state: `loading` while the get-thumbnail promise is
@@ -237,7 +244,7 @@ export const AssetTile = memo(function AssetTile({
           selected && "border-ring bg-accent/60 ring-1 ring-ring",
         )}
       >
-        <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
+        <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
           {status === "ready" && url ? (
             <img
               src={url}
@@ -250,6 +257,11 @@ export const AssetTile = memo(function AssetTile({
           ) : (
             <TypeIcon type={entry.type} />
           )}
+          {entry.type === "animation" && entry.duration ? (
+            <span className="absolute bottom-1 right-1 rounded bg-background/80 px-1 py-0.5 text-[9px] font-medium tabular-nums text-muted-foreground">
+              {formatDurationBadge(entry.duration)}
+            </span>
+          ) : null}
         </div>
         {renaming ? (
           <RenameInput

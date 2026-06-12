@@ -16,6 +16,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   ArrowLeft,
   ArrowRight,
+  Bone,
   Eye,
   Folder,
   FolderPlus,
@@ -179,6 +180,7 @@ export function AssetsPanel() {
   const instantiateModel = useEditorStore((s) => s.instantiateModel);
   const nativeDialogOpen = useEditorStore((s) => s.nativeDialogOpen);
   const openAssetTab = useEditorStore((s) => s.openAssetTab);
+  const openRigEditorForAsset = useEditorStore((s) => s.openRigEditorForAsset);
   const closeViewTab = useEditorStore((s) => s.closeViewTab);
   const [history, setHistory] = useState<FolderHistory>({ stack: [null], index: 0 });
   const [creatingFolder, setCreatingFolder] = useState<CreatingFolder | null>(null);
@@ -202,7 +204,8 @@ export function AssetsPanel() {
   // Embedded sub-assets (a `.smodel`'s mesh/material/texture rows) are hidden from the top level so a
   // model imports as ONE tile, not a flood — they resolve through their container by (modelId, subId).
   const visibleAssets = useMemo(
-    () => assets.filter((asset) => (asset.folder ?? "") === (currentFolder ?? "") && !asset.container),
+    () =>
+      assets.filter((asset) => (asset.folder ?? "") === (currentFolder ?? "") && !asset.container),
     [assets, currentFolder],
   );
 
@@ -611,6 +614,24 @@ export function AssetsPanel() {
     setPendingAssetDelete({ assets: targetAssets, usages });
   }, []);
 
+  // Double-click / "View" routing: animation clips and rigged meshes/models open the rig editor
+  // (resolving to their owning rig via the synchronous `rigged` flag the scan put on the catalog row);
+  // everything else opens the image/asset viewer. Unrigged meshes also get a context-menu "Open in Rig
+  // editor" (which then surfaces the not-a-rig error state).
+  const routeView = useCallback(
+    (asset: AssetEntry) => {
+      const ridesRigEditor =
+        asset.type === "animation" ||
+        (asset.rigged === true && (asset.type === "mesh" || asset.type === "model"));
+      if (ridesRigEditor) {
+        openRigEditorForAsset(asset.id, asset.name);
+      } else {
+        openAssetTab(asset);
+      }
+    },
+    [openAssetTab, openRigEditorForAsset],
+  );
+
   const confirmDeleteAssets = useCallback(
     async (targetAssets: AssetEntry[]): Promise<void> => {
       setPendingAssetDelete(null);
@@ -622,6 +643,7 @@ export function AssetsPanel() {
               await client.deleteAsset(asset.id);
               deletedIds.add(asset.id);
               closeViewTab(`asset:${asset.id}`);
+              closeViewTab(`rigEditor:${asset.id}`);
             } catch (err) {
               notify(`Could not delete ${asset.name}: ${errorText(err)}`);
             }
@@ -839,7 +861,7 @@ export function AssetsPanel() {
                   folderError={folderError}
                   assetDropTarget={assetDropTarget}
                   onOpenFolder={navigateTo}
-                  onView={openAssetTab}
+                  onView={routeView}
                   onSelectAsset={selectAsset}
                   onSelectFolder={selectFolder}
                   onBeginDrag={beginDrag}
@@ -869,7 +891,8 @@ export function AssetsPanel() {
                   renamingFolder?.origin === "grid" ? renamingFolder.path : null
                 }
                 nativeDialogOpen={nativeDialogOpen}
-                onViewAsset={openAssetTab}
+                onViewAsset={routeView}
+                onOpenRigEditor={openRigEditorForAsset}
                 onInstantiate={onInstantiate}
                 onRenameAsset={setRenamingAsset}
                 onDeleteAsset={deleteAsset}
@@ -942,6 +965,7 @@ function GridContextMenuItems({
   renamingFolderGridPath,
   nativeDialogOpen,
   onViewAsset,
+  onOpenRigEditor,
   onInstantiate,
   onRenameAsset,
   onDeleteAsset,
@@ -958,6 +982,7 @@ function GridContextMenuItems({
   renamingFolderGridPath: string | null;
   nativeDialogOpen: boolean;
   onViewAsset(asset: AssetEntry): void;
+  onOpenRigEditor(assetId: string, fallbackName: string): void;
   onInstantiate(modelId: string): void;
   onRenameAsset(assetId: string): void;
   onDeleteAsset(asset: AssetEntry): void;
@@ -1020,6 +1045,12 @@ function GridContextMenuItems({
           <Eye />
           View
         </ContextMenuItem>
+        {asset.type === "mesh" ? (
+          <ContextMenuItem onSelect={() => onOpenRigEditor(asset.id, asset.name)}>
+            <Bone />
+            Open in Rig editor
+          </ContextMenuItem>
+        ) : null}
         {asset.type === "model" ? (
           <ContextMenuItem onSelect={() => onInstantiate(asset.id)}>
             <Plus />

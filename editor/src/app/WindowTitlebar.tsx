@@ -1,7 +1,9 @@
 /// Custom Tauri titlebar with editor view tabs.
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  Bone,
   Box,
+  Clapperboard,
   File,
   Flame,
   House,
@@ -432,11 +434,17 @@ function tabIcon(tab: ViewTab) {
   if (tab.kind === "materialGraph") {
     return Workflow;
   }
+  if (tab.kind === "rigEditor") {
+    return Bone;
+  }
   if (tab.assetType === "mesh") {
     return Box;
   }
   if (tab.assetType === "texture") {
     return ImageIcon;
+  }
+  if (tab.assetType === "animation") {
+    return Clapperboard;
   }
   return File;
 }
