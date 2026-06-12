@@ -160,6 +160,15 @@ export class Engine {
     await delay(ms);
   }
 
+  /// Import a glTF/OBJ as a .smodel asset, then instantiate it into the scene, returning the placed
+  /// root entity. The standard "get a model into the scene" path: import bakes the asset, instantiate
+  /// places it.
+  async importEntity(path: string, name?: string): Promise<{ id: string; name: string }> {
+    const model = await this.call<{ id: string }>("import-model", { path });
+    const params = name === undefined ? { asset: model.id } : { asset: model.id, name };
+    return this.call<{ id: string; name: string }>("instantiate-model", params);
+  }
+
   async shutdown(): Promise<void> {
     try {
       await this.call("quit");
