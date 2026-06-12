@@ -171,6 +171,39 @@ namespace
             }
             return;
         }
+        if (cmd == "get-rig")
+        {
+            std::printf("rig %s  (mesh %s)\n", result.value("name", "").c_str(),
+                        result.value("mesh", std::string{}).c_str());
+            const auto& bones = result.value("bones", json::array());
+            for (const auto& b : bones)
+            {
+                int depth = 0;
+                int parent = b.value("parent", -1);
+                for (int guard = 0; parent >= 0 && parent < static_cast<int>(bones.size()) && guard < 256; guard += 1)
+                {
+                    depth += 1;
+                    parent = bones[static_cast<std::size_t>(parent)].value("parent", -1);
+                }
+                std::printf("  %*s%s%s\n", depth * 2, "", b.value("name", "").c_str(),
+                            b.value("joint", false) ? "  [joint]" : "");
+            }
+            for (const auto& c : result.value("clips", json::array()))
+            {
+                std::printf("  clip %-28s  %8.3fs  %s\n", c.value("name", "").c_str(), c.value("duration", 0.0),
+                            c.value("id", std::string{}).c_str());
+            }
+            return;
+        }
+        if (cmd == "list-clips" && result.contains("clips"))
+        {
+            for (const auto& c : result["clips"])
+            {
+                std::printf("  %-32s  %8.3fs  %s\n", c.value("name", "").c_str(), c.value("duration", 0.0),
+                            c.value("id", std::string{}).c_str());
+            }
+            return;
+        }
         if (cmd == "render-stats")
         {
             std::printf("cpu=%.2fms  gpu=%.2fms  wait=%.2fms  fps=%.0f  draws=%d  tris=%d  binds=%d  pso+=%d%s\n",
