@@ -1,7 +1,18 @@
 # Phase 12 — Sub-asset extraction + remap table
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 11
+
+> Implementation note: `extractSubAsset` slices the chunk → standalone file (keeping the sub-id) →
+> standalone catalog row → `remap[subId]={external}` written via `rewriteContainerMeta` (the simplest
+> correct v1: re-emit META + every payload verbatim). `clearExtraction` reverts (drop remap, **delete**
+> the external file to prevent its uuid name aliasing the embedded chunk on a later scan, revert the
+> row). The id-aliasing footgun is closed by making `catalogRowsForModel` honor the remap (emit the
+> standalone form for remapped sub-assets), so a scan agrees with the resolver. `extract-subasset` +
+> `clear-extraction` commands take a model selector + sub-asset WireUuid. Verified by the GPU-free
+> `runExtractSelfTest` (extract → remap + standalone + resolver reads external; clear → reverts) and the
+> 130-check contract test. The command-level full-flow e2e (with sub-asset discovery via `model-info`)
+> lands in phase 18.
 
 ## Goal
 

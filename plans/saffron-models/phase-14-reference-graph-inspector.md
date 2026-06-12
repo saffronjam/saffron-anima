@@ -1,7 +1,17 @@
 # Phase 14 — Reference graph + dependency inspector
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 13
+
+> Implementation note: `buildDependencyGraph` builds nodes from the catalog (bytes = `.smodel`/file
+> size, or the embedded chunk length via `assetBytes`) + edges: ContainerChild (model→sub-asset),
+> MaterialTexture (`.smat` → textures, via resolve/loadMaterialAsset), EntityAsset (scene
+> mesh/skinned/materialAsset/modelInstance/materialSet → asset, `from` = entity uuid). `referencedBy`/
+> `referencesOf`/`footprint` query it. `model-info` summarizes a container (sub-assets+bytes, source
+> recipe, total footprint); `asset-references` returns the who/what + footprint. Footprint is the honest
+> on-disk byte count (a `.smodel` already includes its embedded sub-assets — no double-count);
+> exclusive-vs-shared accounting is a v1 simplification. Verified by `tests/e2e/model_inspect.test.ts` +
+> the 133-check contract test.
 
 ## Goal
 

@@ -1,7 +1,16 @@
 # Phase 13 — Diffing reimport preserving overrides
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 12
+
+> Implementation note: `reimportModel` skips when `hashFileFnv(source) == stored` + importer version
+> matches; else `translateModel` (deterministic, same sub-ids) → `bakeModel` reusing the modelId →
+> diff old vs new sub-ids (`updated`/`added`/`removedFromSource`, the last kept + reported, never
+> dropped) → preserve the remap for surviving sub-ids (extracted edits survive) via a META rewrite →
+> refresh catalog rows + drop sub-id GPU caches so live instances re-resolve with no re-instantiation.
+> `reimport-model` command idles the GPU first. Verified by the GPU-free `runReimportSelfTest`
+> (skip-unchanged → re-bake-on-drift → re-skip) and the 131-check contract test. The full edit-source +
+> render-diff e2e lands in phase 18.
 
 ## Goal
 

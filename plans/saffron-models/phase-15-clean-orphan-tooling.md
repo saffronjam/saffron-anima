@@ -1,7 +1,18 @@
 # Phase 15 — Clean/orphan tooling (deliberate)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 14
+
+> Implementation note: `analyzeClean` walks reachability from roots (the scene's `EntityAsset` refs +
+> `exclude`) over the phase-14 graph, couples container+sub-assets (one deletable unit), then classifies
+> each top-level catalog asset: Unused (unreachable) / IndirectReview (only a `ScriptComponent` override
+> field references it — `collectScriptReferencedIds`, never auto-deleted) / BrokenReference (an edge to a
+> missing id). `clean-assets` is always a dry-run report; `delete-unused` deletes only confirmed-Unused
+> ids (refusing without `confirm`), logs each, then rescans for cascade. Categories are wire strings (no
+> new enum). Verified by `tests/e2e/clean_assets.test.ts` + the 135-check contract test. **Known
+> consideration surfaced here:** re-importing the *same* source file mints a new modelId but reuses the
+> stable (source-name-derived) sub-ids, so the two models collide in the catalog — the intended path for
+> "update from source" is `reimport-model`, not a second `import-model-to-asset`.
 
 ## Goal
 
