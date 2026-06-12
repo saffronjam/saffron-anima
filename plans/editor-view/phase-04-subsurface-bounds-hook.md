@@ -1,6 +1,6 @@
 # Phase 4 — the subsurface bounds hook
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (kept as a build record; superseded by the general Asset editor — see this dir's README)
 **Depends on:** — (a self-contained frontend refactor)
 
 ## Goal

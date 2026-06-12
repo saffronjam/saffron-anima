@@ -1,6 +1,6 @@
 # Phase 3 — preview furnishing + chrome
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (kept as a build record; superseded by the general Asset editor — see this dir's README)
 **Depends on:** 2 (the preview scene); `plans/saffron-models` for `instantiateModel`.
 
 ## Goal
