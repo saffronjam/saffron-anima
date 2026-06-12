@@ -1,6 +1,6 @@
 # Phase 2 — the preview scene
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (kept as a build record; superseded by the general Asset editor — see this dir's README)
 **Depends on:** plans/saffron-models (the `.smodel` container + `instantiateModel`)
 
 ## Goal

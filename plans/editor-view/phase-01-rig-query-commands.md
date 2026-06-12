@@ -1,6 +1,6 @@
 # Phase 1 — rig query commands
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (kept as a build record; superseded by the general Asset editor — see this dir's README)
 
 **Depends on:** `plans/saffron-models` (build that first, in full) — phases 02 (the `.smodel`
 MetadataChunk with `nodes`/`skin`), 06 (the chunk-slice loaders), and 14 (`model-info` /
