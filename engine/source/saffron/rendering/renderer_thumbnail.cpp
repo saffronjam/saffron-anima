@@ -13,6 +13,7 @@ module;
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -669,17 +670,106 @@ namespace se
         return std::make_shared<GpuTexture>(std::move(texture));
     }
 
-    auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size)
-        -> Result<std::vector<u8>>
+    // A transient 1x image for the thumbnail downscale chain: TRANSFER_DST | TRANSFER_SRC only
+    // (blit target then blit source; never sampled or stored). No view — blit/copy take images.
+    static auto newBlitImage(Renderer& renderer, u32 width, u32 height, vk::Format format) -> Result<Image>
     {
-        static_cast<void>(size);  // textures read back at their native extent (size is a hint)
+        VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = static_cast<VkFormat>(format);
+        imageInfo.extent = VkExtent3D{ width, height, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+
+        VkImage rawImage = VK_NULL_HANDLE;
+        VmaAllocation allocation = nullptr;
+        if (vmaCreateImage(renderer.context.allocator, &imageInfo, &allocInfo, &rawImage, &allocation, nullptr) !=
+            VK_SUCCESS)
+        {
+            return Err(std::string{ "encodeTextureThumbnailPng: vmaCreateImage (blit target) failed" });
+        }
+        Image result;
+        result.device = renderer.context.device;
+        result.allocator = renderer.context.allocator;
+        result.image = vk::Image{ rawImage };
+        result.alloc = allocation;
+        result.extent = vk::Extent2D{ width, height };
+        result.format = format;
+        result.layout = vk::ImageLayout::eUndefined;
+        return result;
+    }
+
+    // Whether `format` supports linear-filtered blits (src + dst) in optimal tiling. RGBA8/RGBA16F
+    // do on every target we run; a format that does not falls back to a native-extent readback.
+    static auto formatSupportsLinearBlit(Renderer& renderer, vk::Format format) -> bool
+    {
+        const vk::FormatProperties props = renderer.context.physicalDevice.getFormatProperties(format);
+        const vk::FormatFeatureFlags needed = vk::FormatFeatureFlagBits::eBlitSrc |
+                                              vk::FormatFeatureFlagBits::eBlitDst |
+                                              vk::FormatFeatureFlagBits::eSampledImageFilterLinear;
+        return (props.optimalTilingFeatures & needed) == needed;
+    }
+
+    auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size,
+                                   PngTransfer transfer) -> Result<ThumbnailPng>
+    {
         if (!texture)
         {
             return Err(std::string{ "encodeTextureThumbnailPng: null texture" });
         }
-        const u32 width = texture->extent.width;
-        const u32 height = texture->extent.height;
-        const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(width) * height * formatPixelBytes(texture->format);
+        const u32 srcW = texture->extent.width;
+        const u32 srcH = texture->extent.height;
+        const u32 maxDim = std::max(srcW, srcH);
+
+        // Fit within size×size preserving aspect (max dimension == size), so the editor's
+        // object-contain display is unchanged. Downscale only shrinks; never upscale a small source.
+        u32 dstW = srcW;
+        u32 dstH = srcH;
+        const bool downscale = maxDim > size && size > 0 && formatSupportsLinearBlit(renderer, texture->format);
+        if (downscale)
+        {
+            dstW = std::max<u32>(1, (srcW * size + maxDim / 2) / maxDim);
+            dstH = std::max<u32>(1, (srcH * size + maxDim / 2) / maxDim);
+        }
+
+        // A chained 2× reduction (mip-style) down to the target — a single 4096→128 linear blit
+        // would undersample (a 2×2 tap per texel). Allocate one transient per halving step.
+        std::vector<Image> transients;
+        if (downscale)
+        {
+            std::vector<vk::Extent2D> steps;
+            vk::Extent2D cur = texture->extent;
+            while (cur.width > dstW * 2 || cur.height > dstH * 2)
+            {
+                cur.width = std::max(dstW, cur.width / 2);
+                cur.height = std::max(dstH, cur.height / 2);
+                steps.push_back(cur);
+            }
+            if (steps.empty() || steps.back().width != dstW || steps.back().height != dstH)
+            {
+                steps.push_back(vk::Extent2D{ dstW, dstH });
+            }
+            for (const vk::Extent2D& e : steps)
+            {
+                auto img = newBlitImage(renderer, e.width, e.height, texture->format);
+                if (!img)
+                {
+                    return Err(img.error());
+                }
+                transients.push_back(std::move(*img));
+            }
+        }
+
+        const vk::DeviceSize bytes =
+            static_cast<vk::DeviceSize>(dstW) * dstH * formatPixelBytes(texture->format);
 
         static_cast<void>(renderer.context.device.waitIdle());
 
@@ -706,12 +796,57 @@ namespace se
         vk::CommandBufferBeginInfo begin{};
         begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
         static_cast<void>(cmd.begin(begin));
-        // Bindless + thumbnail textures live in eShaderReadOnlyOptimal; read back and restore
-        // that layout so the bindless array stays valid.
-        captureImageToBuffer(cmd, texture->image, texture->extent, vk::ImageLayout::eShaderReadOnlyOptimal,
-                             vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
-                             vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eFragmentShader,
-                             vk::AccessFlagBits2::eShaderSampledRead, vk::Buffer{ rawBuffer });
+
+        if (downscale)
+        {
+            // Bindless + thumbnail textures live in eShaderReadOnlyOptimal; blit-read the source and
+            // restore that layout so the bindless array stays valid. Each transient is blitted into,
+            // then flipped to TransferSrc to feed the next step; the last stays TransferSrc for readback.
+            transitionImage(cmd, texture->image, vk::ImageLayout::eShaderReadOnlyOptimal,
+                            vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eFragmentShader,
+                            vk::AccessFlagBits2::eShaderSampledRead, vk::PipelineStageFlagBits2::eBlit,
+                            vk::AccessFlagBits2::eTransferRead);
+            vk::Image srcImage = texture->image;
+            vk::Extent2D srcExtent = texture->extent;
+            for (const Image& dst : transients)
+            {
+                transitionImage(cmd, dst.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+                                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                                vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferWrite);
+                vk::ImageBlit region{};
+                region.srcSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
+                region.srcOffsets[0] = vk::Offset3D{ 0, 0, 0 };
+                region.srcOffsets[1] =
+                    vk::Offset3D{ static_cast<i32>(srcExtent.width), static_cast<i32>(srcExtent.height), 1 };
+                region.dstSubresource = vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
+                region.dstOffsets[0] = vk::Offset3D{ 0, 0, 0 };
+                region.dstOffsets[1] =
+                    vk::Offset3D{ static_cast<i32>(dst.extent.width), static_cast<i32>(dst.extent.height), 1 };
+                cmd.blitImage(srcImage, vk::ImageLayout::eTransferSrcOptimal, dst.image,
+                              vk::ImageLayout::eTransferDstOptimal, region, vk::Filter::eLinear);
+                transitionImage(cmd, dst.image, vk::ImageLayout::eTransferDstOptimal,
+                                vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eBlit,
+                                vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eBlit,
+                                vk::AccessFlagBits2::eTransferRead);
+                srcImage = dst.image;
+                srcExtent = dst.extent;
+            }
+            transitionImage(cmd, texture->image, vk::ImageLayout::eTransferSrcOptimal,
+                            vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eBlit,
+                            vk::AccessFlagBits2::eTransferRead, vk::PipelineStageFlagBits2::eFragmentShader,
+                            vk::AccessFlagBits2::eShaderSampledRead);
+            captureImageToBuffer(cmd, srcImage, vk::Extent2D{ dstW, dstH }, vk::ImageLayout::eTransferSrcOptimal,
+                                 vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead,
+                                 vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eBlit,
+                                 vk::AccessFlagBits2::eTransferRead, vk::Buffer{ rawBuffer });
+        }
+        else
+        {
+            captureImageToBuffer(cmd, texture->image, texture->extent, vk::ImageLayout::eShaderReadOnlyOptimal,
+                                 vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead,
+                                 vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eFragmentShader,
+                                 vk::AccessFlagBits2::eShaderSampledRead, vk::Buffer{ rawBuffer });
+        }
         static_cast<void>(cmd.end());
 
         vk::CommandBufferSubmitInfo cmdInfo{};
@@ -723,17 +858,17 @@ namespace se
         renderer.context.device.freeCommandBuffers(renderer.frame.frames[0].commandPool, cmd);
         vmaInvalidateAllocation(renderer.context.allocator, alloc, 0, VK_WHOLE_SIZE);
 
-        auto png =
-            encodeBufferToPng(static_cast<const unsigned char*>(info.pMappedData), width, height, texture->format);
+        auto png = encodeBufferToPng(static_cast<const unsigned char*>(info.pMappedData), dstW, dstH,
+                                     texture->format, transfer);
         vmaDestroyBuffer(renderer.context.allocator, rawBuffer, alloc);
         if (!png)
         {
             return Err(png.error());
         }
-        return png;
+        return ThumbnailPng{ std::move(*png), dstW, dstH };
     }
 
-    auto encodeAssetThumbnailPng(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<std::vector<u8>>
+    auto encodeAssetThumbnailPng(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<ThumbnailPng>
     {
         // Render the framed mesh to a size×size texture, then read that texture back.
         auto tex = renderMeshThumbnail(renderer, mesh, size);

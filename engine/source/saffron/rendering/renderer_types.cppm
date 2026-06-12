@@ -1796,12 +1796,32 @@ export namespace se
     auto renderMaterialPreview(Renderer& renderer, const SubmeshMaterial& material, u32 size,
                                const std::string& shaderSpv = std::string{}) -> Result<Ref<GpuTexture>>;
 
+    // How a captured RGBA16F buffer is mapped to 8-bit PNG. `Clamp` clamps [0,1]×255 — correct for
+    // an already-tonemapped offscreen (screenshots, mesh/material previews). `Tonemap` Reinhard-maps
+    // + gamma-encodes scene-linear radiance — for thumbnails of HDR *assets*, whose values run past 1.
+    enum class PngTransfer
+    {
+        Clamp,
+        Tonemap
+    };
+
+    // PNG bytes plus the actual pixel dimensions encoded (so the control reply can report
+    // truthful width/height rather than echoing the requested size).
+    struct ThumbnailPng
+    {
+        std::vector<u8> bytes;
+        u32 width = 0;
+        u32 height = 0;
+    };
+
     // Renders/loads an asset to PNG bytes in memory (synchronous, own command buffer + waitIdle;
     // never on the present path). Mesh: framed like renderMeshThumbnail at size×size. Texture:
-    // read back at the texture's native extent (size is a hint).
-    auto encodeAssetThumbnailPng(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<std::vector<u8>>;
-    auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size)
-        -> Result<std::vector<u8>>;
+    // GPU-downscaled to fit within size×size (chained linear halving) before readback, so the
+    // cost is bounded by `size` regardless of source resolution; `width`/`height` report the PNG.
+    // `transfer` controls HDR mapping — pass Tonemap for an HDR asset, Clamp otherwise.
+    auto encodeAssetThumbnailPng(Renderer& renderer, const Ref<GpuMesh>& mesh, u32 size) -> Result<ThumbnailPng>;
+    auto encodeTextureThumbnailPng(Renderer& renderer, const Ref<GpuTexture>& texture, u32 size,
+                                   PngTransfer transfer = PngTransfer::Clamp) -> Result<ThumbnailPng>;
 
     // Resolves each item's material to a cached PSO, batches by (pipeline, mesh, texture),
     // uploads the frame's instance buffer, and stores the structured draw list on the
