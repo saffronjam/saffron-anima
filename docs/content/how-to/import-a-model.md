@@ -6,34 +6,52 @@ math = false
 
 # Import a model
 
-Bring a glTF or OBJ model into the project. Three methods are available.
+Bring a glTF or OBJ model into the project. Importing **bakes** the source into one
+[`.smodel` container](../../explanations/geometry-and-assets/smodel-container/) asset — the mesh,
+materials, textures, and animations as chunks of a single file — and adds the catalog rows. It does
+not spawn an entity: placing the model in the scene is a separate, repeatable step, so one import
+becomes many instances.
 
 You need an active project first. The editor startup modal creates or opens one, and tests can
 select one with `SAFFRON_PROJECT=<project-name>`.
 
-## Steps
+## Import (bake the asset)
 
-Choose the one that fits:
+Any of these bakes one `.smodel` tile and nothing else:
 
-1. **Drag-and-drop** — drop a `.gltf` / `.glb` / `.obj` onto the editor window. Imported into the catalog, no entity spawned.
-2. **File ▸ Import** — the editor menu, same catalog-only import.
-3. **From the CLI** — import and spawn an entity in one step:
+1. **Drag-and-drop** — drop a `.gltf` / `.glb` / `.obj` onto the editor window.
+2. **File ▸ Import** — the editor menu.
+3. **From the CLI**:
    ```sh
    se import-model /path/to/model.gltf
    ```
-   `import-model` bakes the mesh to a project-local `.smesh`, uploads it, imports each material's albedo, adds catalog entries, then spawns an entity with the mesh + its material(s) — a `MaterialComponent` for one material, a `MaterialSet` for several.
 
-To import just a texture (assign it to a material later):
+To import a standalone texture (a loose texture asset, e.g. to assign to a material later):
 ```sh
 se import-texture /path/to/albedo.png
 ```
 
+## Place it in the scene
+
+The baked model is a catalog asset; instantiate it to add entities:
+
+1. **Drag the model tile onto the viewport** (or onto the Hierarchy) — instantiates it into the scene.
+2. **Right-click the tile ▸ Add to scene**.
+3. **From the CLI**:
+   ```sh
+   se instantiate-model <model-id-or-name>
+   ```
+
+Each instantiate expands the container's stored hierarchy into fresh entities (the mesh, its
+materials, and — for a rig — its bones and a stopped `AnimationPlayer`), and the new root is selected.
+
 ## Verify
 
-- List the catalog: `se list-assets` — the mesh (and any albedo texture) appears with name and id.
-- Check the project folder: meshes are under `assets/models`, textures under `assets/textures`.
-- The **Assets** panel shows a tile (3D thumbnail for meshes, image for textures).
-- After `import-model` the new entity is selected. Screenshot it:
+- List the catalog: `se list-assets` — the model appears as one `"type": "model"` row (its embedded
+  mesh/material/texture sub-assets link back to it by `container`).
+- Check the project folder: one `.smodel` under `assets/models`; no loose mesh or texture files for it.
+- The **Assets** panel shows one tile, its thumbnail the textured model.
+- After `instantiate-model` the new entity is selected. Screenshot it:
   ```sh
   se screenshot viewport /tmp/import.png
   ```
@@ -42,8 +60,9 @@ se import-texture /path/to/albedo.png
 
 | What | File | Symbols |
 |---|---|---|
-| `se import-model` / `import-texture` | `control_commands_asset.cpp` | `import-model`, `import-texture` |
-| Import + bake + spawn | `assets.cppm` | `importModel`, `importTexture`, `spawnModel` |
+| `se import-model` / `import-texture` / `instantiate-model` | `control_commands_asset.cpp` | `import-model`, `import-texture`, `instantiate-model` |
+| Bake the `.smodel` | `assets.cppm` | `importModel`, `bakeModel`, `importTexture` |
+| Place it in the scene | `assets.cppm` | `instantiateModel`, `spawnModel`, `spawnSkinnedModel` |
 | Catalog listing | `control_commands_asset.cpp` | `list-assets` |
 
 ## Related

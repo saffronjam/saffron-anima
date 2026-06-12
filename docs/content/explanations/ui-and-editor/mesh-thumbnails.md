@@ -60,6 +60,30 @@ so the wait is acceptable. The pipeline is built on first use and cached on the 
 (`renderer.pipelines.thumbnail`), so the second thumbnail reuses it. A texture asset skips the render
 and copies its decoded image straight back.
 
+## Model thumbnails are textured
+
+A bare mesh shows in a flat color, but a [`.smodel`](../../geometry-and-assets/smodel-container/) tile
+shows the model as it looks — its mesh shaded with the embedded materials. `renderModelThumbnail`
+frames the mesh exactly as above, then draws each submesh through the **material-preview pipeline**
+(`preview.slang`, the same studio-lit shader the [material preview](../../materials-and-pipelines/native-materials/)
+uses) with that submesh's material from the table, indexed by `Submesh.materialSlot`:
+
+```cpp
+for (const Submesh& submesh : mesh->submeshes) {
+    const SubmeshMaterial& m = submeshMaterials[min(submesh.materialSlot, submeshMaterials.size() - 1)];
+    push.baseColor = m.baseColor;
+    push.tex = { idx(m.albedoTexture), idx(m.metallicRoughnessTexture), idx(m.normalTexture), features };
+    push.pbr = { m.metallic, m.roughness, m.normalStrength, 0 };
+    cmd.pushConstants(...); cmd.drawIndexed(submesh.indexCount, 1, submesh.firstIndex, submesh.vertexOffset, 0);
+}
+```
+
+The materials and their textures live as chunks of the container, so the thumbnail worker has no
+`AssetServer`: the main thread resolves them at enqueue — the mesh chunk into `meshBytes`, each material
+into a `MaterialAsset`, and each referenced texture's chunk into `materialTextures` bytes — and the
+worker decodes from memory, uploads, and builds the `SubmeshMaterial` table. Bumping
+`ThumbnailCacheVersion` retires the older flat-rendered model thumbnails so they regenerate textured.
+
 ## Across the socket as a PNG
 
 There is no shared GPU context with the webview. The rendered image is read back into a host-visible
@@ -83,6 +107,7 @@ readback runs once per asset, not once per tile or per frame. That
 | What | File | Symbols |
 |---|---|---|
 | The render | `renderer_thumbnail.cpp` | `renderMeshThumbnail` |
+| Textured model render | `renderer_thumbnail.cpp`; `assets.cppm` | `renderModelThumbnail`, the `Model` job in `generateThumbnail` |
 | Auto-framing | `renderer_thumbnail.cpp` | `center`/`radius`/`distance`, the `(1, 0.7, 1)` eye |
 | The minimal pipeline | `renderer_thumbnail.cpp` | `newThumbnailPipeline`, `renderer.pipelines.thumbnail` |
 | MSAA + resolve | `renderer_thumbnail.cpp` | `thumbnailSampleCount`, the `resolveMode` color attachment |

@@ -57,6 +57,7 @@ The editor learns the engine's play state through its existing reconcile poll �
 
 ## Related
 
+- [Rig editor](../rig-editor/) — Preview, the third mode that routes through `activeScene` the same way Play does
 - [Editor camera](../editor-camera/) — the fly-camera play falls back to, and which stays live during play
 - [Transform gizmo](../gizmo/) — hidden during play, since the play duplicate would swallow its writes
 - [Scene hierarchy](../../scene-and-ecs/scene-hierarchy/) — the uuid identity that lets the duplicate and the authored scene resolve the same entities
