@@ -257,6 +257,13 @@ fn configure_main_window(window: &tauri::WebviewWindow) {
     let _ = window.set_size(LogicalSize::new(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT));
 }
 
+// Serializes every control-plane socket round-trip. The engine drains control once per frame, so
+// concurrent invokes (the reconcile poll + per-edit material-update/preview-render + the graph
+// editor's apply) otherwise pile sockets into that drain and a GPU-bound preview-render pushes some
+// blocking read past its 5 s timeout → EAGAIN ("os error 11"). Holding this across the whole
+// connect+write+read keeps exactly one round-trip outstanding, regardless of caller.
+static CONTROL_IO: Mutex<()> = Mutex::new(());
+
 // The one socket round-trip helper the whole bridge is built on. Newline-delimited JSON;
 // surfaces the engine's `ok:false` error string as a typed Err (→ a rejected JS promise).
 fn control_request_with_params(
@@ -264,6 +271,8 @@ fn control_request_with_params(
     command: &str,
     params: Value,
 ) -> Result<Value, String> {
+    // The guarded data is () (it carries no invariant), so recover a poisoned lock rather than fail.
+    let _guard = CONTROL_IO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut stream = UnixStream::connect(socket_path)
         .map_err(|err| format!("control socket unavailable: {err}"))?;
     stream
