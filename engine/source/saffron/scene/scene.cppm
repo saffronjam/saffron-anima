@@ -244,6 +244,14 @@ export namespace se
         Uuid material;
     };
 
+    // Marks an entity (the root of an expanded model) as an instance of a `.smodel` asset. Lets the
+    // editor show it as a model instance and lets reimport find live instances. Mesh/material refs
+    // live on the usual components as `(sub-id)` resolved through the container.
+    struct ModelInstanceComponent
+    {
+        Uuid modelId;
+    };
+
     // One script attached to an entity: a .lua path relative to the project src/
     // plus per-instance field overrides (filled by the editor; empty until then).
     struct ScriptSlot
@@ -334,19 +342,34 @@ export namespace se
         Texture,
         Other,
         Animation,
-        Material
+        Material,
+        Model  // a `.smodel` container (parent of its embedded mesh/material/texture sub-assets)
+    };
+
+    /// How a texture's bytes are interpreted on upload. Recovered from a container chunk flag (embedded)
+    /// or a `.smeta` sidecar (standalone); supersedes the older `AssetEntry.linear` bool. `Auto` defers
+    /// the choice to a heuristic at scan time.
+    enum class Colorspace : u8
+    {
+        Auto,
+        Srgb,
+        Linear,
+        Hdr
     };
 
     struct AssetEntry
     {
-        Uuid id;
+        Uuid id;  // for a sub-asset, the stable sub-id (unique across the catalog)
         std::string name;
         AssetType type = AssetType::Mesh;
-        std::string path;  // relative to the asset root
+        std::string path;  // sub-asset: the owning .smodel's path; standalone: its own file
         std::string folder;
         bool hdr = false;     // texture: decode as linear float (.hdr); else sRGB RGBA8
         bool linear = false;  // texture: upload as a linear RGBA8 format (metallic-roughness), not sRGB
         f32 duration = 0.0f;  // animation: clip length in seconds (0 for non-animation entries)
+        Uuid container;       // 0 = standalone file; else the owning model's id
+        i32 chunk = -1;       // TOC chunk index inside the container (-1 = standalone / n/a)
+        Colorspace colorspace = Colorspace::Auto;  // texture colorspace provenance (phase 10 fills it)
     };
 
     struct AssetCatalog

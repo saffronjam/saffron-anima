@@ -55,6 +55,26 @@ namespace se
             },
             true);
 
+        registerComponent<ModelInstanceComponent>(
+            reg, "ModelInstance", [](Scene&, Entity) {}, [](const ModelInstanceComponent& c) -> nlohmann::json
+            { return nlohmann::json{ { "modelId", std::to_string(c.modelId.value) } }; },
+            [](ModelInstanceComponent& c, const nlohmann::json& j) -> Result<void>
+            {
+                if (auto it = j.find("modelId"); it != j.end())
+                {
+                    if (it->is_string())
+                    {
+                        c.modelId = Uuid{ std::strtoull(it->get<std::string>().c_str(), nullptr, 10) };
+                    }
+                    else if (it->is_number_unsigned())
+                    {
+                        c.modelId = Uuid{ it->get<u64>() };
+                    }
+                }
+                return {};
+            },
+            true);
+
         registerComponent<ScriptComponent>(
             reg, "Script", [](Scene&, Entity) {}, scriptComponentToJson, scriptComponentFromJson, true);
 
