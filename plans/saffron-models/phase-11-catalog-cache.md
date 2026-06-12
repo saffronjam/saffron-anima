@@ -1,7 +1,16 @@
 # Phase 11 — Catalog cache (regenerable)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 10
+
+> Implementation note: the cache is keyed by a single `assetSignature` — an FNV fold over sorted
+> (relpath, mtime, size) for every file under assets/ (sidecars included, `.cache/` excluded, stat-only).
+> `loadCatalog` reuses the cached rows only when the recomputed signature matches; any add/remove/touch/
+> sidecar-edit (or a missing/corrupt cache) falls through to a cold `scanAssets` + rewrite. Coarser than
+> the plan's per-row mtime check (one change re-scans all), but dead simple and provably non-load-bearing.
+> `loadProject` calls `loadCatalog`; `saveProject` still writes the assets array; `.cache/` is already
+> gitignored. Verified by `tests/e2e/catalog_cache.test.ts` (delete → identical cold-scan catalog;
+> corrupt → clean fallback).
 
 ## Goal
 

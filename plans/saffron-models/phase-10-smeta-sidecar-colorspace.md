@@ -1,7 +1,15 @@
 # Phase 10 — `.smeta` sidecar + colorspace provenance
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 09
+
+> Implementation note: `readSmeta`/`writeSmeta` + `SmetaData`; `scanAssets`'s foreign-file branch (a
+> non-uuid filename) now reads a sibling `.smeta` if present, else mints id + infers colorspace (sRGB
+> for color-ish, Hdr for `.hdr`) + writes the sidecar with a loud warning that the guess may be wrong
+> for data maps. `AssetEntry.colorspace` carries the recovered value; `loadTextureAsset` prefers an
+> explicit `colorspace` over the legacy `hdr`/`linear` bools when choosing the upload format. Embedded
+> textures keep getting colorspace from the chunk flags (phase 06, no sidecar). Verified by
+> `tests/e2e/smeta.test.ts` (drop a foreign `.png` → minted `.smeta` with a stable id surviving reload).
 
 ## Goal
 

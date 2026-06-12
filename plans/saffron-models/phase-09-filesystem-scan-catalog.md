@@ -1,7 +1,18 @@
 # Phase 09 — Filesystem scan + catalog rebuild
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 08
+
+> Implementation note: `scanAssets` rebuilds the catalog from disk (containers via prefix-read →
+> `catalogRowsForModel`; engine-written standalone files identify by their uuid filename stem — foreign
+> names wait for phase 10's `.smeta`), preserving display name/folder (and a standalone row's
+> duration/colorspace) from the prior catalog by id. `loadProject` runs it **after** `catalogFromJson`
+> to reconcile with disk (orphan-proof) — caches were just cleared so no GPU patch is needed; the
+> `scan-assets` command idles + clears caches first. `saveProject` keeps writing the assets array
+> (display names live there until phase 10's `.smeta`), so the scan is non-load-bearing for
+> correctness, not a replacement yet. Verified by the orphan-proof e2e (import → reload → survives) and
+> the 128-check contract test; the full e2e suite is green except one **pre-existing, unrelated** camera
+> default mismatch (`frustumMaxDistance` code=10 vs test=25, no `.smodel`/scan involvement).
 
 ## Goal
 
