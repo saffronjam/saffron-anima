@@ -118,4 +118,4 @@ clobbers a remapped (extracted) sub-asset.
 - [Asset server & catalog](../asset-server-and-catalog/) — the scan-derived, UUID-keyed catalog
 - [Import pipeline](../import-pipeline/) — translate → bake, and why import no longer spawns
 - [Clean unused assets](../../../how-to/clean-unused-assets/) — the deliberate cleanup workflow
-- [Rig editor](../../ui-and-editor/rig-editor/) — reads the node hierarchy + skin + clips back out of this container via `get-rig`
+- [Asset editor](../../ui-and-editor/asset-editor/) — reads the node hierarchy + skin + clips back out of this container via `get-asset-model`
