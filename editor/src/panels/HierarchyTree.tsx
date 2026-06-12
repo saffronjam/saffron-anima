@@ -8,15 +8,21 @@
 /// round trip, and a root strip at the bottom unparents. Expand-state lives outside
 /// the version-gated poll, so a scene mutation never collapses the tree.
 ///
+/// Every row is a `memo`'d component subscribing to its OWN selected/expanded bits, so
+/// a selection change re-renders only the two affected rows; the whole tree shares ONE
+/// context menu (the row under the right-click is resolved from `data-entity-id`), not
+/// a Radix root per row. Component subrows live in their own child so the inspect poll
+/// re-renders one small node, not the tree.
+///
 /// Every drag affordance is in-flow sidebar DOM — no `setDragImage` layer, no portal'd
 /// indicator — because the reparented X11 viewport child paints over anything floating.
-/// The context menu stays Radix-anchored to the sidebar for the same reason.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { useEditorStore, buildTree, reanchorPastBones, type TreeNode } from "../state/store";
 import { matchesBinding } from "../lib/keybindings";
 import { orderedComponentNames } from "./InspectorPanel";
 import type { EntityListEntry } from "../protocol";
+import { logRender } from "../lib/renderLog";
 import { Input } from "@/components/ui/input";
 import {
   ContextMenu,
@@ -60,7 +66,34 @@ function isInSubtree(entities: EntityListEntry[], rootId: string, candidateId: s
   return false;
 }
 
+/// The dragged entity's subtree (itself + every descendant), so per-row drop
+/// validity is a Set lookup instead of an ancestry walk per row.
+function subtreeIds(entities: EntityListEntry[], rootId: string): Set<string> {
+  const childrenOf = new Map<string, string[]>();
+  for (const e of entities) {
+    const parent = e.parentId ?? "0";
+    const list = childrenOf.get(parent);
+    if (list) {
+      list.push(e.id);
+    } else {
+      childrenOf.set(parent, [e.id]);
+    }
+  }
+  const ids = new Set<string>([rootId]);
+  const stack = [rootId];
+  for (let cursor = stack.pop(); cursor !== undefined; cursor = stack.pop()) {
+    for (const child of childrenOf.get(cursor) ?? []) {
+      if (!ids.has(child)) {
+        ids.add(child);
+        stack.push(child);
+      }
+    }
+  }
+  return ids;
+}
+
 export function HierarchyTree({ actions }: { actions: TreeActions }) {
+  logRender("HierarchyTree");
   const entities = useEditorStore((s) => s.entities);
   const selectedId = useEditorStore((s) => s.selectedId);
   const setExpanded = useEditorStore((s) => s.setExpanded);
@@ -68,6 +101,9 @@ export function HierarchyTree({ actions }: { actions: TreeActions }) {
   const hideBones = useEditorStore((s) => s.hideBones);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  // The entity under the last right-click, resolved before Radix opens the one
+  // shared menu; the menu items read it at open time.
+  const menuTargetRef = useRef<string | null>(null);
 
   // The bone filter only shapes the RENDERED tree; drag validity and reparenting
   // keep working against the unfiltered entities, so a drop can never corrupt the
@@ -93,80 +129,178 @@ export function HierarchyTree({ actions }: { actions: TreeActions }) {
     }
   }, [selectedId, entities, setExpanded]);
 
-  const dragContext = {
-    entities,
-    draggingId,
-    dropTargetId,
-    begin: (id: string) => {
+  const draggingSubtree = useMemo(
+    () => (draggingId === null ? null : subtreeIds(entities, draggingId)),
+    [draggingId, entities],
+  );
+
+  // Stable handlers (drop reads the live drag id from a ref), so the drag context
+  // changes identity only while a drag is in flight — never on selection.
+  const draggingIdRef = useRef<string | null>(null);
+  draggingIdRef.current = draggingId;
+  const begin = useCallback(
+    (id: string): void => {
       setDraggingId(id);
       setDragActive(true);
     },
-    end: () => {
-      setDraggingId(null);
-      setDropTargetId(null);
-      setDragActive(false);
-    },
-    setDropTarget: setDropTargetId,
-    drop: (targetId: string | null) => {
-      if (draggingId) {
-        actions.onReparent(draggingId, targetId);
+    [setDragActive],
+  );
+  const end = useCallback((): void => {
+    setDraggingId(null);
+    setDropTargetId(null);
+    setDragActive(false);
+  }, [setDragActive]);
+  const drop = useCallback(
+    (targetId: string | null): void => {
+      const id = draggingIdRef.current;
+      if (id) {
+        actions.onReparent(id, targetId);
       }
       setDraggingId(null);
       setDropTargetId(null);
     },
-  };
+    [actions],
+  );
+
+  const drag = useMemo<DragContext>(
+    () => ({
+      draggingId,
+      dropTargetId,
+      draggingSubtree,
+      begin,
+      end,
+      setDropTarget: setDropTargetId,
+      drop,
+    }),
+    [draggingId, dropTargetId, draggingSubtree, begin, end, drop],
+  );
 
   const draggingEntity = draggingId ? entities.find((e) => e.id === draggingId) : undefined;
 
   return (
-    <div className="p-1" role="tree" aria-label="Scene entities">
-      {entities.length === 0 ? (
-        <div className="p-2.5 text-center italic text-muted-foreground">No entities</div>
-      ) : (
-        roots.map((node) => (
-          <TreeRow
-            key={node.entity.id}
-            node={node}
-            depth={0}
-            actions={actions}
-            drag={dragContext}
-          />
-        ))
-      )}
-      {draggingEntity?.parentId ? (
-        <div
-          className={cn(
-            "mt-1 rounded-md border border-dashed border-border px-2.5 py-1.5 text-center text-xs text-muted-foreground",
-            dropTargetId === "" && "border-primary text-primary",
+    <ContextMenu modal={false}>
+      <ContextMenuTrigger
+        asChild
+        // Resolve the row under a right-click into the ref; an empty-area click
+        // suppresses the menu (preventDefault makes Radix skip opening), matching the
+        // old per-row triggers that left blank space menu-less.
+        onContextMenu={(event) => {
+          const el =
+            event.target instanceof Element ? event.target.closest("[data-entity-id]") : null;
+          if (el) {
+            menuTargetRef.current = el.getAttribute("data-entity-id");
+          } else {
+            menuTargetRef.current = null;
+            event.preventDefault();
+          }
+        }}
+      >
+        <div className="p-1" role="tree" aria-label="Scene entities">
+          {entities.length === 0 ? (
+            <div className="p-2.5 text-center italic text-muted-foreground">No entities</div>
+          ) : (
+            roots.map((node) => (
+              <TreeRow key={node.entity.id} node={node} depth={0} actions={actions} drag={drag} />
+            ))
           )}
-          onDragOver={(e) => {
-            e.preventDefault();
-            dragContext.setDropTarget("");
-          }}
-          onDragLeave={() => dragContext.setDropTarget(null)}
-          onDrop={(e) => {
-            e.preventDefault();
-            dragContext.drop(null);
-          }}
-        >
-          Drop here to unparent
+          {draggingEntity?.parentId ? (
+            <div
+              className={cn(
+                "mt-1 rounded-md border border-dashed border-border px-2.5 py-1.5 text-center text-xs text-muted-foreground",
+                dropTargetId === "" && "border-primary text-primary",
+              )}
+              onDragOver={(e) => {
+                e.preventDefault();
+                drag.setDropTarget("");
+              }}
+              onDragLeave={() => drag.setDropTarget(null)}
+              onDrop={(e) => {
+                e.preventDefault();
+                drag.drop(null);
+              }}
+            >
+              Drop here to unparent
+            </div>
+          ) : null}
         </div>
+      </ContextMenuTrigger>
+      {/* No focus restore on close: it lands after the inline rename input takes
+          focus and would blur-cancel the edit. */}
+      <ContextMenuContent className="min-w-36" onCloseAutoFocus={(event) => event.preventDefault()}>
+        <RowContextMenuItems targetRef={menuTargetRef} actions={actions} />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/// The items of the tree's one shared context menu, mounted by Radix at open time
+/// (closed content is unmounted), so each open reads the target ref and recomputes
+/// the valid "Parent to…" set fresh — never per row per render.
+function RowContextMenuItems({
+  targetRef,
+  actions,
+}: {
+  targetRef: React.RefObject<string | null>;
+  actions: TreeActions;
+}) {
+  const entities = useEditorStore((s) => s.entities);
+  const id = targetRef.current;
+  const entity = id ? entities.find((e) => e.id === id) : undefined;
+  if (!entity) {
+    return null;
+  }
+  // Valid "Parent to…" targets: anything outside this row's own subtree.
+  const parentTargets = entities.filter(
+    (e) => e.id !== entity.id && !isInSubtree(entities, entity.id, e.id),
+  );
+  return (
+    <>
+      <ContextMenuItem onSelect={() => actions.onFocus(entity.id)}>Focus</ContextMenuItem>
+      <ContextMenuItem onSelect={() => actions.onRenameStart(entity.id)}>Rename</ContextMenuItem>
+      <ContextMenuItem onSelect={() => actions.onCopy(entity.id)}>Copy</ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuSub>
+        <ContextMenuSubTrigger>Parent to…</ContextMenuSubTrigger>
+        <ContextMenuSubContent className="max-h-64 min-w-36 overflow-y-auto">
+          {parentTargets.length === 0 ? (
+            <ContextMenuItem disabled>No valid parents</ContextMenuItem>
+          ) : (
+            parentTargets.map((target) => (
+              <ContextMenuItem
+                key={target.id}
+                onSelect={() => actions.onReparent(entity.id, target.id)}
+              >
+                {target.name}
+              </ContextMenuItem>
+            ))
+          )}
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      {entity.parentId ? (
+        <ContextMenuItem onSelect={() => actions.onReparent(entity.id, null)}>
+          Unparent
+        </ContextMenuItem>
       ) : null}
-    </div>
+      <ContextMenuSeparator />
+      <ContextMenuItem variant="destructive" onSelect={() => actions.onDelete(entity.id)}>
+        Delete
+      </ContextMenuItem>
+    </>
   );
 }
 
 interface DragContext {
-  entities: EntityListEntry[];
   draggingId: string | null;
   dropTargetId: string | null;
+  /// The dragged entity's subtree (self + descendants), or null when idle.
+  draggingSubtree: Set<string> | null;
   begin(id: string): void;
   end(): void;
   setDropTarget(id: string | null): void;
   drop(targetId: string | null): void;
 }
 
-function TreeRow({
+const TreeRow = memo(function TreeRow({
   node,
   depth,
   actions,
@@ -177,161 +311,114 @@ function TreeRow({
   actions: TreeActions;
   drag: DragContext;
 }) {
+  logRender("TreeRow");
   const entity = node.entity;
-  const selectedId = useEditorStore((s) => s.selectedId);
-  const expandedIds = useEditorStore((s) => s.expandedIds);
+  const selected = useEditorStore((s) => s.selectedId === entity.id);
+  const expanded = useEditorStore((s) => s.expandedIds.has(entity.id));
   const toggleExpanded = useEditorStore((s) => s.toggleExpanded);
-  const showComponentSubrows = useEditorStore((s) => s.showComponentSubrows);
-  const componentsBySelected = useEditorStore((s) => s.componentsBySelected);
-  const expanded = expandedIds.has(entity.id);
+  // Read-only component leaves for the SELECTED row only, sourced from the inspect
+  // result the poll keeps fresh. The count drives the twisty; the list lives in
+  // ComponentSubrows so an inspect-poll update re-renders that node, not the row.
+  // For every other row the gate short-circuits before the component walk.
+  const subrowCount = useEditorStore((s) =>
+    s.showComponentSubrows &&
+    s.selectedId === entity.id &&
+    s.componentsBySelected &&
+    s.componentsBySelected.id === entity.id
+      ? orderedComponentNames(s.componentsBySelected.components as Record<string, unknown>).length
+      : 0,
+  );
   const hasChildren = node.children.length > 0;
-  const selected = entity.id === selectedId;
+  const expandable = hasChildren || subrowCount > 0;
   const renaming = entity.id === actions.renamingId;
 
-  // Read-only component leaves for the SELECTED row only, sourced from the inspect
-  // result the poll already keeps fresh — never an extra control call. The id guard
-  // drops a mid-poll race where the inspect payload lags a selection change.
-  const subrows =
-    showComponentSubrows &&
-    selected &&
-    componentsBySelected &&
-    componentsBySelected.id === entity.id
-      ? orderedComponentNames(componentsBySelected.components as Record<string, unknown>)
-      : [];
-  const expandable = hasChildren || subrows.length > 0;
-
   // A row is a valid drop target unless it is the dragged row or inside its subtree.
-  const validDropTarget =
-    drag.draggingId !== null &&
-    drag.draggingId !== entity.id &&
-    !isInSubtree(drag.entities, drag.draggingId, entity.id);
-
-  // Valid "Parent to…" targets: anything outside this row's own subtree.
-  const parentTargets = drag.entities.filter(
-    (e) => e.id !== entity.id && !isInSubtree(drag.entities, entity.id, e.id),
-  );
+  const validDropTarget = drag.draggingSubtree !== null && !drag.draggingSubtree.has(entity.id);
 
   return (
     <>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          {renaming ? (
-            <div style={{ paddingLeft: depth * 14 }}>
-              <RenameRow
-                initial={entity.name}
-                onCommit={(next) => actions.onRenameCommit(entity.id, next)}
-                onCancel={actions.onRenameCancel}
-              />
-            </div>
-          ) : (
-            <div
-              role="treeitem"
-              aria-selected={selected}
-              aria-expanded={expandable ? expanded : undefined}
-              draggable
-              tabIndex={0}
-              className={cn(
-                "flex w-full cursor-default items-center gap-0.5 rounded-md px-1 py-1.5 text-left text-sm",
-                selected ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent",
-                drag.dropTargetId === entity.id && validDropTarget && "ring-1 ring-primary",
-              )}
-              style={{ paddingLeft: depth * 14 + 4 }}
-              onClick={() => actions.onSelect(entity)}
-              onMouseDown={() => {
-                if (actions.renamingId && actions.renamingId !== entity.id) {
-                  actions.onRenameCancel();
-                }
-              }}
-              onDoubleClick={() => actions.onRenameStart(entity.id)}
-              // The configured delete key on the focused row (clicking focuses it)
-              // runs the same delete as the context menu item.
-              onKeyDown={(e) => {
-                if (matchesBinding(e, "hierarchy.delete", useEditorStore.getState().keyBindings)) {
-                  e.preventDefault();
-                  actions.onDelete(entity.id);
-                }
-              }}
-              onDragStart={(e) => {
-                e.dataTransfer.setData(DND_MIME, entity.id);
-                e.dataTransfer.effectAllowed = "move";
-                drag.begin(entity.id);
-              }}
-              onDragEnd={drag.end}
-              onDragOver={(e) => {
-                if (validDropTarget) {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  drag.setDropTarget(entity.id);
-                }
-              }}
-              onDragLeave={() => {
-                if (drag.dropTargetId === entity.id) {
-                  drag.setDropTarget(null);
-                }
-              }}
-              onDrop={(e) => {
-                if (validDropTarget) {
-                  e.preventDefault();
-                  drag.drop(entity.id);
-                }
+      {renaming ? (
+        <div data-entity-id={entity.id} style={{ paddingLeft: depth * 14 }}>
+          <RenameRow
+            initial={entity.name}
+            onCommit={(next) => actions.onRenameCommit(entity.id, next)}
+            onCancel={actions.onRenameCancel}
+          />
+        </div>
+      ) : (
+        <div
+          data-entity-id={entity.id}
+          role="treeitem"
+          aria-selected={selected}
+          aria-expanded={expandable ? expanded : undefined}
+          draggable
+          tabIndex={0}
+          className={cn(
+            "flex w-full cursor-default items-center gap-0.5 rounded-md px-1 py-1.5 text-left text-sm",
+            selected ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent",
+            drag.dropTargetId === entity.id && validDropTarget && "ring-1 ring-primary",
+          )}
+          style={{ paddingLeft: depth * 14 + 4 }}
+          onClick={() => actions.onSelect(entity)}
+          onMouseDown={() => {
+            if (actions.renamingId && actions.renamingId !== entity.id) {
+              actions.onRenameCancel();
+            }
+          }}
+          onDoubleClick={() => actions.onRenameStart(entity.id)}
+          // The configured delete key on the focused row (clicking focuses it)
+          // runs the same delete as the context menu item.
+          onKeyDown={(e) => {
+            if (matchesBinding(e, "hierarchy.delete", useEditorStore.getState().keyBindings)) {
+              e.preventDefault();
+              actions.onDelete(entity.id);
+            }
+          }}
+          onDragStart={(e) => {
+            e.dataTransfer.setData(DND_MIME, entity.id);
+            e.dataTransfer.effectAllowed = "move";
+            drag.begin(entity.id);
+          }}
+          onDragEnd={drag.end}
+          onDragOver={(e) => {
+            if (validDropTarget) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              drag.setDropTarget(entity.id);
+            }
+          }}
+          onDragLeave={() => {
+            if (drag.dropTargetId === entity.id) {
+              drag.setDropTarget(null);
+            }
+          }}
+          onDrop={(e) => {
+            if (validDropTarget) {
+              e.preventDefault();
+              drag.drop(entity.id);
+            }
+          }}
+        >
+          {expandable ? (
+            <button
+              type="button"
+              aria-label={expanded ? "Collapse" : "Expand"}
+              className="flex size-4 flex-none items-center justify-center rounded hover:bg-foreground/10"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleExpanded(entity.id);
               }}
             >
-              {expandable ? (
-                <button
-                  type="button"
-                  aria-label={expanded ? "Collapse" : "Expand"}
-                  className="flex size-4 flex-none items-center justify-center rounded hover:bg-foreground/10"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleExpanded(entity.id);
-                  }}
-                >
-                  <ChevronRight
-                    className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
-                  />
-                </button>
-              ) : (
-                <span className="size-4 flex-none" />
-              )}
-              <span className="truncate">{entity.name}</span>
-            </div>
+              <ChevronRight
+                className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
+              />
+            </button>
+          ) : (
+            <span className="size-4 flex-none" />
           )}
-        </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-36">
-          <ContextMenuItem onSelect={() => actions.onFocus(entity.id)}>Focus</ContextMenuItem>
-          <ContextMenuItem onSelect={() => actions.onRenameStart(entity.id)}>
-            Rename
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => actions.onCopy(entity.id)}>Copy</ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>Parent to…</ContextMenuSubTrigger>
-            <ContextMenuSubContent className="max-h-64 min-w-36 overflow-y-auto">
-              {parentTargets.length === 0 ? (
-                <ContextMenuItem disabled>No valid parents</ContextMenuItem>
-              ) : (
-                parentTargets.map((target) => (
-                  <ContextMenuItem
-                    key={target.id}
-                    onSelect={() => actions.onReparent(entity.id, target.id)}
-                  >
-                    {target.name}
-                  </ContextMenuItem>
-                ))
-              )}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-          {entity.parentId ? (
-            <ContextMenuItem onSelect={() => actions.onReparent(entity.id, null)}>
-              Unparent
-            </ContextMenuItem>
-          ) : null}
-          <ContextMenuSeparator />
-          <ContextMenuItem variant="destructive" onSelect={() => actions.onDelete(entity.id)}>
-            Delete
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+          <span className="truncate">{entity.name}</span>
+        </div>
+      )}
       {hasChildren && expanded
         ? node.children.map((child) => (
             <TreeRow
@@ -343,11 +430,25 @@ function TreeRow({
             />
           ))
         : null}
-      {expanded
-        ? subrows.map((name) => (
-            <SubRow key={`${entity.id}:${name}`} entity={entity} name={name} depth={depth + 1} />
-          ))
-        : null}
+      {expanded && subrowCount > 0 ? <ComponentSubrows entity={entity} depth={depth + 1} /> : null}
+    </>
+  );
+});
+
+/// The selected row's read-only component leaves. The only node subscribing to
+/// `componentsBySelected`, so the ~6 Hz inspect poll re-renders this — not the tree.
+function ComponentSubrows({ entity, depth }: { entity: EntityListEntry; depth: number }) {
+  logRender("ComponentSubrows");
+  const components = useEditorStore((s) => s.componentsBySelected);
+  const names =
+    components && components.id === entity.id
+      ? orderedComponentNames(components.components as Record<string, unknown>)
+      : [];
+  return (
+    <>
+      {names.map((name) => (
+        <SubRow key={`${entity.id}:${name}`} entity={entity} name={name} depth={depth} />
+      ))}
     </>
   );
 }

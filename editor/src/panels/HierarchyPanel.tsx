@@ -11,7 +11,7 @@
 /// on each row in the left column, and every drag affordance stays in the sidebar
 /// DOM (the reparented X11 viewport paints over anything floating). Rejected control
 /// calls surface in an inline flash at the bottom of the panel (no silent failures).
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Bone, ListTree } from "lucide-react";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
@@ -38,20 +38,26 @@ export function HierarchyPanel() {
   const { message, flash } = useFlash();
   const [renamingId, setRenamingId] = useState<string | null>(null);
 
-  const actions: TreeActions = {
-    // Left-click a row: optimistic local select, then tell the engine. The poll
-    // confirms via selectionVersion.
-    onSelect: (entity: EntityListEntry): void => {
+  // Left-click a row: optimistic local select, then tell the engine. The poll
+  // confirms via selectionVersion.
+  const onSelect = useCallback(
+    (entity: EntityListEntry): void => {
       selectEntity(entity.id);
       void client.selectEntity(entity.id).catch((err: unknown) => flash(errorText(err)));
     },
-    // Aim the editor camera at the entity.
-    onFocus: (id: string): void => {
+    [selectEntity, flash],
+  );
+  // Aim the editor camera at the entity.
+  const onFocus = useCallback(
+    (id: string): void => {
       void client.focus(id).catch((err: unknown) => flash(errorText(err)));
     },
-    // Copy duplicates the entity; the engine selects the dup, so mirror it locally
-    // and let the sceneVersion bump refresh the list.
-    onCopy: (id: string): void => {
+    [flash],
+  );
+  // Copy duplicates the entity; the engine selects the dup, so mirror it locally
+  // and let the sceneVersion bump refresh the list.
+  const onCopy = useCallback(
+    (id: string): void => {
       void client
         .copyEntity(id)
         .then((ref) => {
@@ -59,24 +65,32 @@ export function HierarchyPanel() {
         })
         .catch((err: unknown) => flash(errorText(err)));
     },
-    // Delete removes the entity and its subtree; clear selection if it was selected.
-    onDelete: (id: string): void => {
+    [selectEntity, flash],
+  );
+  // Delete removes the entity and its subtree; clear selection if it was selected.
+  const onDelete = useCallback(
+    (id: string): void => {
       if (useEditorStore.getState().selectedId === id) {
         setSelectedId(null);
       }
       void client.destroyEntity(id).catch((err: unknown) => flash(errorText(err)));
     },
-    // Reparent (drag-drop or the context menu); the store action relinks
-    // optimistically and rolls back on rejection — surface the error here.
-    onReparent: (id: string, parentId: string | null): void => {
+    [setSelectedId, flash],
+  );
+  // Reparent (drag-drop or the context menu); the store action relinks
+  // optimistically and rolls back on rejection — surface the error here.
+  const onReparent = useCallback(
+    (id: string, parentId: string | null): void => {
       void setParent(id, parentId).catch((err: unknown) => flash(errorText(err)));
     },
-    renamingId,
-    onRenameStart: (id: string): void => setRenamingId(id),
-    // Inline rename: optimistically update the row name and commit via rename-entity;
-    // the sceneVersion bump re-fetches the authoritative list. A rejection reverts to
-    // the next poll's value and surfaces in the flash.
-    onRenameCommit: (id: string, next: string): void => {
+    [setParent, flash],
+  );
+  const onRenameStart = useCallback((id: string): void => setRenamingId(id), []);
+  // Inline rename: optimistically update the row name and commit via rename-entity;
+  // the sceneVersion bump re-fetches the authoritative list. A rejection reverts to
+  // the next poll's value and surfaces in the flash.
+  const onRenameCommit = useCallback(
+    (id: string, next: string): void => {
       setRenamingId(null);
       const trimmed = next.trim();
       if (trimmed === "") {
@@ -85,8 +99,36 @@ export function HierarchyPanel() {
       applyOptimisticEntityName(id, trimmed);
       void client.renameEntity(id, trimmed).catch((err: unknown) => flash(errorText(err)));
     },
-    onRenameCancel: (): void => setRenamingId(null),
-  };
+    [applyOptimisticEntityName, flash],
+  );
+  const onRenameCancel = useCallback((): void => setRenamingId(null), []);
+
+  // Stable across renders except when renamingId changes (rename start/commit, rare),
+  // so a selection change never re-renders the tree through this prop.
+  const actions = useMemo<TreeActions>(
+    () => ({
+      onSelect,
+      onFocus,
+      onCopy,
+      onDelete,
+      onReparent,
+      renamingId,
+      onRenameStart,
+      onRenameCommit,
+      onRenameCancel,
+    }),
+    [
+      onSelect,
+      onFocus,
+      onCopy,
+      onDelete,
+      onReparent,
+      renamingId,
+      onRenameStart,
+      onRenameCommit,
+      onRenameCancel,
+    ],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
