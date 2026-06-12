@@ -1,6 +1,6 @@
 # Phase 04 — Import-graph translator + `ImportOptions`
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 03
 
 ## Goal

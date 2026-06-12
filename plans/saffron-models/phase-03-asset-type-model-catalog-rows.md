@@ -1,6 +1,6 @@
 # Phase 03 — `AssetType::Model` + catalog sub-asset rows
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 02
 
 ## Goal

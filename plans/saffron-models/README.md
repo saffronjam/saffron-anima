@@ -1,6 +1,6 @@
 # Saffron models
 
-**Status:** NOT STARTED — bake each import into one self-contained `.smodel` container; derive the asset catalog from a filesystem scan; decouple import from instantiation; support sub-asset extraction, diffing reimport, and deliberate cleanup.
+**Status:** COMPLETED — bake each import into one self-contained `.smodel` container; derive the asset catalog from a filesystem scan; decouple import from instantiation; support sub-asset extraction, diffing reimport, and deliberate cleanup.
 
 A model-asset system for SaffronEngine. Importing a multi-mesh / multi-texture scene (e.g. Sponza,
 ~50 textures) today scatters ~50 loose files into the catalog and immediately spawns an entity. This

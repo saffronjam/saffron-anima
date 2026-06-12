@@ -1,6 +1,6 @@
 # Phase 02 — MetadataChunk schema + prefix-read
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** 01
 
 ## Goal

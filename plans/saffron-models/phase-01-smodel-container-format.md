@@ -1,6 +1,6 @@
 # Phase 01 — The `.smodel` container format in Geometry
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Depends on:** —
 
 ## Goal
