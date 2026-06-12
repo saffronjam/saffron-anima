@@ -87,9 +87,9 @@ namespace se
 
     auto playStateResultDto(const SceneEditContext& editor) -> PlayStateResult
     {
-        return PlayStateResult{ playStateName(editor.playState), static_cast<i32>(editor.playVersion),
-                                static_cast<i32>(editor.sceneVersion), editor.hadPrimaryCamera,
-                                static_cast<i32>(editor.animationVersion) };
+        return PlayStateResult{ playStateName(editor.playState),           static_cast<i32>(editor.playVersion),
+                                static_cast<i32>(editor.sceneVersion),     editor.hadPrimaryCamera,
+                                static_cast<i32>(editor.animationVersion), WireUuid{ editor.previewAsset.value } };
     }
 
     auto normalizeScriptKey(std::string key) -> std::string
@@ -454,6 +454,10 @@ namespace se
             "metallic?, roughness?, emissive?:{x,y,z}, emissiveStrength?, unlit?:0|1, slot?, smooth?:0|1}",
             [](EngineContext& ctx, const SetMaterialParams& params) -> Result<EntityRef>
             {
+                if (previewing(ctx.sceneEdit))
+                {
+                    return Err("exit the rig preview first");
+                }
                 auto entity = resolveEntity(ctx, params.entity);
                 if (!entity)
                 {
@@ -936,6 +940,10 @@ namespace se
             reg, "play", "play — enter play mode (Edit) or resume (Paused)",
             [](EngineContext& ctx, const EmptyParams&) -> Result<PlayStateResult>
             {
+                if (previewing(ctx.sceneEdit))
+                {
+                    return Err("exit the rig preview first");
+                }
                 if (ctx.sceneEdit.playState == PlayState::Paused)
                 {
                     auto resumed = resumePlay(ctx.sceneEdit);

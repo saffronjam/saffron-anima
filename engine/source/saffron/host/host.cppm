@@ -56,6 +56,7 @@ namespace se
         bool scriptVmActive = false;            // a VM exists (Playing/Paused); stop destroys it
         bool scriptErrorPending = false;        // set inside simTick; drives the deferred pause
         bool shmPublish = false;                // frames publish to shared memory; the editor owns the render size
+        bool previewActive = false;             // tracks rig-preview transitions to prune the anim runtime
     };
 
     enum class BillboardKind
@@ -343,19 +344,32 @@ namespace se
         {
             return;
         }
-        if (editor.selected.handle == entt::null)
-        {
-            return;
-        }
         se::Scene& scene = se::activeScene(editor);
-        if (!se::valid(scene, editor.selected) || !se::hasComponent<se::SkinnedMeshComponent>(scene, editor.selected))
+        // The rig the overlay draws: the previewed rig while previewing (so highlighting a bone via the
+        // dedicated channel never blanks the overlay, and a bone has no SkinnedMesh of its own), else
+        // the selected entity in the normal scene-edit view.
+        const se::Entity target = editor.previewScene ? editor.previewRigEntity : editor.selected;
+        if (target.handle == entt::null)
         {
             return;
         }
-        const se::SkinnedMeshComponent& skin = se::getComponent<se::SkinnedMeshComponent>(scene, editor.selected);
+        if (!se::valid(scene, target) || !se::hasComponent<se::SkinnedMeshComponent>(scene, target))
+        {
+            return;
+        }
+        const se::SkinnedMeshComponent& skin = se::getComponent<se::SkinnedMeshComponent>(scene, target);
+        // Resolve the highlighted joint (a get-rig node index) to its spawned entity uuid; only set
+        // while previewing, drawn in a distinct tint.
+        se::Uuid highlightUuid{ 0 };
+        if (editor.previewScene && editor.skeletonOverlay.highlightJoint >= 0 &&
+            static_cast<std::size_t>(editor.skeletonOverlay.highlightJoint) < editor.previewBoneByNode.size())
+        {
+            highlightUuid = editor.previewBoneByNode[static_cast<std::size_t>(editor.skeletonOverlay.highlightJoint)];
+        }
         const glm::vec3 eye = se::cameraPosition(cam);
         constexpr glm::vec4 BoneColor{ 0.55f, 0.78f, 1.0f, 0.95f };
         constexpr glm::vec4 JointColor{ 1.0f, 0.78f, 0.18f, 1.0f };
+        constexpr glm::vec4 HighlightColor{ 0.30f, 1.0f, 0.45f, 1.0f };
         constexpr se::f32 AxisLen = 0.08f;  // per-joint axis length in world units
         const std::array<glm::vec4, 3> axisColors{ glm::vec4{ 1.0f, 0.32f, 0.32f, 0.95f },
                                                    glm::vec4{ 0.40f, 0.90f, 0.40f, 0.95f },
@@ -385,10 +399,14 @@ namespace se
                     addLine(vertices, parent.pixel, joint.pixel, 2.0f, BoneColor, width, height);
                 }
             }
-            // Joint dot, radius held screen-constant so it never vanishes when zoomed out.
+            // Joint dot, radius held screen-constant so it never vanishes when zoomed out. The
+            // highlighted joint draws larger in a distinct tint (the skeleton-tree selection channel).
             const se::f32 distance = glm::length(eye - worldPos);
-            const se::f32 radius = std::max(2.5f, distance * editor.skeletonOverlay.jointSize * 0.05f);
-            addCircleFill(vertices, joint.pixel, radius, JointColor, width, height);
+            const bool highlighted = highlightUuid.value != 0 &&
+                                     se::getComponent<se::IdComponent>(scene, bone).id.value == highlightUuid.value;
+            const se::f32 baseRadius = std::max(2.5f, distance * editor.skeletonOverlay.jointSize * 0.05f);
+            const se::f32 radius = highlighted ? baseRadius * 1.8f : baseRadius;
+            addCircleFill(vertices, joint.pixel, radius, highlighted ? HighlightColor : JointColor, width, height);
             // Optional per-joint RGB axes from the bone's world-rotation basis.
             if (editor.skeletonOverlay.axes)
             {
@@ -852,6 +870,15 @@ export namespace se
                 }
                 // Insert any thumbnails the worker finished this interval into the GPU caches.
                 se::drainThumbnailCompletions(state->assets);
+                // Entering or leaving the rig preview swaps activeScene to a fresh entity set; drop the
+                // anim runtime's per-entity transition/pose entries so a re-entered preview starts clean
+                // and dead preview-entity entries never accumulate across opens.
+                if (const bool previewing = state->editor->previewScene.has_value(); previewing != state->previewActive)
+                {
+                    state->animation.transitions.clear();
+                    state->animation.lastPose.clear();
+                    state->previewActive = previewing;
+                }
                 // Animation runs every frame in both Edit (preview) and Play, before
                 // scripts so a script can still override a bone the same frame. It only
                 // writes runtime PoseOverrideComponents, never the authored rest pose.
@@ -913,10 +940,10 @@ export namespace se
                     se::RenderSceneOptions options;
                     options.showEditorCameraModels = editor.playState == se::PlayState::Edit;
                     se::renderScene(app.renderer, live, state->assets, cam, options);
-                    // The gizmo + billboards are editor chrome: hidden inside the game view,
-                    // and the gizmo would write transforms the play duplicate swallows. The
-                    // skeleton overlay (when shown) still draws in Play so bones animate.
-                    const bool editChrome = editor.playState == se::PlayState::Edit;
+                    // The gizmo + billboards are editor chrome: hidden inside the game view, and during
+                    // the rig preview (an "Edit without chrome" view). The gizmo would write transforms
+                    // the play duplicate swallows. The skeleton overlay (when shown) still draws in both.
+                    const bool editChrome = editor.playState == se::PlayState::Edit && !editor.previewScene.has_value();
                     se::submitSceneEditOverlay(editor, app.renderer, cam, viewWidth, viewHeight, editChrome);
                 }
             };
