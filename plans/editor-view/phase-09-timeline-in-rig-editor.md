@@ -1,6 +1,6 @@
 # Phase 9 — the timeline in the rig editor
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (kept as a build record; superseded by the general Asset editor — see this dir's README)
 
 **Depends on:** phase 2 (the preview scene + the spawned rig entity), phase 6 (the skeleton tree's
 highlight channel), phase 7 (the clip list), phase 8 (the extracted timeline components).

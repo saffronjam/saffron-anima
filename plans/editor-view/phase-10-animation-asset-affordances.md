@@ -1,6 +1,6 @@
 # Phase 10 — animation-asset affordances
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (kept as a build record; superseded by the general Asset editor — see this dir's README)
 **Depends on:** 5 (the workspace + open routing)
 
 ## Goal

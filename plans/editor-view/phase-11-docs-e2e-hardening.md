@@ -1,6 +1,6 @@
 # Phase 11 — docs, e2e hardening, gate
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (kept as a build record; superseded by the general Asset editor — see this dir's README)
 
 **Depends on:** phase 1 (the rig query commands), phase 2 (the preview scene + byte-identity), phase 3
 (preview furnishing + the skeleton overlay), phases 5–9 (the workspace, skeleton tree, clip list, and
