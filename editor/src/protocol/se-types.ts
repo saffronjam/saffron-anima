@@ -487,6 +487,7 @@ export interface ViewportNativeInfoResult {
 }
 
 export interface SetViewportSizeParams {
+  view?: string;
   width?: number;
   height?: number;
 }
@@ -1134,6 +1135,14 @@ export interface BoneEntityDto {
   entity: WireUuid;
 }
 
+export interface SetActiveViewParams {
+  view: string;
+}
+
+export interface SetActiveViewResult {
+  view: string;
+}
+
 export interface CleanAssetsParams {
   dryRun?: boolean;
   exclude?: string[];
@@ -1513,8 +1522,7 @@ export interface CommandParamsMap {
   "get-asset-model": GetAssetModelParams;
   "enter-asset-preview": EnterAssetPreviewParams;
   "exit-asset-preview": EmptyParams;
-  "suspend-asset-preview": EmptyParams;
-  "resume-asset-preview": EmptyParams;
+  "set-active-view": SetActiveViewParams;
   "clean-assets": CleanAssetsParams;
   "delete-unused": DeleteUnusedParams;
   "rename-asset": RenameAssetParams;
@@ -1653,8 +1661,7 @@ export interface CommandResultMap {
   "get-asset-model": AssetModelResult;
   "enter-asset-preview": AssetPreviewResult;
   "exit-asset-preview": PlayStateResult;
-  "suspend-asset-preview": PlayStateResult;
-  "resume-asset-preview": PlayStateResult;
+  "set-active-view": SetActiveViewResult;
   "clean-assets": CleanReport;
   "delete-unused": DeleteUnusedResult;
   "rename-asset": AssetRef;

@@ -341,6 +341,11 @@ namespace
                         result.value("controlSocket", "").c_str());
             return;
         }
+        if (cmd == "set-active-view")
+        {
+            std::printf("view=%s\n", result.value("view", "").c_str());
+            return;
+        }
         if (cmd == "get-selection")
         {
             if (result.contains("entity") && result["entity"].is_object())

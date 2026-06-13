@@ -288,7 +288,9 @@ async function paramsForFixture(fixture: string, state: { cubeId: string }): Pro
     case "script-input-w":
       return { keys: ["w"] };
     case "viewport-size":
-      return { width: 1280, height: 720 };
+      return { view: "scene", width: 1280, height: 720 };
+    case "active-view-scene":
+      return { view: "scene" };
     case "exposure-zero":
       return { ev: 0 };
     case "new-project":

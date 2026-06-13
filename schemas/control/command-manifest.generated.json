@@ -716,18 +716,11 @@
       "skip": "needs an active asset preview — covered in make e2e"
     },
     {
-      "name": "suspend-asset-preview",
-      "params": "EmptyParams",
-      "result": "PlayStateResult",
+      "name": "set-active-view",
+      "params": "SetActiveViewParams",
+      "result": "SetActiveViewResult",
       "status": "typed",
-      "skip": "needs an active asset preview — covered in make e2e"
-    },
-    {
-      "name": "resume-asset-preview",
-      "params": "EmptyParams",
-      "result": "PlayStateResult",
-      "status": "typed",
-      "skip": "needs a suspended asset preview — covered in make e2e"
+      "fixture": "active-view-scene"
     },
     {
       "name": "clean-assets",

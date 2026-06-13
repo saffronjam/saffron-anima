@@ -1842,38 +1842,20 @@
       }
     },
     {
-      "name": "suspend-asset-preview",
-      "summary": "suspend-asset-preview — park the active preview (keep it alive for an instant resume)",
+      "name": "set-active-view",
+      "summary": "set-active-view {view} — switch the rendered view (scene | assetPreview)",
       "params": [
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/EmptyParams"
+            "$ref": "#/components/schemas/SetActiveViewParams"
           }
         }
       ],
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/PlayStateResult"
-        }
-      }
-    },
-    {
-      "name": "resume-asset-preview",
-      "summary": "resume-asset-preview — un-park a suspended preview (restore its orbit + selection)",
-      "params": [
-        {
-          "name": "params",
-          "schema": {
-            "$ref": "#/components/schemas/EmptyParams"
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$ref": "#/components/schemas/PlayStateResult"
+          "$ref": "#/components/schemas/SetActiveViewResult"
         }
       }
     },
@@ -5983,6 +5965,30 @@
           "aa"
         ]
       },
+      "SetActiveViewParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ]
+      },
+      "SetActiveViewResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ]
+      },
       "SetAnimationLoopParams": {
         "type": "object",
         "additionalProperties": false,
@@ -6695,6 +6701,9 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "view": {
+            "type": "string"
+          },
           "width": {
             "type": "integer"
           },
