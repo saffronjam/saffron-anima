@@ -14,7 +14,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Bone, ListTree } from "lucide-react";
 import { client } from "../control/client";
-import { useEditorStore } from "../state/store";
+import { recordEntityCreation, useEditorStore } from "../state/store";
 import { CreateMenu } from "../app/CreateMenu";
 import { errorText, useFlash } from "../lib/flash";
 import type { EntityListEntry } from "../protocol";
@@ -62,6 +62,7 @@ export function HierarchyPanel() {
         .copyEntity(id)
         .then((ref) => {
           selectEntity(ref.id);
+          recordEntityCreation(ref.id, "Duplicate entity");
         })
         .catch((err: unknown) => flash(errorText(err)));
     },
@@ -96,8 +97,24 @@ export function HierarchyPanel() {
       if (trimmed === "") {
         return;
       }
+      const prior = useEditorStore.getState().entities.find((e) => e.id === id)?.name;
       applyOptimisticEntityName(id, trimmed);
-      void client.renameEntity(id, trimmed).catch((err: unknown) => flash(errorText(err)));
+      void client
+        .renameEntity(id, trimmed)
+        .then(() => {
+          if (prior !== undefined && prior !== trimmed) {
+            useEditorStore.getState().pushEdit(
+              {
+                label: "Rename",
+                selectionId: id,
+                undo: () => client.renameEntity(id, prior),
+                redo: () => client.renameEntity(id, trimmed),
+              },
+              "scene",
+            );
+          }
+        })
+        .catch((err: unknown) => flash(errorText(err)));
     },
     [applyOptimisticEntityName, flash],
   );

@@ -11,7 +11,7 @@ import { useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Box, Camera, CircleDashed, Flashlight, Lightbulb, Orbit, Plus, Sun } from "lucide-react";
 import { client, type EntityPreset } from "../control/client";
-import { useEditorStore } from "../state/store";
+import { recordEntityCreation, useEditorStore } from "../state/store";
 import { errorText, useFlash } from "../lib/flash";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,6 +53,7 @@ export function CreateMenu() {
       .addEntity(preset)
       .then((ref) => {
         selectEntity(ref.id);
+        recordEntityCreation(ref.id, "Create entity");
       })
       .catch((err: unknown) => flash(errorText(err)));
   };
@@ -67,6 +68,7 @@ export function CreateMenu() {
       .createEntity(trimmed)
       .then((ref) => {
         selectEntity(ref.id);
+        recordEntityCreation(ref.id, "Create entity");
       })
       .catch((err: unknown) => flash(errorText(err)));
   };
