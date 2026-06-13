@@ -3,6 +3,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Plus, RefreshCcw } from "lucide-react";
 import { client, type AppDataInfo, type ProjectInfo, type RecentProject } from "../control/client";
 import { useEditorStore, withNativeDialog } from "../state/store";
+import { errorText } from "../lib/flash";
+import { rememberProject } from "../lib/recentProjects";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -76,12 +78,7 @@ export function ProjectStartupModal({
     setProject(project);
     resetSceneState();
     onProjectLoaded(project);
-    const next = await client.rememberRecentProject({
-      path: project.path,
-      name: project.name,
-      displayName: project.displayName,
-      lastOpenedAt: new Date().toISOString(),
-    });
+    const next = await rememberProject(project);
     setRecents(next.projects);
   };
 
@@ -257,19 +254,10 @@ export function ProjectStartupModal({
   );
 }
 
-function validProjectName(name: string): boolean {
+export function validProjectName(name: string): boolean {
   if (name.length < 1 || name.length > 63) {
     return false;
   }
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(name);
 }
 
-function errorText(err: unknown): string {
-  if (typeof err === "string") {
-    return err;
-  }
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}

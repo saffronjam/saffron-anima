@@ -2,9 +2,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ChevronDown } from "lucide-react";
-import { client, type ProjectInfo } from "../control/client";
+import { client } from "../control/client";
 import { useEditorStore, withNativeDialog } from "../state/store";
-import { notify } from "../lib/flash";
+import { errorText, notify } from "../lib/flash";
+import { rememberProject } from "../lib/recentProjects";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -202,21 +203,3 @@ function VsCodeIcon({ className }: { className?: string }) {
   );
 }
 
-function errorText(err: unknown): string {
-  if (typeof err === "string") {
-    return err;
-  }
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
-
-async function rememberProject(project: ProjectInfo): Promise<void> {
-  await client.rememberRecentProject({
-    path: project.path,
-    name: project.name,
-    displayName: project.displayName,
-    lastOpenedAt: new Date().toISOString(),
-  });
-}
