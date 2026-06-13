@@ -84,37 +84,39 @@ namespace se
             return AssetTypeDto::Mesh;
         }
 
-        auto assetSlotName(AssetSlotDto slot) -> const char*
-        {
-            switch (slot)
-            {
-            case AssetSlotDto::Albedo:
-                return "albedo";
-            case AssetSlotDto::MetallicRoughness:
-                return "metallic-roughness";
-            case AssetSlotDto::Normal:
-                return "normal";
-            case AssetSlotDto::Occlusion:
-                return "occlusion";
-            case AssetSlotDto::Emissive:
-                return "emissive";
-            case AssetSlotDto::Height:
-                return "height";
-            case AssetSlotDto::Mesh:
-                return "mesh";
-            }
-            return "mesh";
-        }
-
         auto screenshotTargetName(ScreenshotTargetDto target) -> const char*
         {
-            return target == ScreenshotTargetDto::Window ? "window" : "viewport";
+            if (target == ScreenshotTargetDto::Window)
+            {
+                return "window";
+            }
+            return "viewport";
+        }
+
+        /// Reads an id-or-name selector value as its string form, treating any non-string as empty.
+        auto selectorString(const nlohmann::json& sel) -> std::string
+        {
+            if (sel.is_string())
+            {
+                return sel.get<std::string>();
+            }
+            return std::string{};
+        }
+
+        /// Wraps a folder path as an optional, mapping an empty path to nullopt.
+        auto optionalFolder(const std::string& folder) -> std::optional<std::string>
+        {
+            if (folder.empty())
+            {
+                return std::optional<std::string>{};
+            }
+            return std::optional<std::string>{ folder };
         }
 
         auto resolveAsset(EngineContext& ctx, const AssetSelector& asset) -> Result<const AssetEntry*>
         {
             const json& sel = asset.value;
-            const std::string selector = sel.is_string() ? sel.get<std::string>() : std::string{};
+            const std::string selector = selectorString(sel);
             u64 byId = 0;
             if (sel.is_number_unsigned())
             {
@@ -145,7 +147,7 @@ namespace se
         auto resolveAssetIndex(EngineContext& ctx, const AssetSelector& asset) -> Result<std::size_t>
         {
             const json& sel = asset.value;
-            const std::string selector = sel.is_string() ? sel.get<std::string>() : std::string{};
+            const std::string selector = selectorString(sel);
             u64 byId = 0;
             if (sel.is_number_unsigned())
             {
@@ -185,24 +187,34 @@ namespace se
 
         auto assetDto(const AssetEntry& entry) -> AssetEntryDto
         {
-            return AssetEntryDto{
-                WireUuid{ entry.id.value },
-                entry.name,
-                assetTypeDto(entry.type),
-                entry.path,
-                entry.folder.empty() ? std::optional<std::string>{} : std::optional<std::string>{ entry.folder },
-                entry.container.value == 0 ? std::optional<WireUuid>{}
-                                           : std::optional<WireUuid>{ WireUuid{ entry.container.value } },
-                entry.type == AssetType::Animation ? std::optional<f32>{ entry.duration } : std::optional<f32>{},
-                entry.rigged ? std::optional<bool>{ true } : std::optional<bool>{}
-            };
+            std::optional<WireUuid> container;
+            if (entry.container.value != 0)
+            {
+                container = WireUuid{ entry.container.value };
+            }
+            std::optional<f32> duration;
+            if (entry.type == AssetType::Animation)
+            {
+                duration = entry.duration;
+            }
+            std::optional<bool> rigged;
+            if (entry.rigged)
+            {
+                rigged = true;
+            }
+            return AssetEntryDto{ WireUuid{ entry.id.value },
+                                  entry.name,
+                                  assetTypeDto(entry.type),
+                                  entry.path,
+                                  optionalFolder(entry.folder),
+                                  container,
+                                  duration,
+                                  rigged };
         }
 
         auto assetRef(const AssetEntry& entry) -> AssetRef
         {
-            return AssetRef{ WireUuid{ entry.id.value }, entry.name,
-                             entry.folder.empty() ? std::optional<std::string>{}
-                                                  : std::optional<std::string>{ entry.folder } };
+            return AssetRef{ WireUuid{ entry.id.value }, entry.name, optionalFolder(entry.folder) };
         }
 
         auto assetListDto(const AssetCatalog& catalog) -> AssetList
@@ -409,7 +421,11 @@ namespace se
                 meshId = getComponent<MeshComponent>(scene, meshEntity).mesh;
             }
             updateWorldTransforms(scene);
-            auto gpu = meshId.value != 0 ? loadMeshAsset(assets, renderer, meshId) : Ref<GpuMesh>{};
+            Ref<GpuMesh> gpu;
+            if (meshId.value != 0)
+            {
+                gpu = loadMeshAsset(assets, renderer, meshId);
+            }
             if (!gpu)
             {
                 out.center = worldTranslation(scene, meshEntity);
@@ -425,8 +441,16 @@ namespace se
                                         (c & 2) ? gpu->boundsMax.y : gpu->boundsMin.y,
                                         (c & 4) ? gpu->boundsMax.z : gpu->boundsMin.z };
                 const glm::vec3 w = glm::vec3(world * glm::vec4(corner, 1.0f));
-                lo = c == 0 ? w : glm::min(lo, w);
-                hi = c == 0 ? w : glm::max(hi, w);
+                if (c == 0)
+                {
+                    lo = w;
+                    hi = w;
+                }
+                else
+                {
+                    lo = glm::min(lo, w);
+                    hi = glm::max(hi, w);
+                }
             }
             out.center = (lo + hi) * 0.5f;
             out.radius = glm::length(hi - lo) * 0.5f;
@@ -538,9 +562,11 @@ namespace se
             {
                 ctx.camera = ctx.savedCamera;
                 ctx.skeletonOverlay = ctx.savedOverlay;
-                const Entity restore = ctx.savedSelection.handle != entt::null && valid(ctx.scene, ctx.savedSelection)
-                                           ? ctx.savedSelection
-                                           : Entity{ entt::null };
+                Entity restore{ entt::null };
+                if (ctx.savedSelection.handle != entt::null && valid(ctx.scene, ctx.savedSelection))
+                {
+                    restore = ctx.savedSelection;
+                }
                 ctx.savedSelection = Entity{ entt::null };
                 setSelection(ctx, restore);
             }
@@ -561,9 +587,11 @@ namespace se
             ctx.parkedPreviewCamera = ctx.camera;  // park the preview orbit
             ctx.camera = ctx.savedCamera;
             ctx.skeletonOverlay = ctx.savedOverlay;
-            const Entity restore = ctx.savedSelection.handle != entt::null && valid(ctx.scene, ctx.savedSelection)
-                                       ? ctx.savedSelection
-                                       : Entity{ entt::null };
+            Entity restore{ entt::null };
+            if (ctx.savedSelection.handle != entt::null && valid(ctx.scene, ctx.savedSelection))
+            {
+                restore = ctx.savedSelection;
+            }
             setSelection(ctx, restore);
             ctx.previewActiveView = false;
             ctx.sceneVersion += 1;
@@ -881,7 +909,11 @@ namespace se
                 result.sourcePath = model->meta.import.sourcePath;
                 result.sourceHash = model->meta.import.sourceHash;
                 result.hasSkin = !model->meta.skin.is_null();
-                result.nodeCount = model->meta.nodes.is_array() ? static_cast<i32>(model->meta.nodes.size()) : 0;
+                result.nodeCount = 0;
+                if (model->meta.nodes.is_array())
+                {
+                    result.nodeCount = static_cast<i32>(model->meta.nodes.size());
+                }
                 result.materialCount = 0;
                 std::error_code ec;
                 result.totalBytes =
@@ -957,7 +989,11 @@ namespace se
                     return Err(resolved.error());
                 }
                 const AssetEntry* entry = *resolved;
-                const Uuid containerId = entry->type == AssetType::Model ? entry->id : entry->container;
+                Uuid containerId = entry->container;
+                if (entry->type == AssetType::Model)
+                {
+                    containerId = entry->id;
+                }
                 if (containerId.value == 0)
                 {
                     return Err(std::format("asset {} is not part of a model container", entry->id.value));
@@ -971,7 +1007,11 @@ namespace se
                 AssetModelResult result;
                 result.mesh = WireUuid{ containerId.value };
                 result.name = meta.name;
-                const std::size_t nodeCount = meta.nodes.is_array() ? meta.nodes.size() : 0;
+                std::size_t nodeCount = 0;
+                if (meta.nodes.is_array())
+                {
+                    nodeCount = meta.nodes.size();
+                }
                 const bool hasRig = !meta.skin.is_null();
                 // The bone tree, only when the container carries a skin: the joints plus their ancestor
                 // chains, bounded at the skeleton root (intermediate non-joint nodes included), but not
@@ -1030,10 +1070,12 @@ namespace se
                         BoneDto bone;
                         bone.index = static_cast<i32>(i);
                         bone.name = meta.nodes[i].value("name", std::string{});
-                        bone.parent = parent >= 0 && static_cast<std::size_t>(parent) < nodeCount &&
-                                              inRig[static_cast<std::size_t>(parent)]
-                                          ? parent
-                                          : -1;
+                        bone.parent = -1;
+                        if (parent >= 0 && static_cast<std::size_t>(parent) < nodeCount &&
+                            inRig[static_cast<std::size_t>(parent)])
+                        {
+                            bone.parent = parent;
+                        }
                         bone.joint = isJoint[i];
                         result.bones.push_back(std::move(bone));
                     }
@@ -1090,7 +1132,11 @@ namespace se
                     return Err(resolved.error());
                 }
                 const AssetEntry* entry = *resolved;
-                const Uuid containerId = entry->type == AssetType::Model ? entry->id : entry->container;
+                Uuid containerId = entry->container;
+                if (entry->type == AssetType::Model)
+                {
+                    containerId = entry->id;
+                }
                 if (containerId.value == 0)
                 {
                     return Err(std::format("asset {} is not part of a model container", entry->id.value));
@@ -1151,10 +1197,17 @@ namespace se
                             jointNodes.push_back(joint.get<i32>());
                         }
                     }
-                    const std::size_t nodeCount = meta.nodes.is_array() ? meta.nodes.size() : 0;
+                    std::size_t nodeCount = 0;
+                    if (meta.nodes.is_array())
+                    {
+                        nodeCount = meta.nodes.size();
+                    }
                     boneByNode.assign(nodeCount, Uuid{ 0 });
-                    const std::size_t jointCount =
-                        jointNodes.size() < boneUuids.size() ? jointNodes.size() : boneUuids.size();
+                    std::size_t jointCount = boneUuids.size();
+                    if (jointNodes.size() < boneUuids.size())
+                    {
+                        jointCount = jointNodes.size();
+                    }
                     for (std::size_t k = 0; k < jointCount; k = k + 1)
                     {
                         const i32 nodeIdx = jointNodes[k];
@@ -1380,8 +1433,7 @@ namespace se
             reg, "rename-asset", "rename-asset {id|name, newName}",
             [](EngineContext& ctx, const RenameAssetParams& params) -> Result<AssetRef>
             {
-                const std::string selector =
-                    params.asset.value.is_string() ? params.asset.value.get<std::string>() : std::string{};
+                const std::string selector = selectorString(params.asset.value);
                 if (selector.empty() || params.name.empty())
                 {
                     return Err(std::string{ "usage: rename-asset {id|name} {newName}" });
@@ -1559,7 +1611,7 @@ namespace se
                 std::optional<u32> triangleCount;
                 if (entry.type == AssetType::Mesh)
                 {
-                    if (auto counts = meshFileCounts(abs.string()))
+                    if (auto counts = meshCountsForAsset(ctx.assets, entry))
                     {
                         vertexCount = counts->vertexCount;
                         triangleCount = counts->indexCount / 3;
@@ -1570,8 +1622,7 @@ namespace se
                                          entry.name,
                                          assetTypeDto(entry.type),
                                          entry.path,
-                                         entry.folder.empty() ? std::optional<std::string>{}
-                                                              : std::optional<std::string>{ entry.folder },
+                                         optionalFolder(entry.folder),
                                          sizeBytes,
                                          vertexCount,
                                          triangleCount,
@@ -1633,7 +1684,7 @@ namespace se
                 // The null sentinel (id 0 / empty selector) clears the slot rather than
                 // resolving an asset, so the editor's "(none)" choice unassigns mesh/albedo.
                 const json& sel = params.asset.value;
-                const std::string selector = sel.is_string() ? sel.get<std::string>() : std::string{};
+                const std::string selector = selectorString(sel);
                 const bool clearing = selector == "0" || selector.empty() ||
                                       (sel.is_number_unsigned() && sel.get<u64>() == 0) ||
                                       (sel.is_number_integer() && sel.get<i64>() == 0);
@@ -1715,7 +1766,11 @@ namespace se
             [](EngineContext& ctx, const MaterialCreateParams& params) -> Result<MaterialCreateResult>
             {
                 MaterialAsset asset;
-                const std::string name = params.name.empty() ? std::string{ "Material" } : params.name;
+                std::string name = params.name;
+                if (name.empty())
+                {
+                    name = "Material";
+                }
                 auto id = saveMaterialAsset(ctx.assets, asset, name);
                 if (!id)
                 {
@@ -1735,7 +1790,7 @@ namespace se
                     return Err(entity.error());
                 }
                 const json& sel = params.material.value;
-                const std::string selector = sel.is_string() ? sel.get<std::string>() : std::string{};
+                const std::string selector = selectorString(sel);
                 const bool clearing =
                     selector == "0" || selector.empty() || (sel.is_number_unsigned() && sel.get<u64>() == 0);
                 Uuid matId{ 0 };
@@ -2056,7 +2111,11 @@ namespace se
                 }
                 MaterialAsset child;
                 child.parent = (*parent)->id;
-                const std::string name = params.name.empty() ? std::string{ "Instance" } : params.name;
+                std::string name = params.name;
+                if (name.empty())
+                {
+                    name = "Instance";
+                }
                 auto id = saveMaterialAsset(ctx.assets, child, name);
                 if (!id)
                 {
@@ -2149,10 +2208,22 @@ namespace se
                     const std::filesystem::path fsPath{ path };
                     project.loaded = true;
                     project.path = path;
-                    project.root = fsPath.parent_path().empty() ? "." : fsPath.parent_path().string();
-                    project.name = validProjectName(fsPath.parent_path().filename().string())
-                                       ? fsPath.parent_path().filename().string()
-                                       : "project";
+                    if (fsPath.parent_path().empty())
+                    {
+                        project.root = ".";
+                    }
+                    else
+                    {
+                        project.root = fsPath.parent_path().string();
+                    }
+                    if (validProjectName(fsPath.parent_path().filename().string()))
+                    {
+                        project.name = fsPath.parent_path().filename().string();
+                    }
+                    else
+                    {
+                        project.name = "project";
+                    }
                     project.displayName = defaultDisplayName(project.name);
                 }
                 auto result = saveProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
