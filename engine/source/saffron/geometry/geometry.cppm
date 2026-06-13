@@ -125,9 +125,10 @@ export namespace se
         i32 meshNode = -1;
     };
 
-    // .smesh version 1 is the unskinned three-section layout; version 2 appends a
-    // VertexSkin section after the submeshes (same header, same first three sections).
+    // The unskinned .smesh: a three-section layout (vertices, indices, submeshes).
     inline constexpr u32 MeshFormatVersion = 1;
+    // The skinned .smesh: the same header and first three sections, plus a VertexSkin
+    // section appended after the submeshes.
     inline constexpr u32 MeshFormatVersionSkinned = 2;
 
     // One material extracted from a model: the PBR factors and, if any, the encoded
@@ -194,10 +195,6 @@ export namespace se
         u32 height = 0;
     };
 
-    auto importGltf(const std::string& path) -> Result<Mesh>;
-    auto importObj(const std::string& path) -> Result<Mesh>;
-    auto importModelFile(const std::string& path) -> Result<Mesh>;  // dispatch by extension
-
     /// A material texture slot's semantic role. The import-options colorspace policy keys on it
     /// (albedo/emissive → sRGB color; the rest → linear data), so one source of truth decides how
     /// a baked or scanned texture is interpreted.
@@ -228,11 +225,6 @@ export namespace se
     auto decodeImageHdr(const std::string& path) -> Result<DecodedImageFloat>;
     auto decodeImageFromMemoryHdr(const std::vector<u8>& encoded) -> Result<DecodedImageFloat>;
 
-    // In-place texture bakes applied at import so the runtime stays convention-agnostic.
-    void bakeDxToGlNormal(DecodedImage& image);      // DirectX (green=-Y) -> OpenGL (green=+Y)
-    void bakeGlossToRoughness(DecodedImage& image);  // glossiness -> roughness (1 - x)
-
-    auto saveMesh(const Mesh& mesh, const std::string& path) -> Result<void>;  // baked .smesh
     auto loadMesh(const std::string& path) -> Result<Mesh>;
     // Vertex/index totals read from a .smesh's 64-byte header, without loading the data.
     struct MeshCounts
@@ -241,14 +233,16 @@ export namespace se
         u32 indexCount;
     };
     auto meshFileCounts(const std::string& path) -> Result<MeshCounts>;
+    /// The same counts from an in-memory `.smesh` image (a `.smodel` mesh chunk slice or a whole file).
+    auto meshCountsFromBytes(std::span<const std::byte> bytes) -> Result<MeshCounts>;
     // Skinned bake: v1 layout plus a VertexSkin section (skin must parallel vertices).
     auto saveMeshSkinned(const Mesh& mesh, const std::vector<VertexSkin>& skin, const std::string& path)
         -> Result<void>;
     // The skin stream of a v2 .smesh; empty (not an error) for a v1 file.
     auto loadMeshSkin(const std::string& path) -> Result<std::vector<VertexSkin>>;
 
-    /// The `.smesh` image as an in-memory buffer (the same bytes saveMesh writes to a file), so it can
-    /// be embedded verbatim as a `.smodel` MESH chunk. saveMesh is `saveMeshToBuffer` + a file write.
+    /// The `.smesh` image as an in-memory buffer, so it can be embedded verbatim as a `.smodel` MESH
+    /// chunk or written to a standalone file.
     auto saveMeshToBuffer(const Mesh& mesh) -> std::vector<std::byte>;
     /// The skinned (v2) `.smesh` image as a buffer; errors if the skin does not parallel the vertices.
     auto saveMeshSkinnedToBuffer(const Mesh& mesh, const std::vector<VertexSkin>& skin)
@@ -495,6 +489,34 @@ namespace se
             }
             return bytes;
         }
+
+        // Map a glTF animation target path onto the engine's AnimTrack path enum.
+        auto toTrackPath(cgltf_animation_path_type path) -> AnimTrack::Path
+        {
+            if (path == cgltf_animation_path_type_rotation)
+            {
+                return AnimTrack::Path::Rotation;
+            }
+            if (path == cgltf_animation_path_type_scale)
+            {
+                return AnimTrack::Path::Scale;
+            }
+            return AnimTrack::Path::Translation;
+        }
+
+        // Map a glTF sampler interpolation onto the engine's AnimTrack interpolation enum.
+        auto toTrackInterp(cgltf_interpolation_type interp) -> AnimTrack::Interp
+        {
+            if (interp == cgltf_interpolation_type_step)
+            {
+                return AnimTrack::Interp::Step;
+            }
+            if (interp == cgltf_interpolation_type_cubic_spline)
+            {
+                return AnimTrack::Interp::CubicSpline;
+            }
+            return AnimTrack::Interp::Linear;
+        }
     }
 
     void generateNormals(Mesh& mesh)
@@ -531,8 +553,6 @@ namespace se
         }
     }
 
-    // Extract one glTF material's PBR factors + albedo bytes into the engine's material.
-    // Metallic-roughness/normal/emissive textures are intentionally skipped.
     // Read a glTF texture view's encoded image bytes (embedded buffer view or external file).
     // Returns false (leaving outBytes empty) when the view has no image or the bytes can't be
     // read; a data: URI is logged and skipped. `label` names the slot in any warning.
@@ -549,7 +569,12 @@ namespace se
             const cgltf_buffer_view* bufferView = image->buffer_view;
             const u8* bytes = static_cast<const u8*>(bufferView->buffer->data) + bufferView->offset;
             outBytes.assign(bytes, bytes + bufferView->size);
-            outExt = extensionFromMime(image->mime_type != nullptr ? image->mime_type : "");
+            const char* mime = "";
+            if (image->mime_type != nullptr)
+            {
+                mime = image->mime_type;
+            }
+            outExt = extensionFromMime(mime);
             return !outBytes.empty();
         }
         if (image->uri != nullptr && std::strncmp(image->uri, "data:", 5) != 0)
@@ -580,7 +605,10 @@ namespace se
             material.name = src.name;
         }
         material.emissive = glm::vec3(src.emissive_factor[0], src.emissive_factor[1], src.emissive_factor[2]);
-        material.emissiveStrength = src.has_emissive_strength ? src.emissive_strength.emissive_strength : 1.0f;
+        if (src.has_emissive_strength)
+        {
+            material.emissiveStrength = src.emissive_strength.emissive_strength;
+        }
         material.hasNormal =
             readGltfTextureBytes(src.normal_texture, path, "normal", material.normalBytes, material.normalExt);
         material.hasOcclusion = readGltfTextureBytes(src.occlusion_texture, path, "occlusion", material.occlusionBytes,
@@ -685,8 +713,11 @@ namespace se
             const i32 vertexOffset = static_cast<i32>(mesh.vertices.size());
             const u32 firstIndex = static_cast<u32>(mesh.indices.size());
             const cgltf_size vertexCount = positions->count;
-            const glm::mat3 normalTransform =
-                applyNodeTransform ? glm::transpose(glm::inverse(glm::mat3(nodeTransform))) : glm::mat3(1.0f);
+            glm::mat3 normalTransform(1.0f);
+            if (applyNodeTransform)
+            {
+                normalTransform = glm::transpose(glm::inverse(glm::mat3(nodeTransform)));
+            }
             for (cgltf_size i = 0; i < vertexCount; i = i + 1)
             {
                 Vertex vertex;
@@ -807,7 +838,14 @@ namespace se
         materials.reserve(materialTable.size());
         for (const cgltf_material* src : materialTable)
         {
-            materials.push_back(src != nullptr ? extractGltfMaterial(*src, path) : ImportedMaterial{});
+            if (src != nullptr)
+            {
+                materials.push_back(extractGltfMaterial(*src, path));
+            }
+            else
+            {
+                materials.push_back(ImportedMaterial{});
+            }
         }
         // Skin payload: only when the FIRST skin covers every triangle primitive (a
         // mixed skinned/unskinned model would deform unweighted vertices to the origin,
@@ -821,8 +859,18 @@ namespace se
             {
                 const cgltf_node& node = data->nodes[n];
                 ImportedNode imported;
-                imported.name = node.name != nullptr ? node.name : std::format("Node {}", n);
-                imported.parent = node.parent != nullptr ? static_cast<i32>(node.parent - data->nodes) : -1;
+                if (node.name != nullptr)
+                {
+                    imported.name = node.name;
+                }
+                else
+                {
+                    imported.name = std::format("Node {}", n);
+                }
+                if (node.parent != nullptr)
+                {
+                    imported.parent = static_cast<i32>(node.parent - data->nodes);
+                }
                 if (node.has_matrix)
                 {
                     glm::mat4 local;
@@ -865,8 +913,10 @@ namespace se
                     std::memcpy(&model.skinDesc.inverseBind[j], m, sizeof(glm::mat4));
                 }
             }
-            model.skinDesc.skeletonRoot =
-                gltfSkin.skeleton != nullptr ? static_cast<i32>(gltfSkin.skeleton - data->nodes) : -1;
+            if (gltfSkin.skeleton != nullptr)
+            {
+                model.skinDesc.skeletonRoot = static_cast<i32>(gltfSkin.skeleton - data->nodes);
+            }
             for (cgltf_size n = 0; n < data->nodes_count; n = n + 1)
             {
                 if (data->nodes[n].skin == &gltfSkin && data->nodes[n].mesh != nullptr)
@@ -885,7 +935,14 @@ namespace se
             {
                 const cgltf_animation& anim = data->animations[a];
                 AnimClip clip;
-                clip.name = anim.name != nullptr ? anim.name : std::format("clip_{}", a);
+                if (anim.name != nullptr)
+                {
+                    clip.name = anim.name;
+                }
+                else
+                {
+                    clip.name = std::format("clip_{}", a);
+                }
                 for (cgltf_size c = 0; c < anim.channels_count; c = c + 1)
                 {
                     const cgltf_animation_channel& channel = anim.channels[c];
@@ -927,15 +984,14 @@ namespace se
                     AnimTrack track;
                     track.joint = joint;
                     track.jointName = model.nodes[static_cast<std::size_t>(nodeIndex)].name;
-                    track.path = channel.target_path == cgltf_animation_path_type_rotation ? AnimTrack::Path::Rotation
-                                 : channel.target_path == cgltf_animation_path_type_scale
-                                     ? AnimTrack::Path::Scale
-                                     : AnimTrack::Path::Translation;
-                    track.interp = sampler.interpolation == cgltf_interpolation_type_step ? AnimTrack::Interp::Step
-                                   : sampler.interpolation == cgltf_interpolation_type_cubic_spline
-                                       ? AnimTrack::Interp::CubicSpline
-                                       : AnimTrack::Interp::Linear;
-                    const auto components = static_cast<cgltf_size>(track.path == AnimTrack::Path::Rotation ? 4 : 3);
+                    track.path = toTrackPath(channel.target_path);
+                    track.interp = toTrackInterp(sampler.interpolation);
+                    cgltf_size componentCount = 3;
+                    if (track.path == AnimTrack::Path::Rotation)
+                    {
+                        componentCount = 4;
+                    }
+                    const cgltf_size components = componentCount;
 
                     track.times.resize(sampler.input->count);
                     for (cgltf_size k = 0; k < sampler.input->count; k = k + 1)
@@ -976,16 +1032,6 @@ namespace se
         model.mesh = std::move(mesh);
         model.materials = std::move(materials);
         return model;
-    }
-
-    auto importGltf(const std::string& path) -> Result<Mesh>
-    {
-        auto model = importGltfModel(path);
-        if (!model)
-        {
-            return Err(model.error());
-        }
-        return std::move(model->mesh);
     }
 
     auto importObjModel(const std::string& path) -> Result<ImportedModel>
@@ -1053,8 +1099,11 @@ namespace se
         std::vector<std::vector<u32>> indicesBySlot;
         const auto slotFor = [&](int objMaterial) -> u32
         {
-            const int normalized =
-                objMaterial >= 0 && static_cast<std::size_t>(objMaterial) < materials.size() ? objMaterial : -1;
+            int normalized = -1;
+            if (objMaterial >= 0 && static_cast<std::size_t>(objMaterial) < materials.size())
+            {
+                normalized = objMaterial;
+            }
             auto [it, inserted] = objMaterialToSlot.try_emplace(normalized, static_cast<u32>(slotToObjMaterial.size()));
             if (inserted)
             {
@@ -1068,7 +1117,11 @@ namespace se
             const std::size_t faceCount = shape.mesh.indices.size() / 3;
             for (std::size_t f = 0; f < faceCount; f = f + 1)
             {
-                const int objMaterial = f < shape.mesh.material_ids.size() ? shape.mesh.material_ids[f] : -1;
+                int objMaterial = -1;
+                if (f < shape.mesh.material_ids.size())
+                {
+                    objMaterial = shape.mesh.material_ids[f];
+                }
                 std::vector<u32>& bucket = indicesBySlot[slotFor(objMaterial)];
                 for (std::size_t c = 0; c < 3; c = c + 1)
                 {
@@ -1133,29 +1186,6 @@ namespace se
         return model;
     }
 
-    auto importObj(const std::string& path) -> Result<Mesh>
-    {
-        auto model = importObjModel(path);
-        if (!model)
-        {
-            return Err(model.error());
-        }
-        return std::move(model->mesh);
-    }
-
-    auto importModelFile(const std::string& path) -> Result<Mesh>
-    {
-        if (endsWithIgnoreCase(path, ".gltf") || endsWithIgnoreCase(path, ".glb"))
-        {
-            return importGltf(path);
-        }
-        if (endsWithIgnoreCase(path, ".obj"))
-        {
-            return importObj(path);
-        }
-        return Err(std::format("unsupported model format: '{}' (expected .gltf/.glb/.obj)", path));
-    }
-
     auto translateModel(const std::string& source) -> Result<ImportedModel>
     {
         if (endsWithIgnoreCase(source, ".gltf") || endsWithIgnoreCase(source, ".glb"))
@@ -1181,8 +1211,8 @@ namespace se
                 hash = hash ^ static_cast<u8>(ch);
                 hash = hash * fnvPrime;
             }
-            hash = hash ^ u64{ 0 };  // a NUL separator between fields keeps "ab|c" != "a|bc"
-            hash = hash * fnvPrime;
+            hash = hash ^ u64{ 0 };
+            hash = hash * fnvPrime;  // an extra mix round between fields keeps "ab|c" != "a|bc"
         };
         mix(modelKey);
         mix(kind);
@@ -1273,28 +1303,6 @@ namespace se
         return image;
     }
 
-    // Converts a DirectX-convention normal map (green = -Y) to OpenGL (+Y) in place by inverting
-    // the green channel. Baked at import so the übershader stays convention-agnostic.
-    void bakeDxToGlNormal(DecodedImage& image)
-    {
-        for (std::size_t i = 1; i + 3 < image.rgba.size(); i = i + 4)
-        {
-            image.rgba[i] = static_cast<u8>(255 - image.rgba[i]);
-        }
-    }
-
-    // Converts a glossiness map to roughness in place (roughness = 1 - gloss) so a gloss-workflow
-    // source feeds the engine's roughness path. Inverts RGB; alpha is left intact.
-    void bakeGlossToRoughness(DecodedImage& image)
-    {
-        for (std::size_t i = 0; i + 3 < image.rgba.size(); i = i + 4)
-        {
-            image.rgba[i + 0] = static_cast<u8>(255 - image.rgba[i + 0]);
-            image.rgba[i + 1] = static_cast<u8>(255 - image.rgba[i + 1]);
-            image.rgba[i + 2] = static_cast<u8>(255 - image.rgba[i + 2]);
-        }
-    }
-
     namespace
     {
         // The `.smesh` byte image. An empty skin yields a v1 (unskinned) layout; a skin parallel to
@@ -1376,11 +1384,6 @@ namespace se
         return encodeMeshImage(mesh, skin);
     }
 
-    auto saveMesh(const Mesh& mesh, const std::string& path) -> Result<void>
-    {
-        return writeBytesToFile(path, saveMeshToBuffer(mesh));
-    }
-
     auto loadMeshFromBytes(std::span<const std::byte> bytes) -> Result<Mesh>
     {
         if (bytes.size() < sizeof(SMeshHeader))
@@ -1452,6 +1455,21 @@ namespace se
         if (!in || std::memcmp(header.magic, "SMSH", 4) != 0)
         {
             return Err(std::format("'{}' is not a .smesh (bad magic)", path));
+        }
+        return MeshCounts{ header.vertexCount, header.indexCount };
+    }
+
+    auto meshCountsFromBytes(std::span<const std::byte> bytes) -> Result<MeshCounts>
+    {
+        if (bytes.size() < sizeof(SMeshHeader))
+        {
+            return Err(std::string{ "buffer is too small to be a .smesh" });
+        }
+        SMeshHeader header{};
+        std::memcpy(&header, bytes.data(), sizeof(header));
+        if (std::memcmp(header.magic, "SMSH", 4) != 0)
+        {
+            return Err(std::string{ "not a .smesh (bad magic)" });
         }
         return MeshCounts{ header.vertexCount, header.indexCount };
     }
@@ -2027,41 +2045,39 @@ namespace se
 
     void runGeometrySelfTest(const std::string& modelsDir)
     {
-        auto obj = importObj(modelsDir + "/cube.obj");
+        auto obj = translateModel(modelsDir + "/cube.obj");
         if (!obj)
         {
             logError(std::format("geometry self-test: obj import failed: {}", obj.error()));
             return;
         }
-        logInfo(std::format("geometry self-test: cube.obj -> {} verts, {} indices, {} submeshes", obj->vertices.size(),
-                            obj->indices.size(), obj->submeshes.size()));
+        logInfo(std::format("geometry self-test: cube.obj -> {} verts, {} indices, {} submeshes",
+                            obj->mesh.vertices.size(), obj->mesh.indices.size(), obj->mesh.submeshes.size()));
 
-        auto gltf = importGltf(modelsDir + "/cube.gltf");
+        auto gltf = translateModel(modelsDir + "/cube.gltf");
         if (!gltf)
         {
             logError(std::format("geometry self-test: gltf import failed: {}", gltf.error()));
             return;
         }
+        const Mesh& gltfMesh = gltf->mesh;
         logInfo(std::format("geometry self-test: cube.gltf -> {} verts, {} indices, {} submeshes",
-                            gltf->vertices.size(), gltf->indices.size(), gltf->submeshes.size()));
+                            gltfMesh.vertices.size(), gltfMesh.indices.size(), gltfMesh.submeshes.size()));
 
-        const std::string bakedPath = "/tmp/saffron_cube.smesh";
-        if (Result<void> saved = saveMesh(*gltf, bakedPath); !saved)
-        {
-            logError(std::format("geometry self-test: save failed: {}", saved.error()));
-            return;
-        }
-        auto loaded = loadMesh(bakedPath);
+        // Drive the live bake/load path: encode the .smesh image as the asset importer does
+        // (saveMeshToBuffer), then read it back through loadMeshFromBytes.
+        const std::vector<std::byte> baked = saveMeshToBuffer(gltfMesh);
+        auto loaded = loadMeshFromBytes(std::span<const std::byte>{ baked });
         if (!loaded)
         {
             logError(std::format("geometry self-test: load failed: {}", loaded.error()));
             return;
         }
 
-        const bool roundTrips = loaded->vertices.size() == gltf->vertices.size() &&
-                                loaded->indices.size() == gltf->indices.size() &&
-                                loaded->submeshes.size() == gltf->submeshes.size() &&
-                                loaded->vertices[0].position == gltf->vertices[0].position;
+        const bool roundTrips = loaded->vertices.size() == gltfMesh.vertices.size() &&
+                                loaded->indices.size() == gltfMesh.indices.size() &&
+                                loaded->submeshes.size() == gltfMesh.submeshes.size() &&
+                                loaded->vertices[0].position == gltfMesh.vertices[0].position;
         if (roundTrips)
         {
             logInfo(".smesh round-trip OK");
