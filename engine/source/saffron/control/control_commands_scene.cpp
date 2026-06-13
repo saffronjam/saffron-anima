@@ -17,6 +17,7 @@ module Saffron.Control;
 
 import Saffron.Core;
 import Saffron.Json;
+import Saffron.Geometry;
 import Saffron.Rendering;
 import Saffron.Scene;
 import Saffron.SceneEdit;
@@ -236,6 +237,130 @@ namespace se
         return DebugOverlaysResult{ opts.bounds, opts.sceneAabb, opts.lightVolumes, opts.grid };
     }
 
+    auto fitColliderToMesh(EngineContext& ctx, Entity entity) -> bool
+    {
+        Scene& scene = activeScene(ctx.sceneEdit);
+        if (!hasComponent<ColliderComponent>(scene, entity))
+        {
+            return false;
+        }
+        Uuid meshId{ 0 };
+        if (hasComponent<MeshComponent>(scene, entity))
+        {
+            meshId = getComponent<MeshComponent>(scene, entity).mesh;
+        }
+        else if (hasComponent<SkinnedMeshComponent>(scene, entity))
+        {
+            meshId = getComponent<SkinnedMeshComponent>(scene, entity).mesh;
+        }
+        if (meshId.value == 0)
+        {
+            return false;  // no mesh to size against — keep the collider's defaults
+        }
+        // Read the AABB from the baked .smesh CPU vertices (the same source cooking uses), so the fit
+        // needs no GPU upload and works identically in Edit and headless.
+        const Result<Mesh> mesh = loadMeshCpuAsset(ctx.assets, meshId);
+        if (!mesh || mesh->vertices.empty())
+        {
+            return false;
+        }
+        glm::vec3 lo = mesh->vertices.front().position;
+        glm::vec3 hi = lo;
+        for (const Vertex& vertex : mesh->vertices)
+        {
+            lo = glm::min(lo, vertex.position);
+            hi = glm::max(hi, vertex.position);
+        }
+        if (glm::all(glm::lessThanEqual(hi - lo, glm::vec3(0.0f))))
+        {
+            return false;  // a single degenerate point — nothing to size against (a planar mesh is fine)
+        }
+        auto& collider = getComponent<ColliderComponent>(scene, entity);
+        // Mesh-local AABB; the body transform carries the entity scale, so never bake it in here.
+        const glm::vec3 half = (hi - lo) * 0.5f;
+        collider.offset = (lo + hi) * 0.5f;
+        collider.sourceMesh = meshId;  // cook source for hull/mesh; analytic shapes ignore it
+        switch (collider.shape)
+        {
+        case ColliderComponent::Shape::Box:
+        case ColliderComponent::Shape::ConvexHull:
+        case ColliderComponent::Shape::Mesh:
+            // Hull/mesh fit a fallback box into halfExtents; the cook uses the actual geometry.
+            collider.halfExtents = half;
+            break;
+        case ColliderComponent::Shape::Sphere:
+            // Bounding sphere of the box (never smaller than the mesh); radius packed in .x.
+            collider.halfExtents = glm::vec3(glm::max(glm::max(half.x, half.y), half.z));
+            break;
+        case ColliderComponent::Shape::Capsule:
+        {
+            // Y-up capsule: long axis = Y, radius = the larger of X/Z, half-height excludes the caps.
+            const float radius = glm::max(half.x, half.z);
+            const float halfHeight = glm::max(0.0f, half.y - radius);
+            collider.halfExtents = glm::vec3(radius, halfHeight, radius);
+            break;
+        }
+        }
+        return true;
+    }
+
+    auto fitBoneCapsules(EngineContext& ctx, Entity rig) -> bool
+    {
+        Scene& scene = activeScene(ctx.sceneEdit);
+        if (!hasComponent<SkinnedMeshComponent>(scene, rig))
+        {
+            return false;
+        }
+        const SkinnedMeshComponent& skin = getComponent<SkinnedMeshComponent>(scene, rig);
+        const std::size_t count = skin.boneHandles.size();
+        if (count == 0)
+        {
+            return false;
+        }
+        if (!hasComponent<BonePhysicsComponent>(scene, rig))
+        {
+            addComponent<BonePhysicsComponent>(scene, rig);
+        }
+        auto& phys = getComponent<BonePhysicsComponent>(scene, rig);
+        phys.bones.resize(count);
+        // Rest-pose world positions per joint (Edit reads the authored rest skeleton).
+        std::vector<glm::vec3> restPos(count);
+        std::vector<u64> uuid(count, 0);
+        for (std::size_t i = 0; i < count; i = i + 1)
+        {
+            const Entity joint{ skin.boneHandles[i] };
+            if (valid(scene, joint))
+            {
+                restPos[i] = worldTranslation(scene, joint);
+                if (hasComponent<IdComponent>(scene, joint))
+                {
+                    uuid[i] = getComponent<IdComponent>(scene, joint).id.value;
+                }
+            }
+        }
+        for (std::size_t i = 0; i < count; i = i + 1)
+        {
+            // Capsule half-height spans toward the farthest child joint; radius a fraction of that.
+            float length = 0.0f;
+            for (std::size_t child = 0; child < count; child = child + 1)
+            {
+                const Entity childJoint{ skin.boneHandles[child] };
+                if (child == i || !valid(scene, childJoint) || !hasComponent<RelationshipComponent>(scene, childJoint))
+                {
+                    continue;
+                }
+                if (getComponent<RelationshipComponent>(scene, childJoint).parent.value == uuid[i] && uuid[i] != 0)
+                {
+                    length = glm::max(length, glm::length(restPos[child] - restPos[i]));
+                }
+            }
+            const float halfHeight = length > 0.001f ? length * 0.5f : 0.05f;  // leaf default
+            const float radius = glm::max(halfHeight * 0.3f, 0.03f);
+            phys.bones[i].shapeHalfExtents = glm::vec3(radius, halfHeight, radius);
+        }
+        return true;
+    }
+
     void registerSceneCommands(CommandRegistry& reg)
     {
         registerCommand<EmptyParams, EntityList>(
@@ -377,6 +502,16 @@ namespace se
                     return Err(std::format("entity already has '{}'", params.component));
                 }
                 row->addDefault(activeScene(ctx.sceneEdit), *entity);
+                // Auto-fit a Collider's shape to the entity mesh AABB on add (the locked decision).
+                // The registry onAdd hook can't see the asset/renderer handles, so it runs here.
+                if (row->name == "Collider")
+                {
+                    static_cast<void>(fitColliderToMesh(ctx, *entity));
+                }
+                else if (row->name == "KinematicBones")
+                {
+                    static_cast<void>(fitBoneCapsules(ctx, *entity));  // auto-fit per-bone capsules
+                }
                 ctx.sceneEdit.sceneVersion += 1;
                 return AddComponentResult{ row->name };
             });
@@ -1314,7 +1449,34 @@ namespace se
                         value = n;
                     }
                 }
-                body[params.field] = value;
+                if (params.index.has_value())
+                {
+                    // Address one element of an array field: an object value merges its keys into
+                    // body[field][index] (a partial edit), any other value replaces the element.
+                    json& array = body[params.field];
+                    if (!array.is_array() || *params.index < 0 ||
+                        static_cast<std::size_t>(*params.index) >= array.size())
+                    {
+                        return Err(std::format("'{}.{}' has no array index {}", params.component, params.field,
+                                               *params.index));
+                    }
+                    json& element = array[static_cast<std::size_t>(*params.index)];
+                    if (value.is_object())
+                    {
+                        for (const auto& [key, sub] : value.items())
+                        {
+                            element[key] = sub;
+                        }
+                    }
+                    else
+                    {
+                        element = value;
+                    }
+                }
+                else
+                {
+                    body[params.field] = value;
+                }
                 auto result = row->deserialize(activeScene(ctx.sceneEdit), *entity, body);
                 if (!result)
                 {
