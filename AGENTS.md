@@ -163,18 +163,19 @@ Window   → {Core, Signal}
 Geometry → Core
 Scene    → {Core, Json}
 Animation→ {Core, Geometry, Scene}                pose/clip types + samplers (classic #include)
+Physics  → {Core, Geometry, Scene, Animation}     Jolt wrapper; :Types partition; only physics.cpp includes <Jolt/…>
 Script   → {Core, Scene}                          (Lua 5.5 + LuaBridge3; only Host may import it)
 Rendering→ {Core, Window, Geometry}              partitions :Types :Detail :RenderGraph
 Assets   → {Core, Json, Geometry, Rendering, Scene}
 SceneEdit→ {Core, Signal, Scene, Json}            partition :Context
-Control  → {Core, Json, Window, Rendering, Scene, SceneEdit, Assets}   partitions :Dto :Command
+Control  → {Core, Json, Window, Rendering, Scene, SceneEdit, Assets, Physics}   partitions :Dto :Command
 App      → {Core, Window, Rendering}
-Host     → {Core, App, Window, Rendering, SceneEdit, Control, Scene, Animation, Script, Assets}   (the SaffronEngine exe)
+Host     → {Core, App, Window, Rendering, SceneEdit, Control, Scene, Animation, Physics, Script, Assets}   (the SaffronEngine exe)
 ```
 
 - `core`/`signal`/`app` use `import std`; `window` uses `import std` + the SDL3 **C** header (safe).
-- Modules wrapping heavy **C++** third-party headers (`rendering`, `scene`, `animation`, `script`,
-  `geometry`, `json`, `assets`, `sceneedit`, `control`, `host`) use classic `#include` in the global
+- Modules wrapping heavy **C++** third-party headers (`rendering`, `scene`, `animation`, `physics`,
+  `script`, `geometry`, `json`, `assets`, `sceneedit`, `control`, `host`) use classic `#include` in the global
   module fragment and **do NOT `import std`** (mixing breaks the TU). They are still consumed normally by
   the `import std` modules — the BMI carries the std types.
 - Larger modules split into an interface partition + `.cpp` implementation units.
@@ -267,7 +268,12 @@ a feature — follow and update a matching plan rather than starting cold.
   overlay, animation control commands, and the editor timeline panel); the control
   plane + `se` CLI; the Tauri editor; per-entity Lua scripting (Lua 5.5 + LuaBridge3 behind
   `Saffron.Script`: ScriptComponent slots, script-declared fields + overrides, Inspector UI, project
-  `src/` scaffold).
+  `src/` scaffold); physics behind `Saffron.Physics` (Jolt vendored, cross-platform-deterministic; a
+  per-play world on the play edge; rigidbody/collider split components with five shapes + materials +
+  auto-fit; object-layer matrix + sensors/triggers + a contact-event ring to scripts; kinematic
+  bone-following; a `CharacterVirtual` controller; raycast/shapecast queries + a Lua `se.raycast`; and a
+  motor-driven ragdoll routed through the `PoseBuffer.override_`/`weight` blend layer — passive,
+  active, and partial, with import auto-fit).
 - **Not yet:** transient render-graph resources (graph-created images + aliasing) + async compute;
-  GPU-driven culling (MDI / mesh shaders); `Saffron.Physics` (Jolt); scene-graph parenting; undo/redo;
-  hardware GPU in the toolbox.
+  GPU-driven culling (MDI / mesh shaders); scene-graph parenting; undo/redo; hardware GPU in the
+  toolbox.
