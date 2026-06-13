@@ -35,6 +35,8 @@ The preview reuses the one Wayland subsurface the scene viewport already present
 
 The cost is that the preview *takes over* the single stream, exactly like Play takes over the viewport: while an asset tab is active the scene's dock viewport is parked (its host rect goes 0×0 and no-ops). A second concurrent live view — your scene and an asset at once — is deliberately out of scope; it would need a second offscreen chain and per-view scene addressing that no plan owns yet.
 
+Switching *away* from the asset tab doesn't drop the preview — it **suspends** it (`suspend-asset-preview`): the preview `Scene` stays alive, `previewSuspended` flips, and `activeScene` routes back to the authored scene (so the scene tab is fully editable again and `previewing()` reads false). Switching back **resumes** it (`resume-asset-preview`) — no re-spawn, the orbit camera and selection restore instantly. The editor keeps the asset workspace mounted across the switch (its panels, model, and skeleton-tree state survive) and the viewport stays masked through the resize until a fresh frame lands, so a scene↔asset toggle is instant and never flashes a stretched frame. The suspend round-trip preserves byte-identity just like exit does (the e2e guards `enter → suspend → resume → exit`). Closing the asset tab exits for real (drops the preview); suspending while the user edited the scene leaves those edits intact.
+
 ## The model is asset data
 
 What the editor inspects is not a scene object — it is data baked into the [`.smodel` container](../../geometry-and-assets/smodel-container/). The container's metadata chunk holds the node forest; a rigged model also holds a skin (joints, inverse binds, skeleton root, mesh node); the animation clips and materials are sub-assets of the same file. So the clip↔mesh↔material association is intrinsic — one file, one asset — with no catalog link to chase and no project version bump.
@@ -60,17 +62,18 @@ Models, meshes, and animation clips route to the asset editor; textures and othe
 
 | What | File | Symbols |
 |---|---|---|
-| Preview scene + accessor + guards (engine) | `scene_edit_context.cppm` | `previewScene`, `activeScene`, `previewing`, `previewRootEntity` |
-| Enter/exit + furnishing + framing (engine) | `control_commands_asset.cpp` | `enter-asset-preview`, `exit-asset-preview`, `set-asset-preview-options`, `furnishPreviewScene`, `leaveAssetPreview`, `computePreviewBounds` |
+| Preview scene + accessor + guards (engine) | `scene_edit_context.cppm` | `previewScene`, `previewSuspended`, `activeScene`, `previewing`, `previewRootEntity` |
+| Enter/exit/suspend/resume + furnishing + framing (engine) | `control_commands_asset.cpp` | `enter-asset-preview`, `exit-asset-preview`, `suspend-asset-preview`, `resume-asset-preview`, `set-asset-preview-options`, `furnishPreviewScene`, `leaveAssetPreview`, `computePreviewBounds` |
 | Asset-model query + capabilities (engine) | `control_commands_asset.cpp` | `get-asset-model`, `AssetCapabilitiesDto` |
 | Skeleton overlay + highlight (engine) | `engine/source/saffron/host/host.cppm` | `buildSkeletonOverlay` |
 | Highlight + reverse joint pick + paused-pick + smooth scrub (engine) | `control_commands_animation.cpp` | `set-skeleton-highlight`, `pick-skeleton-joint`, `play-animation` `paused`, `seek-animation` `seekBlend` |
 | Workspace shell + orbit + lifecycle + capability gating | `editor/src/panels/AssetEditorWorkspace.tsx` | `AssetEditorWorkspace` |
 | Side panels | `editor/src/panels/SkeletonTree.tsx` · `ClipList.tsx` | `SkeletonTree`, `ClipList` |
 | Shared timeline | `editor/src/components/timeline/` | `TimelineTransport`, `TimelineSurface`, `TimelineTarget` |
-| Subsurface bounds hook | `editor/src/lib/useSubsurfaceBounds.ts` | `useSubsurfaceBounds` |
+| Subsurface bounds + resize mask (editor) | `editor/src/lib/useSubsurfaceBounds.ts` · `waitForFreshFrame.ts` · `ViewportPanel.tsx` | `useSubsurfaceBounds`, `waitForFreshFrame`, `viewport_presented_count` |
+| Keep-mounted + suspend/resume on tab switch (editor) | `editor/src/app/App.tsx` · `AssetEditorWorkspace.tsx` | `mountedAssetId`, `active` prop |
 | Tab + routing | `editor/src/state/store.ts` · `AssetsPanel.tsx` | `openAssetEditorTab`, `openAssetEditorForAsset`, `routeView` |
-| Client wrappers | `editor/src/control/client.ts` | `getAssetModel`, `enterAssetPreview`, `exitAssetPreview`, `setSkeletonHighlight`, `setAssetPreviewOptions` |
+| Client wrappers | `editor/src/control/client.ts` | `getAssetModel`, `enterAssetPreview`, `exitAssetPreview`, `suspendAssetPreview`, `resumeAssetPreview`, `setSkeletonHighlight`, `setAssetPreviewOptions` |
 
 ## Related
 
