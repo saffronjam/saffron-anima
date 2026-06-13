@@ -673,11 +673,19 @@ export namespace se
             // The editor is the headless native-viewport host: always present-only (no engine
             // panels), driven over the control plane.
             se::setPresentViewportOnly(app.renderer, true);
-            // The editor sets SAFFRON_VIEWPORT_SHM: frames publish into shared memory for
-            // its compositor-side presenter instead of presenting to the (hidden) swapchain.
-            if (const char* shm = std::getenv("SAFFRON_VIEWPORT_SHM"); shm != nullptr && shm[0] != '\0')
+            // The editor sets a per-view shm segment env var: each view publishes its frames
+            // into its own segment for the compositor-side presenter instead of presenting to
+            // the (hidden) swapchain. Only the active view publishes new frames each frame
+            // (gated by activeShmPublish/activeView), but both segments must exist so both
+            // panes have a ring. A standalone/CLI/headless run may set neither (or just scene).
+            if (const char* shm = std::getenv("SAFFRON_VIEWPORT_SHM_SCENE"); shm != nullptr && shm[0] != '\0')
             {
-                se::enableViewportShmPublish(app.renderer, shm);
+                se::enableViewportShmPublish(app.renderer, se::ViewId::Scene, shm);
+                state->shmPublish = true;
+            }
+            if (const char* shm = std::getenv("SAFFRON_VIEWPORT_SHM_ASSET"); shm != nullptr && shm[0] != '\0')
+            {
+                se::enableViewportShmPublish(app.renderer, se::ViewId::AssetPreview, shm);
                 state->shmPublish = true;
             }
             // Default AA: MSAA 4x, clamped to device support. A loaded project's
@@ -929,7 +937,7 @@ export namespace se
                 // hidden SDL window's size is meaningless. Present mode tracks the window.
                 if (!state->shmPublish)
                 {
-                    se::setViewportDesiredSize(app.renderer, app.window.width, app.window.height);
+                    se::setViewportDesiredSize(app.renderer, se::ViewId::Scene, app.window.width, app.window.height);
                 }
                 se::syncNativeGizmo(editor);
                 se::CameraView cam = se::renderCameraView(editor);
