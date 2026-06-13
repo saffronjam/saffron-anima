@@ -3,12 +3,13 @@
 /// never renders pixels — it owns the screen rectangle and forwards pointer input to
 /// the engine over the control plane. A <LoadingOverlay/> sibling covers the region
 /// while the renderer is not yet ready.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { client } from "../control/client";
 import { makeCoalescer } from "../control/coalesce";
 import { useEditorStore } from "../state/store";
 import { LoadingOverlay } from "../app/LoadingOverlay";
 import { useSubsurfaceBounds } from "../lib/useSubsurfaceBounds";
+import { waitForFreshFrame } from "../lib/waitForFreshFrame";
 import { bindingFor } from "../lib/keybindings";
 import { ASSET_DND_MIME, assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
 import { errorText, notify, notifyError } from "../lib/flash";
@@ -78,6 +79,32 @@ export function ViewportPanel() {
   const setDragActive = useEditorStore((s) => s.setDragActive);
   const viewportHidden = useEditorStore((s) => s.viewportHidden);
   const playState = useEditorStore((s) => s.playState);
+  const sceneTabActive = useEditorStore((s) => s.activeViewTabId === "scene");
+
+  // Returning to the scene tab resizes the subsurface back from whatever the previous tab used (an asset
+  // editor's pane), which the compositor would briefly show as a stretched old frame. Cover the region
+  // opaque from the moment the tab activates until the presenter displays a fresh frame at the scene size.
+  const [resizeMask, setResizeMask] = useState(false);
+  const firstActivation = useRef(true);
+  useEffect(() => {
+    if (firstActivation.current) {
+      firstActivation.current = false;
+      return; // startup is covered by LoadingOverlay, not the resize mask
+    }
+    if (!sceneTabActive) {
+      return;
+    }
+    let cancelled = false;
+    setResizeMask(true);
+    void waitForFreshFrame().then(() => {
+      if (!cancelled) {
+        setResizeMask(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sceneTabActive]);
 
   // Coalescers stream the hover and drag phases to the engine at >= GIZMO_STREAM_MS
   // apart, buffering only the latest NDC so a burst of pointermove collapses to one
@@ -393,6 +420,9 @@ export function ViewportPanel() {
     let startClientX = 0;
     let startClientY = 0;
     let dragging = false;
+    // Undo capture for a gizmo manipulation: the selected entity + its Transform before
+    // the drag + the active op, recorded as one entry when a drag ends.
+    let gizmoGesture: { id: string; prior: object; op: string } | null = null;
 
     const ndc = (uv: Uv): { x: number; y: number } => ({
       x: uv.u * 2 - 1,
@@ -412,6 +442,21 @@ export function ViewportPanel() {
       el.setPointerCapture(event.pointerId);
       const { x, y } = ndc(startUv);
       void client.gizmoPointer("begin", x, y).catch(() => {});
+      // Snapshot the selected entity's Transform so a drag records one undo entry; a
+      // press with no selection captures nothing.
+      const store = useEditorStore.getState();
+      const components = store.componentsBySelected?.components as
+        | Record<string, unknown>
+        | undefined;
+      const transform = components?.Transform;
+      gizmoGesture =
+        store.selectedId && transform
+          ? {
+              id: store.selectedId,
+              prior: structuredClone(transform as object),
+              op: store.gizmo.op,
+            }
+          : null;
     };
 
     const onPointerMove = (event: PointerEvent): void => {
@@ -453,13 +498,42 @@ export function ViewportPanel() {
       }
       const wasDragging = dragging;
       const downUv = startUv;
+      const gesture = gizmoGesture;
       pointerId = null;
       startUv = null;
       dragging = false;
+      gizmoGesture = null;
       if (wasDragging) {
-        // The authoritative transform is committed engine-side on `end`; let the
-        // poll resume and reconcile it.
+        // The authoritative transform is committed engine-side on `end`; let the poll
+        // resume and reconcile it, then record one undo entry from the settled transform.
         setDragActive(false);
+        if (gesture) {
+          void client
+            .inspect(gesture.id)
+            .then((res) => {
+              const after = (res.components as Record<string, unknown> | undefined)?.Transform;
+              if (after && JSON.stringify(gesture.prior) !== JSON.stringify(after)) {
+                useEditorStore.getState().pushEdit(
+                  {
+                    label: gesture.op,
+                    selectionId: gesture.id,
+                    undo: () =>
+                      client.setTransform(
+                        gesture.id,
+                        gesture.prior as Parameters<typeof client.setTransform>[1],
+                      ),
+                    redo: () =>
+                      client.setTransform(
+                        gesture.id,
+                        after as Parameters<typeof client.setTransform>[1],
+                      ),
+                  },
+                  "scene",
+                );
+              }
+            })
+            .catch(() => {});
+        }
       } else if (downUv) {
         // No drag: a plain left-click → ray-pick at the press location.
         void runPick(downUv);
@@ -523,6 +597,9 @@ export function ViewportPanel() {
       }}
     >
       <div ref={hostRef} className="viewport-host" />
+      {resizeMask ? (
+        <div className="absolute inset-0 z-10 bg-background" aria-hidden="true" />
+      ) : null}
       <LoadingOverlay />
     </div>
   );
