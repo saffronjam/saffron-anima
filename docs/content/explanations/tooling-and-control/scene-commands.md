@@ -58,6 +58,8 @@ An unknown preset is an error, not a silent fall-through to `empty`.
 | `set-camera` | `{position?, yaw?, pitch?, fov?, near?, far?}` | Merges the given fields into the editor fly-cam. |
 | `get-gizmo` | — | Returns the shared gizmo state `{op, space}`. |
 | `set-gizmo` | `{op?, space?}` | Sets the gizmo `op` (`translate\|rotate\|scale`) and/or `space` (`world\|local`). |
+| `get-debug-overlays` | — | Returns the viewport debug-overlay toggles `{bounds, sceneAabb, lightVolumes, grid}`. |
+| `set-debug-overlays` | `{bounds?, sceneAabb?, lightVolumes?, grid?}` | Toggles the [debug overlays](../../ui-and-editor/debug-visualization/); omitted fields stay unchanged. |
 
 `get-camera`/`set-camera` drive the same editor [fly-camera](../../ui-and-editor/) the viewport uses — the scene-view eye, not an ECS `CameraComponent`. `set-camera` merges fields the same way the transform commands do.
 

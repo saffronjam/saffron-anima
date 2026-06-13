@@ -24,6 +24,7 @@ Most toggles take a `{0|1}` (also accepting `true`/`false`/`off`) and report bac
 | Command | Params | Effect |
 |---|---|---|
 | `set-aa` | `{off\|fxaa\|taa\|msaa2\|msaa4\|msaa8}` | Anti-aliasing mode. Decodes to sample count + fxaa/taa flags. |
+| `set-view-mode` | `{lit\|wireframe}` | Debug render-output mode ([debug visualization](../../ui-and-editor/debug-visualization/)). Transient, not persisted; read back via `render-stats.viewMode`. |
 | `set-clustered` | `{0\|1}` | Clustered (Forward+) light culling vs. a brute-force loop. |
 | `set-ibl` | `{0\|1}` | Image-based ambient vs. flat ambient. |
 | `set-ssao` | `{0\|1}` | Screen-space ambient occlusion (GTAO). |
