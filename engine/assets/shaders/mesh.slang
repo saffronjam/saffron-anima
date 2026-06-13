@@ -81,6 +81,29 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     {
         discard;
     }
+    // Debug view-mode channels: output a surface value directly instead of lighting. Tonemap still
+    // applies (these write into the HDR scene color), so values are display-referred, not raw.
+    uint debugChannel = debugViewChannel();
+    if (debugChannel == 1u)
+    {
+        return float4(surf.albedo, surf.opacity);
+    }
+    if (debugChannel == 2u)
+    {
+        return float4(surf.normal * 0.5 + 0.5, surf.opacity);
+    }
+    if (debugChannel == 3u)
+    {
+        return float4(surf.roughness.xxx, surf.opacity);
+    }
+    if (debugChannel == 4u)
+    {
+        return float4(surf.metallic.xxx, surf.opacity);
+    }
+    if (debugChannel == 5u)
+    {
+        return float4(surf.emissive, surf.opacity);
+    }
     if (kUnlit)
     {
         return float4(surf.albedo + surf.emissive, surf.opacity);

@@ -504,8 +504,10 @@ namespace se
                 continue;  // a skinned draw needs the mesh's VertexSkin stream
             }
             // Skinned meshes draw the deformed buffer as a static stream, so they resolve
-            // to the non-skinned PSO; the deform happens in the compute pre-pass.
-            auto pipeline = requestMeshPipeline(renderer, item.material, false);
+            // to the non-skinned PSO; the deform happens in the compute pre-pass. Wireframe is a
+            // per-draw PSO variant, gated on the device feature so an unsupported GPU stays Lit.
+            const bool wireframe = renderer.viewMode == ViewMode::Wireframe && renderer.context.fillModeNonSolid;
+            auto pipeline = requestMeshPipeline(renderer, item.material, false, wireframe);
             if (!pipeline)
             {
                 continue;
@@ -996,6 +998,26 @@ namespace se
                                 static_cast<f32>(renderer.sky.textureIndex));
         push.clearColor = glm::vec4(renderer.sky.clearColor, 1.0f);
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(push), &push);
+        cmd.draw(3, 1, 0, 0);
+    }
+
+    void recordGrid(Renderer& renderer, vk::CommandBuffer cmd)
+    {
+        if (!renderer.pipelines.grid)
+        {
+            return;
+        }
+        vk::PipelineLayout layout = renderer.pipelines.grid->layout;
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, renderer.pipelines.grid->pipeline);
+        struct GridPush
+        {
+            glm::mat4 viewProj;
+            glm::mat4 invViewProj;
+        } push;
+        push.viewProj = renderer.frame.sceneDrawList.viewProj;
+        push.invViewProj = glm::inverse(push.viewProj);
+        cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
+                          sizeof(push), &push);
         cmd.draw(3, 1, 0, 0);
     }
 

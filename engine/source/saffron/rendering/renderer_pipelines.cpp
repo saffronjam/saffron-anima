@@ -37,7 +37,7 @@ import :Detail;
 
 namespace se
 {
-    auto newMeshPipeline(Renderer& renderer, std::string_view shaderName, bool unlit, bool skinned)
+    auto newMeshPipeline(Renderer& renderer, std::string_view shaderName, bool unlit, bool skinned, bool wireframe)
         -> Result<Ref<Pipeline>>
     {
         std::string path = assetPath(shaderName);
@@ -102,6 +102,10 @@ namespace se
 
         vk::PipelineRasterizationStateCreateInfo raster{};
         raster.polygonMode = vk::PolygonMode::eFill;
+        if (wireframe)
+        {
+            raster.polygonMode = vk::PolygonMode::eLine;
+        }
         raster.cullMode = vk::CullModeFlagBits::eNone;  // enable Back once winding is verified
         raster.frontFace = vk::FrontFace::eCounterClockwise;
         raster.lineWidth = 1.0f;
@@ -189,7 +193,8 @@ namespace se
         return std::make_shared<Pipeline>(std::move(pipeline));
     }
 
-    auto requestMeshPipeline(Renderer& renderer, const Material& material, bool skinned) -> Ref<Pipeline>
+    auto requestMeshPipeline(Renderer& renderer, const Material& material, bool skinned, bool wireframe)
+        -> Ref<Pipeline>
     {
         std::string key = material.shader;
         if (material.unlit)
@@ -200,12 +205,16 @@ namespace se
         {
             key = key + "|skinned";
         }
+        if (wireframe)
+        {
+            key = key + "|wireframe";
+        }
         auto found = renderer.pipelines.cache.find(key);
         if (found != renderer.pipelines.cache.end())
         {
             return found->second;
         }
-        auto built = newMeshPipeline(renderer, material.shader, material.unlit, skinned);
+        auto built = newMeshPipeline(renderer, material.shader, material.unlit, skinned, wireframe);
         if (!built)
         {
             logError(built.error());
@@ -219,7 +228,7 @@ namespace se
 
     auto requestMeshPipeline(Renderer& renderer, const Material& material) -> Ref<Pipeline>
     {
-        return requestMeshPipeline(renderer, material, false);
+        return requestMeshPipeline(renderer, material, false, false);
     }
 
     auto pipelineCount(const Renderer& renderer) -> u32
@@ -333,6 +342,99 @@ namespace se
         {
             renderer.context.device.destroyPipelineLayout(*layoutResult);
             return Err(std::format("createGraphicsPipeline (overlay): {}", vk::to_string(created.result)));
+        }
+        Pipeline pipeline;
+        pipeline.device = renderer.context.device;
+        pipeline.pipeline = created.value;
+        pipeline.layout = *layoutResult;
+        return std::make_shared<Pipeline>(std::move(pipeline));
+    }
+
+    auto newGridPipeline(Renderer& renderer) -> Result<Ref<Pipeline>>
+    {
+        auto moduleResult = loadShaderModule(renderer.context.device, assetPath("shaders/grid.spv"));
+        if (!moduleResult)
+        {
+            return Err(moduleResult.error());
+        }
+        vk::ShaderModule shaderModule = *moduleResult;
+
+        std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
+        stages[0].stage = vk::ShaderStageFlagBits::eVertex;
+        stages[0].module = shaderModule;
+        stages[0].pName = "vertexMain";
+        stages[1].stage = vk::ShaderStageFlagBits::eFragment;
+        stages[1].module = shaderModule;
+        stages[1].pName = "fragmentMain";
+
+        vk::PipelineVertexInputStateCreateInfo vertexInput{};  // fullscreen triangle — no vertex buffer
+        vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+        vk::PipelineViewportStateCreateInfo viewportState{};
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+        vk::PipelineRasterizationStateCreateInfo raster{};
+        raster.polygonMode = vk::PolygonMode::eFill;
+        raster.cullMode = vk::CullModeFlagBits::eNone;
+        raster.frontFace = vk::FrontFace::eCounterClockwise;
+        raster.lineWidth = 1.0f;
+        vk::PipelineMultisampleStateCreateInfo multisample{};
+        multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;  // 1x post-resolve, like the overlay
+        // Test against the persisted 1x scene depth without writing it; the fragment emits SV_Depth
+        // (the reprojected ground point) so geometry in front of the plane occludes the grid.
+        vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_FALSE;
+        depthStencil.depthCompareOp = vk::CompareOp::eLessOrEqual;
+        vk::PipelineColorBlendAttachmentState blendAttachment{};
+        blendAttachment.blendEnable = VK_TRUE;
+        blendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
+        blendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        blendAttachment.colorBlendOp = vk::BlendOp::eAdd;
+        blendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
+        blendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        blendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
+        blendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+        vk::PipelineColorBlendStateCreateInfo colorBlend{};
+        colorBlend.setAttachments(blendAttachment);
+        std::array<vk::DynamicState, 2> dynamicStates{ vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+        vk::PipelineDynamicStateCreateInfo dynamic{};
+        dynamic.setDynamicStates(dynamicStates);
+        vk::PipelineRenderingCreateInfo renderingInfo{};
+        renderingInfo.setColorAttachmentFormats(OffscreenColorFormat);
+        renderingInfo.setDepthAttachmentFormat(DepthFormat);
+        vk::PushConstantRange pushConstant{};
+        pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+        pushConstant.offset = 0;
+        pushConstant.size = 2 * sizeof(glm::mat4);  // viewProj + invViewProj
+        vk::PipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.setPushConstantRanges(pushConstant);
+        auto layoutResult =
+            checked(renderer.context.device.createPipelineLayout(layoutInfo), "createPipelineLayout (grid)");
+        if (!layoutResult)
+        {
+            renderer.context.device.destroyShaderModule(shaderModule);
+            return Err(layoutResult.error());
+        }
+        vk::GraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.pNext = &renderingInfo;
+        pipelineInfo.setStages(stages);
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &raster;
+        pipelineInfo.pMultisampleState = &multisample;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamic;
+        pipelineInfo.layout = *layoutResult;
+        vk::ResultValue<vk::Pipeline> created = renderer.context.device.createGraphicsPipeline(nullptr, pipelineInfo);
+        renderer.context.device.destroyShaderModule(shaderModule);
+        if (created.result != vk::Result::eSuccess)
+        {
+            renderer.context.device.destroyPipelineLayout(*layoutResult);
+            return Err(std::format("createGraphicsPipeline (grid): {}", vk::to_string(created.result)));
         }
         Pipeline pipeline;
         pipeline.device = renderer.context.device;

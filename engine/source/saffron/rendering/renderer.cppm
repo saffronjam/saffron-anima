@@ -203,6 +203,11 @@ namespace se
         VkPhysicalDeviceFeatures pipelineStatsFeat{};
         pipelineStatsFeat.pipelineStatisticsQuery = VK_TRUE;
         const bool hasPipelineStats = physicalResult.value().enable_features_if_present(pipelineStatsFeat);
+        // Wireframe view mode needs eLine polygon fill. Optional + off-by-default; absent leaves
+        // the wireframe view falling back to Lit (llvmpipe supports it, so the headless GPU has it).
+        VkPhysicalDeviceFeatures fillModeFeat{};
+        fillModeFeat.fillModeNonSolid = VK_TRUE;
+        const bool hasFillModeNonSolid = physicalResult.value().enable_features_if_present(fillModeFeat);
         bool rtSupported = false;
         if (hasAsExt && hasRqExt)
         {
@@ -278,6 +283,7 @@ namespace se
         // Resolve the KHR acceleration-structure / ray-query device entry points (not
         // statically exported by the loader; the engine otherwise uses static dispatch).
         renderer.context.rtSupported = rtSupported;
+        renderer.context.fillModeNonSolid = hasFillModeNonSolid;
         if (rtSupported)
         {
             VkDevice dev = renderer.context.vkbDevice.device;
@@ -554,6 +560,7 @@ namespace se
         renderer.pipelines.cull.reset();          // RAII frees the compute pipeline + layout
         renderer.pipelines.overlay.reset();       // editor gizmo + billboard PSO
         renderer.pipelines.overlayDepth.reset();  // depth-tested overlay PSO (frustums)
+        renderer.pipelines.grid.reset();          // analytic ground-grid PSO
         renderer.pipelines.thumbnail.reset();
         renderer.pipelines.preview.reset();  // material-preview PSO
         renderer.pipelines.tonemap.reset();
@@ -2946,6 +2953,22 @@ namespace se
         // radiance). Added after the scene + AA passes, before any app-authored pass + ui.
         addTonemapPass(renderer, graph);
 
+        // Infinite analytic ground grid (debug overlay): a fullscreen depth-tested pass over the
+        // resolved 1x scene color, after tonemap and before the editor overlay so gizmo handles
+        // draw on top. The fragment writes SV_Depth, so geometry occludes the grid.
+        if (renderer.showGrid && renderer.pipelines.grid)
+        {
+            RgPass grid;
+            grid.name = "grid";
+            grid.kind = RgPassKind::Graphics;
+            grid.colors.push_back(RgAttachment{
+                renderer.graph.sceneColor, vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, {} });
+            grid.depth = RgAttachment{ depth1x, vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eDontCare, {} };
+            grid.renderArea = offscreen.extent;
+            grid.execute = [&renderer](vk::CommandBuffer cmd) { recordGrid(renderer, cmd); };
+            addPass(graph, std::move(grid));
+        }
+
         // Editor overlay: gizmo handles + entity billboards, composited into the 1x resolved
         // sceneColor AFTER tonemap (the last sceneColor writer) so present-only blits it too.
         // The overlay runs at e1: by here sceneColor is always the 1x offscreen regardless of AA.
@@ -3793,6 +3816,21 @@ namespace se
     auto skinningEnabled(const Renderer& renderer) -> bool
     {
         return renderer.useSkinning;
+    }
+
+    void setViewMode(Renderer& renderer, ViewMode mode)
+    {
+        renderer.viewMode = mode;
+    }
+
+    auto viewMode(const Renderer& renderer) -> ViewMode
+    {
+        return renderer.viewMode;
+    }
+
+    void setShowGrid(Renderer& renderer, bool enabled)
+    {
+        renderer.showGrid = enabled;
     }
 
     void setDirectionalShadow(Renderer& renderer, const glm::mat4& lightViewProj, bool casting)

@@ -151,8 +151,31 @@ namespace se
         // pointShadowMeta.z = RT-shadow flag (the mesh traces a ray-query shadow per light
         // instead of / in addition to the shadow maps). Requires rtSupported + a built TLAS.
         const u32 rtFlag = (renderer.rt.useRtShadows && renderer.context.rtSupported) ? 1u : 0u;
+        // pointShadowMeta.w carries the debug view-mode channel the mesh fragment outputs instead of
+        // shading: 0 = lit/wireframe, 1 = albedo, 2 = world normal, 3 = roughness, 4 = metallic, 5 = emissive.
+        u32 debugChannel = 0;
+        switch (renderer.viewMode)
+        {
+        case ViewMode::Albedo:
+            debugChannel = 1;
+            break;
+        case ViewMode::Normal:
+            debugChannel = 2;
+            break;
+        case ViewMode::Roughness:
+            debugChannel = 3;
+            break;
+        case ViewMode::Metallic:
+            debugChannel = 4;
+            break;
+        case ViewMode::Emissive:
+            debugChannel = 5;
+            break;
+        default:
+            break;
+        }
         ubo.pointShadowMeta = glm::uvec4(renderer.lighting.pointShadowLightIndex,
-                                         renderer.lighting.pointShadowPending ? 1u : 0u, rtFlag, 0);
+                                         renderer.lighting.pointShadowPending ? 1u : 0u, rtFlag, debugChannel);
         std::memcpy(renderer.lighting.lightMapped[frame], &ubo, sizeof(ubo));
         vmaFlushAllocation(renderer.context.allocator, renderer.lighting.lightAllocs[frame], 0, sizeof(ubo));
         renderer.lighting.frameLightCount = count;

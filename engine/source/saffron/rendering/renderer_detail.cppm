@@ -3360,6 +3360,13 @@ export namespace se
         }
         renderer.pipelines.overlayDepth = *overlayDepth;
 
+        Result<Ref<Pipeline>> grid = newGridPipeline(renderer);
+        if (!grid)
+        {
+            return Err(grid.error());
+        }
+        renderer.pipelines.grid = *grid;
+
         // IBL set (set 3 in the mesh pipeline): irradiance cube + prefiltered cube + BRDF
         // LUT, all sampled in the fragment. Created here so the mesh PSO layout + the bind
         // can reference it; bakeEnvironment fills the images + writes the descriptor.

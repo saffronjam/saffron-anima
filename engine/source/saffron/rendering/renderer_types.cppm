@@ -1033,7 +1033,8 @@ export namespace se
         vk::Queue graphicsQueue;
         u32 graphicsQueueFamily = 0;
         VmaAllocator allocator = nullptr;
-        bool rtSupported = false;  // KHR acceleration_structure + ray_query present + enabled
+        bool rtSupported = false;       // KHR acceleration_structure + ray_query present + enabled
+        bool fillModeNonSolid = false;  // device supports vk::PolygonMode::eLine (wireframe view mode)
         RtDispatch rt;
         RgDebugLabels debugLabels;                  // VK_EXT_debug_utils pass markers; null when the ext is absent
         CalibratedTimestampsDispatch calibratedTs;  // VK_EXT_calibrated_timestamps; null when absent
@@ -1241,6 +1242,7 @@ export namespace se
         Ref<Pipeline> skin;           // compute skinning pre-pass (deforms skinned meshes once)
         Ref<Pipeline> overlay;        // screen-space editor overlay (gizmo + billboards), no depth test
         Ref<Pipeline> overlayDepth;   // overlay variant that depth-tests against the scene depth
+        Ref<Pipeline> grid;           // fullscreen analytic ground grid (depth-tested debug overlay)
         std::unordered_map<std::string, Ref<Pipeline>> cache;
     };
 
@@ -1694,6 +1696,19 @@ export namespace se
         bool hasRestir = false;
     };
 
+    /// Transient debug render-output mode; not persisted into the project (resets to Lit). The
+    /// buffer channels (Albedo…Emissive) are surface values the mesh fragment outputs directly.
+    enum class ViewMode
+    {
+        Lit,
+        Wireframe,
+        Albedo,
+        Normal,
+        Roughness,
+        Metallic,
+        Emissive,
+    };
+
     struct Renderer
     {
         VulkanContext context;
@@ -1718,7 +1733,9 @@ export namespace se
         FrameGraphState graph;
 
         bool useDepthPrepass = false;
-        bool useSkinning = true;           // gate for the GPU skinning path; off = skinned items never gather
+        bool useSkinning = true;            // gate for the GPU skinning path; off = skinned items never gather
+        ViewMode viewMode = ViewMode::Lit;  // debug render-output mode (wireframe …); transient
+        bool showGrid = false;  // infinite analytic ground grid (debug overlay); set per frame by renderScene
         bool presentViewportOnly = false;  // native-viewport host: blit offscreen->swapchain, skip the ui pass
         std::array<ShmPublish, ViewCount>
             shmPublish{};                     // per-view offscreen→shm publish; replaces present when enabled
@@ -1804,6 +1821,10 @@ export namespace se
     // once in initDescriptorResources; the overlay pass draws the per-frame vertex list.
     // `depthTest` builds the variant that reads the scene depth (write off, less-or-equal).
     auto newOverlayPipeline(Renderer& renderer, bool depthTest) -> Result<Ref<Pipeline>>;
+    // The fullscreen analytic ground-grid PSO (1x, depth-tested, alpha-blended; reconstructs the
+    // world ray from a push-constant invViewProj and writes SV_Depth so geometry occludes it).
+    auto newGridPipeline(Renderer& renderer) -> Result<Ref<Pipeline>>;
+    void recordGrid(Renderer& renderer, vk::CommandBuffer cmd);
     // Stashes the editor overlay triangle list for the current frame; the editor-overlay graph
     // pass uploads + draws it over the tonemapped scene color. `depthTested` (camera frustums)
     // is occluded by scene geometry; `onTop` (handles, billboards) always draws.
@@ -1857,8 +1878,10 @@ export namespace se
     // The PSO cache front door: returns the mesh pipeline for a material variant, building
     // + caching it on first request. The renderer owns it; the client never creates PSOs.
     auto requestMeshPipeline(Renderer& renderer, const Material& material) -> Ref<Pipeline>;
-    // The skinned permutation: vertexMainSkinned + the VertexSkin stream on binding 1.
-    auto requestMeshPipeline(Renderer& renderer, const Material& material, bool skinned) -> Ref<Pipeline>;
+    // The skinned/wireframe permutations: skinned binds vertexMainSkinned + the VertexSkin stream
+    // on binding 1; wireframe selects vk::PolygonMode::eLine (gated on the fillModeNonSolid feature).
+    auto requestMeshPipeline(Renderer& renderer, const Material& material, bool skinned, bool wireframe)
+        -> Ref<Pipeline>;
     // Number of distinct mesh PSOs the cache holds (inspectable to verify übershader reuse).
     auto pipelineCount(const Renderer& renderer) -> u32;
     auto bindlessTextureCount(const Renderer& renderer) -> u32;
@@ -2089,6 +2112,13 @@ export namespace se
     // scene renders exactly as it would without the skinned path.
     void setSkinning(Renderer& renderer, bool enabled);
     auto skinningEnabled(const Renderer& renderer) -> bool;
+    // Debug render-output mode (Lit | Wireframe …). Transient; no PSO rebuild — wireframe is a
+    // separate cached PSO selected per draw, gated on the fillModeNonSolid device feature.
+    void setViewMode(Renderer& renderer, ViewMode mode);
+    auto viewMode(const Renderer& renderer) -> ViewMode;
+    // The infinite analytic ground grid (debug overlay); set per frame by renderScene from
+    // RenderSceneOptions, read by the graph build to add the grid pass.
+    void setShowGrid(Renderer& renderer, bool enabled);
     // Anti-aliasing: msaaSamples is 1 (off) / 2 / 4 / 8 (clamped to the device cap); fxaa
     // and taa toggle their post-process passes. The three modes are mutually exclusive.
     // Recreates the MSAA/TAA targets + rebuilds scene PSOs.

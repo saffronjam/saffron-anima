@@ -554,6 +554,13 @@ public MaterialInput makeMaterialInput(VertexOutput input)
     return mi;
 }
 
+// The debug render-output channel (pointShadowMeta.w): 0 = normal shading, else a surface value
+// the mesh fragment outputs directly (1 albedo, 2 normal, 3 roughness, 4 metallic, 5 emissive).
+public uint debugViewChannel()
+{
+    return globals.pointShadowMeta.w;
+}
+
 // The shared lighting half: turns a SurfaceData into lit radiance (direct + punctual + IBL/GI).
 // Compiled once into this module; each material variant links it instead of recompiling it.
 public float4 evalLighting(VertexOutput input, SurfaceData surf)
