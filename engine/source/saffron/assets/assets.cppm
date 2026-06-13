@@ -4579,6 +4579,47 @@ return {0}
         return loadMeshFromSource(assets, renderer, id, ByteSource{ .path = fullPath });
     }
 
+    // Decode an entity's baked .smesh to a CPU Mesh (positions + indices) for physics cooking.
+    // Catalog lookup + bytes read + loadMeshFromBytes; no GPU upload, no cache entry — cooking is a
+    // one-shot at Edit->Playing, not the draw path. Mirrors loadAnimationClipAsset's resolve shape.
+    auto loadMeshCpuAsset(AssetServer& assets, Uuid id) -> Result<Mesh>
+    {
+        const AssetEntry* entry = findAsset(assets.catalog, id);
+        if (entry == nullptr || entry->type != AssetType::Mesh)
+        {
+            return Err(std::format("mesh {} not in catalog", id.value));
+        }
+        if (entry->container.value != 0)
+        {
+            auto model = loadModelAsset(assets, entry->container);
+            if (!model)
+            {
+                return Err(std::format("mesh {}: container {} is not loadable", id.value, entry->container.value));
+            }
+            const ByteSource source = chunkSourceFor(assets, *model, ChunkKind::Mesh, id);
+            if (source.path.empty())
+            {
+                return Err(std::format("container {} has no mesh sub-asset {}", entry->container.value, id.value));
+            }
+            auto bytes = source.read();
+            if (!bytes)
+            {
+                return Err(bytes.error());
+            }
+            return loadMeshFromBytes(std::span<const std::byte>{ *bytes });
+        }
+        std::string fullPath = assets.root + "/" + entry->path;
+        if (!std::filesystem::exists(fullPath) && entry->path.starts_with("meshes/"))
+        {
+            fullPath = assets.root + "/models/" + entry->path.substr(std::string{ "meshes/" }.size());
+        }
+        auto bytes = ByteSource{ .path = fullPath }.read();
+        if (!bytes)
+        {
+            return Err(bytes.error());
+        }
+        return loadMeshFromBytes(std::span<const std::byte>{ *bytes });
+    }
     // Attaches an import's material(s) to an entity: a single MaterialComponent when the
     // model has zero or one material, or a MaterialSetComponent (the slot table) when it
     // has more than one. Submesh.materialSlot indexes the set at render time.
@@ -4721,6 +4762,54 @@ return {0}
         }
 
         relinkHierarchy(scene);  // resolve the parent uuids + the joint handles
+
+        // Auto-fit a per-bone capsule into a BonePhysicsComponent from the rest skeleton (half-height
+        // spans toward the child joint, radius a fraction of it), so a freshly imported rig is
+        // ragdoll-ready — the locked auto-fit decision, hand-editable in the inspector after.
+        const auto handles = getComponent<SkinnedMeshComponent>(scene, meshEntity).boneHandles;
+        if (!handles.empty())
+        {
+            const std::size_t count = handles.size();
+            std::vector<glm::vec3> restPos(count, glm::vec3(0.0f));
+            std::vector<u64> jointUuid(count, 0);
+            for (std::size_t i = 0; i < count; i = i + 1)
+            {
+                const Entity joint{ handles[i] };
+                if (valid(scene, joint))
+                {
+                    restPos[i] = worldTranslation(scene, joint);
+                    if (hasComponent<IdComponent>(scene, joint))
+                    {
+                        jointUuid[i] = getComponent<IdComponent>(scene, joint).id.value;
+                    }
+                }
+            }
+            BonePhysicsComponent& phys = addComponent<BonePhysicsComponent>(scene, meshEntity);
+            phys.bones.resize(count);
+            for (std::size_t i = 0; i < count; i = i + 1)
+            {
+                float length = 0.0f;
+                for (std::size_t child = 0; child < count; child = child + 1)
+                {
+                    const Entity childJoint{ handles[child] };
+                    if (child == i || !valid(scene, childJoint) ||
+                        !hasComponent<RelationshipComponent>(scene, childJoint))
+                    {
+                        continue;
+                    }
+                    if (jointUuid[i] != 0 &&
+                        getComponent<RelationshipComponent>(scene, childJoint).parent.value == jointUuid[i])
+                    {
+                        length = std::max(length, glm::length(restPos[child] - restPos[i]));
+                    }
+                }
+                const float halfHeight = length > 0.001f ? length * 0.5f : 0.05f;
+                const float radius = std::max(halfHeight * 0.3f, 0.03f);
+                phys.bones[i].shapeHalfExtents = glm::vec3(radius, halfHeight, radius);
+                phys.bones[i].mass = 1.0f;
+                phys.bones[i].joint = BonePhysics::Joint::SwingTwist;
+            }
+        }
         return container;
     }
 
