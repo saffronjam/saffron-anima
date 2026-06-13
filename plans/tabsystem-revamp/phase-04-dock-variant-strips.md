@@ -1,6 +1,6 @@
 # Phase 04 — dock-variant strips everywhere
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 
@@ -8,6 +8,15 @@ Replace the three hand-rolled strips with `TabStrip size="dock"` driven by the p
 slice. Requirements 1 and 3 land for the small strips: identical drag mechanics at dock
 size, including in-strip reorder — which none of the three strips has today. **Strip-only
 diff**: each site keeps its current content-rendering policy until phase 05 unifies it.
+
+**Scope = the Scene island.** All three strips live inside the Scene main tab's
+`Layout.tsx`, and `leaf:leftBottom`/`leaf:right`/`leaf:bottom` are Scene-island
+`DockPanelId` leaves. The model is already per-kind keyed from phase 03
+(`dockLayouts: Record<DockSpaceKind, DockLayout>`); the asset-editor island
+(`AssetEditorWorkspace.tsx`) gets its own strips in phase 10. `AssetEditorWorkspace`
+currently has NO tab strips — just fixed `ResizablePanel`s (`id=skeleton/preview/clips`
+at `:448-485`) plus a fixed bottom timeline — so the three Scene strips are the complete
+current strip inventory; no fourth strip is being missed.
 
 ## What exists to build on
 
@@ -18,6 +27,8 @@ diff**: each site keeps its current content-rendering policy until phase 05 unif
   - `RightSidebar` (`panels/RightSidebar.tsx:28-69` strip, `:70-90` content) — keeps every
     open tool mounted, hidden via `display:none`, so Material's preview survives switches.
   - `BottomDock` (`panels/BottomDock.tsx:21-62` strip, `:63` content) — unmounts inactive.
+    Its content (`<TimelinePanel/>`) wraps the extracted shared `components/timeline/*`;
+    unmount-inactive stays correct because each mount builds its own `TimelineCanvas`.
 - The phase-03 slice: strips read `leaf.tabs`/`leaf.activeTab`, call `activatePanel`,
   `closePanel`, `reorderTab`.
 - Titles/icons: `TOOL_LABEL` (`RightSidebar.tsx:12-16`), `BOTTOM_TOOL_LABEL`
@@ -38,6 +49,12 @@ diff**: each site keeps its current content-rendering policy until phase 05 unif
    makes an overfull strip (e.g. four tools dragged into the ~320 px right sidebar later)
    degrade legibly without clipping out of the centers math. Verify it here with many tabs.
 5. Delete the now-dead hand-rolled strip markup and the local label maps if fully absorbed.
+
+This phase delivers only same-leaf in-strip reorder; vertical↔horizontal cross-leaf moves
+between the side strips and the bottom strip are phase 06. The dock drag domain is a
+SINGLE shared domain (`domain: "dock"`) spanning the vertical side strips and the
+horizontal bottom strip — not three separate domains — so phase 06's cross-leaf moves
+already share one drag space.
 
 ## Verify
 

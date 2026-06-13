@@ -1,15 +1,20 @@
 # Phase 06 — cross-dock tabbed drag (the checkpoint)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 
-Drag a tab out of one strip and drop it into another — across today's three fixed sites,
-while they are still composed by `Layout`. Tear-out, cursor ghost, drop-zone overlay,
-tab-merge drops, empty-region reveal targets, and the dock persistence key. **Checkpoint:
-the Material panel tabs in beside the Timeline in the bottom dock, and the arrangement
-survives a reload.** Requirement 2's tabbed-together reading lands here; splits are
-phase 08.
+Drag a tab out of one strip and drop it into another — across today's three fixed sites
+**within the Scene main tab**, while they are still composed by `Layout`. Tear-out, cursor
+ghost, drop-zone overlay, tab-merge drops, empty-region reveal targets, and the dock
+persistence key. **Checkpoint: the Material panel (`MaterialEditorPanel`, the `material`
+`DockPanelId`) tabs in beside the Timeline in the bottom dock, and the arrangement survives
+a reload.** The bottom-dock Timeline leaf is now `panels/TimelinePanel` composing the shared
+`components/timeline/{TimelineSurface,TimelineTransport}`; its `DockPanelId` stays `timeline`.
+This vertical↔horizontal move (a side-dock tab into the horizontal bottom dock) is exactly
+the wanted interaction. Requirement 2's tabbed-together reading lands here; splits are
+phase 08. The asset-editor island gets the same drag layer in phase 10 — this phase proves
+the machinery on Scene first.
 
 ## What exists to build on
 
@@ -30,15 +35,24 @@ phase 08.
 ### 1. Tag the dock sites
 
 The three site containers get `data-dock-leaf="<leafId>"` while still inside `Layout`'s
-fixed slots. **This attribute is the requirement-4 boundary: the titlebar never carries
-it**, so a torn dock tab over the main top bar finds no target — no overlay, no-drop
-cursor, drop cancels. Combined with the `view` hook instance having no tear-out and the
-disjoint id types, cross-domain docking is structurally unexpressible.
+fixed slots — these are **Scene-island leaf ids**, applied only inside the Scene main tab's
+`DockRoot`/`Layout`, never on the titlebar and never on another main tab's leaves. **This is
+the no-cross-main-tab boundary:** the titlebar carries no `[data-dock-leaf]`, so a torn dock
+tab over the main top bar finds no target — no overlay, no-drop cursor, drop cancels.
+Cross-main-tab docking is **structurally unexpressible**, conditioned on three facts together:
+the titlebar is never tagged; the two dockspace kinds have **disjoint `DockPanelId` types**
+(`scene` vs `assetEditor`, defined in phase 03), so a Scene panel id can never resolve into
+the asset-editor tree; and the registry is built only from the active island's leaves (§2).
+The asset-editor island (`AssetEditorWorkspace.tsx`) gets the same drag layer in phase 10,
+with its own scoped registry over its own leaves.
 
 ### 2. `components/dock/dockDrag.ts` — the drag-scoped registry
 
-Module-scope, mirroring `layoutBus`: on tear-out, snapshot every `[data-dock-leaf]` into
-`{ leafId, bodyRect, stripRect, stripCenters, acceptsTabs, acceptsSplits }`; re-measure on
+Module-scope, mirroring `layoutBus`: on tear-out, snapshot every **currently-mounted**
+`[data-dock-leaf]` into `{ leafId, bodyRect, stripRect, stripCenters, acceptsTabs,
+acceptsSplits }`. Because only one main tab is mounted at a time, this snapshots only the
+**active dockspace's** leaves — an inactive island's leaves are unmounted and never enter
+the registry, so a cross-main-tab tear has no candidate target. Re-measure on
 `window.resize`; **registry geometry exists only while a drag is torn** (built on tear-out,
 discarded on drop/cancel). Hit-testing per `pointermove`: point-in-rect against the
 registry, with `document.elementFromPoint(x, y)?.closest('[data-dock-leaf]')` as the
@@ -103,10 +117,11 @@ phase 07 — their leaf participates as a *target* for merges only if desired; s
 
 `saffron.layout.dock:<projectPath>` → `{ version: 1, layout: DockLayout, lastLocation }`,
 written debounced ~300 ms on any dock mutation, loaded on `Layout` mount (the
-`key={projectPath}` remount keeps per-project semantics, `App.tsx:221`). Load runs
-`validate` (incl. `lastLocation` pruning); failure ⇒ default factory. **No-op while
-`projectPath` is undefined** (session-only before a project loads — matching
-`persistSidebarWidth`, `store.ts:854-861`). `movePanel`/`closePanel` update
+`<Layout key={projectPath ?? ""}/>` remount, `App.tsx:229`, comment :222-226 / dock div
+:227-230, keeps per-project semantics). Load runs `validate` (incl. `lastLocation` pruning);
+failure ⇒ default factory. **No-op while `projectPath` is undefined** (session-only before a
+project loads — matching `persistSidebarWidth`, `store.ts:1077-1086`, siblings :1109-1118 /
+:1141-1168). `movePanel`/`closePanel` update
 `lastLocation[id]` so a reopened panel returns where it last lived (Unreal convention).
 Accepted behavior change: open panels now persist (a persisted-open Stats resumes metrics
 polling at launch).
@@ -116,14 +131,18 @@ polling at launch).
 - `bun test` (registry zone math is pure → unit-test it too) + `bun run check`;
   `make prepare-for-commit` clean.
 - Manual matrix via `make run`:
-  - **Material → bottom dock beside Timeline: tabbed together, state intact (no preview
-    re-fetch), survives app restart.**
+  - **Material (`MaterialEditorPanel`) → bottom dock beside Timeline (`TimelinePanel` on the
+    shared `components/timeline/*`): tabbed together, state intact (no preview re-fetch),
+    survives app restart.** The Timeline leaf's old unmount-inactive policy is now the phase-05
+    renderer policy, so it keeps state through the move.
   - Every closable tool moves right↔bottom and back; in-strip reorder still works mid-drag
     (re-entry); each cancel path restores perfectly — Escape, drop on nothing, and capture
     loss (switch workspace mid-drag; a mouse never fires `pointercancel` naturally).
   - Empty-region bands: with the bottom dock closed, dragging a tool to the bottom band
     opens it with the tab; same for the right side.
-  - The titlebar is never a target: overlay never appears there, drop over it cancels.
+  - The titlebar is never a target: overlay never appears there, drop over it cancels;
+    no leaf from another main tab is ever a drop target (only the active island's leaves
+    are in the registry).
   - Last-tab-leaves: source region empties and unmounts (persistent leaf stays in the
     model); viewport reclaims the space and re-glues.
   - Reload round-trip: arrangement + active tabs restored; a corrupted/stale key falls

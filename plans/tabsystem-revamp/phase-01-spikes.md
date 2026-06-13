@@ -1,6 +1,6 @@
 # Phase 01 — go/no-go spikes
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 
@@ -12,34 +12,51 @@ Both spikes are throwaway code, deleted within this phase; the findings land as 
 
 ## What exists to build on
 
-- `react-resizable-panels` `^4` (`editor/package.json`) via the shadcn wrapper
-  (`components/ui/resizable.tsx`): `ResizablePanelGroup` (orientation prop),
-  `ResizablePanel`, `ResizableHandle`, `useDefaultLayout` persistence
-  (`app/Layout.tsx:72-81`).
+- `react-resizable-panels` `^4` (`editor/package.json`). The shadcn wrapper
+  (`components/ui/resizable.tsx`) re-exports only `ResizablePanelGroup` (orientation prop),
+  `ResizablePanel`, `ResizableHandle` (:45); `useDefaultLayout` and the `Layout` type are
+  imported **directly from `react-resizable-panels`** (`app/Layout.tsx:23`), wired for
+  persistence at `app/Layout.tsx:72-81`.
 - `devMode` in the store (`state/store.ts`, toggled by the hidden five-click Scene-tab
-  gesture, `app/WindowTitlebar.tsx:54-66`) — the natural gate for scratch UI.
-- The FLIP settle already proves WAAPI `element.animate` works in this webview
-  (`WindowTitlebar.tsx:154-159`), but not *during* an active pointer capture.
+  gesture `activateSceneTab`, `app/WindowTitlebar.tsx:55-67`) — the natural gate for scratch UI.
+- The FLIP settle already proves WAAPI `node.animate` works in this webview
+  (`WindowTitlebar.tsx:156-159` inside the settle `useLayoutEffect` :131-161), but not
+  *during* an active pointer capture.
 
 ## Work
 
 ### 1. Spike A — rrp v4 dynamic structure
 
+The shipped editor already has TWO dockspace islands with different root orientations: the
+Scene `Layout` is a vertical-root group, while `AssetEditorWorkspace`
+(`panels/AssetEditorWorkspace.tsx:448`) is a horizontal-root group whose `skeleton` / `clips`
+panels and bottom timeline strip mount and unmount on `hasRig` / `hasClips`. That is the
+concrete dynamic add/remove this spike reproduces. The headline capability the dock tree must
+deliver is moving panel tabs between the VERTICAL side docks and the HORIZONTAL bottom dock
+**within one main tab** (vertical↔horizontal is the whole point); the model is keyed per
+dockspace kind (`scene` vs `assetEditor`), and all drag/portal/structure-hash machinery is
+scoped to the single active island.
+
 A dev-gated scratch component (e.g. `app/DockSpike.tsx`, mounted behind `devMode` from
 `App.tsx`) that drives one `ResizablePanelGroup` through the operations the dock tree will
 need:
 
-- Add and remove children at runtime (simulating a leaf collapsing via `normalize` and a
-  drop creating one). Verify remaining panels reclaim space sanely and `defaultSize` /
-  imperative sizing behaves on the *changed* set.
+- Add and remove children at runtime, reproducing the asset-editor's `hasRig` / `hasClips`
+  panel mount/unmount (the `normalize`-driven leaf collapse and the drop-created leaf). Verify
+  remaining panels reclaim space sanely and `defaultSize` / imperative sizing behaves on the
+  *changed* set.
 - Reconcile sizes after a structural change: drive sizes from controlled state (the future
-  `DockBranch.sizes`), confirm `onLayoutChanged` round-trips, and check whether an
-  imperative handle (`setLayout` on the group, if exposed in v4) or a keyed remount is
-  needed after add/remove.
+  `DockBranch.sizes`), confirm `onLayoutChanged` round-trips, and exercise the v4 imperative
+  handle — `GroupImperativeHandle.setLayout` via `useGroupRef`/`useGroupCallbackRef` — against
+  the keyed-remount path, deciding which the dock tree adopts after add/remove. (v4 exposes
+  `setLayout` and px `minSize`; the spike confirms their *behaviour* across structural
+  add/remove, not their existence.)
 - Pixel `minSize` fidelity: a px-min panel (the future viewport leaf, 520 px;
   `VIEWPORT_MIN_WIDTH`, `app/Layout.tsx:48`) inside nested groups at a 1280×720 window —
-  the cannot-collapse-while-attaching guarantee must be expressible.
-- Nested groups three deep (branch → branch → leaf), since orientation alternates per depth.
+  px `minSize` is supported (`SizeUnit` includes `'px'`), so the cannot-collapse-while-attaching
+  guarantee is expressible; the spike confirms it holds under structural change.
+- Nested groups three deep (branch → branch → leaf), since orientation alternates per depth —
+  matching the vertical-root Scene tree and the horizontal-root asset-editor tree.
 
 **Go/no-go:** if structural add/remove cannot be made glitch-free even with a keyed-remount
 fallback (key the group subtree by a structure hash, then rAF-force `emitLayoutSettled`),
@@ -52,13 +69,16 @@ React key: child add/remove/reorder remounts the group, resizes never do.
 
 Same scratch surface, three checks:
 
-- **Portal reparent:** render a stateful component (`useState` counter + an `<img>`) via
-  `createPortal` into a host div; `appendChild` the host div across two parents on a button
-  click. Verify React state, the image (no reload flash), and a scroll position survive.
+- **Portal reparent:** the real first canvas candidate is the timeline canvas in
+  `components/timeline/TimelineSurface.tsx` — render it (or a stateful stand-in: `useState`
+  counter + an `<img>`) via `createPortal` into a host div, then `appendChild` the host div
+  across two parents on a button click. Verify React state, the canvas/image (no reload flash),
+  and a scroll position survive the reparent.
 - **`document.elementFromPoint` during pointer capture:** `setPointerCapture` on one element,
-  and on every `pointermove` hit-test under the cursor across other elements; confirm correct
-  results while a `pointer-events: none` ghost follows the cursor (the ghost must never be
-  the hit result).
+  and on every `pointermove` hit-test under the cursor across other elements; confirm the
+  hit-test resolves a drop target in a **differently-oriented sibling group** (the
+  vertical↔horizontal cross-orientation drop the dock tree needs), while a
+  `pointer-events: none` ghost follows the cursor (the ghost must never be the hit result).
 - **WAAPI under/after capture:** run a `translateX` settle animation immediately after
   `releasePointerCapture` (the drop frame) — confirm no dropped first frame.
 

@@ -1,6 +1,6 @@
 # Phase 02 — shared tab strip + drag hook; titlebar retrofitted
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 ## Goal
 
@@ -14,24 +14,29 @@ satisfiable for free everywhere `TabStrip` is used.
 
 The whole machine lives in `app/WindowTitlebar.tsx`:
 
-- `TabDragState` (`:27-37`): `{id, startX, currentX, dragging, startIndex, previewIndex,
+- `TabDragState` (`:28-38`): `{id, startX, currentX, dragging, startIndex, previewIndex,
   width, order, centers}` — centers snapshotted **once** at drag start.
-- `beginTabDrag` (`:188-226`): left button only, bails on non-closable tabs and on presses
-  inside `[data-tab-close='true']` (`:193`), `setPointerCapture`, snapshots order + centers.
-- `moveTabDrag` (`:228-242`): latches `dragging` at `TAB_DRAG_THRESHOLD_PX = 4` (`:22`),
-  recomputes `previewIndex` via `insertionIndexForPointer` (`:170-186`, which skips the
-  pinned `"scene"` id at `:174`).
-- `tabStyle` (`:268-291`): dragged tab follows the pointer (`translateX(currentX - startX)`),
+- `beginTabDrag` (`:189-227`): left button only, bails on non-closable tabs and on presses
+  inside `[data-tab-close='true']` (`:194`), `setPointerCapture`, snapshots order + centers.
+- `moveTabDrag` (`:229-243`): latches `dragging` at `TAB_DRAG_THRESHOLD_PX = 4` (`:23`),
+  recomputes `previewIndex` via `insertionIndexForPointer` (`:171-187`, which skips the
+  pinned `"scene"` id at `:175`).
+- `tabStyle` (`:269-292`): dragged tab follows the pointer (`translateX(currentX - startX)`),
   displaced neighbors shift by `±width` — transform-only, model untouched until drop.
-- `endTabDrag` (`:244-266`): click-vs-drag — no threshold crossed ⇒ activate; dragged ⇒
+- `endTabDrag` (`:245-267`): click-vs-drag — no threshold crossed ⇒ activate; dragged ⇒
   snapshot pre-drop lefts into `settleRef` and commit `moveViewTab`.
-- The FLIP settle (`useLayoutEffect`, `:130-160`): suppress transitions, diff pre-drop lefts
-  against final rects, WAAPI `animate(translateX(diff) → none, 150ms ease-out)`.
-- Reset on `onPointerCancel` (`:317`). There is **no** `lostpointercapture` handler today.
-- Titlebar-specific layers that must stay local: the dev-mode gesture (`:54-66`), the
+- The FLIP settle (`useLayoutEffect`, `:131-161`): suppress transitions, diff pre-drop lefts
+  against final rects, WAAPI `node.animate(translateX(diff) → none, 150ms ease-out)` (`:156-159`).
+- Reset on `onPointerCancel` (`:318`). There is **no** `lostpointercapture` handler today.
+- Titlebar-specific layers that must stay local: the dev-mode gesture (`:55-67`), the
   `data-titlebar-control` fencing so `appWindow.startDragging()` never fires mid-gesture
-  (`:102-118`), `tabIcon` (`:425-442`), the close X, `moveViewTab`'s index clamping
-  (`store.ts:517-530`).
+  (`:103-119`), `tabIcon` (`:426-449`, now branching on `assetEditor` and the image-viewer
+  `assetType` icons), the close X, `moveViewTab`'s index clamping (`store.ts:736-750`).
+
+The `ViewTab` union now spans five kinds (`scene | flamegraph | materialGraph | assetEditor |
+imageViewer`) and `tabIcon` (`:426-449`) branches across all of them, so the extracted
+hook / `TabStrip` / `tabIcon` must keep all five rendering unchanged with
+`moveViewTab`/`closeViewTab` scene-pinning intact.
 
 ## Work
 
@@ -63,8 +68,8 @@ semantics, the close-affordance fence as the `shouldIgnoreDragStart` default (a 
 X never arms a drag — titlebar or dock), the WAAPI FLIP settle, and reset on **both**
 `pointercancel` and `lostpointercapture` (the one deliberate delta — see gate).
 `pinnedIds` are both excluded from insertion targets **and** non-draggable — generalizing
-the two mechanics that pin the scene tab today: the `insertionIndexForPointer` skip (`:174`)
-and the `beginTabDrag` bail on `!tab.closable` (`:189`).
+the two mechanics that pin the scene tab today: the `insertionIndexForPointer` skip (`:175`)
+and the `beginTabDrag` bail on `!tab.closable` (`:190`).
 
 ### 2. `components/dock/TabStrip.tsx`
 
@@ -74,14 +79,18 @@ forwards its own `onActivate`/`onClose` into the hook options, so the activation
 exists once, not twice. Size variants (cva, theme tokens only):
 
 - `main` — the current titlebar look: `h-8 min-w-28 max-w-48 rounded-t-md`, icon + truncated
-  label + close X (`WindowTitlebar.tsx:373-422`).
+  label + close X (`WindowTitlebar.tsx:374-422`).
 - `dock` — the compact look from `RightSidebar.tsx:47-52`: `h-8 text-xs`, `-mb-px border-b-2`
   active treatment, **`min-w-0` shrink with truncated labels** so an overfull strip degrades
   by shrinking — no scroll offset, so the snapshot-centers math stays valid (the real
   overflow affordance is phase 09).
 
 The `dock` variant is used by nothing yet (phase 04); it ships here so the component is the
-unit under test from day one.
+unit under test from day one. The strip shipped here is later instantiated **per dockspace**:
+the Scene island and the asset-editor island each own a disjoint `DockPanelId` space (phase
+03), so a panel id from one kind can never resolve into the other's tree and the two never
+bridge. The no-cross-main-tab rule (requirement 4) therefore holds **structurally**, by
+construction, not via a runtime check — each `TabStrip` only ever sees its own island's ids.
 
 ### 3. Retrofit `WindowTitlebar`
 
