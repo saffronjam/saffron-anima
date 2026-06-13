@@ -42,6 +42,30 @@ bun run tauri:dev  # launches the app; needs a Wayland session for the subsurfac
 `bun run gen:protocol` regenerates `src/protocol/se-types.ts` from `control_dto.cppm` (and also emits the
 OpenRPC + command-manifest JSON under `schemas/control/`). `index.ts` is the hand-kept re-export shim.
 
+## Debugging runtime/GUI bugs you can't see (log, then ask)
+
+An agent has **no view of the running editor** — you cannot see the viewport, a flicker, a wrong frame,
+or the Wayland presenter's state. Do **not** guess at a runtime/GUI bug's cause and ship a "fix" on a
+hypothesis; that wastes the user's time and erodes trust. When a bug can't be pinned from code + tests
+alone, **instrument first, then ask the user to capture data:**
+
+1. Add **temporary, clearly-prefixed** logging (`[vp-dbg] …`) at each step of the suspect chain — enough
+   to disambiguate the competing hypotheses, not a firehose. Route it to **one stream the user can paste**:
+   the terminal where `make run` prints. Rust bridge / engine logs already go there via `eprintln!` /
+   stdout; for **React state** (effect firing order, `phase`/`revealed`, a computed rect, a store flag)
+   add a temporary Tauri command that `eprintln!`s and call it from React via `invoke` — webview
+   `console.log` does **not** reach the `tauri dev` terminal. Log **transitions**, not per-frame state,
+   in hot loops, and delete the command + its calls once the bug is found.
+2. Tell the user exactly what to do: restart `make run` (a full restart — **Vite HMR does not reliably
+   apply Zustand store-shape changes or new commands to a live session**), reproduce the bug, and paste
+   the `[vp-dbg]` lines (and/or a screenshot). State which questions the log answers.
+3. Diagnose from the **real log**, then fix. **Remove the temporary logging** once the cause is confirmed
+   (it is not part of the shipped change).
+
+When you genuinely need more than logs (a screenshot of a specific frame, the exact repro steps, a
+hardware/driver detail), **ask the user for it** rather than assuming. A bug is not "fixed" until the
+user confirms it against real output — say "this should fix it, please verify with the log", never "fixed".
+
 ## Rules that are easy to break
 
 - **`src/protocol/se-types.ts` is generated.** Never edit it. Edit the DTOs in
@@ -148,10 +172,12 @@ OpenRPC + command-manifest JSON under `schemas/control/`). `index.ts` is the han
   `contextMenuDisabled` flipped `<div>` ↔ `<ContextMenu>`, remounting every thumbnail `<img>`
   on each 0↔1 selection crossing).
 
-The Rust bridge sets a per-PID socket under `$XDG_RUNTIME_DIR` and a per-PID shm segment,
-spawns `$SAFFRON_ENGINE_BIN` (default `build/debug/bin/SaffronEngine`) with
-`SAFFRON_VIEWPORT_SHM` + `SAFFRON_MAX_FPS` (and the NVIDIA `VK_ICD_FILENAMES` guard), and
-presents via `wayland_viewport.rs`. A watchdog flips the UI to an error overlay if the
+The Rust bridge sets a per-PID socket under `$XDG_RUNTIME_DIR` and a per-PID, per-view shm
+segment for each viewport (scene + asset preview), spawns `$SAFFRON_ENGINE_BIN` (default
+`build/debug/bin/SaffronEngine`) with `SAFFRON_VIEWPORT_SHM_SCENE` +
+`SAFFRON_VIEWPORT_SHM_ASSET` + `SAFFRON_MAX_FPS` (and the NVIDIA `VK_ICD_FILENAMES` guard),
+and presents via `wayland_viewport.rs` — one subsurface per view, each glued to its pane,
+plus a shared opaque backdrop below both. A watchdog flips the UI to an error overlay if the
 engine dies.
 
 The bridge also picks the **webview render path** in `run()` (`lib.rs`), logging it at startup
