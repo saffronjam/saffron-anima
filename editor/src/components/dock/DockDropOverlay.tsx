@@ -14,12 +14,7 @@ export function DockDropOverlay() {
   return (
     <>
       {drag.hovered && <DropHighlight target={drag.hovered} />}
-      <DragGhost
-        label={drag.ghostLabel}
-        width={drag.ghostWidth}
-        x={drag.pointer.x}
-        y={drag.pointer.y}
-      />
+      <DragGhost label={drag.ghostLabel} x={drag.pointer.x} y={drag.pointer.y} />
     </>
   );
 }
@@ -72,11 +67,13 @@ function splitInset(
   }
 }
 
-function DragGhost({ label, width, x, y }: { label: string; width: number; x: number; y: number }) {
+// Sized to its label (capped at 18rem) so a panel name reads in full — the dragged tab can be
+// far narrower than its title, so the ghost must not inherit the tab width.
+function DragGhost({ label, x, y }: { label: string; x: number; y: number }) {
   return createPortal(
     <div
-      className="pointer-events-none fixed z-[100] flex h-8 items-center rounded-md border border-border bg-card px-2.5 text-xs font-medium text-foreground shadow-lg"
-      style={{ left: x + 10, top: y + 10, width, maxWidth: 192 }}
+      className="pointer-events-none fixed z-[100] flex h-8 max-w-[18rem] items-center rounded-md border border-border bg-card px-2.5 text-xs font-medium text-foreground shadow-lg"
+      style={{ left: x + 10, top: y + 10 }}
     >
       <span className="min-w-0 truncate">{label}</span>
     </div>,

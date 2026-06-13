@@ -9,16 +9,15 @@
 /// escapes the strip band vertically it hands the drag to `dockDrag` (a cursor ghost + a
 /// drop overlay), and on release commits via `onDrop` instead of `onReorder`. Tear-out keeps
 /// the same pointer capture, so the source strip keeps driving the drag the whole time.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
 import type { DockNodeId, DockPanelId, DropTarget } from "../../state/dockLayout";
-import { beginDockDrag, cancelDockDrag, endDockDrag, moveDockDrag } from "./dockDrag";
+import { beginDockDrag, moveDockDrag } from "./dockDrag";
 
 const TAB_DRAG_THRESHOLD_PX = 4;
-/// Vertical escape past the strip band that tears a dock tab out; un-tears within the smaller
-/// hysteresis band so a jitter at the edge does not flap.
+/// Vertical escape past the strip band that tears a dock tab out — at which point the drag is
+/// handed to `dockDrag`, which drives it from window listeners so the source leaf can collapse.
 const TEAR_OUT_PX = 32;
-const TEAR_HYSTERESIS_PX = 8;
 
 interface StripBox {
   top: number;
@@ -33,7 +32,6 @@ interface TabDragState {
   startX: number;
   currentX: number;
   dragging: boolean;
-  torn: boolean;
   startIndex: number;
   previewIndex: number;
   width: number;
@@ -79,8 +77,6 @@ export interface UseTabStripDragApi {
   dragging: boolean;
   /// The armed/dragged tab id (null when idle).
   draggedId: string | null;
-  /// The dragged tab has torn out (ghosting in place, the cursor ghost is live).
-  torn: boolean;
 }
 
 function defaultShouldIgnoreDragStart(target: Element): boolean {
@@ -105,31 +101,11 @@ export function useTabStripDrag(
     return options.isDraggable?.(id) ?? true;
   };
 
+  // A handed-off torn drag lives entirely in `dockDrag` (`tabDrag` is null), so this no-ops then;
+  // pre-tear it just clears the in-strip drag on capture loss / cancel.
   const reset = (): void => {
-    setTabDrag((current) => {
-      if (current?.torn) {
-        cancelDockDrag();
-      }
-      return null;
-    });
+    setTabDrag(null);
   };
-
-  // Escape cancels a torn drag (pointer capture never delivers keyboard events).
-  useEffect(() => {
-    if (!tabDrag?.torn) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") {
-        return;
-      }
-      cancelDockDrag();
-      tabRefs.current.get(tabDrag.id)?.releasePointerCapture(tabDrag.pointerId);
-      setTabDrag(null);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [tabDrag?.torn, tabDrag?.id, tabDrag?.pointerId]);
 
   // FLIP settle for a tab drop. The drop render reorders the DOM, clears the drag
   // transforms, and re-enables transitions in one commit — left alone, the browser
@@ -232,7 +208,6 @@ export function useTabStripDrag(
       startX: event.clientX,
       currentX: event.clientX,
       dragging: false,
-      torn: false,
       startIndex,
       previewIndex: startIndex,
       width: nodeRect.width,
@@ -256,39 +231,28 @@ export function useTabStripDrag(
     const pointer = { x: event.clientX, y: event.clientY };
 
     if (canTearOut && dragging) {
-      const { top, bottom, left, right } = tabDrag.stripBox;
-      if (tabDrag.torn) {
-        const reentered =
-          event.clientY >= top - TEAR_HYSTERESIS_PX &&
-          event.clientY <= bottom + TEAR_HYSTERESIS_PX &&
-          event.clientX >= left &&
-          event.clientX <= right;
-        if (reentered) {
-          cancelDockDrag();
-          setTabDrag({
-            ...tabDrag,
-            torn: false,
-            currentX: event.clientX,
-            previewIndex: insertionIndexForPointer(tabDrag, event.clientX),
-          });
-          return;
-        }
-        moveDockDrag(pointer);
-        setTabDrag({ ...tabDrag, currentX: event.clientX });
-        return;
-      }
+      const { top, bottom } = tabDrag.stripBox;
       const escaped = event.clientY < top - TEAR_OUT_PX || event.clientY > bottom + TEAR_OUT_PX;
       if (escaped) {
+        // Hand off to `dockDrag`: release pointer capture so the source tab/leaf can unmount
+        // (DockRoot subtracts the torn panel), and stop driving the drag here — `dockDrag` owns
+        // move/drop/cancel from window listeners from now on.
         const node = tabRefs.current.get(tabDrag.id);
-        beginDockDrag({
-          panelId: tabDrag.id as DockPanelId,
-          fromLeafId: options.leafId as DockNodeId,
-          ghostWidth: tabDrag.width,
-          ghostLabel: node?.textContent?.trim() ?? tabDrag.id,
-          pointer,
-        });
+        if (node?.hasPointerCapture(tabDrag.pointerId)) {
+          node.releasePointerCapture(tabDrag.pointerId);
+        }
+        beginDockDrag(
+          {
+            panelId: tabDrag.id as DockPanelId,
+            fromLeafId: options.leafId as DockNodeId,
+            ghostWidth: tabDrag.width,
+            ghostLabel: node?.textContent?.trim() ?? tabDrag.id,
+            pointer,
+          },
+          (id, target) => options.onDrop?.(id, target),
+        );
         moveDockDrag(pointer);
-        setTabDrag({ ...tabDrag, torn: true, dragging: true, currentX: event.clientX });
+        setTabDrag(null);
         return;
       }
     }
@@ -311,15 +275,6 @@ export function useTabStripDrag(
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
 
-    if (tabDrag.torn) {
-      const target = endDockDrag();
-      setTabDrag(null);
-      if (target) {
-        options.onDrop?.(tabDrag.id, target);
-      }
-      return;
-    }
-
     const activate = !tabDrag.dragging;
     const nextIndex = tabDrag.previewIndex;
     if (tabDrag.dragging) {
@@ -340,11 +295,6 @@ export function useTabStripDrag(
   const styleFor = (id: string): CSSProperties | undefined => {
     if (!tabDrag?.dragging) {
       return undefined;
-    }
-    if (tabDrag.torn) {
-      // The dragged tab ghosts in place; the cursor ghost carries it. Neighbors part via
-      // the dockDrag preview the strip renders, not here.
-      return id === tabDrag.id ? { opacity: 0.4 } : undefined;
     }
     if (id === tabDrag.id) {
       return { transform: `translateX(${tabDrag.currentX - tabDrag.startX}px)` };
@@ -382,6 +332,5 @@ export function useTabStripDrag(
     canDrag,
     dragging: tabDrag?.dragging ?? false,
     draggedId: tabDrag?.id ?? null,
-    torn: tabDrag?.torn ?? false,
   };
 }

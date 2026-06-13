@@ -47,6 +47,7 @@ export interface DockDragState {
 }
 
 let state: DockDragState | null = null;
+let onDropResolved: ((panelId: DockPanelId, target: DropTarget) => void) | null = null;
 const listeners = new Set<() => void>();
 
 function notify(): void {
@@ -159,8 +160,58 @@ export function snapshotLeafRects(): LeafDropRect[] {
   return out;
 }
 
-export function beginDockDrag(init: Omit<DockDragState, "hovered">): void {
+function onWindowMove(event: PointerEvent): void {
+  if (!state) {
+    return;
+  }
+  moveDockDrag({ x: event.clientX, y: event.clientY });
+}
+
+function onWindowUp(): void {
+  if (!state) {
+    return;
+  }
+  const { panelId, hovered } = state;
+  const onDrop = onDropResolved;
+  // Commit the drop BEFORE clearing, so the `setBranchSizes` gate (`getDockDrag() !== null`)
+  // stays closed through the move-commit remount; then tear down.
+  if (hovered) {
+    onDrop?.(panelId, hovered);
+  }
+  teardown();
+}
+
+function onWindowKey(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    cancelDockDrag();
+  }
+}
+
+function teardown(): void {
+  window.removeEventListener("pointermove", onWindowMove);
+  window.removeEventListener("pointerup", onWindowUp);
+  window.removeEventListener("pointercancel", cancelDockDrag);
+  window.removeEventListener("keydown", onWindowKey);
+  window.removeEventListener("blur", cancelDockDrag);
+  state = null;
+  onDropResolved = null;
+  notify();
+}
+
+/// Arm a torn drag. The source strip releases pointer capture and hands off here, so the drag
+/// survives the source tab/leaf unmounting (collapsing). Window listeners drive move/drop/cancel;
+/// `onDrop` commits the move — kept as an indirection so this module never imports the store.
+export function beginDockDrag(
+  init: Omit<DockDragState, "hovered">,
+  onDrop: (panelId: DockPanelId, target: DropTarget) => void,
+): void {
   state = { ...init, hovered: null };
+  onDropResolved = onDrop;
+  window.addEventListener("pointermove", onWindowMove);
+  window.addEventListener("pointerup", onWindowUp);
+  window.addEventListener("pointercancel", cancelDockDrag);
+  window.addEventListener("keydown", onWindowKey);
+  window.addEventListener("blur", cancelDockDrag);
   notify();
 }
 
@@ -173,20 +224,11 @@ export function moveDockDrag(pointer: { x: number; y: number }): void {
   notify();
 }
 
-/// End the torn drag, returning the resolved drop target (null when released over nothing).
-export function endDockDrag(): DropTarget | null {
-  const target = state?.hovered ?? null;
-  state = null;
-  notify();
-  return target;
-}
-
 export function cancelDockDrag(): void {
   if (state === null) {
     return;
   }
-  state = null;
-  notify();
+  teardown();
 }
 
 export function getDockDrag(): DockDragState | null {
@@ -203,4 +245,14 @@ function subscribe(fn: () => void): () => void {
 /// Subscribe a component to the torn-drag state (null when idle).
 export function useDockDrag(): DockDragState | null {
   return useSyncExternalStore(subscribe, getDockDrag, () => null);
+}
+
+/// The torn panel id (stable while a drag is torn), so `DockRoot` can subtract it from the
+/// rendered tree without re-rendering on every pointer move.
+export function useTornPanelId(): DockPanelId | null {
+  return useSyncExternalStore(
+    subscribe,
+    () => state?.panelId ?? null,
+    () => null,
+  );
 }

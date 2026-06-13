@@ -93,6 +93,15 @@ export function LeafBody({
     if (!container) {
       return;
     }
+    // Detach hosts this leaf no longer owns — e.g. a tab subtracted mid-drag by DockRoot's
+    // effective layout — so the torn body hides. The module map keeps the host alive (never
+    // destroyed here), so the panel re-claims it on drop/cancel with its state intact.
+    for (const child of [...container.children]) {
+      const id = (child as HTMLElement).dataset.panelHost;
+      if (id && !tabs.includes(id as DockPanelId)) {
+        container.removeChild(child);
+      }
+    }
     for (const id of tabs) {
       const host = hostFor(id);
       host.style.display = id === activeTab ? "" : "none";

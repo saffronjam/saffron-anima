@@ -105,7 +105,7 @@ export function TabStrip({
       {items.map((item, index) => {
         const Icon = item.icon;
         const active = item.id === activeId;
-        const dragged = api.draggedId === item.id && api.dragging && !api.torn;
+        const dragged = api.draggedId === item.id && api.dragging;
         const gapStyle =
           gap && index >= gap.index && item.id !== gap.draggedId
             ? { transform: `translateX(${gap.width}px)` }

@@ -8,10 +8,15 @@
 /// child add/remove/reorder remounts the group against the new `defaultLayout`, while a resize
 /// never changes the key and so never remounts. An empty non-locked leaf is skipped, so its
 /// region collapses (the viewport reclaims the space) while the leaf stays in the model.
+import { useMemo } from "react";
 import { useEditorStore } from "../../state/store";
 import {
   isBranch,
   isLeaf,
+  isPanelOpenIn,
+  normalize,
+  panelKind,
+  removePanel,
   renderedChildIds,
   subtreeMinPx,
   type DockBranch,
@@ -25,10 +30,24 @@ import type { Layout as PanelLayout } from "react-resizable-panels";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { TabStrip } from "./TabStrip";
 import { LeafBody } from "./DockPanelsHost";
+import { useTornPanelId } from "./dockDrag";
 import { panelDef, panelTitle } from "./panelRegistry";
 
 export function DockRoot({ space }: { space: DockSpaceKind }) {
-  const layout = useEditorStore((s) => s.dockLayouts[space]);
+  const real = useEditorStore((s) => s.dockLayouts[space]);
+  const tornId = useTornPanelId();
+  // While a tab of THIS island is torn out, render a tree with it subtracted: the tab + its body
+  // vanish from the source, and a leaf left empty collapses (reclaiming space). Render-only — the
+  // store is untouched until drop — and a collapsed leaf has no `[data-dock-leaf]`, so it can never
+  // be a drop target (no dock-to-self). The `setBranchSizes` store action ignores writes while a
+  // drag is active, so the collapse remount never corrupts the real sizes.
+  const layout = useMemo(
+    () =>
+      tornId !== null && panelKind(tornId) === space && isPanelOpenIn(real, tornId)
+        ? normalize(removePanel(real, tornId))
+        : real,
+    [real, tornId, space],
+  );
   return <DockNodeView layout={layout} nodeId={layout.rootId} />;
 }
 
