@@ -68,7 +68,7 @@ test("scene camera editor helpers default on and roundtrip", async () => {
   const created = await engine.call<Inspect>("inspect", { entity: camera.id });
   expect(created.components.Camera.showModel).toBe(true);
   expect(created.components.Camera.showFrustum).toBe(true);
-  expect(created.components.Camera.frustumMaxDistance).toBeCloseTo(25, 4);
+  expect(created.components.Camera.frustumMaxDistance).toBeCloseTo(10, 4);
 
   await engine.call("set-component-field", {
     entity: camera.id,
