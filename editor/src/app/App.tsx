@@ -1,12 +1,15 @@
 /// Top-level editor shell. Wires the Tauri lifecycle events to the store, starts
 /// the reconcile poll + the global W/E/R gizmo shortcuts, and composes the chrome
-/// above the resizable dock `Layout` and a status bar below.
-/// The dock arrangement (Hierarchy + tabbed Inspector/Environment/Stats on the
-/// left, Assets bottom, Viewport center) lives in `Layout`; the embedded viewport's
-/// LoadingOverlay is a sibling inside ViewportPanel, never a panel the native window
-/// paints over. The dock stays mounted while an asset tab is active (display:none),
-/// so split ratios, scroll positions, and the viewport survive tab navigation.
-import { useEffect, useState } from "react";
+/// above the Scene dock `Layout` and a status bar below.
+/// Each main tab that owns a dockspace is its own island: the Scene tree (Hierarchy,
+/// the tabbed Inspector/Environment/Render group, Assets, the locked Viewport, plus the
+/// right/bottom docks) lives in `Layout`; the asset editor is the second island
+/// (`AssetEditorWorkspace`). The embedded viewport's LoadingOverlay is a sibling inside
+/// ViewportPanel, never a panel the native window paints over. Both islands stay mounted
+/// while the other main tab is active (display:none), so layouts, scroll positions, and the
+/// viewport survive tab navigation; each remounts on the per-project key.
+import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { client } from "../control/client";
@@ -16,6 +19,8 @@ import { Topbar } from "../panels/Topbar";
 import { Layout } from "./Layout";
 import { WindowTitlebar } from "./WindowTitlebar";
 import { useGizmoShortcuts } from "./useGizmoShortcuts";
+import { useUndoRedoShortcuts } from "./useUndoRedoShortcuts";
+import { useMouseHistoryNav } from "./useMouseHistoryNav";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectStartupModal } from "./ProjectStartupModal";
 import { SettingsModal } from "./SettingsModal";
@@ -24,6 +29,8 @@ import { AssetPreview } from "../components/AssetViewer";
 import { CaptureFlame } from "../components/CaptureFlame";
 import { MaterialGraphEditor } from "../panels/MaterialGraphEditor";
 import { AssetEditorWorkspace } from "../panels/AssetEditorWorkspace";
+import { DockPanelsHost } from "../components/dock/DockPanelsHost";
+import { DockDropOverlay } from "../components/dock/DockDropOverlay";
 import { emitLayoutSettled } from "./layoutBus";
 import { logRender } from "../lib/renderLog";
 import { Toaster } from "@/components/ui/sonner";
@@ -70,6 +77,26 @@ export function App() {
     const tab = s.viewTabs.find((candidate) => candidate.id === s.activeViewTabId);
     return tab?.kind === "assetEditor" ? tab.assetId : null;
   });
+  // Keep one asset editor mounted across tab switches (like the scene dock) so returning is instant: it
+  // suspends/resumes the engine preview on `active` rather than remounting + re-entering. We keep the
+  // most-recently-active asset tab mounted, sticky until its tab closes; switching to a different asset
+  // tab remounts via the key (a real model swap).
+  const [mountedAssetId, setMountedAssetId] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeKind === "assetEditor" && activeAssetEditorId !== null) {
+      setMountedAssetId(activeAssetEditorId);
+    }
+  }, [activeKind, activeAssetEditorId]);
+  const mountedAssetTabExists = useEditorStore(
+    (s) =>
+      mountedAssetId !== null &&
+      s.viewTabs.some((tab) => tab.kind === "assetEditor" && tab.assetId === mountedAssetId),
+  );
+  useEffect(() => {
+    if (mountedAssetId !== null && !mountedAssetTabExists) {
+      setMountedAssetId(null); // its tab closed — unmount (exits the preview)
+    }
+  }, [mountedAssetId, mountedAssetTabExists]);
   const [revealed, setRevealed] = useState(didRevealWindow);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const sceneTabActive = activeViewTabId === "scene";
@@ -79,6 +106,10 @@ export function App() {
 
   // W/E/R → translate/rotate/scale, gated off while a text field is focused.
   useGizmoShortcuts();
+  // Ctrl+Z / Ctrl+Shift+Z (+ Ctrl+Y) → undo/redo on the active tab's history.
+  useUndoRedoShortcuts();
+  // Mouse Back/Forward → undo/redo; also kills the webview's default Back/Forward nav.
+  useMouseHistoryNav();
 
   useEffect(() => {
     if (didRevealWindow) {
@@ -228,14 +259,34 @@ export function App() {
           <Topbar />
           <Layout key={projectPath ?? ""} />
         </div>
+        {/* The Scene panels render here, once, portaled into the per-panel host divs the
+            dock leaves claim — so a panel's React tree survives moves between docks and
+            main-tab switches. Mounted unconditionally; the host divs live inside the dock
+            above, hidden with it when a non-scene tab is active. */}
+        <DockPanelsHost space="scene" />
+        {/* The torn-drag ghost + drop highlight, above every panel (pointer-events: none). */}
+        <DockDropOverlay />
         {activeKind === "imageViewer" && <ImageViewerWorkspace asset={activeImage} />}
         {activeKind === "flamegraph" && <FlameGraphWorkspace />}
         {activeKind === "materialGraph" && (
           <MaterialGraphWorkspace materialId={activeGraphMaterialId} />
         )}
-        {/* key={assetId} so a model A -> model B switch remounts (cleanup exits A, mount enters B). */}
-        {activeKind === "assetEditor" && activeAssetEditorId !== null && (
-          <AssetEditorWorkspace key={activeAssetEditorId} assetId={activeAssetEditorId} />
+        {/* Kept mounted across tab switches (hidden when inactive) so returning suspends/resumes the
+            preview instead of re-spawning it. key={assetId} so a model A -> model B switch still remounts
+            (cleanup exits A, mount enters B). */}
+        {mountedAssetId !== null && (
+          <div
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              activeKind !== "assetEditor" && "hidden",
+            )}
+          >
+            <AssetEditorWorkspace
+              key={mountedAssetId}
+              assetId={mountedAssetId}
+              active={activeKind === "assetEditor" && activeAssetEditorId === mountedAssetId}
+            />
+          </div>
         )}
         <ProjectStartupModal open={projectModalOpen} onProjectLoaded={handleProjectLoaded} />
         <SettingsModal />
@@ -246,16 +297,59 @@ export function App() {
   );
 }
 
-/// The status strip below the dock. A leaf so the fps meter's twice-a-second store
-/// write re-renders this one line, not the entire shell above it.
+/// Hidden dev-mode gesture: five quick clicks on the fps counter, each within this gap of
+/// the last, toggle developer mode.
+const DEV_GESTURE_CLICKS = 5;
+const DEV_GESTURE_WINDOW_MS = 600;
+
+/// Status chip flagging that developer mode is on; the X exits dev mode.
+function DevModeChip({ onExit }: { onExit: () => void }) {
+  return (
+    <span className="flex h-4 flex-none select-none items-center gap-1 rounded-full bg-orange-500/15 pl-2 pr-1 text-[10px] font-medium uppercase tracking-wide text-orange-400">
+      Dev mode
+      <button
+        type="button"
+        aria-label="Exit developer mode"
+        className="flex size-3.5 items-center justify-center rounded-full hover:bg-orange-500/25"
+        onClick={onExit}
+      >
+        <X className="size-3" />
+      </button>
+    </span>
+  );
+}
+
+/// The status strip below the dock. A leaf so the fps meter's twice-a-second store write
+/// re-renders this one line, not the entire shell above it. Five quick clicks on the fps
+/// counter toggle developer mode (the hidden gesture), and the DEV MODE chip shows here
+/// while it is on.
 function StatusFooter() {
   const phase = useEditorStore((s) => s.engineStatus.phase);
   const uiFrameRateHz = useEditorStore((s) => s.uiFrameRateHz);
+  const devMode = useEditorStore((s) => s.devMode);
+  const setDevMode = useEditorStore((s) => s.setDevMode);
+  const clicks = useRef(0);
+  const lastClickAt = useRef(0);
+  const onCounterClick = (): void => {
+    const now = Date.now();
+    clicks.current = now - lastClickAt.current > DEV_GESTURE_WINDOW_MS ? 1 : clicks.current + 1;
+    lastClickAt.current = now;
+    if (clicks.current >= DEV_GESTURE_CLICKS) {
+      clicks.current = 0;
+      setDevMode(!devMode);
+    }
+  };
   return (
-    <footer className="flex h-[22px] flex-none items-center justify-end border-t border-border bg-card px-3">
-      <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+    <footer className="flex h-[22px] flex-none items-center justify-end gap-2 border-t border-border bg-card px-3">
+      {devMode ? <DevModeChip onExit={() => setDevMode(false)} /> : null}
+      <button
+        type="button"
+        onClick={onCounterClick}
+        aria-label="Engine status and UI frame rate"
+        className="cursor-default select-none font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+      >
         {phase} · UI {uiFrameRateHz > 0 ? uiFrameRateHz.toFixed(0) : "--"} fps
-      </span>
+      </button>
     </footer>
   );
 }
