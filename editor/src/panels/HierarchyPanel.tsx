@@ -149,10 +149,7 @@ export function HierarchyPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-10 flex-none items-center justify-between border-b border-border px-3">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Scene
-        </span>
+      <div className="flex h-10 flex-none items-center justify-end border-b border-border px-3">
         <div className="flex items-center gap-1">
           <Tooltip>
             <TooltipTrigger asChild>

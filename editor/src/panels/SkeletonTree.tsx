@@ -125,9 +125,6 @@ export function SkeletonTree({ bones, selectedIndex, onSelect }: SkeletonTreePro
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="border-b border-border px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Skeleton
-      </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="py-1">{roots.map((bone) => renderRows(bone, 0))}</div>
       </ScrollArea>

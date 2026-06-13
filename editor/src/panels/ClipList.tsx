@@ -49,9 +49,6 @@ export function ClipList({ model, rootEntity }: ClipListProps) {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="border-b border-border px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Clips
-      </div>
       {clips.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-3 text-center text-xs italic text-muted-foreground">
           No clips imported with this model. Re-import it to add them.
