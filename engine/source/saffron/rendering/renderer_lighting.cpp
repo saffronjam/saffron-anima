@@ -40,6 +40,16 @@ import :Detail;
 
 namespace se
 {
+    // Packs a bool into the 1u/0u flag words the lighting/cluster UBOs carry.
+    static auto boolFlag(bool b) -> u32
+    {
+        if (b)
+        {
+            return 1u;
+        }
+        return 0u;
+    }
+
     // Ensures the current frame's punctual-light buffer holds at least `count` lights,
     // growing to the next power of two (never shrinking) and rewriting its set.
     auto ensureLightCapacity(Renderer& renderer, u32 frame, u32 count) -> Result<void>
@@ -117,27 +127,31 @@ namespace se
         // ambientColor.w carries the reflection-probe count the mesh fragment iterates;
         // 0 = no probes -> the fragment's specular IBL is byte-identical to the global fallback.
         const bool probesOn = renderer.reflection.useProbes && renderer.ibl.ready;
-        const u32 probeCount = probesOn ? renderer.lighting.frameProbeCount : 0u;
+        u32 probeCount = 0u;
+        if (probesOn)
+        {
+            probeCount = renderer.lighting.frameProbeCount;
+        }
         ubo.ambientColor = glm::vec4(ambient, std::bit_cast<f32>(probeCount));
         // counts: x = punctual count, y = directional-shadow flag, z = IBL-ambient flag,
         // w = SSAO flag (the mesh multiplies the AO map into the ambient term). screenFlags
         // x = contact-shadow flag, y = SSGI flag. Driven off the same enable state
         // beginFrameGraph uses to schedule the passes (set this frame, before this call), so
         // a flagged map is always produced + valid.
-        const u32 iblFlag = (renderer.ibl.useIbl && renderer.ibl.ready) ? 1u : 0u;
+        const u32 iblFlag = boolFlag(renderer.ibl.useIbl && renderer.ibl.ready);
         // The screen-space maps are sampled through the active view's set 4; gate the flags on this view's
         // G-buffer existing so the mesh never samples a per-view set whose images aren't created yet (a
         // freshly-activated view before its first resize). ssao.ready is shared device state.
         const bool ssReady = renderer.ssao.ready && static_cast<bool>(activeView(renderer).gNormal.image);
-        const u32 ssaoFlag = (renderer.ssao.useSsao && ssReady) ? 1u : 0u;
-        const u32 contactFlag = (renderer.ssao.useContact && ssReady) ? 1u : 0u;
-        const u32 ssgiFlag = (renderer.ssao.useSsgi && ssReady) ? 1u : 0u;
-        const u32 ddgiFlag = (renderer.ddgi.useDdgi && renderer.ddgi.ready) ? 1u : 0u;
-        ubo.counts = glm::uvec4(count, renderer.lighting.shadowPending ? 1u : 0u, iblFlag, ssaoFlag);
+        const u32 ssaoFlag = boolFlag(renderer.ssao.useSsao && ssReady);
+        const u32 contactFlag = boolFlag(renderer.ssao.useContact && ssReady);
+        const u32 ssgiFlag = boolFlag(renderer.ssao.useSsgi && ssReady);
+        const u32 ddgiFlag = boolFlag(renderer.ddgi.useDdgi && renderer.ddgi.ready);
+        ubo.counts = glm::uvec4(count, boolFlag(renderer.lighting.shadowPending), iblFlag, ssaoFlag);
         // screenFlags.w = ReSTIR direct-lighting flag: the mesh replaces its punctual loop
         // with the resolved ReSTIR radiance buffer.
         const u32 restirFlag =
-            (renderer.restir.useRestir && activeRestir(renderer).ready && renderer.context.rtSupported) ? 1u : 0u;
+            boolFlag(renderer.restir.useRestir && activeRestir(renderer).ready && renderer.context.rtSupported);
         ubo.screenFlags = glm::uvec4(contactFlag, ssgiFlag, ddgiFlag, restirFlag);
         ubo.ddgiVolumeMin = glm::vec4(renderer.ddgi.volumeMin, 0.0f);
         ubo.ddgiVolumeExtent = glm::vec4(renderer.ddgi.volumeExtent, 0.0f);
@@ -146,11 +160,11 @@ namespace se
         ubo.shadowViewProj = renderer.lighting.shadowViewProj;
         ubo.spotShadowViewProj = renderer.lighting.spotShadowViewProj;
         ubo.spotShadow =
-            glm::uvec4(renderer.lighting.spotShadowLightIndex, renderer.lighting.spotShadowPending ? 1u : 0u, 0, 0);
+            glm::uvec4(renderer.lighting.spotShadowLightIndex, boolFlag(renderer.lighting.spotShadowPending), 0, 0);
         ubo.pointShadow = glm::vec4(renderer.lighting.pointShadowPos, renderer.lighting.pointShadowFar);
         // pointShadowMeta.z = RT-shadow flag (the mesh traces a ray-query shadow per light
         // instead of / in addition to the shadow maps). Requires rtSupported + a built TLAS.
-        const u32 rtFlag = (renderer.rt.useRtShadows && renderer.context.rtSupported) ? 1u : 0u;
+        const u32 rtFlag = boolFlag(renderer.rt.useRtShadows && renderer.context.rtSupported);
         // pointShadowMeta.w carries the debug view-mode channel the mesh fragment outputs instead of
         // shading: 0 = lit/wireframe, 1 = albedo, 2 = world normal, 3 = roughness, 4 = metallic, 5 = emissive.
         u32 debugChannel = 0;
@@ -175,7 +189,7 @@ namespace se
             break;
         }
         ubo.pointShadowMeta = glm::uvec4(renderer.lighting.pointShadowLightIndex,
-                                         renderer.lighting.pointShadowPending ? 1u : 0u, rtFlag, debugChannel);
+                                         boolFlag(renderer.lighting.pointShadowPending), rtFlag, debugChannel);
         std::memcpy(renderer.lighting.lightMapped[frame], &ubo, sizeof(ubo));
         vmaFlushAllocation(renderer.context.allocator, renderer.lighting.lightAllocs[frame], 0, sizeof(ubo));
         renderer.lighting.frameLightCount = count;
@@ -196,7 +210,7 @@ namespace se
         // the cull dispatch is skipped, so the buffers hold stale lists from the last dispatch
         // and the fragment must take the flat loop (which counts.x bounds to nothing) instead.
         const bool clusteredValid = renderer.lighting.useClustered && renderer.lighting.frameLightCount > 0;
-        params.screenSize = glm::uvec4(viewportWidth(renderer), viewportHeight(renderer), clusteredValid ? 1u : 0u, 0u);
+        params.screenSize = glm::uvec4(viewportWidth(renderer), viewportHeight(renderer), boolFlag(clusteredValid), 0u);
         params.zPlanes = glm::vec4(nearPlane, farPlane, 0.0f, 0.0f);
         std::memcpy(renderer.lighting.clusterParamMapped[frame], &params, sizeof(params));
         vmaFlushAllocation(renderer.context.allocator, renderer.lighting.clusterParamAllocs[frame], 0, sizeof(params));
@@ -254,11 +268,6 @@ namespace se
         ibl.pendingParams = params;
     }
 
-    void requestSkyBake(Renderer& renderer, const SkygenParams& params)
-    {
-        requestEnvBake(renderer, EnvSource::Procedural, nullptr, params);
-    }
-
     void submitReflectionProbes(Renderer& renderer, std::span<const ReflectionProbeUpload> probes)
     {
         ReflectionProbes& refl = renderer.reflection;
@@ -312,13 +321,17 @@ namespace se
         if (refl.metaBuffer && refl.metaBuffer->mapped != nullptr)
         {
             std::array<ProbeMetaGpu, MaxReflectionProbes> meta{};
-            const u32 sampleCount = refl.useProbes ? count : 0u;
+            u32 sampleCount = 0u;
+            if (refl.useProbes)
+            {
+                sampleCount = count;
+            }
             for (u32 i = 0; i < sampleCount; i = i + 1)
             {
                 const ReflectionProbe& probe = refl.probes[i];
                 meta[i].originRadius = glm::vec4(probe.origin, probe.influenceRadius);
                 meta[i].extentIntensity = glm::vec4(probe.boxExtent, probe.intensity);
-                meta[i].flags = glm::uvec4(probe.valid ? 1u : 0u, probe.boxProjection ? 1u : 0u, 0u, 0u);
+                meta[i].flags = glm::uvec4(boolFlag(probe.valid), boolFlag(probe.boxProjection), 0u, 0u);
             }
             std::memcpy(refl.metaBuffer->mapped, meta.data(), sizeof(meta));
             vmaFlushAllocation(renderer.context.allocator, refl.metaBuffer->alloc, 0, sizeof(meta));

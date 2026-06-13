@@ -63,7 +63,11 @@ namespace se
         std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
         stages[0].stage = vk::ShaderStageFlagBits::eVertex;
         stages[0].module = shaderModule;
-        stages[0].pName = skinned ? "vertexMainSkinned" : "vertexMain";
+        stages[0].pName = "vertexMain";
+        if (skinned)
+        {
+            stages[0].pName = "vertexMainSkinned";
+        }
         stages[1].stage = vk::ShaderStageFlagBits::eFragment;
         stages[1].module = shaderModule;
         stages[1].pName = "fragmentMain";
@@ -88,9 +92,14 @@ namespace se
         };
 
         vk::PipelineVertexInputStateCreateInfo vertexInput{};
-        vertexInput.vertexBindingDescriptionCount = skinned ? 2 : 1;
+        vertexInput.vertexBindingDescriptionCount = 1;
+        vertexInput.vertexAttributeDescriptionCount = 3;
+        if (skinned)
+        {
+            vertexInput.vertexBindingDescriptionCount = 2;
+            vertexInput.vertexAttributeDescriptionCount = 5;
+        }
         vertexInput.pVertexBindingDescriptions = bindings.data();
-        vertexInput.vertexAttributeDescriptionCount = skinned ? 5 : 3;
         vertexInput.pVertexAttributeDescriptions = attributes.data();
 
         vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
@@ -293,7 +302,11 @@ namespace se
         // The depth-tested variant occludes against the scene depth without touching it
         // (eLessOrEqual matches the scene pass's compare; depth is Vulkan [0,1]).
         vk::PipelineDepthStencilStateCreateInfo depthStencil{};
-        depthStencil.depthTestEnable = depthTest ? VK_TRUE : VK_FALSE;
+        depthStencil.depthTestEnable = VK_FALSE;
+        if (depthTest)
+        {
+            depthStencil.depthTestEnable = VK_TRUE;
+        }
         depthStencil.depthWriteEnable = VK_FALSE;
         depthStencil.depthCompareOp = vk::CompareOp::eLessOrEqual;
         vk::PipelineColorBlendAttachmentState blendAttachment{};
