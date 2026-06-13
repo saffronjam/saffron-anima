@@ -43,8 +43,8 @@ step "control DTO contract test (live help/results vs generated manifest/OpenRPC
 step "project startup and asset layout smoke"
 ( "$REPO/tools/check-projects/check.sh" ) || fail=1
 
-step "frontend: gen @saffron/protocol + tsc --noEmit + vite build"
-( cd "$REPO/editor" && bun run build ) || fail=1
+step "frontend: gen @saffron/protocol + tsc --noEmit + vite build + unit tests"
+( cd "$REPO/editor" && bun run build && bun test ) || fail=1
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL GATES PASSED"; else echo "SOME GATES FAILED"; fi
