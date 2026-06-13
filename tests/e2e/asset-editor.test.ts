@@ -30,7 +30,10 @@ beforeAll(async () => {
   legModel = (await engine.call<{ id: string }>("import-model", { path: LEG })).id;
   stripModel = (await engine.call<{ id: string }>("import-model", { path: STRIP })).id;
   await engine.settle();
-  projectPath = (await engine.call<{ path: string }>("get-project")).path;
+  // get-project reports project.json relative to the engine CWD (REPO via the harness); the auto-empty
+  // project lives at appdata/userdata/auto-empty-<suffix>/project.json there. Resolve against REPO so the
+  // test process (cwd tests/e2e) reads the file the engine actually wrote.
+  projectPath = join(REPO, (await engine.call<{ path: string }>("get-project")).path);
 });
 afterAll(async () => {
   await engine?.shutdown();

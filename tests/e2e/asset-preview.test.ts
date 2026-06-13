@@ -41,7 +41,9 @@ beforeAll(async () => {
   legModel = ref.id;
   await engine.settle();
   const proj = await engine.call<{ path: string }>("get-project");
-  projectPath = proj.path;
+  // The auto-empty project path is relative to the engine cwd (REPO, set by the harness); the test
+  // process runs in tests/e2e, so resolve it against REPO before reading the file.
+  projectPath = join(REPO, proj.path);
 });
 afterAll(async () => {
   await engine?.shutdown();
