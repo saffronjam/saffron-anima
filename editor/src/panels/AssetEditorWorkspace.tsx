@@ -15,18 +15,19 @@
 /// previewing A under B's panels. enter-asset-preview / exit-asset-preview stash + restore the camera
 /// engine-side, so orbiting never dirties the saved editorCamera.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Axis3d, Bone, Box, Grid2x2, Loader2 } from "lucide-react";
+import { Axis3d, Bone, Box, Grid2x2 } from "lucide-react";
 import { client } from "../control/client";
 import { makeCoalescer } from "../control/coalesce";
 import { useSubsurfaceBounds } from "../lib/useSubsurfaceBounds";
 import { errorText, notifyError } from "../lib/flash";
 import { Button } from "@/components/ui/button";
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import { SkeletonTree } from "./SkeletonTree";
-import { ClipList } from "./ClipList";
-import { TimelineTransport } from "../components/timeline/TimelineTransport";
-import { TimelineSurface } from "../components/timeline/TimelineSurface";
-import type { TimelineTarget } from "../components/timeline/shared";
+import { DockRoot } from "@/components/dock/DockRoot";
+import { DockPanelsHost } from "@/components/dock/DockPanelsHost";
+import {
+  AssetPreviewProvider,
+  Preparing,
+  type AssetPreviewContextValue,
+} from "./assetEditorPanels";
 import { useEditorStore } from "../state/store";
 import type { AssetModelResult } from "../protocol";
 
@@ -80,20 +81,7 @@ function cloneOrbit(o: OrbitState): OrbitState {
   return { target: { ...o.target }, distance: o.distance, yaw: o.yaw, pitch: o.pitch };
 }
 
-/// The shared "Preparing…" overlay (mirrors LoadingOverlay's non-error visual). Opaque so the unsettled
-/// subsurface frame never shows through the transparent viewport hole.
-function Preparing({ className }: { className: string }) {
-  return (
-    <div className={className} role="status" aria-live="polite">
-      <div className="flex flex-col items-center gap-3.5 text-muted-foreground">
-        <Loader2 className="size-8 animate-spin text-primary" aria-hidden="true" />
-        <div className="text-[13px]">Preparing…</div>
-      </div>
-    </div>
-  );
-}
-
-export function AssetEditorWorkspace({ assetId }: { assetId: string }) {
+export function AssetEditorWorkspace({ assetId, active }: { assetId: string; active: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMessage, setErrorMessage] = useState("");
@@ -123,10 +111,12 @@ export function AssetEditorWorkspace({ assetId }: { assetId: string }) {
   const rafId = useRef<number | null>(null);
   const lastFrameTs = useRef(0);
 
-  // Glue the single subsurface into this pane once the layout is final (status ready → host mounted with
-  // the correct panels), and lift the spinner after the first settled resize presents.
+  // Glue the single subsurface into this pane while this tab is ACTIVE and the layout is final (the host
+  // mounts with the correct panels), and lift the spinner after the first settled resize presents. When
+  // inactive (the tab is parked, preview suspended) the hook disables so the scene viewport drives the
+  // subsurface; re-activating re-runs the hook (a fresh resize + mask) for the resumed preview.
   const onViewportSettled = useCallback(() => setViewportSettled(true), []);
-  useSubsurfaceBounds(hostRef, { enabled: ready, onSettled: onViewportSettled });
+  useSubsurfaceBounds(hostRef, { enabled: active && ready, onSettled: onViewportSettled });
 
   // One coalesced set-camera in flight at a time (the serialized wire — never one call per frame tick).
   const cameraCoalescer = useMemo(
@@ -241,27 +231,56 @@ export function AssetEditorWorkspace({ assetId }: { assetId: string }) {
     };
   }, [assetId]);
 
+  // Suspend/resume the preview as this tab loses/gains focus (the mount enters, the unmount exits). The
+  // engine keeps the preview scene alive across a suspend, so resuming is instant (no re-spawn) and the
+  // orbit camera is preserved. The first run is the mount itself (already entered) — skip it.
+  const firstActiveRun = useRef(true);
+  useEffect(() => {
+    if (firstActiveRun.current) {
+      firstActiveRun.current = false;
+      return;
+    }
+    if (active) {
+      setViewportSettled(false); // re-mask while the resumed preview resizes back into this pane
+      void client.resumeAssetPreview().catch((err: unknown) => notifyError(errorText(err)));
+    } else {
+      void client.suspendAssetPreview().catch((err: unknown) => notifyError(errorText(err)));
+    }
+  }, [active]);
+
   const onBoneSelect = useCallback((joint: number) => {
     setHighlightJoint(joint);
     void client.setSkeletonHighlight(joint).catch((err: unknown) => notifyError(errorText(err)));
   }, []);
 
-  // The previewed model is the engine selection, so the store's selection-keyed animationState mirrors
-  // it; the timeline targets the spawned root entity. The clip list panel owns clip picking, so the
-  // transport hides its clip Select. Enabled once the preview is entered.
-  const animationState = useEditorStore((s) => s.animationState);
-  const timelineTarget: TimelineTarget = {
-    entityId: rootEntity,
-    state: animationState,
-    clips: [],
-    enabled: ready && rootEntity !== null,
-  };
+  // Capability gating through the dock model, not a render branch (NO-COMPAT): once the
+  // model's capabilities are known, open the panels it supports (rig → skeleton; clips →
+  // clips + the timeline) and close the rest. Their leaves are persistent, so DockRoot
+  // collapses an empty one — a static model shows just the preview. `preview` is always open.
+  useEffect(() => {
+    if (!ready) {
+      return;
+    }
+    const { openPanel, closePanel } = useEditorStore.getState();
+    if (hasRig) {
+      openPanel("skeleton");
+    } else {
+      closePanel("skeleton");
+    }
+    if (hasClips) {
+      openPanel("clips");
+      openPanel("assetTimeline");
+    } else {
+      closePanel("clips");
+      closePanel("assetTimeline");
+    }
+  }, [ready, hasRig, hasClips]);
 
-  // Space = play/pause while the tab is focused (not while a text field is). The workspace mounts only
-  // when the tab is active, so a window listener is scoped correctly.
+  // Space = play/pause while THIS tab is active (the workspace stays mounted-but-hidden when parked, so
+  // the window listener must no-op unless active) and no text field is focused.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.code !== "Space" || !rootEntity) {
+      if (!active || e.code !== "Space" || !rootEntity) {
         return;
       }
       const el = document.activeElement;
@@ -283,7 +302,7 @@ export function AssetEditorWorkspace({ assetId }: { assetId: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rootEntity]);
+  }, [active, rootEntity]);
 
   const toggleFloor = useCallback(() => {
     setFloor((prev) => {
@@ -387,6 +406,35 @@ export function AssetEditorWorkspace({ assetId }: { assetId: string }) {
     [ensureOrbitLoop],
   );
 
+  // The live preview state the dock panels read. Provided around this island's DockRoot +
+  // DockPanelsHost so the portaled panel bodies inherit it across the leaves they land in.
+  const previewContext: AssetPreviewContextValue = useMemo(
+    () => ({
+      model,
+      rootEntity,
+      highlightJoint,
+      onBoneSelect,
+      hostRef,
+      viewportSettled,
+      orbit: { onPointerDown, onPointerMove, onPointerUp, onWheel },
+      active,
+      ready,
+    }),
+    [
+      model,
+      rootEntity,
+      highlightJoint,
+      onBoneSelect,
+      viewportSettled,
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      onWheel,
+      active,
+      ready,
+    ],
+  );
+
   if (status === "error") {
     return (
       <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-background px-6 text-center">
@@ -444,54 +492,16 @@ export function AssetEditorWorkspace({ assetId }: { assetId: string }) {
         ) : null}
       </div>
       {ready ? (
-        <>
-          <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-            {hasRig ? (
-              <>
-                <ResizablePanel id="skeleton" defaultSize={18} minSize={12}>
-                  <SkeletonTree
-                    bones={model?.bones ?? []}
-                    selectedIndex={highlightJoint}
-                    onSelect={onBoneSelect}
-                  />
-                </ResizablePanel>
-                <ResizableHandle />
-              </>
-            ) : null}
-            <ResizablePanel id="preview" defaultSize={67} minSize={30}>
-              {/* The transparent hole down to the engine's subsurface (the preview scene renders here). */}
-              <div
-                className="relative h-full w-full overflow-hidden"
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                onPointerCancel={onPointerUp}
-                onWheel={onWheel}
-              >
-                <div ref={hostRef} className="viewport-host" />
-                {viewportSettled ? null : (
-                  <Preparing className="absolute inset-0 z-10 flex items-center justify-center bg-background" />
-                )}
-              </div>
-            </ResizablePanel>
-            {hasClips ? (
-              <>
-                <ResizableHandle />
-                <ResizablePanel id="clips" defaultSize={15} minSize={14}>
-                  <ClipList model={model} rootEntity={rootEntity} />
-                </ResizablePanel>
-              </>
-            ) : null}
-          </ResizablePanelGroup>
-          {/* Bottom timeline strip: the shared transport + surface, targeted at the previewed model —
-              shown only when the model has clips. */}
-          {hasClips ? (
-            <div className="flex h-[200px] flex-none flex-col border-t border-border bg-background">
-              <TimelineTransport target={timelineTarget} showClipSelect={false} />
-              <TimelineSurface target={timelineTarget} />
-            </div>
-          ) : null}
-        </>
+        // The asset-editor dock island: its skeleton / preview(locked) / clips / assetTimeline
+        // panels are a draggable DockRoot tree (the second dockspace kind). The panels render
+        // through this island's own DockPanelsHost, portaled into the leaves — so they inherit
+        // the preview state via AssetPreviewProvider and survive retab/split moves.
+        <AssetPreviewProvider value={previewContext}>
+          <DockPanelsHost space="assetEditor" />
+          <div className="relative min-h-0 flex-1">
+            <DockRoot space="assetEditor" />
+          </div>
+        </AssetPreviewProvider>
       ) : (
         <Preparing className="flex min-h-0 flex-1 items-center justify-center bg-background" />
       )}
