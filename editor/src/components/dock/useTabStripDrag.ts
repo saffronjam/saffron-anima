@@ -47,7 +47,6 @@ export interface UseTabStripDragOptions {
   leafId?: DockNodeId;
   /// Ids that are both excluded as insertion targets and non-draggable (e.g. the scene tab).
   pinnedIds?: string[];
-  isDraggable?(id: string): boolean;
   /// A press whose target matches this never arms a drag; defaults to the close affordance.
   shouldIgnoreDragStart?(target: Element): boolean;
   /// Commit a same-strip reorder; `index` is in the without-moving-tab space.
@@ -70,8 +69,8 @@ export interface UseTabStripDragApi {
   handlersFor(id: string): TabStripDragHandlers;
   styleFor(id: string): CSSProperties | undefined;
   registerTabRef(id: string, el: HTMLButtonElement | null): void;
-  /// Resolved draggability (pinnedIds + isDraggable): the strip routes activation for
-  /// non-draggable tabs through onClick, draggable ones through the click-vs-drag pointerup.
+  /// Resolved draggability: pinned tabs are non-draggable, and the strip routes their
+  /// activation through onClick while draggable tabs go through the click-vs-drag pointerup.
   canDrag(id: string): boolean;
   /// A threshold-crossed drag is live in this strip.
   dragging: boolean;
@@ -94,12 +93,7 @@ export function useTabStripDrag(
   const shouldIgnore = options.shouldIgnoreDragStart ?? defaultShouldIgnoreDragStart;
   const canTearOut = options.domain === "dock" && options.leafId !== undefined;
 
-  const canDrag = (id: string): boolean => {
-    if (pinned.includes(id)) {
-      return false;
-    }
-    return options.isDraggable?.(id) ?? true;
-  };
+  const canDrag = (id: string): boolean => !pinned.includes(id);
 
   // A handed-off torn drag lives entirely in `dockDrag` (`tabDrag` is null), so this no-ops then;
   // pre-tear it just clears the in-strip drag on capture loss / cancel.

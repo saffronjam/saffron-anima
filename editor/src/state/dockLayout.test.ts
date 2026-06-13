@@ -228,6 +228,93 @@ describe("splitLeaf", () => {
     const b = next.nodes["b"] as DockBranch;
     expect(b.children).toEqual(["a", "n"]);
   });
+
+  test("same-orientation branch append: trailing child + sizes rescale to sum 100, ratios kept", () => {
+    // Splitting a BRANCH (not a leaf) on a same-orientation edge appends a sibling and
+    // rescales every size so the set still sums to 100, preserving the old children's ratio.
+    const l = layoutOf(
+      "b",
+      { ...branch("b", "horizontal", ["a", "c"]), sizes: { a: 60, c: 40 } },
+      leaf("a", ["material"]),
+      leaf("c", ["timeline"]),
+    );
+    const next = splitLeaf(l, "b", "stats", "right", { leafId: "n" });
+    const b = next.nodes["b"] as DockBranch;
+    expect(b.children).toEqual(["a", "c", "n"]);
+    // share = 100 / 3; existing scaled by (1 - 1/3) = 2/3.
+    expect(b.sizes["a"]).toBeCloseTo(40); // 60 * 2/3
+    expect(b.sizes["c"]).toBeCloseTo(26.6667); // 40 * 2/3
+    expect(b.sizes["n"]).toBeCloseTo(33.3333); // 100 / 3
+    const sum = b.children.reduce((acc, id) => acc + b.sizes[id], 0);
+    expect(sum).toBeCloseTo(100);
+    // Existing children keep their 60:40 ratio after the rescale.
+    expect(b.sizes["a"] / b.sizes["c"]).toBeCloseTo(60 / 40);
+    expect(leafTabs(next, "n")).toEqual(["stats"]);
+    const n = next.nodes["n"];
+    expect(isLeaf(n) && n.activeTab).toBe("stats");
+  });
+
+  test("same-orientation branch append before-edge: prepends and still sums to 100", () => {
+    // A leading edge (left/top) prepends the new leaf; sizes still rescale to sum 100.
+    const l = layoutOf(
+      "b",
+      { ...branch("b", "horizontal", ["a", "c"]), sizes: { a: 70, c: 30 } },
+      leaf("a", ["material"]),
+      leaf("c", ["timeline"]),
+    );
+    const next = splitLeaf(l, "b", "stats", "left", { leafId: "n" });
+    const b = next.nodes["b"] as DockBranch;
+    expect(b.children).toEqual(["n", "a", "c"]);
+    expect(b.sizes["a"]).toBeCloseTo(70 * (2 / 3));
+    expect(b.sizes["c"]).toBeCloseTo(30 * (2 / 3));
+    expect(b.sizes["n"]).toBeCloseTo(100 / 3);
+    const sum = b.children.reduce((acc, id) => acc + b.sizes[id], 0);
+    expect(sum).toBeCloseTo(100);
+  });
+
+  test("same-orientation branch append into a single-child branch: even halves summing to 100", () => {
+    // The openPanel terminal-fallback shape: one child, append a second -> two even halves.
+    const l = layoutOf(
+      "b",
+      { ...branch("b", "vertical", ["a"]), sizes: { a: 100 } },
+      leaf("a", ["viewport"], { locked: true }),
+    );
+    const next = splitLeaf(l, "b", "stats", "bottom", { leafId: "n" });
+    const b = next.nodes["b"] as DockBranch;
+    expect(b.children).toEqual(["a", "n"]);
+    expect(b.sizes["a"]).toBeCloseTo(50); // 100 * (1 - 1/2)
+    expect(b.sizes["n"]).toBeCloseTo(50); // 100 / 2
+  });
+
+  test("same-orientation branch append with missing sizes: total falls back to 100", () => {
+    // No recorded sizes -> total is 0 || 100 = 100; existing scale from 0, new gets 100/len.
+    const l = layoutOf(
+      "b",
+      { ...branch("b", "horizontal", ["a", "c"]), sizes: {} },
+      leaf("a", ["material"]),
+      leaf("c", ["timeline"]),
+    );
+    const next = splitLeaf(l, "b", "stats", "right", { leafId: "n" });
+    const b = next.nodes["b"] as DockBranch;
+    expect(b.children).toEqual(["a", "c", "n"]);
+    expect(b.sizes["a"]).toBeCloseTo(0); // 0 * 2/3
+    expect(b.sizes["c"]).toBeCloseTo(0);
+    expect(b.sizes["n"]).toBeCloseTo(100 / 3); // total (100) / 3
+  });
+
+  test("same-orientation branch append is pure: the input layout is untouched", () => {
+    const l = layoutOf(
+      "b",
+      { ...branch("b", "horizontal", ["a", "c"]), sizes: { a: 60, c: 40 } },
+      leaf("a", ["material"]),
+      leaf("c", ["timeline"]),
+    );
+    splitLeaf(l, "b", "stats", "right", { leafId: "n" });
+    const b = l.nodes["b"] as DockBranch;
+    expect(b.children).toEqual(["a", "c"]);
+    expect(b.sizes).toEqual({ a: 60, c: 40 });
+    expect(l.nodes["n"]).toBeUndefined();
+  });
 });
 
 describe("movePanel", () => {

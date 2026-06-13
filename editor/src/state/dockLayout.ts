@@ -76,8 +76,6 @@ export function panelKind(id: DockPanelId): DockSpaceKind {
   return SCENE_PANEL_SET.has(id) ? "scene" : "assetEditor";
 }
 
-// --- node guards / accessors -------------------------------------------------
-
 export function isLeaf(node: DockNode | undefined): node is DockLeaf {
   return node?.type === "leaf";
 }
@@ -93,14 +91,6 @@ function leafAt(layout: DockLayout, id: DockNodeId): DockLeaf | null {
 
 export function leafTabs(layout: DockLayout, leafId: DockNodeId): DockPanelId[] {
   return leafAt(layout, leafId)?.tabs ?? [];
-}
-
-export function leafActiveTab(layout: DockLayout, leafId: DockNodeId): DockPanelId | null {
-  return leafAt(layout, leafId)?.activeTab ?? null;
-}
-
-export function isLeafEmpty(layout: DockLayout, leafId: DockNodeId): boolean {
-  return leafTabs(layout, leafId).length === 0;
 }
 
 /// The leaf id currently holding `panelId`, or null when the panel is closed.
@@ -238,8 +228,6 @@ function parentBranchOf(layout: DockLayout, childId: DockNodeId): DockBranch | n
   return null;
 }
 
-// --- id allocation (deterministic, no randomness) ----------------------------
-
 /// A fresh node id that collides with nothing in the layout. Deterministic given the
 /// layout so the pure functions stay testable and resume-safe.
 function freshNodeId(layout: DockLayout, kind: "leaf" | "branch"): DockNodeId {
@@ -249,8 +237,6 @@ function freshNodeId(layout: DockLayout, kind: "leaf" | "branch"): DockNodeId {
   }
   return `${kind}:gen${n}`;
 }
-
-// --- immutability helpers ----------------------------------------------------
 
 function withNodes(layout: DockLayout, nodes: Record<DockNodeId, DockNode>): DockLayout {
   return { version: 1, rootId: layout.rootId, nodes };
@@ -277,8 +263,6 @@ function renormalize(
   }
   return Object.fromEntries(ids.map((id) => [id, ((sizes[id] ?? 0) / total) * 100]));
 }
-
-// --- pure mutations ----------------------------------------------------------
 
 /// Insert `panelId` into an existing leaf at `index` and make it the active tab.
 export function insertPanel(
@@ -418,8 +402,6 @@ export function movePanel(
       : splitLeaf(removed, target.leafId, panelId, target.edge);
   return normalize(placed);
 }
-
-// --- normalize / validate ----------------------------------------------------
 
 function reachableIds(layout: DockLayout): Set<DockNodeId> {
   const seen = new Set<DockNodeId>();
@@ -623,8 +605,6 @@ export function pruneLastLocation(
   return pruned;
 }
 
-// --- openPanel resolution chain ---------------------------------------------
-
 export interface OpenPanelHints {
   defaultLeafId: DockNodeId;
   lastLeafId?: DockNodeId;
@@ -689,8 +669,6 @@ function firstNonLockedLeaf(layout: DockLayout): DockNodeId | null {
   }
   return null;
 }
-
-// --- default factories + interim default-leaf map ----------------------------
 
 /// The full Scene tree: a horizontal root [left sidebar | center column | right dock] over
 /// the center's vertical [viewport | assets | bottom dock]. The viewport leaf is `locked`
