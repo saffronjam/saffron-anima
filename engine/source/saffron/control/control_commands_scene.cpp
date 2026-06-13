@@ -76,13 +76,79 @@ namespace se
         return EnvironmentDto{ environmentToJson(scene.environment) };
     }
 
+    auto gizmoOpDto(GizmoOp op) -> GizmoOpDto
+    {
+        if (op == GizmoOp::Rotate)
+        {
+            return GizmoOpDto::Rotate;
+        }
+        if (op == GizmoOp::Scale)
+        {
+            return GizmoOpDto::Scale;
+        }
+        return GizmoOpDto::Translate;
+    }
+
+    auto gizmoOpFromDto(GizmoOpDto op) -> GizmoOp
+    {
+        if (op == GizmoOpDto::Rotate)
+        {
+            return GizmoOp::Rotate;
+        }
+        if (op == GizmoOpDto::Scale)
+        {
+            return GizmoOp::Scale;
+        }
+        return GizmoOp::Translate;
+    }
+
+    auto gizmoSpaceDto(GizmoSpace space) -> GizmoSpaceDto
+    {
+        if (space == GizmoSpace::Local)
+        {
+            return GizmoSpaceDto::Local;
+        }
+        return GizmoSpaceDto::World;
+    }
+
+    auto gizmoSpaceFromDto(GizmoSpaceDto space) -> GizmoSpace
+    {
+        if (space == GizmoSpaceDto::Local)
+        {
+            return GizmoSpace::Local;
+        }
+        return GizmoSpace::World;
+    }
+
+    auto nativeGizmoHandleName(NativeGizmoHandle handle) -> const char*
+    {
+        switch (handle)
+        {
+        case NativeGizmoHandle::X:
+            return "x";
+        case NativeGizmoHandle::Y:
+            return "y";
+        case NativeGizmoHandle::Z:
+            return "z";
+        case NativeGizmoHandle::XY:
+            return "xy";
+        case NativeGizmoHandle::YZ:
+            return "yz";
+        case NativeGizmoHandle::XZ:
+            return "xz";
+        case NativeGizmoHandle::Screen:
+            return "screen";
+        case NativeGizmoHandle::Uniform:
+            return "uniform";
+        case NativeGizmoHandle::None:
+            return "none";
+        }
+        return "none";
+    }
+
     auto gizmoStateDto(const SceneEditContext& editor) -> GizmoState
     {
-        return GizmoState{ editor.gizmoOp == GizmoOp::Rotate  ? GizmoOpDto::Rotate
-                           : editor.gizmoOp == GizmoOp::Scale ? GizmoOpDto::Scale
-                                                              : GizmoOpDto::Translate,
-                           editor.gizmoSpace == GizmoSpace::Local ? GizmoSpaceDto::Local : GizmoSpaceDto::World,
-                           editor.preserveChildren };
+        return GizmoState{ gizmoOpDto(editor.gizmoOp), gizmoSpaceDto(editor.gizmoSpace), editor.preserveChildren };
     }
 
     auto playStateResultDto(const SceneEditContext& editor) -> PlayStateResult
@@ -236,8 +302,11 @@ namespace se
                 // destroyEntity takes the whole subtree, so clear the selection when it
                 // sits anywhere under the doomed root (walk the selection's ancestry).
                 Scene& scene = activeScene(ctx.sceneEdit);
-                entt::entity cursor =
-                    scene.registry.valid(ctx.sceneEdit.selected.handle) ? ctx.sceneEdit.selected.handle : entt::null;
+                entt::entity cursor = entt::null;
+                if (scene.registry.valid(ctx.sceneEdit.selected.handle))
+                {
+                    cursor = ctx.sceneEdit.selected.handle;
+                }
                 while (cursor != entt::null)
                 {
                     if (cursor == entity->handle)
@@ -245,9 +314,14 @@ namespace se
                         setSelection(ctx.sceneEdit, Entity{ entt::null });
                         break;
                     }
-                    cursor = scene.registry.all_of<RelationshipComponent>(cursor)
-                                 ? scene.registry.get<RelationshipComponent>(cursor).parentHandle
-                                 : entt::null;
+                    if (scene.registry.all_of<RelationshipComponent>(cursor))
+                    {
+                        cursor = scene.registry.get<RelationshipComponent>(cursor).parentHandle;
+                    }
+                    else
+                    {
+                        cursor = entt::null;
+                    }
                 }
                 destroyEntity(scene, *entity);
                 ctx.sceneEdit.sceneVersion += 1;
@@ -793,7 +867,7 @@ namespace se
         registerCommand<SetEnvironmentParams, EnvironmentDto>(
             reg, "set-environment",
             "set-environment {--json {...} | skyMode?:color|texture|procedural, clearColor?:{x,y,z}, "
-            "skyTexture?:uuid, skyIntensity?, skyRotation?, visible?:bool, useSkyForAmbient?:bool, "
+            "skyTexture?:uuid, skyIntensity?, skyRotation?, exposure?, visible?:bool, useSkyForAmbient?:bool, "
             "ambientColor?:{x,y,z}, ambientIntensity?}",
             [](EngineContext& ctx, const SetEnvironmentParams& params) -> Result<EnvironmentDto>
             {
@@ -1314,14 +1388,11 @@ namespace se
                 }
                 if (params.op)
                 {
-                    ctx.sceneEdit.gizmoOp = *params.op == GizmoOpDto::Rotate  ? GizmoOp::Rotate
-                                            : *params.op == GizmoOpDto::Scale ? GizmoOp::Scale
-                                                                              : GizmoOp::Translate;
+                    ctx.sceneEdit.gizmoOp = gizmoOpFromDto(*params.op);
                 }
                 if (params.space)
                 {
-                    ctx.sceneEdit.gizmoSpace =
-                        *params.space == GizmoSpaceDto::Local ? GizmoSpace::Local : GizmoSpace::World;
+                    ctx.sceneEdit.gizmoSpace = gizmoSpaceFromDto(*params.space);
                 }
                 if (params.preserveChildren)
                 {
@@ -1422,16 +1493,12 @@ namespace se
                     gizmo.target = Entity{ entt::null };
                 }
 
-                const NativeGizmoHandle h = gizmo.dragging ? gizmo.active : gizmo.hovered;
-                const char* handleName = h == NativeGizmoHandle::X         ? "x"
-                                         : h == NativeGizmoHandle::Y       ? "y"
-                                         : h == NativeGizmoHandle::Z       ? "z"
-                                         : h == NativeGizmoHandle::XY      ? "xy"
-                                         : h == NativeGizmoHandle::YZ      ? "yz"
-                                         : h == NativeGizmoHandle::XZ      ? "xz"
-                                         : h == NativeGizmoHandle::Screen  ? "screen"
-                                         : h == NativeGizmoHandle::Uniform ? "uniform"
-                                                                           : "none";
+                NativeGizmoHandle h = gizmo.hovered;
+                if (gizmo.dragging)
+                {
+                    h = gizmo.active;
+                }
+                const char* handleName = nativeGizmoHandleName(h);
                 return GizmoPointerResult{ handleName, gizmo.dragging };
             });
 
