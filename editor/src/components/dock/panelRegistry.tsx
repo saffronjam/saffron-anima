@@ -1,0 +1,160 @@
+/// The per-panel definition table: title, closability, render policy, and body component.
+/// One row per `DockPanelId` across both islands. `DockPanelsHost` reads it to decide what to
+/// mount and when, and the strips read `title`. The panel→default-leaf fallback the
+/// `openPanel` resolver uses lives in the pure model (`DEFAULT_LEAF`), which the store imports
+/// directly — keeping the store decoupled from these React components.
+import type { LucideIcon } from "lucide-react";
+import type { ComponentType } from "react";
+import type { AssetEditorDockPanelId, DockPanelId, SceneDockPanelId } from "../../state/dockLayout";
+import {
+  AssetClipsPanel,
+  AssetPreviewPanel,
+  AssetSkeletonPanel,
+  AssetTimelinePanel,
+} from "../../panels/assetEditorPanels";
+import { InspectorPanel } from "../../panels/InspectorPanel";
+import { EnvironmentPanel } from "../../panels/EnvironmentPanel";
+import { RenderPanel } from "../../panels/RenderPanel";
+import { RenderStatsPanel } from "../../panels/RenderStatsPanel";
+import { ProfilerPanel } from "../../panels/ProfilerPanel";
+import { MaterialEditorPanel } from "../../panels/MaterialEditorPanel";
+import { TimelinePanel } from "../../panels/TimelinePanel";
+import { HierarchyPanel } from "../../panels/HierarchyPanel";
+import { AssetsPanel } from "../../panels/AssetsPanel";
+import { ViewportPanel } from "../../panels/ViewportPanel";
+
+export interface DockPanelDef {
+  id: DockPanelId;
+  title: string;
+  icon?: LucideIcon;
+  closable: boolean;
+  /// `always`: stay mounted (hidden) when not the active tab — for panels with expensive
+  /// live state (Material's GPU preview, Assets' thumbnails). `onlyWhenVisible`: unmount
+  /// when hidden, leaving an empty attached host div.
+  renderer: "always" | "onlyWhenVisible";
+  component: ComponentType;
+}
+
+/// The Scene island's panels.
+export const SCENE_PANEL_REGISTRY: Record<SceneDockPanelId, DockPanelDef> = {
+  inspector: {
+    id: "inspector",
+    title: "Inspector",
+    closable: false,
+    renderer: "onlyWhenVisible",
+    component: InspectorPanel,
+  },
+  environment: {
+    id: "environment",
+    title: "Environment",
+    closable: false,
+    renderer: "onlyWhenVisible",
+    component: EnvironmentPanel,
+  },
+  render: {
+    id: "render",
+    title: "Render",
+    closable: false,
+    renderer: "onlyWhenVisible",
+    component: RenderPanel,
+  },
+  stats: {
+    id: "stats",
+    title: "Stats",
+    closable: true,
+    renderer: "onlyWhenVisible",
+    component: RenderStatsPanel,
+  },
+  profiler: {
+    id: "profiler",
+    title: "Profiler",
+    closable: true,
+    renderer: "onlyWhenVisible",
+    component: ProfilerPanel,
+  },
+  material: {
+    id: "material",
+    title: "Material",
+    closable: true,
+    renderer: "always",
+    component: MaterialEditorPanel,
+  },
+  timeline: {
+    id: "timeline",
+    title: "Timeline",
+    closable: true,
+    renderer: "onlyWhenVisible",
+    component: TimelinePanel,
+  },
+  hierarchy: {
+    id: "hierarchy",
+    title: "Hierarchy",
+    closable: false,
+    renderer: "onlyWhenVisible",
+    component: HierarchyPanel,
+  },
+  assets: {
+    id: "assets",
+    title: "Assets",
+    closable: false,
+    renderer: "always",
+    component: AssetsPanel,
+  },
+  viewport: {
+    id: "viewport",
+    title: "Viewport",
+    closable: false,
+    renderer: "always",
+    component: ViewportPanel,
+  },
+};
+
+/// The asset-editor island's panels. `preview` is the locked live-subsurface host (like the
+/// Scene viewport); the other three carry the unmount-when-hidden policy of their Scene
+/// cousins. Capability gating (rig → skeleton; clips → clips + assetTimeline) opens/closes
+/// them per the previewed model, so a row being registered does not mean it is always open.
+export const ASSET_EDITOR_PANEL_REGISTRY: Record<AssetEditorDockPanelId, DockPanelDef> = {
+  skeleton: {
+    id: "skeleton",
+    title: "Skeleton",
+    closable: true,
+    renderer: "onlyWhenVisible",
+    component: AssetSkeletonPanel,
+  },
+  preview: {
+    id: "preview",
+    title: "Preview",
+    closable: false,
+    renderer: "always",
+    component: AssetPreviewPanel,
+  },
+  clips: {
+    id: "clips",
+    title: "Clips",
+    closable: true,
+    renderer: "onlyWhenVisible",
+    component: AssetClipsPanel,
+  },
+  assetTimeline: {
+    id: "assetTimeline",
+    title: "Timeline",
+    closable: true,
+    renderer: "onlyWhenVisible",
+    component: AssetTimelinePanel,
+  },
+};
+
+const REGISTRY: Record<DockPanelId, DockPanelDef> = {
+  ...SCENE_PANEL_REGISTRY,
+  ...ASSET_EDITOR_PANEL_REGISTRY,
+};
+
+/// The definition for a panel id (every id is registered across the two islands).
+export function panelDef(id: DockPanelId): DockPanelDef | undefined {
+  return REGISTRY[id];
+}
+
+/// The strip title for a panel id, falling back to the id when unregistered.
+export function panelTitle(id: DockPanelId): string {
+  return REGISTRY[id]?.title ?? id;
+}
