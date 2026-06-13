@@ -1211,8 +1211,6 @@ function cppJsonValue(type: string, expr: string): string {
     case "f32":
     case "std::string":
       return expr;
-    case "WireUuid":
-      return `dtoToJson(${expr})`;
     case "Json":
       return expr;
     default:
@@ -1749,6 +1747,14 @@ export interface Material {
   emissive: Vec3;
   emissiveStrength: number;
   unlit: boolean;
+  normalTexture: WireUuid;
+  occlusionTexture: WireUuid;
+  emissiveTexture: WireUuid;
+  heightTexture: WireUuid;
+  normalStrength: number;
+  heightScale: number;
+  alphaClip: boolean;
+  alphaCutoff: number;
 }
 
 export interface MaterialSet {
@@ -2357,7 +2363,8 @@ function emitManifest(): string {
 
 function emitSceneSerde(): string {
   return `// GENERATED - do not edit.
-// Produced by tools/gen-control-dto/gen.ts from the scene component DTO catalog.
+// The scene-component (de)serialization below is hand-maintained in emitSceneSerde
+// (tools/gen-control-dto/gen.ts), kept in step with the component structs in Saffron.Scene.
 
 module;
 

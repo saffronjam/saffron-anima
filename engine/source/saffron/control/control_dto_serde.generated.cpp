@@ -1723,17 +1723,7 @@ namespace se
         ListClipsParams out;
 
         {
-            auto value = optionalField(params, "entity", 0, true);
-            if (value && !value->is_null())
-            {
-                auto parsed = readEntitySelector(*value, "entity");
-                if (!parsed) { return Err(std::move(parsed.error())); }
-                out.entity = std::move(*parsed);
-            }
-        }
-
-        {
-            auto value = optionalField(params, "asset", 1, true);
+            auto value = optionalField(params, "asset", 0, true);
             if (value && !value->is_null())
             {
                 auto parsed = readAssetSelector(*value, "asset");

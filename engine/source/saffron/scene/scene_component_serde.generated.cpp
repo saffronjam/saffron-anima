@@ -1,5 +1,6 @@
 // GENERATED - do not edit.
-// Produced by tools/gen-control-dto/gen.ts from the scene component DTO catalog.
+// The scene-component (de)serialization below is hand-maintained in emitSceneSerde
+// (tools/gen-control-dto/gen.ts), kept in step with the component structs in Saffron.Scene.
 
 module;
 

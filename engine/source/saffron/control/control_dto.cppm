@@ -243,7 +243,7 @@ export namespace se
         bool hdr;
         f32 exposureEv;
         AaModeDto aa;
-        ViewModeDto viewMode;  // debug render-output mode; append-last (positional aggregate init)
+        ViewModeDto viewMode;  // debug render-output mode
     };
 
     struct RenderPassTimingDto
@@ -1281,7 +1281,7 @@ export namespace se
         i32 playVersion;
         i32 sceneVersion;       // echoed so a stop reads as a scene change
         bool hasPrimaryCamera;  // captured at enterPlay; false drives the editor warning
-        i32 animationVersion;   // bumped by the animation commands (Phase 12 reconcile poll)
+        i32 animationVersion;   // bumped by the animation commands so the reconcile poll can gate on it
         WireUuid previewAsset;  // the model being previewed, 0 when none (Edit/Play/Preview triad)
     };
 
@@ -1349,8 +1349,7 @@ export namespace se
 
     struct ListClipsParams
     {
-        std::optional<EntitySelector> entity;  // accepted for wire-compat; ignored (the catalog is global)
-        std::optional<AssetSelector> asset;    // filter to a model container's clips (omit for the full catalog)
+        std::optional<AssetSelector> asset;  // filter to a model container's clips (omit for the full catalog)
     };
 
     struct ListClipsResult

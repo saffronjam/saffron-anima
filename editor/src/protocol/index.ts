@@ -3,15 +3,11 @@ import type {
   AssetList as DtoAssetList,
   CommandParamsMap as DtoCommandParamsMap,
   CommandResultMap as DtoCommandResultMap,
-  EditorCamera,
-  EntityList,
   EntityRef,
-  GizmoState,
   ProjectInfoDto,
   RenderStatsDto,
   ThumbnailResult,
   Vec3,
-  Vec4,
   WireUuid,
 } from "./se-types";
 
@@ -27,9 +23,16 @@ export type {
   AssetUsagesParams,
   AssetUsagesResult,
   AssignAssetParams,
+  BoneDto,
+  AssetCapabilitiesDto,
+  AssetModelResult,
+  AssetPreviewResult,
+  AssetPreviewOptionsResult,
+  Camera,
   ComponentBody,
   ComponentList,
   ComponentParams,
+  Components,
   CaptureStartParams,
   CaptureStartResult,
   CaptureStatusResult,
@@ -38,12 +41,16 @@ export type {
   CreateAssetFolderParams,
   CreateScriptParams,
   CreateScriptResult,
+  DebugOverlaysResult,
   DeleteAssetParams,
   DeleteAssetResult,
+  DeleteAssetFolderParams,
   DeselectResult,
   DestroyEntityResult,
+  DirectionalLight,
   DrainAlarmsParams,
   DrainAlarmsResult,
+  DrainScriptErrorsResult,
   EditorCamera,
   EntityList,
   EntityListEntry,
@@ -52,23 +59,31 @@ export type {
   FrameHistoryDto,
   FrameHistoryParams,
   FrameSampleDto,
+  GetScriptSchemaResult,
   GizmoPointerParams,
   GizmoPointerResult,
   GizmoState,
   ImportModelResult,
   ImportTextureResult,
+  InspectResult,
   ListClipsResult,
   ListProbesResult,
+  Material,
+  Mesh,
+  MoveAssetParams,
+  Name,
   OptionalPathParams,
   PathParams,
   PathResult,
+  PerfConfigDto,
   PickParams,
   PickResult,
+  PickSkeletonJointResult,
   PingParams,
   PingResult,
-  PerfConfigDto,
   PipelineStatsDto,
   PlayStateResult,
+  PointLight,
   ProbeRef,
   ProfileCaptureDto,
   ProfileCaptureMetadataDto,
@@ -77,21 +92,12 @@ export type {
   ProfilerSetModeParams,
   QuitResult,
   RecaptureProbesResult,
+  ReflectionProbe,
   RenderPassTimingDto,
   RenderPassTimingsDto,
   RenameAssetParams,
   RenameAssetFolderParams,
-  DeleteAssetFolderParams,
-  MoveAssetParams,
   RenameEntityParams,
-  BoneDto,
-  AssetCapabilitiesDto,
-  AssetModelResult,
-  AssetPreviewResult,
-  AssetPreviewOptionsResult,
-  SkeletonOverlayResult,
-  DebugOverlaysResult,
-  PickSkeletonJointResult,
   ScreenshotParams,
   ScreenshotResult,
   Script,
@@ -101,10 +107,6 @@ export type {
   ScriptInputResult,
   ScriptSlot,
   ScriptStatusResult,
-  DrainScriptErrorsResult,
-  GetScriptSchemaResult,
-  SetScriptOverrideParams,
-  SetScriptOverrideResult,
   SetAaParams,
   SetAaResult,
   SetAtmosphereParams,
@@ -130,13 +132,18 @@ export type {
   SetProbesResult,
   SetRestirResult,
   SetRtShadowsResult,
+  SetScriptOverrideParams,
+  SetScriptOverrideResult,
   SetShadowsResult,
   SetSsaoResult,
   SetSsgiResult,
   SetTransformParams,
+  SkeletonOverlayResult,
+  SpotLight,
   StepParams,
   ThumbnailParams,
   ToggleParams,
+  Transform,
   Vec3,
   Vec4,
   ViewportNativeInfoResult,
@@ -149,107 +156,6 @@ export type AssetList = DtoAssetList;
 export type ProjectInfo = ProjectInfoDto;
 export type RenderStats = RenderStatsDto;
 export type Thumbnail = Omit<ThumbnailResult, "format"> & { format: "png" };
-
-export interface Protocol {
-  AssetEntry?: AssetEntry;
-  AssetList?: AssetList;
-  Camera?: Camera;
-  Components?: Components;
-  DirectionalLight?: DirectionalLight;
-  EditorCamera?: EditorCamera;
-  EntityList?: EntityList;
-  EntityRef?: EntityRef;
-  Envelope?: Envelope;
-  Environment?: Environment;
-  GizmoState?: GizmoState;
-  InspectResult?: InspectResult;
-  Material?: Material;
-  Mesh?: Mesh;
-  Name?: Name;
-  PointLight?: PointLight;
-  ProjectInfo?: ProjectInfo;
-  ReflectionProbe?: ReflectionProbe;
-  RenderStats?: RenderStats;
-  Selection?: Selection;
-  SpotLight?: SpotLight;
-  Thumbnail?: Thumbnail;
-  Transform?: Transform;
-  Uuid?: Uuid;
-  Vec3?: Vec3;
-  Vec4?: Vec4;
-}
-
-export interface Camera {
-  fov: number;
-  near: number;
-  far: number;
-  primary: boolean;
-}
-
-export interface Components {
-  Name?: Name;
-  Transform?: Transform;
-  Mesh?: Mesh;
-  Camera?: Camera;
-  Material?: Material;
-  DirectionalLight?: DirectionalLight;
-  PointLight?: PointLight;
-  SpotLight?: SpotLight;
-  ReflectionProbe?: ReflectionProbe;
-}
-
-export interface Name {
-  name: string;
-}
-
-export interface Transform {
-  translation: Vec3;
-  scale: Vec3;
-  rotation: Vec3;
-}
-
-export interface Mesh {
-  mesh: Uuid;
-}
-
-export interface Material {
-  baseColor: Vec4;
-  albedoTexture: Uuid;
-  metallic: number;
-  roughness: number;
-  emissive: Vec3;
-  emissiveStrength: number;
-  unlit: boolean;
-}
-
-export interface DirectionalLight {
-  direction: Vec3;
-  color: Vec3;
-  intensity: number;
-  ambient: number;
-}
-
-export interface PointLight {
-  color: Vec3;
-  intensity: number;
-  range: number;
-}
-
-export interface SpotLight {
-  direction: Vec3;
-  color: Vec3;
-  intensity: number;
-  range: number;
-  innerAngle: number;
-  outerAngle: number;
-}
-
-export interface ReflectionProbe {
-  influenceRadius: number;
-  intensity: number;
-  boxProjection: boolean;
-  boxExtent: Vec3;
-}
 
 export interface Envelope {
   ok: boolean;
@@ -283,12 +189,6 @@ export interface Environment {
   };
 }
 
-export interface InspectResult {
-  id: Uuid;
-  name: string;
-  components: Components;
-}
-
 export interface Selection {
   entity: EntityRef | null;
   selectionVersion: number;
@@ -303,7 +203,6 @@ type CompatCommandResultOverrides = {
   "set-environment": Environment;
   "set-atmosphere": Environment;
   "get-selection": Selection;
-  inspect: InspectResult;
   "get-thumbnail": Thumbnail;
   "view-asset": Thumbnail;
 };

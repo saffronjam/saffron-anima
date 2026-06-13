@@ -4296,16 +4296,6 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "entity": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "integer"
-              }
-            ]
-          },
           "asset": {
             "oneOf": [
               {

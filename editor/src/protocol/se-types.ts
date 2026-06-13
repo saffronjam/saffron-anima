@@ -39,6 +39,14 @@ export interface Material {
   emissive: Vec3;
   emissiveStrength: number;
   unlit: boolean;
+  normalTexture: WireUuid;
+  occlusionTexture: WireUuid;
+  emissiveTexture: WireUuid;
+  heightTexture: WireUuid;
+  normalStrength: number;
+  heightScale: number;
+  alphaClip: boolean;
+  alphaCutoff: number;
 }
 
 export interface MaterialSet {
@@ -712,7 +720,6 @@ export interface AnimationStateResult {
 }
 
 export interface ListClipsParams {
-  entity?: WireUuid | string | number;
   asset?: WireUuid | string | number;
 }
 

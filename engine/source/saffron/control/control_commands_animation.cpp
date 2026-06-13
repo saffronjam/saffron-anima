@@ -30,7 +30,11 @@ namespace se
         auto resolveClip(EngineContext& ctx, const AssetSelector& clip) -> Result<const AssetEntry*>
         {
             const json& sel = clip.value;
-            const std::string name = sel.is_string() ? sel.get<std::string>() : std::string{};
+            std::string name;
+            if (sel.is_string())
+            {
+                name = sel.get<std::string>();
+            }
             u64 byId = 0;
             if (sel.is_number_unsigned())
             {
@@ -39,7 +43,10 @@ namespace se
             else if (sel.is_number_integer())
             {
                 const i64 v = sel.get<i64>();
-                byId = v >= 0 ? static_cast<u64>(v) : 0;
+                if (v >= 0)
+                {
+                    byId = static_cast<u64>(v);
+                }
             }
             else
             {
@@ -60,7 +67,11 @@ namespace se
         auto resolveContainer(EngineContext& ctx, const AssetSelector& asset) -> Result<Uuid>
         {
             const json& sel = asset.value;
-            const std::string name = sel.is_string() ? sel.get<std::string>() : std::string{};
+            std::string name;
+            if (sel.is_string())
+            {
+                name = sel.get<std::string>();
+            }
             u64 byId = 0;
             if (sel.is_number_unsigned())
             {
@@ -69,7 +80,10 @@ namespace se
             else if (sel.is_number_integer())
             {
                 const i64 v = sel.get<i64>();
-                byId = v >= 0 ? static_cast<u64>(v) : 0;
+                if (v >= 0)
+                {
+                    byId = static_cast<u64>(v);
+                }
             }
             else
             {
@@ -79,7 +93,11 @@ namespace se
             {
                 if (entry.id.value == byId || entry.name == name)
                 {
-                    return entry.type == AssetType::Model ? entry.id : entry.container;
+                    if (entry.type == AssetType::Model)
+                    {
+                        return entry.id;
+                    }
+                    return entry.container;
                 }
             }
             return Err(std::format("no asset '{}'", name));
@@ -209,8 +227,7 @@ namespace se
             });
 
         registerCommand<ListClipsParams, ListClipsResult>(
-            reg, "list-clips",
-            "list-clips {entity?, asset?} — animation clips: a model container's own, or the full catalog",
+            reg, "list-clips", "list-clips {asset?} — animation clips: a model container's own, or the full catalog",
             [](EngineContext& ctx, const ListClipsParams& params) -> Result<ListClipsResult>
             {
                 Uuid container{ 0 };
@@ -270,8 +287,14 @@ namespace se
                 p.clip = (*clip)->id;
                 p.time = 0.0f;
                 p.speed = params.speed.value_or(1.0f);
-                p.wrap = params.loop.value_or(true) ? AnimationPlayerComponent::Wrap::Loop
-                                                    : AnimationPlayerComponent::Wrap::Once;
+                if (params.loop.value_or(true))
+                {
+                    p.wrap = AnimationPlayerComponent::Wrap::Loop;
+                }
+                else
+                {
+                    p.wrap = AnimationPlayerComponent::Wrap::Once;
+                }
                 // `paused` loads the clip at frame 0 without advancing (UE5's clip-pick semantics); the
                 // pose still previews in Edit so the rig shows frame 0.
                 p.playing = !params.paused.value_or(false);
@@ -384,7 +407,12 @@ namespace se
             "set-skeleton-highlight {joint} — tint a previewed model's joint by its get-asset-model node index",
             [](EngineContext& ctx, const SetSkeletonHighlightParams& params) -> Result<SkeletonOverlayResult>
             {
-                ctx.sceneEdit.skeletonOverlay.highlightJoint = params.joint < 0 ? -1 : params.joint;
+                i32 highlightJoint = params.joint;
+                if (params.joint < 0)
+                {
+                    highlightJoint = -1;
+                }
+                ctx.sceneEdit.skeletonOverlay.highlightJoint = highlightJoint;
                 return skeletonOverlayState(ctx.sceneEdit.skeletonOverlay);
             });
 

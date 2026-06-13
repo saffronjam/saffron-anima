@@ -1,6 +1,6 @@
 /// Central editor state (Zustand) plus the focus-gated reconcile poll that keeps
-/// the slices in sync with the running engine. Data panels (phases 5-8) read the
-/// slices this fills.
+/// the slices in sync with the running engine. The data panels read the slices
+/// this fills.
 import { create } from "zustand";
 import { client, type Client } from "../control/client";
 import type { ProjectInfo } from "../control/client";
@@ -71,7 +71,6 @@ const ALARM_LOG_LIMIT = 200;
 const FRAME_HISTORY_SAMPLES = 1000;
 const METRICS_RANGE_STORAGE_KEY = "saffron.metricsRangeSec";
 const METRICS_BUCKET_STORAGE_KEY = "saffron.metricsBucketMs";
-const METRICS_WINDOW_LEGACY_KEY = "saffron.metricsWindowSec"; // migrated once into the range key
 const METRICS_REFRESH_STORAGE_KEY = "saffron.metricsRefreshMs";
 const CAPTURE_WINDOW_STORAGE_KEY = "saffron.captureWindowFrames";
 const CAPTURE_STATS_STORAGE_KEY = "saffron.captureIncludeStats";
@@ -146,7 +145,7 @@ export interface EditorState {
   /// One dock-layout tree PER main-tab kind (Scene, asset editor). The two kinds carry
   /// disjoint `DockPanelId` spaces, so a panel can never resolve into the other island's
   /// tree — the structural no-cross-main-tab guarantee. Region emptiness (a leaf's
-  /// `tabs.length`) drives the Scene-region mount/unmount, replacing the old tool slices.
+  /// `tabs.length`) drives the Scene-region mount/unmount.
   dockLayouts: Record<DockSpaceKind, DockLayout>;
   /// Unreal-style re-open memory: the leaf each panel last lived in, so `openPanel`
   /// returns it home. Written by `closePanel` and `movePanel`.
@@ -155,8 +154,8 @@ export interface EditorState {
   renderStats: RenderStats | null;
   /// Viewport debug-overlay toggles (set-debug-overlays); filled by the render-panel-gated poll.
   debugOverlays: DebugOverlaysResult | null;
-  /// Performance-telemetry slices (phases 1-4), filled by the gated metrics poll only
-  /// while the Stats tab is open (history/passes) or always (alarms, for the badge).
+  /// Performance-telemetry slices, filled by the gated metrics poll only while the
+  /// Stats tab is open (history/passes) or always (alarms, for the badge).
   perfConfig: PerfConfigDto | null;
   frameHistory: FrameHistoryDto | null;
   passTimings: RenderPassTimingsDto | null;
@@ -174,8 +173,8 @@ export interface EditorState {
   metricsRefreshMs: number;
   /// Pause the metrics lane (freeze the dashboard). Session-only; alarms catch up on resume.
   metricsPaused: boolean;
-  /// Profiler capture (phases 5-7), request-scoped and kept OUT of the metrics lane. The
-  /// last completed capture, its lifecycle state, and the in-flight frame progress.
+  /// Profiler capture, request-scoped and kept OUT of the metrics lane. The last
+  /// completed capture, its lifecycle state, and the in-flight frame progress.
   captureState: CaptureState;
   captureProgress: { current: number; total: number };
   capture: ProfileCaptureDto | null;
@@ -184,7 +183,7 @@ export interface EditorState {
   /// Request pipeline-statistics (overdraw / cull / vertex-reuse) in the capture; persisted,
   /// default off (the heaviest mode). The engine drops it gracefully when unsupported.
   captureIncludeStats: boolean;
-  /// The pass name highlighted across the Profiler sub-views (Phase 7 cross-highlight).
+  /// The pass name highlighted across the Profiler sub-views (cross-highlight).
   selectedPass: string | null;
   project: ProjectInfo | null;
   /// Client-side reconcile-poll rate (Hz), an EMA over the actual tick interval.
@@ -602,8 +601,8 @@ export const useEditorStore = create<EditorState>((set) => ({
       // Engine may be briefly busy; the next reconcile tick recovers.
     }
   },
-  // The decoupled-flow actions let a rejected control call propagate, so the calling panel
-  // surfaces it through notifyError (the AGENTS toast rule); they refresh the catalog on success.
+  // These actions let a rejected control call propagate, so the calling panel surfaces it
+  // through notifyError; they refresh the catalog on success.
   instantiateModel: async (modelId, name) => {
     const entity = await client.instantiateModel(modelId, name);
     if (entity.id) {
@@ -919,8 +918,8 @@ export const useEditorStore = create<EditorState>((set) => ({
       if (!loaded) {
         return {};
       }
-      // Validate, then reject a tree that lacks a structural panel — i.e. one saved by a
-      // build before those panels joined the tree — for the default. No layout migration.
+      // Validate, then reject a tree that lacks a structural panel for the default.
+      // No layout migration.
       const accept = (raw: DockLayout | undefined, kind: DockSpaceKind): DockLayout => {
         const validated = raw ? validateLayout(raw, knownPanelIds(kind)) : null;
         return validated && hasRequiredPanels(validated, kind)
@@ -1386,8 +1385,7 @@ function loadExpanded(path: string): Set<string> {
 
 /// Dock-layout persistence: both island trees + last-location memory under one per-project
 /// key, written debounced on any dock mutation, validated on load. No-op without a project
-/// (session-only before one loads). Phase 07 retires the sidebar-width helpers below; this
-/// subsumes them.
+/// (session-only before one loads).
 const DOCK_LAYOUT_STORAGE_PREFIX = "saffron.layout.dock:";
 
 interface PersistedDockLayouts {
@@ -1472,13 +1470,10 @@ function loadDevMode(): boolean {
   }
 }
 
-/// The frame-time graph time range (seconds); default 30 s. Migrates once from the legacy
-/// "window" key (which was really the range) so an existing preference carries over.
+/// The frame-time graph time range (seconds); default 30 s.
 function loadMetricsRangeSec(): number {
   try {
-    const raw =
-      localStorage.getItem(METRICS_RANGE_STORAGE_KEY) ??
-      localStorage.getItem(METRICS_WINDOW_LEGACY_KEY);
+    const raw = localStorage.getItem(METRICS_RANGE_STORAGE_KEY);
     if (raw !== null) {
       const value = Number(raw);
       if (Number.isFinite(value) && value > 0) {
@@ -1728,7 +1723,7 @@ export function startReconcile(client: Client): () => void {
       try {
         const [state, clips] = await Promise.all([
           client.getAnimationState(selectedId).catch(() => null),
-          client.listClips(selectedId).catch(() => ({ clips: [] })),
+          client.listClips().catch(() => ({ clips: [] })),
         ]);
         if (stopped) {
           return;
@@ -2004,7 +1999,7 @@ const thumbnailCache = new Map<string, ThumbnailCacheEntry>();
 /// get-thumbnail per asset (the rest await the same promise).
 const thumbnailInflight = new Map<string, Promise<string>>();
 
-function base64ToBlob(b64: string, mime = "image/png"): Blob {
+export function base64ToBlob(b64: string, mime = "image/png"): Blob {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) {

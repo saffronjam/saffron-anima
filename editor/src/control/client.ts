@@ -130,7 +130,6 @@ async function call<C extends CommandName>(
 }
 
 export const client = {
-  // --- scene / entities ---
   listEntities(): Promise<EntityList> {
     return call("list-entities");
   },
@@ -169,7 +168,6 @@ export const client = {
     return call("rename-entity", { entity: id, name });
   },
 
-  // --- transform / components ---
   /// `smooth` makes the engine animate the fields toward the values (~25ms) instead
   /// of snapping — sent only mid-drag; the release send omits it.
   setTransform(id: string, partial: Partial<Transform>, smooth?: boolean): Promise<unknown> {
@@ -212,12 +210,10 @@ export const client = {
     return call("set-component-field", { entity: id, component, field, value });
   },
 
-  // --- picking ---
   pick(u: number, v: number): Promise<PickResult> {
     return call("pick", { u, v });
   },
 
-  // --- play mode ---
   /// Enter play mode (from edit) or resume (from paused): the engine duplicates the
   /// scene and cuts to its primary camera. `hasPrimaryCamera:false` → fly-cam fallback.
   play(): Promise<PlayStateResult> {
@@ -238,10 +234,9 @@ export const client = {
     return call("get-play-state");
   },
 
-  // --- animation ---
-  /// The animation clips in the project catalog (the entity's available clips).
-  listClips(entity: string): Promise<ListClipsResult> {
-    return call("list-clips", { entity });
+  /// The animation clips in the project catalog (global; the catalog is not per-entity).
+  listClips(): Promise<ListClipsResult> {
+    return call("list-clips", {});
   },
   /// The entity's playhead, clip, wrap, speed, and the animationVersion stamp.
   getAnimationState(entity: string): Promise<AnimationStateResult> {
@@ -279,7 +274,6 @@ export const client = {
     return call("stop-preview", { entity });
   },
 
-  // --- asset editor ---
   /// A model's capabilities + bone tree + clips, read from its .smodel container. Accepts the model, a
   /// mesh sub-asset, or a clip sub-asset — all resolve to the same owning container. A static model
   /// returns an empty bone tree (capabilities.hasRig === false), not an error.
@@ -333,7 +327,6 @@ export const client = {
     return call("set-asset-preview-options", opts);
   },
 
-  // --- scripting ---
   /// Drain contained script errors with seq > since (the cursor mirrors drain-alarms).
   drainScriptErrors(since: number): Promise<DrainScriptErrorsResult> {
     return call("drain-script-errors", { since });
@@ -356,7 +349,6 @@ export const client = {
     return call("set-script-override", { entity: id, slot, name, value });
   },
 
-  // --- gizmo ---
   getGizmo(): Promise<GizmoState> {
     return call("get-gizmo");
   },
@@ -369,7 +361,6 @@ export const client = {
     return call("gizmo-pointer", { phase, x, y });
   },
 
-  // --- editor camera ---
   /// Aim the editor camera at the entity (the F shortcut / hierarchy Focus).
   focus(id: string): Promise<EntityRef> {
     return call("focus", { entity: id });
@@ -381,7 +372,6 @@ export const client = {
     return call("set-camera", camera);
   },
 
-  // --- assets ---
   listAssets(): Promise<AssetList> {
     return call("list-assets");
   },
@@ -540,7 +530,6 @@ export const client = {
     return call("delete-unused", { ids, confirm });
   },
 
-  // --- projects ---
   getProject(): Promise<ProjectInfo> {
     return call("get-project");
   },
@@ -573,12 +562,10 @@ export const client = {
     return invoke<void>("save_editor_settings", { settings });
   },
 
-  // --- stats / environment ---
   renderStats(): Promise<RenderStats> {
     return call("render-stats");
   },
 
-  // --- performance telemetry (phases 1-3) ---
   /// Set the GPU profiler depth. `timestamps` enables per-pass GPU timing + the VMA
   /// budget read; `off` returns to baseline cost. Reports device capability.
   setProfilerMode(mode: ProfilerMode): Promise<ProfilerModeResult> {
@@ -635,7 +622,6 @@ export const client = {
     return call("set-atmosphere", atmosphere);
   },
 
-  // --- render toggles (untyped echo payloads; each returns its own flag) ---
   /// Anti-aliasing mode. Echoes `{ aa }`.
   setAa(mode: RenderStats["aa"]): Promise<{ aa: RenderStats["aa"] }> {
     return call("set-aa", { mode });
@@ -692,15 +678,9 @@ export const client = {
     return call("set-exposure", { ev });
   },
 
-  // --- file ops ---
   /// Write catalog + scene to `path` (engine default `project.json` when omitted).
   saveProject(path?: string): Promise<ProjectInfo> {
     return call("save-project", path === undefined ? {} : { path });
-  },
-  /// Restore catalog + scene + GPU assets from `path` (engine default
-  /// `project.json`). Clears the engine's selection; the caller resets the store.
-  loadProject(path?: string): Promise<ProjectInfo> {
-    return call("load-project", path === undefined ? {} : { path });
   },
   /// Close the active project and load it again from its own path (catalog + scene +
   /// GPU assets). Clears the engine's selection; the caller resets the store.
@@ -746,7 +726,8 @@ export const client = {
     return call("script-input", { keys });
   },
 
-  // --- engine lifecycle + presenter (dedicated Rust commands, NOT the passthrough) ---
+  /// Engine lifecycle + presenter calls go through dedicated Rust commands, not the
+  /// generic control passthrough.
   startEngine(): Promise<void> {
     return invoke<void>("start_engine");
   },
