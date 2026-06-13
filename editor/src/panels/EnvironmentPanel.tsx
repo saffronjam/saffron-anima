@@ -23,6 +23,7 @@ import { NumberDrag } from "../components/NumberDrag";
 import { ColorField } from "../components/ColorField";
 import { AssetPicker } from "../components/AssetPicker";
 import type { Environment, Vec3 } from "../protocol";
+import { DEG_TO_RAD, RAD_TO_DEG } from "@/lib/utils";
 import { humanizeFieldName } from "@/lib/humanize";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -35,9 +36,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
-const RAD_TO_DEG = 180 / Math.PI;
-const DEG_TO_RAD = Math.PI / 180;
 
 type SkyMode = Environment["skyMode"];
 type Atmosphere = Environment["atmosphere"];

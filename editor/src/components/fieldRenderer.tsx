@@ -19,6 +19,7 @@ import { ColorField } from "./ColorField";
 import { AssetPicker } from "./AssetPicker";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { DEG_TO_RAD, RAD_TO_DEG } from "@/lib/utils";
 
 export type FieldKind =
   | "vec3"
@@ -102,9 +103,6 @@ export const FIELD_HINTS: Record<string, FieldHint> = {
   "ReflectionProbe.boxExtent": { kind: "vec3", step: 0.1 },
 };
 
-const RAD_TO_DEG = 180 / Math.PI;
-const DEG_TO_RAD = Math.PI / 180;
-
 function isVec3(v: unknown): v is Record<string, number> {
   return typeof v === "object" && v !== null && "x" in v && "y" in v && "z" in v && !("w" in v);
 }
@@ -115,7 +113,7 @@ function isVec4(v: unknown): v is Record<string, number> {
 
 /// Infer a kind from the value shape when no FIELD_HINTS entry exists. Keeps an
 /// unmapped (e.g. newly added) field renderable instead of dropped.
-function inferKind(value: unknown): FieldKind {
+export function inferKind(value: unknown): FieldKind {
   if (isVec4(value)) {
     return "vec4";
   }
