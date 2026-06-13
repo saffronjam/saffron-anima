@@ -42,4 +42,5 @@ around this spine.
 | [Tooling & control](tooling-and-control/) | control plane and the `se` CLI |
 | [Scripting](scripting/) | the embedded Lua 5.5 VM, sandboxing, script errors as values |
 | [Animation](animation/) | skeletal clips, the decomposed pose + blend layer, clip sampling |
+| [Physics](physics/) | the Jolt-backed simulation: per-play world lifecycle, rigid bodies, the ragdoll |
 | [Architecture & conventions](architecture-and-conventions/) | module DAG, build, coding style |
