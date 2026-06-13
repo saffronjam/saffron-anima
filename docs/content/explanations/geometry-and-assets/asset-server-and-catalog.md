@@ -32,7 +32,7 @@ struct AssetServer
 The catalog is the source of truth; the two maps are caches over it. The catalog records
 that asset 42 is a mesh at `meshes/42.smesh`; the cache records that asset 42 is already
 uploaded and holds its `Ref`. `newAssetServer` creates the asset root with its `meshes/`
-and `textures/` subdirectories and migrates any legacy `asset_registry.json`. The catalog
+and `textures/` subdirectories. The catalog
 is normally populated by [loading a project](../project-serialization/).
 
 ## The catalog

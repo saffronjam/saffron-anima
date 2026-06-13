@@ -17,8 +17,8 @@ so a parse failure becomes an `Err` rather than an exception, matching the engin
 
 ## Dispatch by extension
 
-`importModelFile` (mesh only) and `importModelWithMaterial` (mesh + material table) both
-branch on a case-insensitive suffix check. An unknown extension returns an `Err`.
+`translateModel` parses a model file and returns a mesh plus its material table. It branches on a
+case-insensitive suffix check; an unknown extension returns an `Err`.
 
 ## glTF through cgltf
 
@@ -123,10 +123,10 @@ becomes one `MaterialComponent`, a multi-material model a
 
 | What | File | Symbols |
 |---|---|---|
-| Extension dispatch | `geometry.cppm` | `importModelFile`, `importModelWithMaterial` |
-| glTF parse + walk | `geometry.cppm` | `importGltfModel`, `importGltf` |
+| Extension dispatch | `geometry.cppm` | `translateModel` |
+| glTF parse + walk | `geometry.cppm` | `importGltfModel` |
 | Skeletal clip decode | `geometry.cppm` | `importGltfModel`, `AnimClip`, `AnimTrack` |
-| OBJ parse + dedup | `geometry.cppm` | `importObjModel`, `importObj` |
+| OBJ parse + dedup | `geometry.cppm` | `importObjModel` |
 | Missing-normal fallback | `geometry.cppm` | `anyNormalsPresent`, `generateNormals` |
 | Material extraction | `geometry.cppm` | `ImportedMaterial`, `extractGltfMaterial`, `readGltfTextureBytes` |
 

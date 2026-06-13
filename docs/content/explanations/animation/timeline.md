@@ -72,25 +72,22 @@ live as you drag.
 ## Deferred authoring
 
 Keyframe **authoring** is out of scope here, mirroring the Timeline-vs-Animation-window split in
-other engines. The lane renderer is already built for it: it has a separate `diamonds` draw mode and
-a `keys` model field, so a future authoring lane (diamonds for keys, curves for interpolation) drops
-in without restructuring the layout or the seconds↔pixels transform. v1 also draws a single clip bar
-per entity; multi-clip sequencing and per-bone lanes are the visual target the structure supports
-but does not yet populate.
+other engines. The lane renderer draws a single clip bar per entity; keyframe authoring, multi-clip
+sequencing, and per-bone lanes would extend the lane model and draw path, reusing the existing
+seconds↔pixels transform and layout.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
 | The panel: regions, transport, scrub wiring | `editor/src/panels/TimelinePanel.tsx` | `TimelinePanel`, `isRiggedEntity` |
-| The canvas renderer (ruler, bars, playhead, diamonds mode) | `editor/src/lib/timelineCanvas.ts` | `TimelineCanvas`, `TimelineModel`, `LaneMode` |
+| The canvas renderer (ruler, bars, playhead) | `editor/src/lib/timelineCanvas.ts` | `TimelineCanvas`, `TimelineModel` |
 | The poll gate + state slice | `editor/src/state/store.ts` | `startReconcile`, `refreshAnimation`, `setAnimationState` |
 | Typed control wrappers | `editor/src/control/client.ts` | `getAnimationState`, `listClips`, `playAnimation`, `seekAnimation`, `setAnimationLoop` |
 | Scrub + coalesce primitives | `editor/src/lib/useScrubValue.ts`; `editor/src/control/coalesce.ts` | `useScrubValue`, `makeCoalescer` |
 
 > [!NOTE]
-> The panel is read-only. Keyframe editing, multi-clip sequencing, and per-bone lanes are deferred;
-> the renderer's `diamonds` mode and `keys` field are the seams they plug into.
+> The panel is read-only. Keyframe editing, multi-clip sequencing, and per-bone lanes are deferred.
 
 ## Related
 

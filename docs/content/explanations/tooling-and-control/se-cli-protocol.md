@@ -57,7 +57,7 @@ A dependency-free client proves the protocol is genuinely a wire contract rather
 | argv → request | `tools/se/source/main.cpp` | `splitArgs`, `buildParams`, `coerce` |
 | Socket connect + round-trip | `tools/se/source/main.cpp` | `socketPath`, `main` |
 | Reply printing | `tools/se/source/main.cpp` | `printResult`, `OutputMode` |
-| Param reading, engine side | `command.cppm` | `positionalOr`, `asString` |
+| Param reading, engine side | `command.cppm` | `positionalOr` |
 
 > [!NOTE]
 > `cmd/se` in the repo root is a thin wrapper that runs the built binary inside the `saffron-build` toolbox; the host can reach the socket directly, so the wrapper is only a convenience. The binary itself is plain C++20.

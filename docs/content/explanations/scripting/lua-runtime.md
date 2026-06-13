@@ -37,7 +37,7 @@ log.
 | What | File | Symbols |
 |---|---|---|
 | VM ownership and lifecycle | `script.cppm` | `ScriptVm`, `newScriptVm` |
-| Running chunks, errors → `Result` | `script.cppm` | `runFile`, `runString` |
+| Running chunks, errors → `Result` | `script.cppm` | `runString` |
 | Spike self-check | `script.cppm` | `runScriptSelfTest` |
 | Vendored Lua 5.5 + LuaBridge3 | `Dependencies.cmake` | `lua_static`, `LuaBridge` |
 

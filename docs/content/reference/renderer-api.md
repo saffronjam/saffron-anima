@@ -33,8 +33,6 @@ These are the exported entry points of `Saffron.Rendering` (the `:Types` partiti
 | Symbol | Signature |
 |---|---|
 | `setViewportDesiredSize` | `void setViewportDesiredSize(Renderer&, u32 w, u32 h)` |
-| `viewportImageView` | `auto viewportImageView(const Renderer&) -> vk::ImageView` |
-| `viewportGeneration` | `auto viewportGeneration(const Renderer&) -> u32` |
 | `viewportWidth` / `viewportHeight` | `auto …(const Renderer&) -> u32` |
 
 ## Resource upload
@@ -42,9 +40,7 @@ These are the exported entry points of `Saffron.Rendering` (the `:Types` partiti
 |---|---|
 | `uploadMesh` | `auto uploadMesh(Renderer&, const Mesh&) -> Result<Ref<GpuMesh>>` |
 | `uploadTexture` | `auto uploadTexture(Renderer&, const u8* rgba, u32 w, u32 h, bool srgb) -> Result<Ref<GpuTexture>>` |
-| `uploadSvgIcon` | `auto uploadSvgIcon(Renderer&, const std::string& svgPath, u32 pixelSize, glm::vec4 tint) -> Result<Ref<GpuTexture>>` |
 | `renderMeshThumbnail` | `auto renderMeshThumbnail(Renderer&, const Ref<GpuMesh>&, u32 size) -> Result<Ref<GpuTexture>>` |
-| `defaultTexture` | `auto defaultTexture(const Renderer&) -> const Ref<GpuTexture>&` |
 
 ## Pipelines (PSO cache)
 | Symbol | Signature | Effect |
@@ -77,7 +73,6 @@ These are the exported entry points of `Saffron.Rendering` (the `:Types` partiti
 | `setSsao` / `ssaoEnabled` | GTAO |
 | `setContactShadows` / `contactShadowsEnabled` | screen-space contact shadows |
 | `setSsgi` / `ssgiEnabled` | screen-space GI |
-| `screenEffectsEnabled(const Renderer&) -> bool` | any screen effect on |
 | `setDdgi` / `ddgiEnabled` | DDGI probe GI |
 | `setShadows` / `shadowsEnabled` | directional shadow map |
 | `setDepthPrepass` / `depthPrepassEnabled` | depth pre-pass |

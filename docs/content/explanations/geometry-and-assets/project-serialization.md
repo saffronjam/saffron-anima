@@ -138,22 +138,7 @@ runtime asset directory.
 
 ## Legacy compatibility
 
-An older `asset_registry.json` mapped id → path, with no names. `newAssetServer` migrates it on
-construction:
-
-```cpp
-entry.id   = Uuid{ std::strtoull(it.key().c_str(), nullptr, 10) };
-entry.name = uniqueName(catalog, std::filesystem::path(path).stem().string());
-entry.type = type;   // "meshes" => Mesh, "textures" => Texture
-putAsset(assets.catalog, std::move(entry));
-```
-
-The old file had no human names, so migration synthesizes one from each path's filename stem
-and dedups it with `uniqueName`. After migration the catalog lives in `project.json` like any
-other catalog. The legacy file is read defensively: anything that is not a string entry under
-`meshes`/`textures` is skipped.
-
-Old project catalogs may also contain mesh paths beginning with `meshes/`. Loading keeps those
+Old project catalogs may contain mesh paths beginning with `meshes/`. Loading keeps those
 paths working. New imports and new saves use `models/`.
 
 ## In the code
