@@ -102,7 +102,14 @@ namespace se
             const f32 delta = dt * player.speed;
             if (player.wrap == AnimationPlayerComponent::Wrap::PingPong)
             {
-                player.time = player.time + (player.pingForward ? delta : -delta);
+                if (player.pingForward)
+                {
+                    player.time = player.time + delta;
+                }
+                else
+                {
+                    player.time = player.time - delta;
+                }
                 if (player.time >= duration)
                 {
                     player.time = 2.0f * duration - player.time;
@@ -311,7 +318,14 @@ namespace se
                 if (stale)
                 {
                     auto it = nameToIndex.find(track.jointName);
-                    joint = it != nameToIndex.end() ? it->second : -1;
+                    if (it != nameToIndex.end())
+                    {
+                        joint = it->second;
+                    }
+                    else
+                    {
+                        joint = -1;
+                    }
                 }
                 if (joint < 0 || joint >= jointCount)
                 {
@@ -338,7 +352,11 @@ namespace se
     auto sampleTrack(const AnimTrack& track, f32 t) -> glm::vec4
     {
         const bool rotation = track.path == AnimTrack::Path::Rotation;
-        const int cc = rotation ? 4 : 3;
+        i32 cc = 3;
+        if (rotation)
+        {
+            cc = 4;
+        }
         const auto stride = static_cast<std::size_t>(cc);
         const std::vector<f32>& times = track.times;
         const std::size_t n = times.size();
@@ -369,7 +387,7 @@ namespace se
         auto readVec4 = [&](std::size_t offset) -> glm::vec4
         {
             glm::vec4 r(0.0f);
-            for (int c = 0; c < cc; c = c + 1)
+            for (i32 c = 0; c < cc; c = c + 1)
             {
                 r[c] = track.values[offset + static_cast<std::size_t>(c)];
             }
@@ -528,12 +546,14 @@ namespace se
         }
         bendAxis = glm::normalize(bendAxis);
 
-        // 1. Knee bend at the mid joint: change the interior angle at the mid (between the
-        //    reversed upper segment and the lower segment) from its current value to the reach
-        //    value. Rotating the lower bone about the bend axis by this delta sets |start-end|
-        //    to the clamped reach.
-        const f32 currentMidAngle =
-            lenStartEnd > 1e-6f ? angleOpposite(a, b, lenStartEnd) : glm::pi<f32>();  // folded back == pi
+        // Knee bend at the mid joint: change the interior angle at the mid (between the reversed
+        // upper segment and the lower segment) from its current value to the reach value. Rotating
+        // the lower bone about the bend axis by this delta sets |start-end| to the clamped reach.
+        f32 currentMidAngle = glm::pi<f32>();  // a degenerate (folded-back) chain reads as pi
+        if (lenStartEnd > 1e-6f)
+        {
+            currentMidAngle = angleOpposite(a, b, lenStartEnd);
+        }
         const f32 targetMidAngle = angleOpposite(a, b, reachClamped);
         const f32 bendDelta = targetMidAngle - currentMidAngle;
 
@@ -549,15 +569,15 @@ namespace se
         }
         out.lower = glm::normalize(bend);
 
-        // 2. Swing: rotate the whole chain about the root so the bent start->end points at the
-        //    target. Applied to the upper joint (the lower inherits it through the hierarchy).
+        // Swing: rotate the whole chain about the root so the bent start->end points at the
+        // target. Applied to the upper joint (the lower inherits it through the hierarchy).
         const glm::quat swing = rotationBetween(startEndBent, toTarget);
         out.upper = glm::normalize(swing);
 
-        // 3. Pole: twist about the root->target axis so the mid joint sits in the plane spanned
-        //    by the target direction and the pole vector (knee/elbow points the intended way).
-        //    The swung mid joint (start-relative) is swing*startMid; project it off the chain
-        //    axis to get the current knee direction, and likewise the desired pole direction.
+        // Pole: twist about the root->target axis so the mid joint sits in the plane spanned by
+        // the target direction and the pole vector (knee/elbow points the intended way). The swung
+        // mid joint (start-relative) is swing*startMid; project it off the chain axis to get the
+        // current knee direction, and likewise the desired pole direction.
         const glm::vec3 targetDir = toTarget / reach;
         const glm::vec3 midBent = swing * startMid;  // start-relative mid after the swing
         const glm::vec3 currentPole = midBent - targetDir * glm::dot(midBent, targetDir);
@@ -588,9 +608,16 @@ namespace se
             {
                 // Play animates every rig; Edit previews only the timeline-selected one.
                 const bool active = mode == AnimMode::Play || player.previewInEdit;
-                const AnimClip* clip = active ? loadClip(runtime, player.clip) : nullptr;
-                const u64 key =
-                    hasComponent<IdComponent>(scene, entity) ? getComponent<IdComponent>(scene, entity).id.value : 0;
+                const AnimClip* clip = nullptr;
+                if (active)
+                {
+                    clip = loadClip(runtime, player.clip);
+                }
+                u64 key = 0;
+                if (hasComponent<IdComponent>(scene, entity))
+                {
+                    key = getComponent<IdComponent>(scene, entity).id.value;
+                }
                 if (clip == nullptr)
                 {
                     clearOverrides(scene, skin);
@@ -681,9 +708,14 @@ namespace se
                     const f32 x = glm::clamp(player.transition / player.transitionDuration, 0.0f, 1.0f);
                     for (std::size_t i = 0; i < jointCount && i < state.offset.size(); i = i + 1)
                     {
-                        finalLocal[i] = player.transitionMode == AnimationPlayerComponent::Transition::CrossFade
-                                            ? blendJoint(state.outgoing[i], finalLocal[i], smoothstep01(x))
-                                            : applyDelta(finalLocal[i], state.offset[i], quinticDecay(x));
+                        if (player.transitionMode == AnimationPlayerComponent::Transition::CrossFade)
+                        {
+                            finalLocal[i] = blendJoint(state.outgoing[i], finalLocal[i], smoothstep01(x));
+                        }
+                        else
+                        {
+                            finalLocal[i] = applyDelta(finalLocal[i], state.offset[i], quinticDecay(x));
+                        }
                     }
                     player.transition = player.transition + dt;
                     if (player.transition >= player.transitionDuration)
@@ -859,7 +891,7 @@ namespace se
                    "untracked joint keeps rest");
         }
 
-        // .sanim IO round-trip (Phase 2): a two-track clip survives save -> load exactly.
+        // .sanim IO round-trip: a two-track clip survives save -> load exactly.
         {
             AnimClip clip;
             clip.name = "io_roundtrip";
@@ -907,7 +939,7 @@ namespace se
             }
         }
 
-        // Evaluator (Phase 3): a previewInEdit rig writes a PoseOverrideComponent that
+        // Evaluator: a previewInEdit rig writes a PoseOverrideComponent that
         // animates the bone and shows through world composition, while the authored
         // rest-pose TransformComponent stays put; clearing the preview reverts it.
         {
@@ -982,7 +1014,7 @@ namespace se
             expect(scene.registry.all_of<PoseOverrideComponent>(rootBone.handle), "play animates without preview");
         }
 
-        // PoseDelta (Phase 4): the delta carries `to` onto `from` at weight 1 and is the
+        // PoseDelta: the delta carries `to` onto `from` at weight 1 and is the
         // identity at weight 0 — the reusable offset machinery transitions build on.
         {
             JointPose from;
@@ -1000,7 +1032,7 @@ namespace se
                    "applyDelta w=0 is the base");
         }
 
-        // Transitions (Phase 4): a 90 deg Y clip, switched in from the rest (identity)
+        // Transitions: a 90 deg Y clip, switched in from the rest (identity)
         // outgoing pose. Cross-fade and inertialization both start at the outgoing pose and
         // end at the incoming clip; inertialization is C0 at the switch (no pop).
         {
@@ -1058,7 +1090,7 @@ namespace se
             expect(quatClose(inEnd, q90), "inertialization ends at the incoming clip");
         }
 
-        // Loop-wrap blend (Phase 4): a clip whose start (0 deg) and end (90 deg Y) differ
+        // Loop-wrap blend: a clip whose start (0 deg) and end (90 deg Y) differ
         // would pop at the wrap; loopBlend inertializes across it, so the wrap frame holds
         // the pre-wrap (end) pose rather than snapping to the start.
         {
@@ -1100,7 +1132,7 @@ namespace se
             expect(quatClose(wrapFrame, preWrap), "loop wrap holds the pre-wrap pose (no pop)");
         }
 
-        // Two-bone IK (Phase 13): the solver returns world deltas that, composed onto the
+        // Two-bone IK: the solver returns world deltas that, composed onto the
         // chain's (identity) bone world rotations, place the end on an in-range target exactly,
         // and clamp gracefully (straight chain toward the target, no NaN) when over-reached.
         {
