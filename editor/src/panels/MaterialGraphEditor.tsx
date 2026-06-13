@@ -41,11 +41,13 @@ import {
   flowToGraph,
   freshNodeId,
   graphToFlow,
+  type MaterialGraph,
   type NodeCategory,
   NODE_SPECS,
   type SaffronNodeData,
   TEXTURE_SLOTS,
 } from "../materials/graph";
+import { useTabSnapshotHistory } from "../lib/useTabSnapshotHistory";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import {
@@ -59,6 +61,21 @@ import {
 /// Last rendered preview PNG per material, kept module-level so it survives the tab unmounting:
 /// switching to the Scene tab and back shows the cached sphere immediately instead of re-rendering.
 const previewCache = new Map<string, string>();
+
+/// Stable, order-insensitive equality of two graphs (nodes/edges sorted by id/endpoints),
+/// so a settle that only reorders the arrays or rounds a position back records no entry.
+function graphsEqual(a: MaterialGraph, b: MaterialGraph): boolean {
+  const key = (g: MaterialGraph): string => {
+    const nodes = [...g.nodes].sort((x, y) => x.id.localeCompare(y.id));
+    const edges = [...g.edges].sort((x, y) =>
+      `${x.from[0]}.${x.from[1]}>${x.to[0]}.${x.to[1]}`.localeCompare(
+        `${y.from[0]}.${y.from[1]}>${y.to[0]}.${y.to[1]}`,
+      ),
+    );
+    return JSON.stringify({ nodes, edges });
+  };
+  return key(a) === key(b);
+}
 
 interface NodeCallbacks {
   updateProps: (id: string, props: Record<string, unknown>) => void;
@@ -202,6 +219,26 @@ function GraphCanvas({ materialId }: { materialId: string }) {
   const menuRef = useRef<HTMLDivElement>(null);
   const reactFlow = useReactFlow();
 
+  // Per-tab snapshot history: the local React Flow state is the authority between
+  // debounced saves, so undo records a { before, after } graph and replays the same
+  // materialSetGraph apply the engine already sees.
+  const history = useTabSnapshotHistory<MaterialGraph>(`materialGraph:${materialId}`, {
+    read: () => flowToGraph(nodes, edges),
+    write: async (g) => {
+      const { nodes: n, edges: e } = graphToFlow(g);
+      setNodes(n);
+      setEdges(e);
+      const set = await client.materialSetGraph(materialId, g);
+      setStatus(set.foldable ? "applied (folded to params)" : "applied (codegen)");
+      const result = await client.previewRender(materialId, 256);
+      previewCache.set(materialId, result.png);
+      setPreview(result.png);
+    },
+    equals: graphsEqual,
+    label: "Edit material graph",
+    selectionId: materialId,
+  });
+
   // Load the material's stored graph into the canvas. Show the cached preview immediately, then
   // re-render to refresh it (and cache the result so the next tab switch is instant).
   useEffect(() => {
@@ -215,6 +252,9 @@ function GraphCanvas({ materialId }: { materialId: string }) {
         );
         setNodes(n);
         setEdges(e);
+        // Baseline for the first real edit: the normalized loaded graph (same space the
+        // apply effect produces), so a no-op first settle records nothing.
+        history.seed(flowToGraph(n, e));
         const result = await client.previewRender(materialId, 256);
         previewCache.set(materialId, result.png);
         setPreview(result.png);
@@ -222,7 +262,7 @@ function GraphCanvas({ materialId }: { materialId: string }) {
         notifyError(errorText(err));
       }
     })();
-  }, [materialId, setNodes, setEdges]);
+  }, [materialId, setNodes, setEdges, history]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -278,6 +318,11 @@ function GraphCanvas({ materialId }: { materialId: string }) {
       return;
     }
     const timer = setTimeout(() => {
+      // A replay already pushed the authoritative graph to the engine; skip this settle's
+      // re-send and recording (the replay's setNodes triggered us, but it is not an edit).
+      if (history.consumeReplay()) {
+        return;
+      }
       void (async () => {
         try {
           const graph = flowToGraph(nodes, edges);
@@ -286,6 +331,7 @@ function GraphCanvas({ materialId }: { materialId: string }) {
           const result = await client.previewRender(materialId, 256);
           previewCache.set(materialId, result.png);
           setPreview(result.png);
+          history.record(graph);
         } catch (err) {
           notifyError(errorText(err));
           setStatus("apply failed");
@@ -293,7 +339,7 @@ function GraphCanvas({ materialId }: { materialId: string }) {
       })();
     }, 500);
     return () => clearTimeout(timer);
-  }, [nodes, edges, materialId]);
+  }, [nodes, edges, materialId, history]);
 
   const compile = useCallback(async () => {
     try {
