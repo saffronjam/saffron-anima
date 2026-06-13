@@ -25,7 +25,7 @@ fn nvidia_present() -> bool {
 struct EditorState {
     engine: Mutex<Option<Child>>,
     socket_path: String,
-    viewport: Arc<wayland_viewport::ViewportShared>,
+    viewports: Arc<wayland_viewport::Viewports>,
     /// The latest profiler trace bytes, served on the loopback port below so Perfetto can fetch
     /// them itself (`?url=`). Replaced on each "Open in Perfetto"; None until the first.
     trace: Arc<Mutex<Option<Vec<u8>>>>,
@@ -78,7 +78,7 @@ impl Default for EditorState {
         Self {
             engine: Mutex::new(None),
             socket_path: socket_path(),
-            viewport: Arc::default(),
+            viewports: Arc::default(),
             trace,
             trace_port,
         }
@@ -176,9 +176,10 @@ fn socket_path() -> String {
     format!("{dir}/saffron-editor-{}.sock", std::process::id())
 }
 
-// Per-PID shm segment the engine publishes viewport frames into; the presenter maps it.
-fn viewport_shm_name() -> String {
-    format!("/saffron-viewport-{}", std::process::id())
+// Per-PID, per-view shm segment the engine publishes that view's viewport frames into; the
+// presenter maps each. The token MUST be the engine's wire name ("scene" / "assetPreview").
+fn viewport_shm_name(view: &str) -> String {
+    format!("/saffron-viewport-{}-{}", view, std::process::id())
 }
 
 fn engine_binary() -> String {
@@ -319,9 +320,11 @@ fn spawn_engine(socket_path: &str) -> Result<Child, String> {
         .env("SAFFRON_EDITOR_NATIVE_VIEWPORT", "1")
         .env("SAFFRON_CONTROL_SOCK", socket_path)
         .env("SAFFRON_APPDATA_DIR", app_data_dir())
-        // The engine publishes frames into shared memory for the subsurface presenter
-        // instead of presenting to its (hidden) swapchain.
-        .env("SAFFRON_VIEWPORT_SHM", viewport_shm_name());
+        // The engine publishes each view's frames into its own shared-memory segment for the
+        // subsurface presenter instead of presenting to its (hidden) swapchain. One segment
+        // per view so each pane's subsurface has a ring even while parked.
+        .env("SAFFRON_VIEWPORT_SHM_SCENE", viewport_shm_name("scene"))
+        .env("SAFFRON_VIEWPORT_SHM_ASSET", viewport_shm_name("assetPreview"));
     // Unthrottled headless publish renders thousands of fps for nothing; cap well above
     // any display rate. An explicit SAFFRON_MAX_FPS in the environment wins.
     if std::env::var_os("SAFFRON_MAX_FPS").is_none() {
@@ -361,8 +364,10 @@ fn teardown(state: &EditorState) {
         }
     }
     let _ = fs::remove_file(&state.socket_path);
-    // The engine unlinks its shm segment on clean exit; cover the killed case too.
-    let _ = fs::remove_file(format!("/dev/shm{}", viewport_shm_name()));
+    // The engine unlinks its shm segments on clean exit; cover the killed case too (both views).
+    for view in ["scene", "assetPreview"] {
+        let _ = fs::remove_file(format!("/dev/shm{}", viewport_shm_name(view)));
+    }
 }
 
 // ONE generic passthrough: any `se` command reaches the engine with zero Rust changes.
@@ -408,14 +413,21 @@ struct ViewportBounds {
     scale: f64,
 }
 
+// Resolve a wire view token ("scene" / "assetPreview") to its View, rejecting anything else.
+fn viewport_for(view: &str) -> Result<wayland_viewport::View, String> {
+    wayland_viewport::View::from_wire(view).ok_or_else(|| format!("unknown viewport view '{view}'"))
+}
+
 #[tauri::command]
 async fn set_viewport_bounds(
     window: tauri::WebviewWindow,
     state: State<'_, EditorState>,
+    view: String,
     bounds: ViewportBounds,
     resize_engine: bool,
 ) -> Result<(), String> {
-    state.viewport.set_bounds(
+    let which = viewport_for(&view)?;
+    state.viewports.view(which).set_bounds(
         bounds.x.round() as i32,
         bounds.y.round() as i32,
         bounds.width.round() as i32,
@@ -437,20 +449,22 @@ async fn set_viewport_bounds(
         let _ = control_request_with_params(
             &state.socket_path,
             "set-viewport-size",
-            json!({ "width": width, "height": height }),
+            json!({ "view": view, "width": width, "height": height }),
         );
     }
     Ok(())
 }
 
 #[tauri::command]
-fn set_viewport_hidden(
+fn set_viewport_parked(
     window: tauri::WebviewWindow,
     state: State<'_, EditorState>,
-    hidden: bool,
+    view: String,
+    parked: bool,
 ) -> Result<(), String> {
-    state.viewport.set_hidden(hidden);
-    // The opaque underlay punches its hole per the hidden flag; repaint it.
+    let which = viewport_for(&view)?;
+    state.viewports.view(which).set_parked(parked);
+    // The opaque underlay punches its hole per the parked flag; repaint it.
     let nudge = window.clone();
     let _ = window.run_on_main_thread(move || {
         if let Ok(gtk_window) = nudge.gtk_window() {
@@ -458,13 +472,6 @@ fn set_viewport_hidden(
         }
     });
     Ok(())
-}
-
-/// The presenter's monotonic count of frames the compositor has actually displayed. The UI polls this
-/// after a resize to lift its mask only once a fresh frame at the new size has landed (no timer guess).
-#[tauri::command]
-fn viewport_presented_count(state: State<'_, EditorState>) -> u32 {
-    state.viewport.presented_count()
 }
 
 #[tauri::command]
@@ -721,8 +728,7 @@ pub fn run() {
             control,
             start_engine,
             set_viewport_bounds,
-            set_viewport_hidden,
-            viewport_presented_count,
+            set_viewport_parked,
             quit_engine,
             engine_alive,
             app_data_info,
@@ -738,8 +744,13 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 configure_main_window(&window);
-                let shared = Arc::clone(&app.state::<EditorState>().viewport);
-                if let Err(err) = wayland_viewport::install(&window, viewport_shm_name(), shared) {
+                let viewports = Arc::clone(&app.state::<EditorState>().viewports);
+                if let Err(err) = wayland_viewport::install(
+                    &window,
+                    viewport_shm_name("scene"),
+                    viewport_shm_name("assetPreview"),
+                    &viewports,
+                ) {
                     let _ = app.handle().emit("viewport-error", err);
                 }
             }
