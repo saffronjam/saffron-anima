@@ -930,7 +930,7 @@ namespace se
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 3, renderer.ibl.set, {});
         // Set 4 = screen-space maps (AO + contact + SSGI); each gated by its flag in the
         // shader, so the bind is always valid even when an effect is off.
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 4, renderer.ssao.meshSet, {});
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 4, activeView(renderer).meshSet, {});
         // Set 5 = DDGI probe atlases (irradiance + distance); gated by screenFlags.z.
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 5, renderer.ddgi.meshSet, {});
         // Set 6 = the RT TLAS, set 7 = the ReSTIR radiance (only when RT is supported, so the
@@ -941,9 +941,9 @@ namespace se
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 6,
                                    renderer.rt.meshSets[renderer.frame.index], {});
             binds = binds + 1;
-            if (renderer.restir.meshSet)
+            if (activeRestir(renderer).meshSet)
             {
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 7, renderer.restir.meshSet, {});
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 7, activeRestir(renderer).meshSet, {});
                 binds = binds + 1;
             }
         }
@@ -1084,7 +1084,7 @@ namespace se
         {
             glm::mat4 curViewProj;
             glm::mat4 prevViewProj;
-        } push{ list.viewProj, renderer.prevViewProj };
+        } push{ list.viewProj, activeView(renderer).prevViewProj };
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(push), &push);
         const bool haveDeformed =
             renderer.skinning.deformedBuffers[frame] && renderer.skinning.prevDeformedBuffers[frame];

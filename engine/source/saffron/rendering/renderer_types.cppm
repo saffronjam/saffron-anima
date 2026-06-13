@@ -59,6 +59,16 @@ export namespace se
 
     inline constexpr u32 MaxFramesInFlight = 2;
 
+    /// Which editor pane a render view targets. Each view owns its own ViewTargets (offscreen
+    /// images + temporal state); the renderer renders the active view.
+    enum class ViewId : u8
+    {
+        Scene = 0,
+        AssetPreview = 1,
+    };
+
+    inline constexpr u32 ViewCount = 2;
+
     // Capacity of the bindless texture array (set 0). One global combined-image-sampler
     // array indexed per-instance; lavapipe + desktop GPUs allow far more, this is plenty.
     inline constexpr u32 MaxBindlessTextures = 1024;
@@ -1105,14 +1115,13 @@ export namespace se
         // texture so it outlives both the descriptors and any texture whose dtor pushes to it; an upload
         // pops a freed slot before growing nextBindlessIndex, so a churny scene keeps the pool bounded.
         Ref<std::vector<u32>> bindlessFreeList = std::make_shared<std::vector<u32>>();
-        vk::DescriptorSetLayout tonemapSetLayout;  // compute set 0: storage image
-        vk::DescriptorSet tonemapSet;              // points at the offscreen color view (GENERAL)
+        // The post-process compute set LAYOUTS are device-shared; the SETS that bind per-view
+        // images (offscreen/scratch/history/motion) live per-view in ViewTargets.
+        vk::DescriptorSetLayout tonemapSetLayout;  // compute set 0: storage image (offscreen)
         vk::DescriptorSetLayout fxaaSetLayout;
-        vk::DescriptorSet fxaaSet;
-        // TAA resolve set (compute): current + history + motion samplers, offscreen +
-        // history storage. Two sets (one per ping-pong parity) rewritten when targets change.
+        // TAA resolve set (compute): current + history + motion samplers, offscreen + history storage.
+        // Two sets per view (one per ping-pong parity) rewritten when that view's targets change.
         vk::DescriptorSetLayout taaSetLayout;
-        std::array<vk::DescriptorSet, 2> taaSets;
         vk::DescriptorSetLayout clusterSetLayout;  // compute set 0
     };
 
@@ -1235,19 +1244,13 @@ export namespace se
         std::unordered_map<std::string, Ref<Pipeline>> cache;
     };
 
-    // The offscreen render targets + the AA state that decides which targets exist.
-    struct Targets
+    // The per-view offscreen render targets: every viewport-sized image plus the per-view
+    // sizing/history state. One instance per editor pane (indexed by ViewId); the scene-global
+    // and device-global state lives in Targets.
+    struct ViewTargets
     {
-        Image offscreen;      // scene render target shown in the Viewport panel
-        Image depth;          // depth buffer for the scene pass, sized to the viewport
-        Image shadowMap;      // directional-light depth map (sampled with the compare sampler)
-        Image spotShadowMap;  // first shadow-casting spot light's depth map (same compare sampler)
-        // First shadow-casting point light's omnidirectional distance cubemap: a color cube
-        // (R32_SFLOAT = world distance to the nearest occluder) rendered face-by-face with a
-        // shared depth scratch; the mesh samples it by direction and compares linear distance.
-        Image pointShadowCube;
-        Image pointShadowDepth;
-        std::array<vk::ImageView, 6> pointShadowFaces{};  // per-face render views (freed manually)
+        Image offscreen;  // scene render target shown in the Viewport panel
+        Image depth;      // depth buffer for the scene pass, sized to the viewport
         // Screen-space effects: a thin G-buffer (view normal rgb + view-Z in .a) + its depth
         // scratch; the raw + denoised AO (r8), the contact-shadow map (r8), the SSGI radiance
         // (rgba16f), and the persistent previous-frame linear-HDR color SSGI gathers from.
@@ -1273,15 +1276,49 @@ export namespace se
         // FXAA: when on, the scene renders to scratch (1x sampled), and a compute pass
         // edge-blurs it into offscreen.
         Image scratch;
+        // The descriptor sets that bind this view's screenspace + post-process images. Per-view
+        // (allocated once per view, written when this view's images are (re)created) so a view switch
+        // never leaves a set bound to another view's images — the shared LAYOUTS/samplers/pipelines stay
+        // device-global in Ssao/Descriptors. The screen-space compute chain (set into Ssao's layouts):
+        vk::DescriptorSet gtaoSet;       // gNormal + aoRaw            (compute2)
+        vk::DescriptorSet aoBlurSet;     // aoRaw + gNormal + aoMap    (compute3)
+        vk::DescriptorSet contactSet;    // gNormal + contactMap       (compute2)
+        vk::DescriptorSet ssgiSet;       // gNormal + prevColor + ssgiMap (compute3)
+        vk::DescriptorSet copyColorSet;  // offscreen + prevColor      (compute2)
+        vk::DescriptorSet meshSet;       // set 4: aoMap + contactMap + ssgiMap (sampled by the mesh pass)
+        // Post-process compute sets (Descriptors' layouts): tonemap (offscreen), FXAA (scratch+offscreen),
+        // and the two TAA ping-pong-parity sets (scratch/history/motion/offscreen).
+        vk::DescriptorSet tonemapSet;
+        vk::DescriptorSet fxaaSet;
+        std::array<vk::DescriptorSet, 2> taaSets;
+        // Last frame's camera viewProj, for TAA motion vectors; invalid until the first frame
+        // stores one. Per-view so a re-activated view reprojects against ITS own last frame.
+        glm::mat4 prevViewProj{ 1.0f };
+        bool prevViewProjValid = false;
+        u32 desiredWidth = 0;  // requested by the UI panel (applied next frame)
+        u32 desiredHeight = 0;
+        u32 generation = 0;  // bumped whenever the offscreen image is recreated
+    };
+
+    // The scene-global + device-global render state shared across all views: the shadow maps
+    // (the scene has one light rig) and the AA capability/toggle state (a device fact + a
+    // session toggle). The per-view, viewport-sized images live in ViewTargets.
+    struct Targets
+    {
+        Image shadowMap;      // directional-light depth map (sampled with the compare sampler)
+        Image spotShadowMap;  // first shadow-casting spot light's depth map (same compare sampler)
+        // First shadow-casting point light's omnidirectional distance cubemap: a color cube
+        // (R32_SFLOAT = world distance to the nearest occluder) rendered face-by-face with a
+        // shared depth scratch; the mesh samples it by direction and compares linear distance.
+        Image pointShadowCube;
+        Image pointShadowDepth;
+        std::array<vk::ImageView, 6> pointShadowFaces{};                       // per-face render views (freed manually)
         vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1;     // 1 = MSAA off
         vk::SampleCountFlagBits maxSampleCount = vk::SampleCountFlagBits::e1;  // device cap
         vk::SampleCountFlags supportedSampleCounts =
             vk::SampleCountFlagBits::e1;  // counts the color+depth MSAA formats accept
         bool fxaaEnabled = false;         // FXAA post-process (mutually exclusive with MSAA)
         bool taaEnabled = false;          // TAA resolve (mutually exclusive with MSAA/FXAA)
-        u32 desiredWidth = 0;             // requested by the UI panel (applied next frame)
-        u32 desiredHeight = 0;
-        u32 generation = 0;  // bumped whenever the offscreen image is recreated
     };
 
     // Which shader fills the IBL environment cube before the convolution chain.
@@ -1440,17 +1477,12 @@ export namespace se
         f32 strength = 3.0f;
         vk::Sampler sampler;  // nearest, clamp — samples the G-buffer
         // Two compute set layouts shared by the screen-space passes: 2-binding
-        // (sampler + storage) and 3-binding (sampler + sampler + storage).
+        // (sampler + storage) and 3-binding (sampler + sampler + storage). The SETS that bind
+        // per-view images live in ViewTargets (one per view); these layouts are device-shared.
         vk::DescriptorSetLayout compute2Layout;
         vk::DescriptorSetLayout compute3Layout;
-        vk::DescriptorSet gtaoSet;              // gbuffer + aoRaw         (compute2)
-        vk::DescriptorSet aoBlurSet;            // aoRaw + gbuffer + aoMap (compute3)
-        vk::DescriptorSet contactSet;           // gbuffer + contactMap    (compute2)
-        vk::DescriptorSet ssgiSet;              // gbuffer + prevColor + ssgiMap (compute3)
-        vk::DescriptorSet copyColorSet;         // sceneColor + prevColor  (compute2)
         vk::DescriptorSetLayout meshSetLayout;  // set 4 in the mesh pipeline (AO + contact + SSGI)
-        vk::DescriptorSet meshSet;
-        u32 generation = 0;  // bumped when targets recreate (sets refreshed)
+        u32 generation = 0;                     // bumped when targets recreate (sets refreshed)
     };
 
     // A VMA-allocated 3D image (the DDGI voxel scene proxy). Move-only like Image; a 3D
@@ -1606,29 +1638,39 @@ export namespace se
     // ReSTIR DI (reservoir spatiotemporal importance resampling) — stochastic many-light
     // direct lighting. Feeds off the froxel candidate lists (set via the cluster SSBO) +
     // the phase-7 TLAS for one visibility ray per pixel + phase-5 motion for temporal reuse.
-    // Gated on rtSupported (needs ray-query). Per-pixel reservoir SSBOs (initial, combined,
-    // previous) + an output radiance image the mesh adds in. Diffuse direct only in v1.
+    // Gated on rtSupported (needs ray-query). Diffuse direct only in v1.
+    //
+    // Restir holds the device-shared pipeline scaffolding (sampler + descriptor-set LAYOUTS);
+    // the per-pixel reservoir buffers, viewport-sized radiance image, and the descriptor SETS
+    // that bind them are per-view (RestirView) so two views never read each other's reservoirs.
     struct Restir
     {
         bool useRestir = false;
-        bool ready = false;
-        bool historyReset = true;
-        Image radiance;                         // per-pixel resolved direct radiance (rgba16f)
-        Ref<Buffer> initial;                    // initial reservoirs (this frame's candidate sampling)
-        Ref<Buffer> combined;                   // after temporal+spatial reuse
-        Ref<Buffer> previous;                   // last frame's combined (temporal source)
-        u32 reservoirCapacity = 0;              // pixels the buffers are sized for
         vk::Sampler sampler;                    // nearest, clamp — samples G-buffer/motion
         vk::DescriptorSetLayout initialLayout;  // 4 bindings
         vk::DescriptorSetLayout reuseLayout;    // 6 bindings
         vk::DescriptorSetLayout resolveLayout;  // 6 bindings (incl. TLAS)
         vk::DescriptorSetLayout meshLayout;     // set 7: the radiance sampler
+        u32 candidateCount = 16;                // K initial candidates per pixel
+    };
+
+    // Per-view ReSTIR state: the per-pixel reservoir SSBOs (initial, combined, previous), the
+    // resolved-radiance image, and the descriptor sets binding them. Sized to the view's pixel
+    // count, recreated with the offscreen. frameIndex/historyReset are per-view temporal state.
+    struct RestirView
+    {
+        bool ready = false;
+        bool historyReset = true;
+        Image radiance;             // per-pixel resolved direct radiance (rgba16f)
+        Ref<Buffer> initial;        // initial reservoirs (this frame's candidate sampling)
+        Ref<Buffer> combined;       // after temporal+spatial reuse
+        Ref<Buffer> previous;       // last frame's combined (temporal source)
+        u32 reservoirCapacity = 0;  // pixels the buffers are sized for
         vk::DescriptorSet initialSet;
         vk::DescriptorSet reuseSet;
         vk::DescriptorSet resolveSet;
         vk::DescriptorSet meshSet;
         u32 frameIndex = 0;
-        u32 candidateCount = 16;  // K initial candidates per pixel
     };
 
     // The frame as a render graph + the resource handles app-authored passes reference.
@@ -1663,6 +1705,8 @@ export namespace se
         Skinning skinning;
         Pipelines pipelines;
         Targets targets;
+        std::array<ViewTargets, ViewCount> views{};  // per-pane offscreen targets (indexed by ViewId)
+        ViewId activeView = ViewId::Scene;           // the view rendered + presented this frame
         Ibl ibl;
         ReflectionProbes reflection;
         Sky sky;
@@ -1670,15 +1714,15 @@ export namespace se
         Ddgi ddgi;
         Rt rt;
         Restir restir;
+        std::array<RestirView, ViewCount> restirViews{};  // per-view reservoirs + sets (indexed by ViewId)
         FrameGraphState graph;
 
         bool useDepthPrepass = false;
-        bool useSkinning = true;              // gate for the GPU skinning path; off = skinned items never gather
-        bool presentViewportOnly = false;     // native-viewport host: blit offscreen->swapchain, skip the ui pass
-        ShmPublish shmPublish;                // pipelined offscreen→shm publish; replaces present when enabled
+        bool useSkinning = true;           // gate for the GPU skinning path; off = skinned items never gather
+        bool presentViewportOnly = false;  // native-viewport host: blit offscreen->swapchain, skip the ui pass
+        std::array<ShmPublish, ViewCount>
+            shmPublish{};                     // per-view offscreen→shm publish; replaces present when enabled
         f32 exposureEv = 0.0f;                // tonemap exposure in stops; the tonemap pass applies exp2(this)
-        glm::mat4 prevViewProj{ 1.0f };       // last frame's camera viewProj, for TAA motion vectors
-        bool prevViewProjValid = false;       // false until the first frame stores one
         Ref<GpuTexture> defaultWhiteTexture;  // 1x1 white; bound when a material has no albedo
         Ref<GpuMesh> previewSphere;           // lazy unit UV sphere for material previews
         RenderStats stats;                    // populated each frame by submitDrawList
@@ -1711,6 +1755,29 @@ export namespace se
         vk::CommandPool workerCommandPool;
     };
 
+    /// The render targets for the view the renderer is currently rendering + presenting.
+    inline auto activeView(Renderer& renderer) -> ViewTargets&
+    {
+        return renderer.views[static_cast<std::size_t>(renderer.activeView)];
+    }
+
+    inline auto activeView(const Renderer& renderer) -> const ViewTargets&
+    {
+        return renderer.views[static_cast<std::size_t>(renderer.activeView)];
+    }
+
+    /// The shared-memory publish slot for the view the renderer is currently presenting.
+    inline auto activeShmPublish(Renderer& renderer) -> ShmPublish&
+    {
+        return renderer.shmPublish[static_cast<std::size_t>(renderer.activeView)];
+    }
+
+    /// The ReSTIR per-pixel reservoir state for the view the renderer is currently rendering.
+    inline auto activeRestir(Renderer& renderer) -> RestirView&
+    {
+        return renderer.restirViews[static_cast<std::size_t>(renderer.activeView)];
+    }
+
     auto newRenderer(Window& window) -> Result<Renderer>;
     void destroyRenderer(Renderer& renderer);
 
@@ -1742,8 +1809,10 @@ export namespace se
     // is occluded by scene geometry; `onTop` (handles, billboards) always draws.
     void submitOverlay(Renderer& renderer, std::vector<OverlayVertex> depthTested, std::vector<OverlayVertex> onTop);
 
-    // The offscreen Viewport target the editor samples + displays in a panel.
-    void setViewportDesiredSize(Renderer& renderer, u32 width, u32 height);
+    // The offscreen Viewport target the editor samples + displays in a panel. Records the
+    // requested size on that view; beginFrame applies it only when the view is active (a
+    // non-active view's size is deferred until it becomes active).
+    void setViewportDesiredSize(Renderer& renderer, ViewId view, u32 width, u32 height);
     auto viewportImageView(const Renderer& renderer) -> vk::ImageView;
     auto viewportGeneration(const Renderer& renderer) -> u32;
     auto viewportWidth(const Renderer& renderer) -> u32;
@@ -1984,6 +2053,16 @@ export namespace se
     // ReSTIR many-light direct lighting (feature-gated on rtSupported). Diffuse direct in v1.
     void setRestir(Renderer& renderer, bool enabled);
     auto restirEnabled(const Renderer& renderer) -> bool;
+    // Resets every temporal accumulator for one view so it re-converges from scratch: TAA history,
+    // the motion reprojection's previous-viewProj, and the view's ReSTIR reservoir history. DDGI is
+    // scene-global but its probes must re-converge too, so its history reset is armed here as well.
+    // Call only at a frame boundary (TAA captures historyValid by value into its execute closure).
+    void resetViewTemporal(Renderer& renderer, ViewId view);
+    // Selects which view the renderer renders + presents. When the active view changes, the
+    // newly-shown view's temporal accumulators are stale, so this resets them (reset-on-activate).
+    // Call at a frame boundary (before beginFrameGraph) so the reset settles before TAA captures
+    // historyValid. A no-op when `view` is already active.
+    void setActiveView(Renderer& renderer, ViewId view);
     // Records the G-buffer prepass (view normal + view-Z) for the screen-space pass bodies.
     void recordGbuffer(Renderer& renderer, vk::CommandBuffer cmd);
     // Feeds the camera the screen-space passes need: view, proj (SAME Y-flipped projection
@@ -2088,8 +2167,15 @@ export namespace se
     // endFrame records an offscreen→BGRA8→staging readback into each frame's own command
     // buffer and skips swapchain acquire/present entirely; beginFrame memcpys the ready
     // slot into the shared segment after its fence wait. Zero added stalls.
-    void enableViewportShmPublish(Renderer& renderer, const std::string& shmName);
+    void enableViewportShmPublish(Renderer& renderer, ViewId view, const std::string& shmName);
     auto ensureShmPublishSlot(Renderer& renderer, ShmPublishSlot& slot, u32 width, u32 height) -> bool;
     void publishShmPublishSlot(Renderer& renderer, ShmPublishSlot& slot);
+    // Frees every per-view shm publisher's readback slots + mapped segment on teardown.
     void destroyShmPublish(Renderer& renderer);
+
+    // Frees one view's per-view resources (offscreen targets, ReSTIR reservoirs + radiance, and
+    // its shm publisher) under a device idle, honoring the Ref-drop-then-idle order. Safe on a
+    // never-allocated view (null Refs / zero extents). Pool-owned descriptor sets are left intact.
+    // Called when an editor pane closes; the device + global state outlive it.
+    void destroyView(Renderer& renderer, ViewId view);
 }

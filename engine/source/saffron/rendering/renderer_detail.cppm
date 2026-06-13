@@ -1094,14 +1094,14 @@ export namespace se
     // sample-count change. The caller has already idled the GPU.
     void recreateMsaaTargets(Renderer& renderer)
     {
-        renderer.targets.msaaColor.reset();
-        renderer.targets.msaaDepth.reset();
+        activeView(renderer).msaaColor.reset();
+        activeView(renderer).msaaDepth.reset();
         if (renderer.targets.sampleCount == vk::SampleCountFlagBits::e1)
         {
             return;
         }
-        const u32 w = renderer.targets.offscreen.extent.width;
-        const u32 h = renderer.targets.offscreen.extent.height;
+        const u32 w = activeView(renderer).offscreen.extent.width;
+        const u32 h = activeView(renderer).offscreen.extent.height;
         if (w == 0 || h == 0)
         {
             return;
@@ -1109,7 +1109,7 @@ export namespace se
         Result<Image> color = newColorImage(renderer, w, h, OffscreenColorFormat, false, renderer.targets.sampleCount);
         if (color)
         {
-            renderer.targets.msaaColor = std::move(*color);
+            activeView(renderer).msaaColor = std::move(*color);
         }
         else
         {
@@ -1118,7 +1118,7 @@ export namespace se
         auto depth = newDepthImage(renderer, w, h, renderer.targets.sampleCount);
         if (depth)
         {
-            renderer.targets.msaaDepth = std::move(*depth);
+            activeView(renderer).msaaDepth = std::move(*depth);
         }
         else
         {
@@ -1130,18 +1130,21 @@ export namespace se
     void recreateSsaoTargets(Renderer& renderer);    // defined after the SSAO pipeline helpers
     void recreateTaaTargets(Renderer& renderer);     // defined after the TAA pipeline helpers
     void recreateRestirTargets(Renderer& renderer);  // defined after the ReSTIR pipeline helpers
+    // Frees one shm publisher's readback slots + mapped segment (defined in renderer_capture.cpp);
+    // destroyShmPublish loops it over every view, destroyView calls it for one.
+    void destroyShmPublishSlots(Renderer& renderer, ShmPublish& shm);
 
     // (Re)create the 1x scratch target FXAA + TAA read from (the scene renders here when
     // either is on); drop it when neither. Sized to the offscreen; the GPU is already idle.
     void recreateFxaaTarget(Renderer& renderer)
     {
-        renderer.targets.scratch.reset();
+        activeView(renderer).scratch.reset();
         if (!renderer.targets.fxaaEnabled && !renderer.targets.taaEnabled)
         {
             return;
         }
-        const u32 w = renderer.targets.offscreen.extent.width;
-        const u32 h = renderer.targets.offscreen.extent.height;
+        const u32 w = activeView(renderer).offscreen.extent.width;
+        const u32 h = activeView(renderer).offscreen.extent.height;
         if (w == 0 || h == 0)
         {
             return;
@@ -1149,7 +1152,7 @@ export namespace se
         auto scratch = newColorImage(renderer, w, h, OffscreenColorFormat, false);
         if (scratch)
         {
-            renderer.targets.scratch = std::move(*scratch);
+            activeView(renderer).scratch = std::move(*scratch);
             if (renderer.targets.fxaaEnabled)
             {
                 updateFxaaSet(renderer);
@@ -2100,15 +2103,15 @@ export namespace se
     void recreateSsaoTargets(Renderer& renderer)
     {
         renderer.ssao.ready = false;
-        renderer.targets.gNormal.reset();
-        renderer.targets.gDepth.reset();
-        renderer.targets.aoRaw.reset();
-        renderer.targets.aoMap.reset();
-        renderer.targets.contactMap.reset();
-        renderer.targets.ssgiMap.reset();
-        renderer.targets.prevColor.reset();
-        const u32 w = renderer.targets.offscreen.extent.width;
-        const u32 h = renderer.targets.offscreen.extent.height;
+        activeView(renderer).gNormal.reset();
+        activeView(renderer).gDepth.reset();
+        activeView(renderer).aoRaw.reset();
+        activeView(renderer).aoMap.reset();
+        activeView(renderer).contactMap.reset();
+        activeView(renderer).ssgiMap.reset();
+        activeView(renderer).prevColor.reset();
+        const u32 w = activeView(renderer).offscreen.extent.width;
+        const u32 h = activeView(renderer).offscreen.extent.height;
         if (w == 0 || h == 0)
         {
             return;
@@ -2119,49 +2122,49 @@ export namespace se
             logError(gNormal.error());
             return;
         }
-        renderer.targets.gNormal = std::move(*gNormal);
+        activeView(renderer).gNormal = std::move(*gNormal);
         auto gDepth = newDepthImage(renderer, w, h);
         if (!gDepth)
         {
             logError(gDepth.error());
             return;
         }
-        renderer.targets.gDepth = std::move(*gDepth);
+        activeView(renderer).gDepth = std::move(*gDepth);
         auto aoRaw = newColorImage(renderer, w, h, AoFormat, true);
         if (!aoRaw)
         {
             logError(aoRaw.error());
             return;
         }
-        renderer.targets.aoRaw = std::move(*aoRaw);
+        activeView(renderer).aoRaw = std::move(*aoRaw);
         auto aoMap = newColorImage(renderer, w, h, AoFormat, true);
         if (!aoMap)
         {
             logError(aoMap.error());
             return;
         }
-        renderer.targets.aoMap = std::move(*aoMap);
+        activeView(renderer).aoMap = std::move(*aoMap);
         auto contactMap = newColorImage(renderer, w, h, AoFormat, true);
         if (!contactMap)
         {
             logError(contactMap.error());
             return;
         }
-        renderer.targets.contactMap = std::move(*contactMap);
+        activeView(renderer).contactMap = std::move(*contactMap);
         auto ssgiMap = newColorImage(renderer, w, h, GNormalFormat, true);  // rgba16f radiance
         if (!ssgiMap)
         {
             logError(ssgiMap.error());
             return;
         }
-        renderer.targets.ssgiMap = std::move(*ssgiMap);
+        activeView(renderer).ssgiMap = std::move(*ssgiMap);
         auto prevColor = newColorImage(renderer, w, h, OffscreenColorFormat, true);
         if (!prevColor)
         {
             logError(prevColor.error());
             return;
         }
-        renderer.targets.prevColor = std::move(*prevColor);
+        activeView(renderer).prevColor = std::move(*prevColor);
 
         // Transition the three mesh-sampled maps to ShaderReadOnly so set 4 is valid even
         // before the passes first run (each is gated by its enable flag in the shader), and
@@ -2181,8 +2184,8 @@ export namespace se
             vk::CommandBufferBeginInfo begin{};
             begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
             static_cast<void>(cmd.begin(begin));
-            const std::array<Image*, 4> maps{ &renderer.targets.aoMap, &renderer.targets.contactMap,
-                                              &renderer.targets.ssgiMap, &renderer.targets.prevColor };
+            const std::array<Image*, 4> maps{ &activeView(renderer).aoMap, &activeView(renderer).contactMap,
+                                              &activeView(renderer).ssgiMap, &activeView(renderer).prevColor };
             for (Image* img : maps)
             {
                 transitionImage(cmd, img->image, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -2223,29 +2226,31 @@ export namespace se
         };
         const auto S = vk::DescriptorType::eCombinedImageSampler;
         const auto I = vk::DescriptorType::eStorageImage;
-        const vk::ImageView gv = renderer.targets.gNormal.view;
+        const vk::ImageView gv = activeView(renderer).gNormal.view;
 
+        // All sets are this (active) view's per-view sets, bound to this view's images.
+        ViewTargets& vt = activeView(renderer);
         // gtao: gbuffer -> aoRaw
-        write(renderer.ssao.gtaoSet, 0, S, sampled(nearest, gv));
-        write(renderer.ssao.gtaoSet, 1, I, storage(renderer.targets.aoRaw.view));
+        write(vt.gtaoSet, 0, S, sampled(nearest, gv));
+        write(vt.gtaoSet, 1, I, storage(vt.aoRaw.view));
         // ao_blur: aoRaw + gbuffer -> aoMap
-        write(renderer.ssao.aoBlurSet, 0, S, sampled(nearest, renderer.targets.aoRaw.view));
-        write(renderer.ssao.aoBlurSet, 1, S, sampled(nearest, gv));
-        write(renderer.ssao.aoBlurSet, 2, I, storage(renderer.targets.aoMap.view));
+        write(vt.aoBlurSet, 0, S, sampled(nearest, vt.aoRaw.view));
+        write(vt.aoBlurSet, 1, S, sampled(nearest, gv));
+        write(vt.aoBlurSet, 2, I, storage(vt.aoMap.view));
         // contact: gbuffer -> contactMap
-        write(renderer.ssao.contactSet, 0, S, sampled(nearest, gv));
-        write(renderer.ssao.contactSet, 1, I, storage(renderer.targets.contactMap.view));
+        write(vt.contactSet, 0, S, sampled(nearest, gv));
+        write(vt.contactSet, 1, I, storage(vt.contactMap.view));
         // ssgi: gbuffer + prevColor -> ssgiMap
-        write(renderer.ssao.ssgiSet, 0, S, sampled(nearest, gv));
-        write(renderer.ssao.ssgiSet, 1, S, sampled(linear, renderer.targets.prevColor.view));
-        write(renderer.ssao.ssgiSet, 2, I, storage(renderer.targets.ssgiMap.view));
+        write(vt.ssgiSet, 0, S, sampled(nearest, gv));
+        write(vt.ssgiSet, 1, S, sampled(linear, vt.prevColor.view));
+        write(vt.ssgiSet, 2, I, storage(vt.ssgiMap.view));
         // copy_color: offscreen sceneColor + prevColor storage
-        write(renderer.ssao.copyColorSet, 0, S, sampled(linear, renderer.targets.offscreen.view));
-        write(renderer.ssao.copyColorSet, 1, I, storage(renderer.targets.prevColor.view));
+        write(vt.copyColorSet, 0, S, sampled(linear, vt.offscreen.view));
+        write(vt.copyColorSet, 1, I, storage(vt.prevColor.view));
         // mesh set 4: AO + contact + SSGI (all linear-sampled)
-        write(renderer.ssao.meshSet, 0, S, sampled(linear, renderer.targets.aoMap.view));
-        write(renderer.ssao.meshSet, 1, S, sampled(linear, renderer.targets.contactMap.view));
-        write(renderer.ssao.meshSet, 2, S, sampled(linear, renderer.targets.ssgiMap.view));
+        write(vt.meshSet, 0, S, sampled(linear, vt.aoMap.view));
+        write(vt.meshSet, 1, S, sampled(linear, vt.contactMap.view));
+        write(vt.meshSet, 2, S, sampled(linear, vt.ssgiMap.view));
 
         renderer.ssao.generation = renderer.ssao.generation + 1;
         renderer.ssao.ready = true;
@@ -2369,13 +2374,13 @@ export namespace se
     // Called at init + after the offscreen resizes (the caller has idled the GPU).
     void recreateTaaTargets(Renderer& renderer)
     {
-        renderer.targets.motion.reset();
-        renderer.targets.motionDepth.reset();
-        renderer.targets.history[0].reset();
-        renderer.targets.history[1].reset();
-        renderer.targets.historyValid = false;
-        const u32 w = renderer.targets.offscreen.extent.width;
-        const u32 h = renderer.targets.offscreen.extent.height;
+        activeView(renderer).motion.reset();
+        activeView(renderer).motionDepth.reset();
+        activeView(renderer).history[0].reset();
+        activeView(renderer).history[1].reset();
+        activeView(renderer).historyValid = false;
+        const u32 w = activeView(renderer).offscreen.extent.width;
+        const u32 h = activeView(renderer).offscreen.extent.height;
         if (w == 0 || h == 0)
         {
             return;
@@ -2386,14 +2391,14 @@ export namespace se
             logError(motion.error());
             return;
         }
-        renderer.targets.motion = std::move(*motion);
+        activeView(renderer).motion = std::move(*motion);
         auto motionDepth = newDepthImage(renderer, w, h);
         if (!motionDepth)
         {
             logError(motionDepth.error());
             return;
         }
-        renderer.targets.motionDepth = std::move(*motionDepth);
+        activeView(renderer).motionDepth = std::move(*motionDepth);
         for (u32 i = 0; i < 2; i = i + 1)
         {
             auto hist = newColorImage(renderer, w, h, OffscreenColorFormat, true);  // storage (TAA writes it)
@@ -2402,7 +2407,7 @@ export namespace se
                 logError(hist.error());
                 return;
             }
-            renderer.targets.history[i] = std::move(*hist);
+            activeView(renderer).history[i] = std::move(*hist);
         }
 
         // The history images start ShaderReadOnly so their sampler bindings are valid even
@@ -2424,11 +2429,11 @@ export namespace se
             static_cast<void>(cmd.begin(begin));
             for (u32 i = 0; i < 2; i = i + 1)
             {
-                transitionImage(cmd, renderer.targets.history[i].image, vk::ImageLayout::eUndefined,
+                transitionImage(cmd, activeView(renderer).history[i].image, vk::ImageLayout::eUndefined,
                                 vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eTopOfPipe,
                                 vk::AccessFlagBits2::eNone, vk::PipelineStageFlagBits2::eComputeShader,
                                 vk::AccessFlagBits2::eShaderSampledRead);
-                renderer.targets.history[i].layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+                activeView(renderer).history[i].layout = vk::ImageLayout::eShaderReadOnlyOptimal;
             }
             static_cast<void>(cmd.end());
             vk::CommandBufferSubmitInfo cmdInfo{};
@@ -2445,21 +2450,22 @@ export namespace se
         // TAA reads the scene's 1x result from the scratch image (the scene renders there
         // when TAA is on, mirroring FXAA). When scratch isn't allocated (TAA off), bind the
         // offscreen as a valid placeholder — the set is unused until TAA turns on + rebinds.
-        vk::ImageView sceneInput =
-            renderer.targets.scratch.image ? renderer.targets.scratch.view : renderer.targets.offscreen.view;
+        vk::ImageView sceneInput = activeView(renderer).scratch.image ? activeView(renderer).scratch.view
+                                                                      : activeView(renderer).offscreen.view;
         for (u32 p = 0; p < 2; p = p + 1)
         {
             vk::DescriptorImageInfo curInfo{ renderer.descriptors.linearSampler, sceneInput,
                                              vk::ImageLayout::eShaderReadOnlyOptimal };
-            vk::DescriptorImageInfo histInfo{ renderer.descriptors.linearSampler, renderer.targets.history[1 - p].view,
+            vk::DescriptorImageInfo histInfo{ renderer.descriptors.linearSampler,
+                                              activeView(renderer).history[1 - p].view,
                                               vk::ImageLayout::eShaderReadOnlyOptimal };
-            vk::DescriptorImageInfo motionInfo{ renderer.descriptors.linearSampler, renderer.targets.motion.view,
+            vk::DescriptorImageInfo motionInfo{ renderer.descriptors.linearSampler, activeView(renderer).motion.view,
                                                 vk::ImageLayout::eShaderReadOnlyOptimal };
             vk::DescriptorImageInfo outInfo{};
-            outInfo.imageView = renderer.targets.offscreen.view;
+            outInfo.imageView = activeView(renderer).offscreen.view;
             outInfo.imageLayout = vk::ImageLayout::eGeneral;
             vk::DescriptorImageInfo histOut{};
-            histOut.imageView = renderer.targets.history[p].view;
+            histOut.imageView = activeView(renderer).history[p].view;
             histOut.imageLayout = vk::ImageLayout::eGeneral;
             std::array<vk::WriteDescriptorSet, 5> writes{};
             const std::array<vk::DescriptorImageInfo*, 5> infos{ &curInfo, &histInfo, &motionInfo, &outInfo, &histOut };
@@ -2470,7 +2476,7 @@ export namespace se
                                                            vk::DescriptorType::eStorageImage };
             for (u32 b = 0; b < 5; b = b + 1)
             {
-                writes[b].dstSet = renderer.descriptors.taaSets[p];
+                writes[b].dstSet = activeView(renderer).taaSets[p];
                 writes[b].dstBinding = b;
                 writes[b].descriptorType = types[b];
                 writes[b].setImageInfo(*infos[b]);
@@ -2486,13 +2492,14 @@ export namespace se
     // change. Called at init + on resize (GPU already idle). Requires rtSupported.
     void recreateRestirTargets(Renderer& renderer)
     {
-        renderer.restir.ready = false;
-        renderer.restir.radiance.reset();
-        renderer.restir.initial.reset();
-        renderer.restir.combined.reset();
-        renderer.restir.previous.reset();
-        const u32 w = renderer.targets.offscreen.extent.width;
-        const u32 h = renderer.targets.offscreen.extent.height;
+        RestirView& rv = activeRestir(renderer);
+        rv.ready = false;
+        rv.radiance.reset();
+        rv.initial.reset();
+        rv.combined.reset();
+        rv.previous.reset();
+        const u32 w = activeView(renderer).offscreen.extent.width;
+        const u32 h = activeView(renderer).offscreen.extent.height;
         if (w == 0 || h == 0)
         {
             return;
@@ -2506,29 +2513,29 @@ export namespace se
             logError(r0.error());
             return;
         }
-        renderer.restir.initial = *r0;
+        rv.initial = *r0;
         auto r1 = mk();
         if (!r1)
         {
             logError(r1.error());
             return;
         }
-        renderer.restir.combined = *r1;
+        rv.combined = *r1;
         auto r2 = mk();
         if (!r2)
         {
             logError(r2.error());
             return;
         }
-        renderer.restir.previous = *r2;
-        renderer.restir.reservoirCapacity = pixels;
+        rv.previous = *r2;
+        rv.reservoirCapacity = pixels;
         auto rad = newColorImage(renderer, w, h, GNormalFormat, true);  // rgba16f radiance, storage
         if (!rad)
         {
             logError(rad.error());
             return;
         }
-        renderer.restir.radiance = std::move(*rad);
+        rv.radiance = std::move(*rad);
 
         // Radiance rests in ShaderReadOnly (mesh samples it; resolve writes it as storage).
         {
@@ -2546,11 +2553,11 @@ export namespace se
             vk::CommandBufferBeginInfo begin{};
             begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
             static_cast<void>(cmd.begin(begin));
-            transitionImage(cmd, renderer.restir.radiance.image, vk::ImageLayout::eUndefined,
+            transitionImage(cmd, rv.radiance.image, vk::ImageLayout::eUndefined,
                             vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eTopOfPipe,
                             vk::AccessFlagBits2::eNone, vk::PipelineStageFlagBits2::eFragmentShader,
                             vk::AccessFlagBits2::eShaderSampledRead);
-            renderer.restir.radiance.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+            rv.radiance.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
             static_cast<void>(cmd.end());
             vk::CommandBufferSubmitInfo cmdInfo{};
             cmdInfo.commandBuffer = cmd;
@@ -2573,37 +2580,37 @@ export namespace se
             renderer.context.device.updateDescriptorSets(w, {});
         };
         // initial set: b3 = reservoir out (initial buffer).
-        wBuf(renderer.restir.initialSet, 3, renderer.restir.initial);
+        wBuf(rv.initialSet, 3, rv.initial);
         // reuse set: b2 = initial, b3 = previous, b5 = combined.
-        wBuf(renderer.restir.reuseSet, 2, renderer.restir.initial);
-        wBuf(renderer.restir.reuseSet, 3, renderer.restir.previous);
-        wBuf(renderer.restir.reuseSet, 5, renderer.restir.combined);
+        wBuf(rv.reuseSet, 2, rv.initial);
+        wBuf(rv.reuseSet, 3, rv.previous);
+        wBuf(rv.reuseSet, 5, rv.combined);
         // resolve set: b1 = combined, b2 = previousOut. The radiance storage image (b5) + TLAS
         // (b4) + samplers + light SSBO are written per frame in the pass (TLAS changes; light
         // SSBO grows). Radiance storage written here (stable view).
-        wBuf(renderer.restir.resolveSet, 1, renderer.restir.combined);
-        wBuf(renderer.restir.resolveSet, 2, renderer.restir.previous);
+        wBuf(rv.resolveSet, 1, rv.combined);
+        wBuf(rv.resolveSet, 2, rv.previous);
         {
             vk::DescriptorImageInfo radStore{};
-            radStore.imageView = renderer.restir.radiance.view;
+            radStore.imageView = rv.radiance.view;
             radStore.imageLayout = vk::ImageLayout::eGeneral;
             vk::WriteDescriptorSet w{};
-            w.dstSet = renderer.restir.resolveSet;
+            w.dstSet = rv.resolveSet;
             w.dstBinding = 5;
             w.descriptorType = vk::DescriptorType::eStorageImage;
             w.setImageInfo(radStore);
             renderer.context.device.updateDescriptorSets(w, {});
             // mesh set 7: the radiance sampled.
-            vk::DescriptorImageInfo radSamp{ renderer.descriptors.linearSampler, renderer.restir.radiance.view,
+            vk::DescriptorImageInfo radSamp{ renderer.descriptors.linearSampler, rv.radiance.view,
                                              vk::ImageLayout::eShaderReadOnlyOptimal };
             vk::WriteDescriptorSet wm{};
-            wm.dstSet = renderer.restir.meshSet;
+            wm.dstSet = rv.meshSet;
             wm.dstBinding = 0;
             wm.descriptorType = vk::DescriptorType::eCombinedImageSampler;
             wm.setImageInfo(radSamp);
             renderer.context.device.updateDescriptorSets(wm, {});
         }
-        renderer.restir.ready = true;
+        rv.ready = true;
     }
 
     // Writes the ReSTIR sets' PER-FRAME bindings: the punctual light SSBO + cluster list SSBO
@@ -2612,9 +2619,9 @@ export namespace se
     void writeRestirFrameBindings(Renderer& renderer, u32 frame)
     {
         vk::Device dev = renderer.context.device;
-        const vk::ImageView gv = renderer.targets.gNormal.view;
-        const vk::ImageView mv =
-            renderer.targets.motion.image ? renderer.targets.motion.view : gv;  // motion may be absent (TAA off)
+        const vk::ImageView gv = activeView(renderer).gNormal.view;
+        const vk::ImageView mv = activeView(renderer).motion.image ? activeView(renderer).motion.view
+                                                                   : gv;  // motion may be absent (TAA off)
         auto wSampler = [&](vk::DescriptorSet set, u32 binding, vk::ImageView v)
         {
             vk::DescriptorImageInfo ii{ renderer.restir.sampler, v, vk::ImageLayout::eShaderReadOnlyOptimal };
@@ -2637,29 +2644,30 @@ export namespace se
         };
         const Ref<Buffer>& lightBuf = renderer.lighting.lightListBuffers[frame];
         const Ref<Buffer>& clusterBuf = renderer.lighting.clusterBuffers[frame];
+        RestirView& rv = activeRestir(renderer);
 
         // initial: b0 gbuffer, b1 lights, b2 clusters.
-        wSampler(renderer.restir.initialSet, 0, gv);
+        wSampler(rv.initialSet, 0, gv);
         if (lightBuf)
         {
-            wBuffer(renderer.restir.initialSet, 1, lightBuf->buffer, lightBuf->size);
+            wBuffer(rv.initialSet, 1, lightBuf->buffer, lightBuf->size);
         }
         if (clusterBuf)
         {
-            wBuffer(renderer.restir.initialSet, 2, clusterBuf->buffer, clusterBuf->size);
+            wBuffer(rv.initialSet, 2, clusterBuf->buffer, clusterBuf->size);
         }
         // reuse: b0 gbuffer, b1 motion, b4 lights.
-        wSampler(renderer.restir.reuseSet, 0, gv);
-        wSampler(renderer.restir.reuseSet, 1, mv);
+        wSampler(rv.reuseSet, 0, gv);
+        wSampler(rv.reuseSet, 1, mv);
         if (lightBuf)
         {
-            wBuffer(renderer.restir.reuseSet, 4, lightBuf->buffer, lightBuf->size);
+            wBuffer(rv.reuseSet, 4, lightBuf->buffer, lightBuf->size);
         }
         // resolve: b0 gbuffer, b3 lights, b4 TLAS.
-        wSampler(renderer.restir.resolveSet, 0, gv);
+        wSampler(rv.resolveSet, 0, gv);
         if (lightBuf)
         {
-            wBuffer(renderer.restir.resolveSet, 3, lightBuf->buffer, lightBuf->size);
+            wBuffer(rv.resolveSet, 3, lightBuf->buffer, lightBuf->size);
         }
         {
             VkAccelerationStructureKHR handle =
@@ -2671,7 +2679,7 @@ export namespace se
             asWrite.pAccelerationStructures = &handle;
             VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
             w.pNext = &asWrite;
-            w.dstSet = static_cast<VkDescriptorSet>(renderer.restir.resolveSet);
+            w.dstSet = static_cast<VkDescriptorSet>(rv.resolveSet);
             w.dstBinding = 4;
             w.descriptorCount = 1;
             w.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -2700,15 +2708,15 @@ export namespace se
     // view (GENERAL layout). Called after the offscreen color is (re)created.
     void updateTonemapSet(Renderer& renderer)
     {
-        if (!renderer.descriptors.tonemapSet)
+        if (!activeView(renderer).tonemapSet)
         {
             return;
         }
         vk::DescriptorImageInfo imageInfo{};
-        imageInfo.imageView = renderer.targets.offscreen.view;
+        imageInfo.imageView = activeView(renderer).offscreen.view;
         imageInfo.imageLayout = vk::ImageLayout::eGeneral;
         vk::WriteDescriptorSet write{};
-        write.dstSet = renderer.descriptors.tonemapSet;
+        write.dstSet = activeView(renderer).tonemapSet;
         write.dstBinding = 0;
         write.descriptorType = vk::DescriptorType::eStorageImage;
         write.setImageInfo(imageInfo);
@@ -2719,21 +2727,21 @@ export namespace se
     // target) views. Called after either is (re)created.
     void updateFxaaSet(Renderer& renderer)
     {
-        if (!renderer.descriptors.fxaaSet || !renderer.targets.scratch.view)
+        if (!activeView(renderer).fxaaSet || !activeView(renderer).scratch.view)
         {
             return;
         }
-        vk::DescriptorImageInfo sourceInfo{ renderer.descriptors.linearSampler, renderer.targets.scratch.view,
+        vk::DescriptorImageInfo sourceInfo{ renderer.descriptors.linearSampler, activeView(renderer).scratch.view,
                                             vk::ImageLayout::eShaderReadOnlyOptimal };
         vk::DescriptorImageInfo targetInfo{};
-        targetInfo.imageView = renderer.targets.offscreen.view;
+        targetInfo.imageView = activeView(renderer).offscreen.view;
         targetInfo.imageLayout = vk::ImageLayout::eGeneral;
         std::array<vk::WriteDescriptorSet, 2> writes{};
-        writes[0].dstSet = renderer.descriptors.fxaaSet;
+        writes[0].dstSet = activeView(renderer).fxaaSet;
         writes[0].dstBinding = 0;
         writes[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
         writes[0].setImageInfo(sourceInfo);
-        writes[1].dstSet = renderer.descriptors.fxaaSet;
+        writes[1].dstSet = activeView(renderer).fxaaSet;
         writes[1].dstBinding = 1;
         writes[1].descriptorType = vk::DescriptorType::eStorageImage;
         writes[1].setImageInfo(targetInfo);
@@ -3041,17 +3049,18 @@ export namespace se
         std::array<vk::DescriptorPoolSize, 5> poolSizes{
             vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, 1024 },
             vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, 4 * MaxFramesInFlight + 8 },
-            // + the DDGI box SSBO; bumped for it.
-            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageBuffer, 8 * MaxFramesInFlight + 16 },
-            // tonemap/fxaa/TAA(4) + screen-space chain + DDGI (voxel/ray/atlas storages)
-            // ~= two dozen; plus generous headroom.
-            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 48 },
-            // RT: one TLAS descriptor per in-flight frame (set 6) + the ReSTIR resolve set + headroom.
-            vk::DescriptorPoolSize{ vk::DescriptorType::eAccelerationStructureKHR, MaxFramesInFlight + 4 }
+            // + the DDGI box SSBO + the per-view ReSTIR reservoir bindings (6 SSBOs per view).
+            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageBuffer, 8 * MaxFramesInFlight + 16 + 8 * ViewCount },
+            // The screen-space + post-process storage-image bindings are now PER-VIEW (tonemap/fxaa/TAA +
+            // gtao/aoBlur/contact/ssgi/copyColor ~= 11 per view); plus DDGI (voxel/ray/atlas) + headroom.
+            vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 48 + 11 * ViewCount },
+            // RT: one TLAS descriptor per in-flight frame (set 6) + the per-view ReSTIR resolve sets + headroom.
+            vk::DescriptorPoolSize{ vk::DescriptorType::eAccelerationStructureKHR, MaxFramesInFlight + 2 + ViewCount }
         };
         vk::DescriptorPoolCreateInfo poolInfo{};
         poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;  // texture sets freed on Ref drop
-        poolInfo.maxSets = 1024 + 8 * MaxFramesInFlight + 64;
+        // +10 per-view sets (gtao/aoBlur/contact/ssgi/copyColor/mesh + tonemap/fxaa/taa[2]) × ViewCount.
+        poolInfo.maxSets = 1024 + 8 * MaxFramesInFlight + 64 + 10 * ViewCount;
         poolInfo.setPoolSizes(poolSizes);
         auto pool = checked(renderer.context.device.createDescriptorPool(poolInfo), "descriptorPool");
         if (!pool)
@@ -3273,17 +3282,20 @@ export namespace se
         }
         renderer.pipelines.tonemap = *tonemap;
 
-        vk::DescriptorSetAllocateInfo tonemapAlloc{};
-        tonemapAlloc.descriptorPool = renderer.descriptors.descriptorPool;
-        tonemapAlloc.setSetLayouts(renderer.descriptors.tonemapSetLayout);
-        auto tonemapAllocated =
-            checked(renderer.context.device.allocateDescriptorSets(tonemapAlloc), "allocate tonemapSet");
-        if (!tonemapAllocated)
+        for (ViewTargets& vt : renderer.views)
         {
-            return Err(tonemapAllocated.error());
+            vk::DescriptorSetAllocateInfo tonemapAlloc{};
+            tonemapAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+            tonemapAlloc.setSetLayouts(renderer.descriptors.tonemapSetLayout);
+            auto tonemapAllocated =
+                checked(renderer.context.device.allocateDescriptorSets(tonemapAlloc), "allocate tonemapSet");
+            if (!tonemapAllocated)
+            {
+                return Err(tonemapAllocated.error());
+            }
+            vt.tonemapSet = (*tonemapAllocated)[0];
         }
-        renderer.descriptors.tonemapSet = (*tonemapAllocated)[0];
-        updateTonemapSet(renderer);
+        updateTonemapSet(renderer);  // writes the active (Scene) view; other views written on their first resize
 
         // FXAA: a compute pipeline + a set (source sampler + offscreen storage). The
         // scratch source is created on demand when FXAA is enabled (recreateFxaaTarget).
@@ -3294,15 +3306,18 @@ export namespace se
             return Err(fxaa.error());
         }
         renderer.pipelines.fxaa = *fxaa;
-        vk::DescriptorSetAllocateInfo fxaaAlloc{};
-        fxaaAlloc.descriptorPool = renderer.descriptors.descriptorPool;
-        fxaaAlloc.setSetLayouts(renderer.descriptors.fxaaSetLayout);
-        auto fxaaAllocated = checked(renderer.context.device.allocateDescriptorSets(fxaaAlloc), "allocate fxaaSet");
-        if (!fxaaAllocated)
+        for (ViewTargets& vt : renderer.views)
         {
-            return Err(fxaaAllocated.error());
+            vk::DescriptorSetAllocateInfo fxaaAlloc{};
+            fxaaAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+            fxaaAlloc.setSetLayouts(renderer.descriptors.fxaaSetLayout);
+            auto fxaaAllocated = checked(renderer.context.device.allocateDescriptorSets(fxaaAlloc), "allocate fxaaSet");
+            if (!fxaaAllocated)
+            {
+                return Err(fxaaAllocated.error());
+            }
+            vt.fxaaSet = (*fxaaAllocated)[0];
         }
-        renderer.descriptors.fxaaSet = (*fxaaAllocated)[0];
 
         // Depth pre-pass: a vertex-only pipeline that reuses the mesh vertex shader.
         Result<Ref<Pipeline>> depthPrepass = makeDepthPrepassPipeline(renderer, "shaders/mesh.spv");
@@ -3555,42 +3570,48 @@ export namespace se
             }
             return (*s)[0];
         };
-        auto gtaoSet = allocSet(renderer.ssao.compute2Layout, "gtaoSet");
-        if (!gtaoSet)
+        // The screen-space compute sets are per-view (they bind per-view ViewTargets images); allocate
+        // one set of each for every view. The active (Scene) view's bindings are written by the
+        // recreateSsaoTargets call below; the others are written on their first activate-resize.
+        for (ViewTargets& vt : renderer.views)
         {
-            return Err(gtaoSet.error());
+            auto gtaoSet = allocSet(renderer.ssao.compute2Layout, "gtaoSet");
+            if (!gtaoSet)
+            {
+                return Err(gtaoSet.error());
+            }
+            vt.gtaoSet = *gtaoSet;
+            auto aoBlurSet = allocSet(renderer.ssao.compute3Layout, "aoBlurSet");
+            if (!aoBlurSet)
+            {
+                return Err(aoBlurSet.error());
+            }
+            vt.aoBlurSet = *aoBlurSet;
+            auto contactSet = allocSet(renderer.ssao.compute2Layout, "contactSet");
+            if (!contactSet)
+            {
+                return Err(contactSet.error());
+            }
+            vt.contactSet = *contactSet;
+            auto ssgiSet = allocSet(renderer.ssao.compute3Layout, "ssgiSet");
+            if (!ssgiSet)
+            {
+                return Err(ssgiSet.error());
+            }
+            vt.ssgiSet = *ssgiSet;
+            auto copyColorSet = allocSet(renderer.ssao.compute2Layout, "copyColorSet");
+            if (!copyColorSet)
+            {
+                return Err(copyColorSet.error());
+            }
+            vt.copyColorSet = *copyColorSet;
+            auto meshSet = allocSet(renderer.ssao.meshSetLayout, "meshAoSet");
+            if (!meshSet)
+            {
+                return Err(meshSet.error());
+            }
+            vt.meshSet = *meshSet;
         }
-        renderer.ssao.gtaoSet = *gtaoSet;
-        auto aoBlurSet = allocSet(renderer.ssao.compute3Layout, "aoBlurSet");
-        if (!aoBlurSet)
-        {
-            return Err(aoBlurSet.error());
-        }
-        renderer.ssao.aoBlurSet = *aoBlurSet;
-        auto contactSet = allocSet(renderer.ssao.compute2Layout, "contactSet");
-        if (!contactSet)
-        {
-            return Err(contactSet.error());
-        }
-        renderer.ssao.contactSet = *contactSet;
-        auto ssgiSet = allocSet(renderer.ssao.compute3Layout, "ssgiSet");
-        if (!ssgiSet)
-        {
-            return Err(ssgiSet.error());
-        }
-        renderer.ssao.ssgiSet = *ssgiSet;
-        auto copyColorSet = allocSet(renderer.ssao.compute2Layout, "copyColorSet");
-        if (!copyColorSet)
-        {
-            return Err(copyColorSet.error());
-        }
-        renderer.ssao.copyColorSet = *copyColorSet;
-        auto meshSet = allocSet(renderer.ssao.meshSetLayout, "meshAoSet");
-        if (!meshSet)
-        {
-            return Err(meshSet.error());
-        }
-        renderer.ssao.meshSet = *meshSet;
 
         Result<Ref<Pipeline>> gbufferPipe = makeGbufferPipeline(renderer, "shaders/gbuffer.spv");
         if (!gbufferPipe)
@@ -3660,17 +3681,22 @@ export namespace se
             return Err(taaLayout.error());
         }
         renderer.descriptors.taaSetLayout = *taaLayout;
-        for (u32 p = 0; p < 2; p = p + 1)
+        // Two TAA ping-pong-parity sets PER VIEW (they bind per-view scratch/history/motion/offscreen);
+        // the active view's are written by recreateTaaTargets below, the others on their first resize.
+        for (ViewTargets& vt : renderer.views)
         {
-            vk::DescriptorSetAllocateInfo taaAlloc{};
-            taaAlloc.descriptorPool = renderer.descriptors.descriptorPool;
-            taaAlloc.setSetLayouts(renderer.descriptors.taaSetLayout);
-            auto taaSet = checked(renderer.context.device.allocateDescriptorSets(taaAlloc), "allocate taaSet");
-            if (!taaSet)
+            for (u32 p = 0; p < 2; p = p + 1)
             {
-                return Err(taaSet.error());
+                vk::DescriptorSetAllocateInfo taaAlloc{};
+                taaAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+                taaAlloc.setSetLayouts(renderer.descriptors.taaSetLayout);
+                auto taaSet = checked(renderer.context.device.allocateDescriptorSets(taaAlloc), "allocate taaSet");
+                if (!taaSet)
+                {
+                    return Err(taaSet.error());
+                }
+                vt.taaSets[p] = (*taaSet)[0];
             }
-            renderer.descriptors.taaSets[p] = (*taaSet)[0];
         }
 
         Result<Ref<Pipeline>> motionPipe = makeMotionPipeline(renderer, "shaders/motion.spv");
@@ -4096,30 +4122,35 @@ export namespace se
                 }
                 return (*s)[0];
             };
-            auto si0 = rsAlloc(renderer.restir.initialLayout, "restirInitialSet");
-            if (!si0)
+            // The reservoir-binding sets are per-view (each view's reservoirs differ); the layouts
+            // they share. Allocate one set of each per view; recreate writes a view's bindings.
+            for (RestirView& rv : renderer.restirViews)
             {
-                return Err(si0.error());
+                auto si0 = rsAlloc(renderer.restir.initialLayout, "restirInitialSet");
+                if (!si0)
+                {
+                    return Err(si0.error());
+                }
+                rv.initialSet = *si0;
+                auto si1 = rsAlloc(renderer.restir.reuseLayout, "restirReuseSet");
+                if (!si1)
+                {
+                    return Err(si1.error());
+                }
+                rv.reuseSet = *si1;
+                auto si2 = rsAlloc(renderer.restir.resolveLayout, "restirResolveSet");
+                if (!si2)
+                {
+                    return Err(si2.error());
+                }
+                rv.resolveSet = *si2;
+                auto si3 = rsAlloc(renderer.restir.meshLayout, "restirMeshSet");
+                if (!si3)
+                {
+                    return Err(si3.error());
+                }
+                rv.meshSet = *si3;
             }
-            renderer.restir.initialSet = *si0;
-            auto si1 = rsAlloc(renderer.restir.reuseLayout, "restirReuseSet");
-            if (!si1)
-            {
-                return Err(si1.error());
-            }
-            renderer.restir.reuseSet = *si1;
-            auto si2 = rsAlloc(renderer.restir.resolveLayout, "restirResolveSet");
-            if (!si2)
-            {
-                return Err(si2.error());
-            }
-            renderer.restir.resolveSet = *si2;
-            auto si3 = rsAlloc(renderer.restir.meshLayout, "restirMeshSet");
-            if (!si3)
-            {
-                return Err(si3.error());
-            }
-            renderer.restir.meshSet = *si3;
 
             // Pipelines. initial: invView+invProj+grid+screen+zPlanes; reuse: +params; resolve: +eye.
             const u32 initialPush =

@@ -423,17 +423,17 @@ namespace se
         {
             return Err(offscreen.error());
         }
-        renderer.targets.offscreen = std::move(*offscreen);
-        renderer.targets.desiredWidth = window.width;
-        renderer.targets.desiredHeight = window.height;
-        renderer.targets.generation = 1;
+        activeView(renderer).offscreen = std::move(*offscreen);
+        activeView(renderer).desiredWidth = window.width;
+        activeView(renderer).desiredHeight = window.height;
+        activeView(renderer).generation = 1;
 
         auto depth = newDepthImage(renderer, window.width, window.height);
         if (!depth)
         {
             return Err(depth.error());
         }
-        renderer.targets.depth = std::move(*depth);
+        activeView(renderer).depth = std::move(*depth);
 
         for (FrameData& frame : renderer.frame.frames)
         {
@@ -578,10 +578,13 @@ namespace se
         renderer.pipelines.restirReuse.reset();
         renderer.pipelines.restirResolve.reset();
         renderer.sky.pipeline.reset();  // fullscreen sky PSO
-        renderer.restir.radiance.reset();
-        renderer.restir.initial.reset();
-        renderer.restir.combined.reset();
-        renderer.restir.previous.reset();
+        for (RestirView& rv : renderer.restirViews)
+        {
+            rv.radiance.reset();
+            rv.initial.reset();
+            rv.combined.reset();
+            rv.previous.reset();
+        }
         renderer.ddgi.boxBuffer.reset();
         renderer.ddgi.voxels.reset();
         renderer.ddgi.irradiance.reset();
@@ -615,23 +618,29 @@ namespace se
             }
         }
 
-        renderer.targets.offscreen.reset();  // free before the allocator/device
-        renderer.targets.depth.reset();
+        for (ViewTargets& vt : renderer.views)  // free per-view images before the allocator/device
+        {
+            vt.offscreen.reset();
+            vt.depth.reset();
+            vt.gNormal.reset();
+            vt.gDepth.reset();
+            vt.aoRaw.reset();
+            vt.aoMap.reset();
+            vt.contactMap.reset();
+            vt.ssgiMap.reset();
+            vt.prevColor.reset();
+            vt.motion.reset();
+            vt.motionDepth.reset();
+            vt.history[0].reset();
+            vt.history[1].reset();
+            vt.msaaColor.reset();
+            vt.msaaDepth.reset();
+            vt.scratch.reset();
+        }
         renderer.targets.shadowMap.reset();
         renderer.targets.spotShadowMap.reset();
         renderer.targets.pointShadowCube.reset();
         renderer.targets.pointShadowDepth.reset();
-        renderer.targets.gNormal.reset();
-        renderer.targets.gDepth.reset();
-        renderer.targets.aoRaw.reset();
-        renderer.targets.aoMap.reset();
-        renderer.targets.contactMap.reset();
-        renderer.targets.ssgiMap.reset();
-        renderer.targets.prevColor.reset();
-        renderer.targets.motion.reset();
-        renderer.targets.motionDepth.reset();
-        renderer.targets.history[0].reset();
-        renderer.targets.history[1].reset();
         renderer.ibl.envCube.reset();
         renderer.ibl.transmittanceLut.reset();
         renderer.ibl.multiScatterLut.reset();
@@ -664,9 +673,6 @@ namespace se
             renderer.context.device.destroySampler(renderer.reflection.sampler);
             renderer.reflection.sampler = nullptr;
         }
-        renderer.targets.msaaColor.reset();
-        renderer.targets.msaaDepth.reset();
-        renderer.targets.scratch.reset();
 
         for (u32 i = 0; i < MaxFramesInFlight; i = i + 1)
         {
@@ -1774,12 +1780,12 @@ namespace se
             renderer.cpuProfiler.buffers[renderer.frame.index].reset();
         }
 
-        if (renderer.shmPublish.enabled)
+        if (activeShmPublish(renderer).enabled)
         {
             // The fence wait above guarantees this slot's recorded readback (from
             // MaxFramesInFlight frames ago) has completed: hand it to the editor. The
             // swapchain is never acquired or presented in this mode.
-            ShmPublishSlot& slot = renderer.shmPublish.slots[renderer.frame.index];
+            ShmPublishSlot& slot = activeShmPublish(renderer).slots[renderer.frame.index];
             if (slot.valid)
             {
                 publishShmPublishSlot(renderer, slot);
@@ -1813,25 +1819,23 @@ namespace se
             renderer.swapchain.imagesInFlight[renderer.frame.imageIndex] = frame.inFlight;
         }
 
-        // Apply a pending Viewport resize (requested last frame). Single shared
-        // target, so a full device idle is required before recreating it.
-        if (renderer.targets.desiredWidth > 0 && renderer.targets.desiredHeight > 0 &&
-            (renderer.targets.desiredWidth != renderer.targets.offscreen.extent.width ||
-             renderer.targets.desiredHeight != renderer.targets.offscreen.extent.height))
+        // Apply a pending Viewport resize (requested last frame) on the active view. Single
+        // shared queue, so a full device idle is required before recreating its targets.
+        ViewTargets& vt = activeView(renderer);
+        if (vt.desiredWidth > 0 && vt.desiredHeight > 0 &&
+            (vt.desiredWidth != vt.offscreen.extent.width || vt.desiredHeight != vt.offscreen.extent.height))
         {
             static_cast<void>(renderer.context.device.waitIdle());
-            auto resized = newColorImage(renderer, renderer.targets.desiredWidth, renderer.targets.desiredHeight,
-                                         OffscreenColorFormat, true);
+            auto resized = newColorImage(renderer, vt.desiredWidth, vt.desiredHeight, OffscreenColorFormat, true);
             if (resized)
             {
-                renderer.targets.offscreen = std::move(*resized);
-                renderer.targets.generation = renderer.targets.generation + 1;
+                vt.offscreen = std::move(*resized);
+                vt.generation = vt.generation + 1;
                 updateTonemapSet(renderer);  // the storage-image binding follows the new view
-                auto resizedDepth =
-                    newDepthImage(renderer, renderer.targets.desiredWidth, renderer.targets.desiredHeight);
+                auto resizedDepth = newDepthImage(renderer, vt.desiredWidth, vt.desiredHeight);
                 if (resizedDepth)
                 {
-                    renderer.targets.depth = std::move(*resizedDepth);
+                    vt.depth = std::move(*resizedDepth);
                 }
                 else
                 {
@@ -1845,6 +1849,9 @@ namespace se
                 {
                     recreateRestirTargets(renderer);
                 }  // ReSTIR reservoirs
+                // The view's temporal accumulators reference the old extent's pixels; invalidate
+                // them all so the post-resize frame re-converges instead of reprojecting garbage.
+                resetViewTemporal(renderer, renderer.activeView);
             }
             else
             {
@@ -1894,30 +1901,43 @@ namespace se
         renderer.frame.uiSubmissions.push_back(std::move(fn));
     }
 
-    void setViewportDesiredSize(Renderer& renderer, u32 width, u32 height)
+    void setViewportDesiredSize(Renderer& renderer, ViewId view, u32 width, u32 height)
     {
-        renderer.targets.desiredWidth = width;
-        renderer.targets.desiredHeight = height;
+        ViewTargets& vt = renderer.views[static_cast<std::size_t>(view)];
+        vt.desiredWidth = width;
+        vt.desiredHeight = height;
+    }
+
+    void setActiveView(Renderer& renderer, ViewId view)
+    {
+        if (renderer.activeView == view)
+        {
+            return;
+        }
+        renderer.activeView = view;
+        // The newly-shown view's temporal accumulators are stale/discontinuous — reset them so
+        // it re-converges instead of reprojecting against another view's history.
+        resetViewTemporal(renderer, view);
     }
 
     auto viewportImageView(const Renderer& renderer) -> vk::ImageView
     {
-        return renderer.targets.offscreen.view;
+        return activeView(renderer).offscreen.view;
     }
 
     auto viewportGeneration(const Renderer& renderer) -> u32
     {
-        return renderer.targets.generation;
+        return activeView(renderer).generation;
     }
 
     auto viewportWidth(const Renderer& renderer) -> u32
     {
-        return renderer.targets.offscreen.extent.width;
+        return activeView(renderer).offscreen.extent.width;
     }
 
     auto viewportHeight(const Renderer& renderer) -> u32
     {
-        return renderer.targets.offscreen.extent.height;
+        return activeView(renderer).offscreen.extent.height;
     }
 
     void beginFrameGraph(Renderer& renderer)
@@ -1971,8 +1991,8 @@ namespace se
         const CpuRecorder buildRec = cpuRecorder(renderer);
         const CpuScope buildScope(&buildRec, "build-frame-graph");
 
-        Image& offscreen = renderer.targets.offscreen;
-        Image& depth = renderer.targets.depth;
+        Image& offscreen = activeView(renderer).offscreen;
+        Image& depth = activeView(renderer).depth;
         const u32 f = renderer.frame.index;
         const bool doCull = renderer.lighting.clusterDispatchPending && renderer.pipelines.cull;
         renderer.lighting.clusterDispatchPending = false;
@@ -1987,10 +2007,10 @@ namespace se
         // scratch when FXAA is on (FXAA then edge-blurs scratch → offscreen). With MSAA the
         // scene renders to msaaColor and resolves into sceneOutput. mutually exclusive via set-aa.
         const bool msaa =
-            renderer.targets.sampleCount != vk::SampleCountFlagBits::e1 && renderer.targets.msaaColor.image;
-        const bool fxaa = renderer.targets.fxaaEnabled && renderer.targets.scratch.image && renderer.pipelines.fxaa;
-        const bool taa = renderer.targets.taaEnabled && renderer.targets.scratch.image && renderer.pipelines.motion &&
-                         renderer.pipelines.taa;
+            renderer.targets.sampleCount != vk::SampleCountFlagBits::e1 && activeView(renderer).msaaColor.image;
+        const bool fxaa = renderer.targets.fxaaEnabled && activeView(renderer).scratch.image && renderer.pipelines.fxaa;
+        const bool taa = renderer.targets.taaEnabled && activeView(renderer).scratch.image &&
+                         renderer.pipelines.motion && renderer.pipelines.taa;
         renderer.graph.sceneColor = importImage(graph, offscreen.image, offscreen.view, vk::ImageAspectFlagBits::eColor,
                                                 offscreen.layout, &offscreen.layout);
         RgResource sceneOutput = renderer.graph.sceneColor;
@@ -1998,14 +2018,15 @@ namespace se
         // compute pass resolves scratch -> offscreen.
         if (fxaa || taa)
         {
-            sceneOutput = importImage(graph, renderer.targets.scratch.image, renderer.targets.scratch.view,
+            sceneOutput = importImage(graph, activeView(renderer).scratch.image, activeView(renderer).scratch.view,
                                       vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
         }
         RgResource sceneColorAttachment = sceneOutput;
         if (msaa)
         {
-            sceneColorAttachment = importImage(graph, renderer.targets.msaaColor.image, renderer.targets.msaaColor.view,
-                                               vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+            sceneColorAttachment =
+                importImage(graph, activeView(renderer).msaaColor.image, activeView(renderer).msaaColor.view,
+                            vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
         }
         // The 1x depth is always imported: it is the scene depth (no MSAA) or the resolve
         // target the scene pass writes the multisampled depth into (MSAA). The post-tonemap
@@ -2015,7 +2036,7 @@ namespace se
         RgResource sceneDepth = depth1x;
         if (msaa)
         {
-            sceneDepth = importImage(graph, renderer.targets.msaaDepth.image, renderer.targets.msaaDepth.view,
+            sceneDepth = importImage(graph, activeView(renderer).msaaDepth.image, activeView(renderer).msaaDepth.view,
                                      vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
         }
         renderer.graph.swapImage = importImage(graph, renderer.swapchain.images[renderer.frame.imageIndex],
@@ -2208,7 +2229,7 @@ namespace se
         // when ANY of them is on; each effect's compute pass is gated by its toggle. The
         // scene pass samples whichever maps are produced (flags in the light UBO gate the
         // shader reads). The graph derives all the ColorWrite/Storage/SampledRead barriers.
-        const bool gbufReady = renderer.ssao.ready && renderer.pipelines.gbuffer && renderer.targets.gNormal.image;
+        const bool gbufReady = renderer.ssao.ready && renderer.pipelines.gbuffer && activeView(renderer).gNormal.image;
         const bool doSsao = gbufReady && renderer.ssao.useSsao && renderer.pipelines.gtao && renderer.pipelines.aoBlur;
         const bool doContact = gbufReady && renderer.ssao.useContact && renderer.pipelines.contact;
         const bool doSsgi =
@@ -2216,7 +2237,7 @@ namespace se
         // ReSTIR also needs the G-buffer (world pos/normal). Force the prepass when ReSTIR is
         // on even with no screen effect; the gNormal handle is captured for its sets.
         const bool wantRestir =
-            renderer.restir.useRestir && renderer.restir.ready && renderer.context.rtSupported && gbufReady;
+            renderer.restir.useRestir && activeRestir(renderer).ready && renderer.context.rtSupported && gbufReady;
         const bool doScreen = doSsao || doContact || doSsgi || wantRestir;
         const vk::Extent2D ssExtent = offscreen.extent;
         const auto ssGroups = [](u32 n) -> u32 { return (n + 7) / 8; };
@@ -2227,10 +2248,12 @@ namespace se
         if (doScreen)
         {
             renderer.graph.hasGbuffer = true;
-            RgResource gNormalRes = importImage(graph, renderer.targets.gNormal.image, renderer.targets.gNormal.view,
-                                                vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
-            RgResource gDepthRes = importImage(graph, renderer.targets.gDepth.image, renderer.targets.gDepth.view,
-                                               vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
+            RgResource gNormalRes =
+                importImage(graph, activeView(renderer).gNormal.image, activeView(renderer).gNormal.view,
+                            vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+            RgResource gDepthRes =
+                importImage(graph, activeView(renderer).gDepth.image, activeView(renderer).gDepth.view,
+                            vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
 
             RgPass gpass;
             gpass.name = "gbuffer";
@@ -2254,11 +2277,11 @@ namespace se
             if (doSsao)
             {
                 RgResource aoRawRes =
-                    importImage(graph, renderer.targets.aoRaw.image, renderer.targets.aoRaw.view,
+                    importImage(graph, activeView(renderer).aoRaw.image, activeView(renderer).aoRaw.view,
                                 vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
-                RgResource aoRes = importImage(graph, renderer.targets.aoMap.image, renderer.targets.aoMap.view,
-                                               vk::ImageAspectFlagBits::eColor, renderer.targets.aoMap.layout,
-                                               &renderer.targets.aoMap.layout);
+                RgResource aoRes = importImage(graph, activeView(renderer).aoMap.image, activeView(renderer).aoMap.view,
+                                               vk::ImageAspectFlagBits::eColor, activeView(renderer).aoMap.layout,
+                                               &activeView(renderer).aoMap.layout);
                 RgPass aopass;
                 aopass.name = "gtao";
                 aopass.kind = RgPassKind::Compute;
@@ -2270,7 +2293,7 @@ namespace se
                 {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.gtao->pipeline);
                     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.gtao->layout, 0,
-                                           renderer.ssao.gtaoSet, {});
+                                           activeView(renderer).gtaoSet, {});
                     struct
                     {
                         glm::mat4 invProjection;
@@ -2292,7 +2315,7 @@ namespace se
                 {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.aoBlur->pipeline);
                     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.aoBlur->layout, 0,
-                                           renderer.ssao.aoBlurSet, {});
+                                           activeView(renderer).aoBlurSet, {});
                     cmd.dispatch(ssGroups(ssExtent.width), ssGroups(ssExtent.height), 1);
                 };
                 addPass(graph, std::move(blurpass));
@@ -2303,9 +2326,9 @@ namespace se
             if (doContact)
             {
                 RgResource contactRes =
-                    importImage(graph, renderer.targets.contactMap.image, renderer.targets.contactMap.view,
-                                vk::ImageAspectFlagBits::eColor, renderer.targets.contactMap.layout,
-                                &renderer.targets.contactMap.layout);
+                    importImage(graph, activeView(renderer).contactMap.image, activeView(renderer).contactMap.view,
+                                vk::ImageAspectFlagBits::eColor, activeView(renderer).contactMap.layout,
+                                &activeView(renderer).contactMap.layout);
                 RgPass cpass;
                 cpass.name = "contact-shadows";
                 cpass.kind = RgPassKind::Compute;
@@ -2316,7 +2339,7 @@ namespace se
                 {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.contact->pipeline);
                     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.contact->layout, 0,
-                                           renderer.ssao.contactSet, {});
+                                           activeView(renderer).contactSet, {});
                     struct
                     {
                         glm::mat4 projection;
@@ -2342,12 +2365,13 @@ namespace se
                 // there); seed that and DON'T write the layout back — the graph internally
                 // transitions General for the copy write then back to ShaderReadOnly.
                 RgResource prevColorRes =
-                    importImage(graph, renderer.targets.prevColor.image, renderer.targets.prevColor.view,
+                    importImage(graph, activeView(renderer).prevColor.image, activeView(renderer).prevColor.view,
                                 vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eShaderReadOnlyOptimal, nullptr);
                 renderer.graph.prevColorResource = prevColorRes;
-                RgResource ssgiRes = importImage(graph, renderer.targets.ssgiMap.image, renderer.targets.ssgiMap.view,
-                                                 vk::ImageAspectFlagBits::eColor, renderer.targets.ssgiMap.layout,
-                                                 &renderer.targets.ssgiMap.layout);
+                RgResource ssgiRes =
+                    importImage(graph, activeView(renderer).ssgiMap.image, activeView(renderer).ssgiMap.view,
+                                vk::ImageAspectFlagBits::eColor, activeView(renderer).ssgiMap.layout,
+                                &activeView(renderer).ssgiMap.layout);
                 RgPass gipass;
                 gipass.name = "ssgi";
                 gipass.kind = RgPassKind::Compute;
@@ -2359,7 +2383,7 @@ namespace se
                 {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgi->pipeline);
                     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgi->layout, 0,
-                                           renderer.ssao.ssgiSet, {});
+                                           activeView(renderer).ssgiSet, {});
                     struct
                     {
                         glm::mat4 projection;
@@ -2382,10 +2406,10 @@ namespace se
         RgResource motionRes{};
         if (taa)
         {
-            motionRes = importImage(graph, renderer.targets.motion.image, renderer.targets.motion.view,
+            motionRes = importImage(graph, activeView(renderer).motion.image, activeView(renderer).motion.view,
                                     vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
             RgResource motionDepthRes =
-                importImage(graph, renderer.targets.motionDepth.image, renderer.targets.motionDepth.view,
+                importImage(graph, activeView(renderer).motionDepth.image, activeView(renderer).motionDepth.view,
                             vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
             RgPass motionPass;
             motionPass.name = "motion";
@@ -2614,25 +2638,26 @@ namespace se
         // TLAS. Three compute passes; the reservoir SSBOs serialize via memory barriers the
         // graph derives from StorageWrite->StorageRead on a representative resource.
         renderer.graph.hasRestir = false;
-        const bool doRestir = renderer.restir.useRestir && renderer.restir.ready && renderer.context.rtSupported &&
+        RestirView& rv = activeRestir(renderer);
+        const bool doRestir = renderer.restir.useRestir && rv.ready && renderer.context.rtSupported &&
                               renderer.rt.tlasReady && renderer.graph.hasGbuffer && doCull /* froxel candidate lists */;
         if (doRestir)
         {
             // Per-frame writes: light SSBO + cluster SSBO (they grow), G-buffer + motion
             // samplers, and the TLAS into the resolve set.
             writeRestirFrameBindings(renderer, f);
-            RgResource radianceRes = importImage(graph, renderer.restir.radiance.image, renderer.restir.radiance.view,
-                                                 vk::ImageAspectFlagBits::eColor, renderer.restir.radiance.layout,
-                                                 &renderer.restir.radiance.layout);
+            RgResource radianceRes =
+                importImage(graph, rv.radiance.image, rv.radiance.view, vk::ImageAspectFlagBits::eColor,
+                            rv.radiance.layout, &rv.radiance.layout);
             // A sentinel buffer access so consecutive ReSTIR passes get RAW barriers on the
             // reservoir storage (initial->reuse->resolve write/read the same buffers).
-            RgResource resvSentinel = importBuffer(graph, renderer.restir.combined->buffer);
+            RgResource resvSentinel = importBuffer(graph, rv.combined->buffer);
 
             const vk::Extent2D ex = offscreen.extent;
             const glm::mat4 invView = glm::inverse(renderer.ssao.view);
             const glm::mat4 invProj = renderer.ssao.invProjection;
-            const u32 fi = renderer.restir.frameIndex;
-            const bool histValid = !renderer.restir.historyReset;
+            const u32 fi = rv.frameIndex;
+            const bool histValid = !rv.historyReset;
 
             RgPass init;
             init.name = "restir-initial";
@@ -2642,7 +2667,7 @@ namespace se
             {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirInitial->pipeline);
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirInitial->layout, 0,
-                                       renderer.restir.initialSet, {});
+                                       activeRestir(renderer).initialSet, {});
                 struct
                 {
                     glm::mat4 invView;
@@ -2668,7 +2693,7 @@ namespace se
             {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirReuse->pipeline);
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirReuse->layout, 0,
-                                       renderer.restir.reuseSet, {});
+                                       activeRestir(renderer).reuseSet, {});
                 struct
                 {
                     glm::mat4 invView;
@@ -2693,7 +2718,7 @@ namespace se
             {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirResolve->pipeline);
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.restirResolve->layout, 0,
-                                       renderer.restir.resolveSet, {});
+                                       activeRestir(renderer).resolveSet, {});
                 struct
                 {
                     glm::mat4 invView;
@@ -2708,8 +2733,8 @@ namespace se
             addPass(graph, std::move(resolve));
             renderer.graph.restirRadiance = radianceRes;
             renderer.graph.hasRestir = true;
-            renderer.restir.frameIndex = renderer.restir.frameIndex + 1;
-            renderer.restir.historyReset = false;
+            rv.frameIndex = rv.frameIndex + 1;
+            rv.historyReset = false;
         }
 
         // Visible sky: a fullscreen pass that fills the scene color target before the geometry.
@@ -2833,7 +2858,7 @@ namespace se
             {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.fxaa->pipeline);
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.fxaa->layout, 0,
-                                       renderer.descriptors.fxaaSet, {});
+                                       activeView(renderer).fxaaSet, {});
                 cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
             };
             addPass(graph, std::move(fxaaPass));
@@ -2844,15 +2869,15 @@ namespace se
         // Parity p writes history[p]; the GTAO-style compute pass declares its image usages.
         if (taa)
         {
-            const u32 p = renderer.targets.historyIndex;
+            const u32 p = activeView(renderer).historyIndex;
             RgResource histReadRes =
-                importImage(graph, renderer.targets.history[1 - p].image, renderer.targets.history[1 - p].view,
-                            vk::ImageAspectFlagBits::eColor, renderer.targets.history[1 - p].layout,
-                            &renderer.targets.history[1 - p].layout);
+                importImage(graph, activeView(renderer).history[1 - p].image, activeView(renderer).history[1 - p].view,
+                            vk::ImageAspectFlagBits::eColor, activeView(renderer).history[1 - p].layout,
+                            &activeView(renderer).history[1 - p].layout);
             RgResource histWriteRes =
-                importImage(graph, renderer.targets.history[p].image, renderer.targets.history[p].view,
-                            vk::ImageAspectFlagBits::eColor, renderer.targets.history[p].layout,
-                            &renderer.targets.history[p].layout);
+                importImage(graph, activeView(renderer).history[p].image, activeView(renderer).history[p].view,
+                            vk::ImageAspectFlagBits::eColor, activeView(renderer).history[p].layout,
+                            &activeView(renderer).history[p].layout);
             RgPass taaPass;
             taaPass.name = "taa";
             taaPass.kind = RgPassKind::Compute;
@@ -2862,12 +2887,12 @@ namespace se
                                  RgAccess{ renderer.graph.sceneColor, RgUsage::StorageImageRWCompute },
                                  RgAccess{ histWriteRes, RgUsage::StorageImageRWCompute } };
             const vk::Extent2D extent = offscreen.extent;
-            const bool historyValid = renderer.targets.historyValid;
+            const bool historyValid = activeView(renderer).historyValid;
             taaPass.execute = [&renderer, extent, p, historyValid](vk::CommandBuffer cmd)
             {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.taa->pipeline);
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.taa->layout, 0,
-                                       renderer.descriptors.taaSets[p], {});
+                                       activeView(renderer).taaSets[p], {});
                 struct TaaPush
                 {
                     glm::vec4 params;
@@ -2878,8 +2903,8 @@ namespace se
             };
             addPass(graph, std::move(taaPass));
             // Next frame reads this frame's history; mark it valid + flip parity.
-            renderer.targets.historyValid = true;
-            renderer.targets.historyIndex = 1 - p;
+            activeView(renderer).historyValid = true;
+            activeView(renderer).historyIndex = 1 - p;
         }
 
         // SSGI history capture: copy the scene's resolved LINEAR-HDR color into prevColor
@@ -2900,7 +2925,7 @@ namespace se
             {
                 cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.copyColor->pipeline);
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.copyColor->layout, 0,
-                                       renderer.ssao.copyColorSet, {});
+                                       activeView(renderer).copyColorSet, {});
                 cmd.dispatch(ssGroups(extent.width), ssGroups(extent.height), 1);
             };
             addPass(graph, std::move(copyPass));
@@ -2964,12 +2989,12 @@ namespace se
                 vk::Viewport viewport{};
                 viewport.x = 0.0f;
                 viewport.y = 0.0f;
-                viewport.width = static_cast<float>(renderer.targets.offscreen.extent.width);
-                viewport.height = static_cast<float>(renderer.targets.offscreen.extent.height);
+                viewport.width = static_cast<float>(activeView(renderer).offscreen.extent.width);
+                viewport.height = static_cast<float>(activeView(renderer).offscreen.extent.height);
                 viewport.minDepth = 0.0f;
                 viewport.maxDepth = 1.0f;
                 cmd.setViewport(0, viewport);
-                cmd.setScissor(0, vk::Rect2D{ vk::Offset2D{ 0, 0 }, renderer.targets.offscreen.extent });
+                cmd.setScissor(0, vk::Rect2D{ vk::Offset2D{ 0, 0 }, activeView(renderer).offscreen.extent });
                 const vk::DeviceSize offset = 0;
                 cmd.bindVertexBuffers(0, buffer->buffer, offset);
                 // Depth-tested range first (occluded by geometry), then the on-top range
@@ -3009,11 +3034,11 @@ namespace se
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.tonemap->pipeline);
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.tonemap->layout, 0,
-                                   renderer.descriptors.tonemapSet, {});
+                                   activeView(renderer).tonemapSet, {});
             const f32 exposure = std::exp2(renderer.exposureEv);
             cmd.pushConstants(renderer.pipelines.tonemap->layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(f32),
                               &exposure);
-            const vk::Extent2D extent = renderer.targets.offscreen.extent;
+            const vk::Extent2D extent = activeView(renderer).offscreen.extent;
             cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
         };
         addPass(graph, std::move(pass));
@@ -3060,7 +3085,7 @@ namespace se
     // pass when the scene is embedded in an external window.
     void presentViewportToSwapchain(Renderer& renderer, vk::CommandBuffer cmd)
     {
-        Image& src = renderer.targets.offscreen;
+        Image& src = activeView(renderer).offscreen;
         const vk::Image swap = renderer.swapchain.images[renderer.frame.imageIndex];
 
         transitionImage(cmd, src.image, src.layout, vk::ImageLayout::eTransferSrcOptimal,
@@ -3094,14 +3119,14 @@ namespace se
     // frame fence beginFrame already waits on. No extra submits, no waitIdle.
     void recordShmPublishCopy(Renderer& renderer, vk::CommandBuffer cmd)
     {
-        Image& src = renderer.targets.offscreen;
+        Image& src = activeView(renderer).offscreen;
         const u32 width = src.extent.width;
         const u32 height = src.extent.height;
         if (width == 0 || height == 0)
         {
             return;
         }
-        ShmPublishSlot& slot = renderer.shmPublish.slots[renderer.frame.index];
+        ShmPublishSlot& slot = activeShmPublish(renderer).slots[renderer.frame.index];
         if (!ensureShmPublishSlot(renderer, slot, width, height))
         {
             return;
@@ -3224,8 +3249,8 @@ namespace se
         // vectors. Only valid once a scene draw list was submitted this frame.
         if (renderer.frame.sceneDrawList.valid)
         {
-            renderer.prevViewProj = renderer.frame.sceneDrawList.viewProj;
-            renderer.prevViewProjValid = true;
+            activeView(renderer).prevViewProj = renderer.frame.sceneDrawList.viewProj;
+            activeView(renderer).prevViewProjValid = true;
         }
 
         // The swapchain image is only safely owned in-frame, so a pending capture
@@ -3254,7 +3279,7 @@ namespace se
                 renderer.captureNextSwapchainPath.reset();
             }
         }
-        if (renderer.shmPublish.enabled)
+        if (activeShmPublish(renderer).enabled)
         {
             recordShmPublishCopy(renderer, frame.commandBuffer);
         }
@@ -3281,7 +3306,7 @@ namespace se
 
         static_cast<void>(frame.commandBuffer.end());
 
-        if (renderer.shmPublish.enabled)
+        if (activeShmPublish(renderer).enabled)
         {
             const CpuScope presentScope(&rec, "submit-present");
             // No swapchain image was acquired and nothing presents: submit with the frame
@@ -3622,17 +3647,70 @@ namespace se
 
     void setRestir(Renderer& renderer, bool enabled)
     {
-        const bool on = enabled && renderer.context.rtSupported && renderer.restir.ready;
+        const bool on = enabled && renderer.context.rtSupported && activeRestir(renderer).ready;
         if (on && !renderer.restir.useRestir)
         {
-            renderer.restir.historyReset = true;
+            activeRestir(renderer).historyReset = true;
         }
         renderer.restir.useRestir = on;
     }
 
     auto restirEnabled(const Renderer& renderer) -> bool
     {
-        return renderer.restir.useRestir && renderer.context.rtSupported && renderer.restir.ready;
+        const RestirView& rv = renderer.restirViews[static_cast<std::size_t>(renderer.activeView)];
+        return renderer.restir.useRestir && renderer.context.rtSupported && rv.ready;
+    }
+
+    void resetViewTemporal(Renderer& renderer, ViewId view)
+    {
+        const std::size_t i = static_cast<std::size_t>(view);
+        renderer.views[i].prevViewProjValid = false;
+        renderer.views[i].historyValid = false;
+        renderer.restirViews[i].historyReset = true;
+        renderer.ddgi.historyReset = true;  // scene-global probes re-converge for the new view
+    }
+
+    void destroyView(Renderer& renderer, ViewId view)
+    {
+        const std::size_t i = static_cast<std::size_t>(view);
+        // Single shared queue: idle the device before freeing this view's resources so no
+        // in-flight command buffer still references them (Refs are dropped under the idle).
+        waitGpuIdle(renderer);
+
+        ViewTargets& vt = renderer.views[i];
+        vt.offscreen.reset();
+        vt.depth.reset();
+        vt.gNormal.reset();
+        vt.gDepth.reset();
+        vt.aoRaw.reset();
+        vt.aoMap.reset();
+        vt.contactMap.reset();
+        vt.ssgiMap.reset();
+        vt.prevColor.reset();
+        vt.motion.reset();
+        vt.motionDepth.reset();
+        vt.history[0].reset();
+        vt.history[1].reset();
+        vt.msaaColor.reset();
+        vt.msaaDepth.reset();
+        vt.scratch.reset();
+        vt.prevViewProjValid = false;
+        vt.historyValid = false;
+        vt.desiredWidth = 0;
+        vt.desiredHeight = 0;
+
+        // ReSTIR reservoir buffers + radiance image; the descriptor sets are pool-owned and
+        // left intact (the pool is freed once at destroyRenderer).
+        RestirView& rv = renderer.restirViews[i];
+        rv.radiance.reset();
+        rv.initial.reset();
+        rv.combined.reset();
+        rv.previous.reset();
+        rv.reservoirCapacity = 0;
+        rv.ready = false;
+        rv.historyReset = true;
+
+        destroyShmPublishSlots(renderer, renderer.shmPublish[i]);
     }
 
     void setDdgi(Renderer& renderer, bool enabled)

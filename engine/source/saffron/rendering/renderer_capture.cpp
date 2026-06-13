@@ -46,7 +46,7 @@ namespace se
 {
     auto captureViewport(Renderer& renderer, const std::string& path) -> Result<void>
     {
-        Image& img = renderer.targets.offscreen;
+        Image& img = activeView(renderer).offscreen;
         const u32 width = img.extent.width;
         const u32 height = img.extent.height;
         const vk::DeviceSize byteSize = static_cast<vk::DeviceSize>(width) * height * formatPixelBytes(img.format);
@@ -136,10 +136,74 @@ namespace se
         constexpr u32 ShmRingSlots = 4;
     }
 
-    void enableViewportShmPublish(Renderer& renderer, const std::string& shmName)
+    // The minimum slot capacity (4K RGBA): floors the segment so ordinary resizes never reallocate it.
+    constexpr std::size_t MinShmSlotCapacity = std::size_t{ 3840 } * 2160 * 4;
+
+    // (Re)create a view's shm segment sized for `capacity` bytes per ring slot: drop any prior mapping,
+    // shm_open + ftruncate the header + ring, mmap it, and initialize the header (magic/ring/capacity;
+    // seq = 0 means "no frame yet"). Shared by enableViewportShmPublish (so BOTH views' segments exist
+    // from startup) and publishShmPublishSlot (grow-only, when a frame outgrows the current slot).
+    auto recreateShmSegment(ShmPublish& shm, std::size_t capacity) -> bool
     {
-        renderer.shmPublish.enabled = true;
-        renderer.shmPublish.name = shmName;
+        const std::size_t totalBytes = ShmHeaderBytes + static_cast<std::size_t>(ShmRingSlots) * capacity;
+        if (shm.base != nullptr)
+        {
+            munmap(shm.base, shm.mappedSize);
+            shm.base = nullptr;
+        }
+        if (shm.fd >= 0)
+        {
+            close(shm.fd);
+            shm.fd = -1;
+        }
+        shm_unlink(shm.name.c_str());
+        const int fd = shm_open(shm.name.c_str(), O_CREAT | O_RDWR, 0600);
+        if (fd < 0)
+        {
+            return false;
+        }
+        if (ftruncate(fd, static_cast<off_t>(totalBytes)) != 0)
+        {
+            close(fd);
+            return false;
+        }
+        void* base = mmap(nullptr, totalBytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (base == MAP_FAILED)
+        {
+            close(fd);
+            return false;
+        }
+        shm.fd = fd;
+        shm.base = static_cast<unsigned char*>(base);
+        shm.mappedSize = totalBytes;
+        shm.slotCapacity = capacity;
+        shm.seq = 0;
+        u32* header = reinterpret_cast<u32*>(shm.base);
+        header[0] = ShmMagic;
+        header[1] = 0;  // width: no frame published yet
+        header[2] = 0;  // height
+        header[3] = 0;  // seq = 0: reader shows nothing until the first real publish
+        header[4] = ShmRingSlots;
+        header[5] = static_cast<u32>(capacity);
+        header[6] = 0;
+        header[7] = 0;
+        return true;
+    }
+
+    void enableViewportShmPublish(Renderer& renderer, ViewId view, const std::string& shmName)
+    {
+        ShmPublish& shm = renderer.shmPublish[static_cast<std::size_t>(view)];
+        shm.enabled = true;
+        shm.name = shmName;
+        // Create the segment NOW, not lazily on the first publish: the editor's presenter blocks at
+        // startup until EACH view's segment exists, so a view that isn't rendered yet (the asset preview
+        // before it is opened) would otherwise never create its segment — stalling the whole present loop
+        // so neither view nor the backdrop ever shows. seq stays 0 until the first real frame, so the
+        // reader displays nothing for this view until it is actually rendered.
+        if (!recreateShmSegment(shm, MinShmSlotCapacity))
+        {
+            logError("shm publish: failed to create segment '" + shmName + "'");
+        }
         logInfo("viewport shm publish enabled (pipelined readback, swapchain present skipped)");
     }
 
@@ -205,58 +269,23 @@ namespace se
 
     void publishShmPublishSlot(Renderer& renderer, ShmPublishSlot& slot)
     {
-        ShmPublish& shm = renderer.shmPublish;
+        ShmPublish& shm = activeShmPublish(renderer);
         const std::size_t pixelBytes = static_cast<std::size_t>(slot.width) * slot.height * 4;
         if (pixelBytes == 0 || slot.buffer == VK_NULL_HANDLE || slot.bufferInfo.pMappedData == nullptr)
         {
             return;
         }
 
-        // Grow-only segment: header + a fixed-capacity ring. Capacity is floored at 4K so
-        // ordinary resizes never outgrow it (the reader must remap when the segment is
-        // recreated; shm pages are sparse, so unused capacity costs nothing).
+        // Grow-only segment: header + a fixed-capacity ring. Capacity is floored at 4K so ordinary
+        // resizes never outgrow it (the reader remaps when the segment is recreated; shm pages are
+        // sparse, so unused capacity costs nothing). The segment normally already exists from
+        // enableViewportShmPublish; this only fires if a frame outgrows the current slot.
         if (shm.fd < 0 || pixelBytes > shm.slotCapacity)
         {
-            constexpr std::size_t MinSlotCapacity = std::size_t{ 3840 } * 2160 * 4;
-            const std::size_t capacity = std::max(pixelBytes, MinSlotCapacity);
-            const std::size_t totalBytes = ShmHeaderBytes + static_cast<std::size_t>(ShmRingSlots) * capacity;
-            if (shm.base != nullptr)
-            {
-                munmap(shm.base, shm.mappedSize);
-                shm.base = nullptr;
-            }
-            if (shm.fd >= 0)
-            {
-                close(shm.fd);
-                shm.fd = -1;
-            }
-            shm_unlink(shm.name.c_str());
-            const int fd = shm_open(shm.name.c_str(), O_CREAT | O_RDWR, 0600);
-            if (fd < 0)
+            if (!recreateShmSegment(shm, std::max(pixelBytes, MinShmSlotCapacity)))
             {
                 return;
             }
-            if (ftruncate(fd, static_cast<off_t>(totalBytes)) != 0)
-            {
-                close(fd);
-                return;
-            }
-            void* base = mmap(nullptr, totalBytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-            if (base == MAP_FAILED)
-            {
-                close(fd);
-                return;
-            }
-            shm.fd = fd;
-            shm.base = static_cast<unsigned char*>(base);
-            shm.mappedSize = totalBytes;
-            shm.slotCapacity = capacity;
-            u32* header = reinterpret_cast<u32*>(shm.base);
-            header[0] = ShmMagic;
-            header[4] = ShmRingSlots;
-            header[5] = static_cast<u32>(capacity);
-            header[6] = 0;
-            header[7] = 0;
         }
 
         const u32 next = shm.seq + 1;
@@ -274,9 +303,8 @@ namespace se
         header[3] = next;
     }
 
-    void destroyShmPublish(Renderer& renderer)
+    void destroyShmPublishSlots(Renderer& renderer, ShmPublish& shm)
     {
-        ShmPublish& shm = renderer.shmPublish;
         for (ShmPublishSlot& slot : shm.slots)
         {
             if (slot.image)
@@ -309,5 +337,13 @@ namespace se
         }
         shm.slotCapacity = 0;
         shm.enabled = false;
+    }
+
+    void destroyShmPublish(Renderer& renderer)
+    {
+        for (ShmPublish& shm : renderer.shmPublish)
+        {
+            destroyShmPublishSlots(renderer, shm);
+        }
     }
 }

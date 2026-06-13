@@ -125,15 +125,19 @@ namespace se
         // beginFrameGraph uses to schedule the passes (set this frame, before this call), so
         // a flagged map is always produced + valid.
         const u32 iblFlag = (renderer.ibl.useIbl && renderer.ibl.ready) ? 1u : 0u;
-        const u32 ssaoFlag = (renderer.ssao.useSsao && renderer.ssao.ready) ? 1u : 0u;
-        const u32 contactFlag = (renderer.ssao.useContact && renderer.ssao.ready) ? 1u : 0u;
-        const u32 ssgiFlag = (renderer.ssao.useSsgi && renderer.ssao.ready) ? 1u : 0u;
+        // The screen-space maps are sampled through the active view's set 4; gate the flags on this view's
+        // G-buffer existing so the mesh never samples a per-view set whose images aren't created yet (a
+        // freshly-activated view before its first resize). ssao.ready is shared device state.
+        const bool ssReady = renderer.ssao.ready && static_cast<bool>(activeView(renderer).gNormal.image);
+        const u32 ssaoFlag = (renderer.ssao.useSsao && ssReady) ? 1u : 0u;
+        const u32 contactFlag = (renderer.ssao.useContact && ssReady) ? 1u : 0u;
+        const u32 ssgiFlag = (renderer.ssao.useSsgi && ssReady) ? 1u : 0u;
         const u32 ddgiFlag = (renderer.ddgi.useDdgi && renderer.ddgi.ready) ? 1u : 0u;
         ubo.counts = glm::uvec4(count, renderer.lighting.shadowPending ? 1u : 0u, iblFlag, ssaoFlag);
         // screenFlags.w = ReSTIR direct-lighting flag: the mesh replaces its punctual loop
         // with the resolved ReSTIR radiance buffer.
         const u32 restirFlag =
-            (renderer.restir.useRestir && renderer.restir.ready && renderer.context.rtSupported) ? 1u : 0u;
+            (renderer.restir.useRestir && activeRestir(renderer).ready && renderer.context.rtSupported) ? 1u : 0u;
         ubo.screenFlags = glm::uvec4(contactFlag, ssgiFlag, ddgiFlag, restirFlag);
         ubo.ddgiVolumeMin = glm::vec4(renderer.ddgi.volumeMin, 0.0f);
         ubo.ddgiVolumeExtent = glm::vec4(renderer.ddgi.volumeExtent, 0.0f);
