@@ -8,7 +8,7 @@
 /// that rewrites the full bag. A write optimistically folds the new value in (and the
 /// echoed result) so the control reflects the change at once; the reconcile poll re-reads
 /// the full bag right after.
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
@@ -28,6 +28,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type AaMode = RenderStats["aa"];
+type ViewMode = RenderStats["viewMode"];
 
 const AA_MODES: { value: AaMode; label: string }[] = [
   { value: "off", label: "Off" },
@@ -36,6 +37,18 @@ const AA_MODES: { value: AaMode; label: string }[] = [
   { value: "msaa2", label: "MSAA 2x" },
   { value: "msaa4", label: "MSAA 4x" },
   { value: "msaa8", label: "MSAA 8x" },
+];
+
+/// The debug render-output mode. Transient (not persisted, not undoable); only implemented
+/// modes are listed, so the dropdown never offers a value the engine ignores.
+const VIEW_MODES: { value: ViewMode; label: string }[] = [
+  { value: "lit", label: "Lit" },
+  { value: "wireframe", label: "Wireframe" },
+  { value: "albedo", label: "Albedo" },
+  { value: "normal", label: "Normal" },
+  { value: "roughness", label: "Roughness" },
+  { value: "metallic", label: "Metallic" },
+  { value: "emissive", label: "Emissive" },
 ];
 
 /// The boolean feature toggles (label + the stat field + its setter). RT-gated rows
@@ -56,6 +69,35 @@ const TOGGLES: {
   { label: "DDGI", field: "ddgi", set: (on) => client.setGi(on ? "ddgi" : "off") },
   { label: "RT Shadows", field: "rtShadows", set: (on) => client.setRtShadows(on), rtGated: true },
   { label: "ReSTIR", field: "restir", set: (on) => client.setRestir(on), rtGated: true },
+];
+
+/// Transient debug-visualization overlays (set-debug-overlays). Not persisted, not undoable —
+/// distinct from the feature toggles above, which are project render config.
+const DEBUG_OVERLAYS: {
+  label: string;
+  field: "bounds" | "sceneAabb" | "lightVolumes" | "grid";
+  tooltip?: string;
+}[] = [
+  {
+    label: "Bounding Boxes",
+    field: "bounds",
+    tooltip: "The AABB mouse picking tests — static draw box, skinned joint-union box",
+  },
+  {
+    label: "Scene AABB",
+    field: "sceneAabb",
+    tooltip: "The whole-scene box the shadow/GI fit uses",
+  },
+  {
+    label: "Light Volumes",
+    field: "lightVolumes",
+    tooltip: "Point-light range spheres + spot cones",
+  },
+  {
+    label: "Grid",
+    field: "grid",
+    tooltip: "Infinite ground-plane reference grid",
+  },
 ];
 
 function ToggleRow({
@@ -95,11 +137,14 @@ export function RenderPanel() {
   const hasStats = useEditorStore((s) => s.renderStats !== null);
   const setRenderStats = useEditorStore((s) => s.setRenderStats);
   const setDragActive = useEditorStore((s) => s.setDragActive);
+  const debugOverlays = useEditorStore((s) => s.debugOverlays);
+  const setDebugOverlays = useEditorStore((s) => s.setDebugOverlays);
   const cfg = useEditorStore(
     useShallow((s) => {
       const r = s.renderStats;
       return {
         aa: (r?.aa ?? "off") as AaMode,
+        viewMode: (r?.viewMode ?? "lit") as ViewMode,
         exposureEv: r?.exposureEv ?? 0,
         rtSupported: r?.rtSupported ?? false,
         clustered: r?.clustered ?? false,
@@ -121,6 +166,35 @@ export function RenderPanel() {
     if (cur) {
       setRenderStats({ ...cur, ...patch });
     }
+  };
+
+  // Debug overlays are transient editor state (not project config): no undo, no persistence.
+  // Fetch once on mount; the render-panel-gated poll keeps them live (and reflects external `se`).
+  useEffect(() => {
+    if (ready && debugOverlays === null) {
+      void client
+        .getDebugOverlays()
+        .then(setDebugOverlays)
+        .catch(() => {
+          // Engine briefly busy; the render-panel poll picks the overlays up on its next tick.
+        });
+    }
+  }, [ready, debugOverlays, setDebugOverlays]);
+
+  const onDebugToggle = (field: (typeof DEBUG_OVERLAYS)[number]["field"], next: boolean): void => {
+    const previous = useEditorStore.getState().debugOverlays;
+    if (previous) {
+      setDebugOverlays({ ...previous, [field]: next });
+    }
+    void client
+      .setDebugOverlays({ [field]: next })
+      .then(setDebugOverlays)
+      .catch((err: unknown) => {
+        if (previous) {
+          setDebugOverlays(previous);
+        }
+        notifyError(errorText(err));
+      });
   };
 
   // Render settings persist with the project, so their edits are scene-tab undoable. A
@@ -146,6 +220,15 @@ export function RenderPanel() {
     void client
       .setAa(mode)
       .then((res) => optimistic({ aa: res.aa }))
+      .catch((err: unknown) => notifyError(errorText(err)));
+  };
+
+  // View mode is a transient debug output, not project config — optimistic + echo, no undo record.
+  const onViewMode = (mode: ViewMode): void => {
+    optimistic({ viewMode: mode });
+    void client
+      .setViewMode(mode)
+      .then((res) => optimistic({ viewMode: res.viewMode }))
       .catch((err: unknown) => notifyError(errorText(err)));
   };
 
@@ -251,6 +334,28 @@ export function RenderPanel() {
             </Select>
           </div>
 
+          <div className="grid grid-cols-[1fr_auto] items-center gap-1.5">
+            <Label className="truncate text-[11px] font-normal text-muted-foreground">
+              View Mode
+            </Label>
+            <Select
+              value={cfg.viewMode}
+              disabled={!ready}
+              onValueChange={(v) => onViewMode(v as ViewMode)}
+            >
+              <SelectTrigger size="sm" className="h-7 w-[112px] font-mono text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {VIEW_MODES.map((m) => (
+                  <SelectItem key={m.value} value={m.value} className="text-[11px]">
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           {TOGGLES.map((t) => {
             const disabled = !ready || (t.rtGated === true && !cfg.rtSupported);
             const tooltip =
@@ -283,6 +388,22 @@ export function RenderPanel() {
               onDragEnd={onExposureDragEnd}
             />
           </div>
+
+          <div className="mt-1 border-t border-border pt-2.5">
+            <Label className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Debug
+            </Label>
+          </div>
+          {DEBUG_OVERLAYS.map((d) => (
+            <ToggleRow
+              key={d.field}
+              label={d.label}
+              checked={debugOverlays ? debugOverlays[d.field] : false}
+              disabled={!ready}
+              tooltip={d.tooltip}
+              onCheckedChange={(next) => onDebugToggle(d.field, next)}
+            />
+          ))}
         </div>
       </ScrollArea>
     </div>

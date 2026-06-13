@@ -42,6 +42,7 @@ import type {
   RenderStats,
   AssetPreviewOptionsResult,
   AssetModelResult,
+  DebugOverlaysResult,
   PickSkeletonJointResult,
   Selection,
   SetPerfConfigParams,
@@ -306,6 +307,17 @@ export const client = {
     jointSize?: number;
   }): Promise<SkeletonOverlayResult> {
     return call("set-skeleton-overlay", opts);
+  },
+  /// The viewport debug-overlay toggles (bounds / scene AABB / light volumes).
+  getDebugOverlays(): Promise<DebugOverlaysResult> {
+    return call("get-debug-overlays", {});
+  },
+  setDebugOverlays(opts: {
+    bounds?: boolean;
+    sceneAabb?: boolean;
+    lightVolumes?: boolean;
+  }): Promise<DebugOverlaysResult> {
+    return call("set-debug-overlays", opts);
   },
   /// Tint a previewed model's joint by its get-asset-model node index (-1 clears the highlight).
   setSkeletonHighlight(joint: number): Promise<SkeletonOverlayResult> {
@@ -627,6 +639,10 @@ export const client = {
   /// Anti-aliasing mode. Echoes `{ aa }`.
   setAa(mode: RenderStats["aa"]): Promise<{ aa: RenderStats["aa"] }> {
     return call("set-aa", { mode });
+  },
+  /// Debug render-output mode (read back via render-stats). Transient; not persisted. Echoes `{ viewMode }`.
+  setViewMode(mode: RenderStats["viewMode"]): Promise<{ viewMode: RenderStats["viewMode"] }> {
+    return call("set-view-mode", { mode });
   },
   /// Clustered (Forward+) light culling. Echoes `{ clustered }`.
   setClustered(on: boolean): Promise<{ clustered: boolean }> {

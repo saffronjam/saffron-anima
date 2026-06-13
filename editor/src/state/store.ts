@@ -52,6 +52,7 @@ import type {
   AnimationClipDto,
   AnimationStateResult,
   AssetEntry,
+  DebugOverlaysResult,
   EntityListEntry,
   Environment,
   FrameHistoryDto,
@@ -152,6 +153,8 @@ export interface EditorState {
   lastLocation: Partial<Record<DockPanelId, DockNodeId>>;
   environment: Environment | null;
   renderStats: RenderStats | null;
+  /// Viewport debug-overlay toggles (set-debug-overlays); filled by the render-panel-gated poll.
+  debugOverlays: DebugOverlaysResult | null;
   /// Performance-telemetry slices (phases 1-4), filled by the gated metrics poll only
   /// while the Stats tab is open (history/passes) or always (alarms, for the badge).
   perfConfig: PerfConfigDto | null;
@@ -348,6 +351,7 @@ export interface EditorState {
   /// Set the selected rig's animation state and available clips together (poll-driven).
   setAnimationState(state: AnimationStateResult | null, clips: AnimationClipDto[]): void;
   setRenderStats(renderStats: RenderStats | null): void;
+  setDebugOverlays(debugOverlays: DebugOverlaysResult | null): void;
   setPerfConfig(perfConfig: PerfConfigDto | null): void;
   setFrameHistory(frameHistory: FrameHistoryDto | null): void;
   setPassTimings(passTimings: RenderPassTimingsDto | null): void;
@@ -441,6 +445,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   lastLocation: {},
   environment: null,
   renderStats: null,
+  debugOverlays: null,
   perfConfig: null,
   frameHistory: null,
   passTimings: null,
@@ -931,6 +936,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       return { dockLayouts: { scene, assetEditor }, lastLocation };
     }),
   setEnvironment: (environment) => set({ environment }),
+  setDebugOverlays: (debugOverlays) => set({ debugOverlays }),
   setAnimationState: (animationState, animationClips) => set({ animationState, animationClips }),
   setRenderStats: (renderStats) => set({ renderStats }),
   setPerfConfig: (perfConfig) => set({ perfConfig }),
@@ -1802,6 +1808,16 @@ export function startReconcile(client: Client): () => void {
           }
           useEditorStore.getState().setPassTimings(passes);
         }
+      }
+
+      // The Render panel owns the debug-overlay toggles; poll them only while it is open so
+      // an external `se set-debug-overlays` reflects in the panel.
+      if (isPanelOpen(useEditorStore.getState(), "render")) {
+        const overlays = await client.getDebugOverlays();
+        if (stopped) {
+          return;
+        }
+        useEditorStore.getState().setDebugOverlays(overlays);
       }
     } catch {
       // Engine briefly busy; the next tick recovers.
