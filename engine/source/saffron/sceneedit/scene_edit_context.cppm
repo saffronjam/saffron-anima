@@ -182,6 +182,16 @@ export namespace se
         i32 highlightJoint = -1;  // get-asset-model node index of the tinted joint while previewing, -1 = none
     };
 
+    // Transient viewport debug overlays (set-debug-overlays), drawn as world-space lines in the
+    // editor overlay pass. Opt-in, Edit-only, never persisted into the project.
+    struct DebugOverlayOptions
+    {
+        bool bounds = false;        // per-entity world AABB (the pick volume for static meshes)
+        bool sceneAabb = false;     // the whole-scene AABB the shadow/DDGI fit uses
+        bool lightVolumes = false;  // point-light range spheres + spot cones
+        bool grid = false;          // infinite analytic ground grid (a render-graph pass)
+    };
+
     // The editor's mutable state: the scene being edited, the component registry
     // that drives every panel, and the current selection (broadcast as a signal).
     struct SceneEditContext
@@ -206,6 +216,7 @@ export namespace se
                                                     // (their locals rebase to hold the world pose)
         NativeGizmoState nativeGizmo;               // overlay-gizmo hover/drag state (mode/space synced from above)
         SkeletonOverlayOptions skeletonOverlay;     // line-skeleton viewport overlay for the selected rig
+        DebugOverlayOptions debugOverlays;          // bounds / scene-AABB / light-volume viewport overlays
         std::vector<MaterialSmoothTarget> materialSmoothing;    // pending smoothed material edits, one per entity
         std::vector<TransformSmoothTarget> transformSmoothing;  // pending smoothed transform edits, one per entity
         SceneEditCameraInput flyInput;                          // latest fly-input command state; lookDelta accumulates
