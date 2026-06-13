@@ -42,6 +42,7 @@ import { matchesBinding } from "../lib/keybindings";
 import { AssetMetadataPanel } from "../components/AssetMetadataPanel";
 import { errorText, notify, notifyError } from "../lib/flash";
 import { useOutsideCommit } from "../lib/useOutsideCommit";
+import { useElementSize } from "../lib/useElementSize";
 import type { AssetEntry, AssetMetadataDto, AssetUsageDto } from "../protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -716,12 +717,16 @@ export function AssetsPanel() {
   const shownUsages = pendingDelete?.usages.slice(0, MAX_USAGE_LINES) ?? [];
   const extraUsages = (pendingDelete?.usages.length ?? 0) - shownUsages.length;
 
+  // The grid area's width drives the Details pane: docked narrow (e.g. on the right) it moves to
+  // the bottom so a 256px side pane never swallows the grid. Seed wide (right) for the first paint.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const gridSize = useElementSize(gridRef);
+  const detailOrientation: "right" | "bottom" =
+    gridSize.width > 0 && gridSize.width < 480 ? "bottom" : "right";
+
   return (
     <div className="flex h-full min-h-0 flex-col" data-asset-panel="true">
       <div className="flex h-10 flex-none items-center gap-1 border-b border-border px-3">
-        <span className="mr-1 flex-none text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Assets
-        </span>
         <Button
           type="button"
           size="icon-xs"
@@ -830,6 +835,7 @@ export function AssetsPanel() {
           <ContextMenu modal={false}>
             <ContextMenuTrigger asChild>
               <div
+                ref={gridRef}
                 className="h-full min-h-0"
                 // Resolve the tile under a right-click into the ref before Radix
                 // opens the one shared menu; the menu items read it at open time.
@@ -900,7 +906,7 @@ export function AssetsPanel() {
               />
             </ContextMenuContent>
           </ContextMenu>
-          <AssetDetailOverlay />
+          <AssetDetailOverlay orientation={detailOrientation} />
         </ResizablePanel>
       </ResizablePanelGroup>
       <Dialog
@@ -1100,7 +1106,7 @@ function GridContextMenuItems({
 /// selection to a primitive (the lone asset id or null), and the marquee gate keeps
 /// it closed while a sweep flips the selection through "exactly one" — it opens
 /// once, on release.
-function AssetDetailOverlay() {
+function AssetDetailOverlay({ orientation }: { orientation: "right" | "bottom" }) {
   logRender("AssetDetailOverlay");
   const detailAssetId = useEditorStore((s) =>
     !s.assetMarqueeActive && s.selectedAssetIds.size === 1 && s.selectedFolderPaths.size === 0
@@ -1136,6 +1142,7 @@ function AssetDetailOverlay() {
     <AssetMetadataPanel
       metadata={metadata}
       open={detailAssetId !== null}
+      orientation={orientation}
       onClose={() => setAssetSelection([], [])}
     />
   );

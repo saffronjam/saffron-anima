@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import type { AssetMetadataDto } from "../protocol";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
@@ -39,20 +40,30 @@ function Row({ label, value }: { label: string; value: string }) {
 export function AssetMetadataPanel({
   metadata,
   open,
+  orientation,
   onClose,
 }: {
   metadata: AssetMetadataDto | null;
   open: boolean;
+  orientation: "right" | "bottom";
   onClose(): void;
 }) {
   if (!open) {
     return null;
   }
   return (
-    // Fade, not slide: a slide-in overflows the grid's right edge mid-animation and
-    // flashes a horizontal scrollbar. The body scrolls inside its own ScrollArea so
-    // tall metadata never overflows the overlay into the grid's scroll context.
-    <div className="absolute inset-y-0 right-0 z-20 flex w-64 flex-col border-l border-border bg-background shadow-lg duration-200 ease-out animate-in fade-in">
+    // Fade, not slide: a slide-in overflows the grid edge mid-animation and flashes a scrollbar.
+    // The body scrolls inside its own ScrollArea so tall metadata never overflows into the grid's
+    // scroll context. Orientation follows the grid's aspect — a side pane when wide, a bottom pane
+    // when docked narrow, so a fixed-width side pane never swallows a narrow grid.
+    <div
+      className={cn(
+        "absolute z-20 flex flex-col border-border bg-background shadow-lg duration-200 ease-out animate-in fade-in",
+        orientation === "bottom"
+          ? "inset-x-0 bottom-0 h-56 border-t"
+          : "inset-y-0 right-0 w-64 border-l",
+      )}
+    >
       <div className="flex h-8 flex-none items-center justify-between border-b border-border px-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Details
