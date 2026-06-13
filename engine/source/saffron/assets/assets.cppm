@@ -54,6 +54,7 @@ export namespace se
     struct RenderSceneOptions
     {
         bool showEditorCameraModels = false;
+        bool showGrid = false;  // the infinite analytic ground grid (debug overlay)
     };
 
     struct ThumbnailWorker;  // async thumbnail generation; defined at the foot of this module
@@ -5883,6 +5884,7 @@ return {0}
         // Screen-space passes (G-buffer/GTAO/contact/SSGI) use the scene's view/proj + the
         // directional light direction (for contact shadows).
         setSsaoCamera(renderer, view, proj, lightDir);
+        setShowGrid(renderer, options.showGrid);
 
         if (options.showEditorCameraModels)
         {
