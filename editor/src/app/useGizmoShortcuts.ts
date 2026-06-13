@@ -38,7 +38,8 @@ function logRejected(action: string, err: unknown): void {
 }
 
 /// True when the active element is a text-entry control, so shortcuts must not fire.
-function isTextEntryFocused(): boolean {
+/// Shared with the undo/redo shortcut hook (one definition for the text-entry guard).
+export function isTextEntryFocused(): boolean {
   const el = document.activeElement;
   if (!el || !(el instanceof HTMLElement)) {
     return false;

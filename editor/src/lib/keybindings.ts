@@ -26,6 +26,8 @@ export type CommandId =
   | "gizmo.scale"
   | "camera.focus"
   | "selection.deselect"
+  | "edit.undo"
+  | "edit.redo"
   | "hierarchy.delete"
   | "assets.delete"
   | "camera.flyForward"
@@ -85,6 +87,22 @@ export const COMMANDS: readonly CommandDef[] = [
     category: "Selection",
     kind: "press",
     default: "escape",
+    scope: "global",
+  },
+  {
+    id: "edit.undo",
+    label: "Undo",
+    category: "Edit",
+    kind: "press",
+    default: "ctrl+z",
+    scope: "global",
+  },
+  {
+    id: "edit.redo",
+    label: "Redo",
+    category: "Edit",
+    kind: "press",
+    default: "ctrl+shift+z",
     scope: "global",
   },
   {
