@@ -8,10 +8,16 @@
 /// right/bottom regions during a torn drag so a panel can be dropped back into them.
 import { useEffect } from "react";
 import { useEditorStore } from "../state/store";
-import { isLeaf } from "../state/dockLayout";
 import { DockRoot } from "@/components/dock/DockRoot";
-import { useDockDrag } from "@/components/dock/dockDrag";
+import { RevealBands, type RevealBand } from "@/components/dock/RevealBands";
 import { logRender } from "../lib/renderLog";
+
+/// The empty Scene edge regions that accept a torn tab while collapsed (the persistent
+/// right/bottom docks).
+const SCENE_REVEAL_BANDS: RevealBand[] = [
+  { leafId: "leaf:right", edge: "right" },
+  { leafId: "leaf:bottom", edge: "bottom" },
+];
 
 export function Layout() {
   logRender("Layout");
@@ -29,47 +35,10 @@ export function Layout() {
 
   return (
     <div className={`relative flex min-h-0 min-w-0 flex-1 ${playRing}`}>
-      <RevealBands />
+      <RevealBands space="scene" bands={SCENE_REVEAL_BANDS} />
       <div className="min-h-0 min-w-0 flex-1">
         <DockRoot space="scene" />
       </div>
     </div>
-  );
-}
-
-/// During a torn dock drag, thin edge bands stand in for the right/bottom regions while they
-/// are empty (and thus collapsed) — dropping there docks the tab into the well-known
-/// persistent leaf (which always exists in the model), so the region re-expands. The bands
-/// carry `data-dock-leaf` so the drag registry picks them up like any mounted leaf.
-function RevealBands() {
-  const dragging = useDockDrag() !== null;
-  const rightEmpty = useEditorStore((s) => {
-    const leaf = s.dockLayouts.scene.nodes["leaf:right"];
-    return isLeaf(leaf) && leaf.tabs.length === 0;
-  });
-  const bottomEmpty = useEditorStore((s) => {
-    const leaf = s.dockLayouts.scene.nodes["leaf:bottom"];
-    return isLeaf(leaf) && leaf.tabs.length === 0;
-  });
-  if (!dragging) {
-    return null;
-  }
-  return (
-    <>
-      {rightEmpty && (
-        <div
-          data-dock-leaf="leaf:right"
-          data-dock-accepts-splits="false"
-          className="pointer-events-none absolute right-0 top-0 z-20 h-full w-10 border border-dashed border-primary/40 bg-primary/5"
-        />
-      )}
-      {bottomEmpty && (
-        <div
-          data-dock-leaf="leaf:bottom"
-          data-dock-accepts-splits="false"
-          className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 h-10 border border-dashed border-primary/40 bg-primary/5"
-        />
-      )}
-    </>
   );
 }
