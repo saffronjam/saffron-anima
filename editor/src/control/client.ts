@@ -290,6 +290,15 @@ export const client = {
   exitAssetPreview(): Promise<PlayStateResult> {
     return call("exit-asset-preview");
   },
+  /// Park the active preview (restore the authored scene) but keep it alive, so returning to the asset
+  /// tab resumes instantly with no re-spawn. Used when the asset tab loses focus to another tab.
+  suspendAssetPreview(): Promise<PlayStateResult> {
+    return call("suspend-asset-preview");
+  },
+  /// Un-park a suspended preview: restore its orbit camera + selection. Used when the asset tab regains focus.
+  resumeAssetPreview(): Promise<PlayStateResult> {
+    return call("resume-asset-preview");
+  },
   /// The previewed model's line-skeleton overlay toggles (master show, per-joint axes, joint size).
   setSkeletonOverlay(opts: {
     show?: boolean;
@@ -734,6 +743,11 @@ export const client = {
   /// Park/unpark the subsurface (a modal or another tab owns the region).
   setViewportHidden(hidden: boolean): Promise<void> {
     return invoke<void>("set_viewport_hidden", { hidden });
+  },
+  /// The presenter's monotonic count of frames the compositor has displayed. Poll it after a resize to
+  /// lift the resize mask only once a fresh frame at the new size has actually landed.
+  viewportPresentedCount(): Promise<number> {
+    return invoke<number>("viewport_presented_count");
   },
   quitEngine(): Promise<void> {
     return invoke<void>("quit_engine");

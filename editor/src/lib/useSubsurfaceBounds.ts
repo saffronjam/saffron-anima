@@ -3,14 +3,15 @@
 /// (one subsurface, one presenter in wayland_viewport.rs), but the EMITTER is not: any component may
 /// call set_viewport_bounds, and a degenerate (<=0) rect no-ops via the computeBounds null guard.
 ///
-/// INVARIANT — at most one host is non-degenerate at a time, so no arbitration/locking is needed: the
-/// dock viewport host is 0x0 whenever a non-scene tab is active (App.tsx parks it via viewportHidden +
-/// the panel collapses), and the asset workspace only mounts while its tab is active (App.tsx
-/// conditionally mounts/unmounts workspaces). Two emitters therefore never both drive the subsurface.
+/// INVARIANT — at most one host drives the subsurface at a time, so no arbitration/locking is needed:
+/// the dock viewport host is 0x0 whenever a non-scene tab is active (App.tsx parks it via viewportHidden
+/// + the panel collapses), and the asset workspace — though kept mounted across tab switches — passes
+/// `enabled: false` whenever its tab isn't active. Two emitters therefore never both drive the subsurface.
 import { useEffect, type RefObject } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { client, type ViewportBounds } from "../control/client";
 import { onLayoutSettled } from "../app/layoutBus";
+import { waitForFreshFrame } from "./waitForFreshFrame";
 
 /// Resize-end commit debounce: after the last layout/resize change settles, send one final exact
 /// bounds — this is the tier that also resizes the engine's render target (expensive offscreen
@@ -100,10 +101,18 @@ export function useSubsurfaceBounds(
     const scheduleEndCommit = (force = false): void => {
       if (debounceTimer !== null) {
         clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+      // A forced settle (tab-show / layout-settled) resizes immediately so the reveal isn't delayed by
+      // the drag-coalescing debounce — the consumer's mask then lifts on the next fresh frame. Live drag
+      // ticks still debounce via the non-forced path.
+      if (force) {
+        void commit(true, true);
+        return;
       }
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
-        void commit(true, force);
+        void commit(true, false);
       }, RESIZE_END_DEBOUNCE_MS);
     };
 
@@ -127,20 +136,18 @@ export function useSubsurfaceBounds(
       scheduleEndCommit();
     };
 
-    // The first forced commit resizes the engine's render target at the host's settled size; once it
-    // lands (plus one present at the new size, via the double-rAF) the viewport is ready to reveal.
-    void commit(true, true).then(() => {
+    // The first forced commit resizes the engine's render target at the host's settled size; reveal the
+    // viewport only once the presenter has actually DISPLAYED a fresh frame at the new size (not after a
+    // timer guess), so the resize never flashes the stretched old frame through the mask.
+    void commit(true, true).then(async () => {
       if (cancelled || settledFired || !onSettled) {
         return;
       }
       settledFired = true;
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          if (!cancelled) {
-            onSettled();
-          }
-        }),
-      );
+      await waitForFreshFrame();
+      if (!cancelled) {
+        onSettled();
+      }
     });
     const observer = new ResizeObserver(onGeometryChange);
     observer.observe(el);

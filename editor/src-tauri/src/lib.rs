@@ -460,6 +460,13 @@ fn set_viewport_hidden(
     Ok(())
 }
 
+/// The presenter's monotonic count of frames the compositor has actually displayed. The UI polls this
+/// after a resize to lift its mask only once a fresh frame at the new size has landed (no timer guess).
+#[tauri::command]
+fn viewport_presented_count(state: State<'_, EditorState>) -> u32 {
+    state.viewport.presented_count()
+}
+
 #[tauri::command]
 fn quit_engine(state: State<'_, EditorState>) -> Result<(), String> {
     teardown(&state);
@@ -715,6 +722,7 @@ pub fn run() {
             start_engine,
             set_viewport_bounds,
             set_viewport_hidden,
+            viewport_presented_count,
             quit_engine,
             engine_alive,
             app_data_info,

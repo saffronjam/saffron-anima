@@ -7,7 +7,7 @@
 use std::ffi::{c_void, CString};
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -54,6 +54,7 @@ pub struct ViewportShared {
     offset: AtomicU64, // packed logical origin of the webview within the toplevel surface
     window: AtomicU64, // packed logical toplevel size (the backdrop stretches to it)
     hidden: AtomicBool,
+    presented: AtomicU32, // monotonic count of frames the compositor actually displayed
 }
 
 impl ViewportShared {
@@ -64,6 +65,12 @@ impl ViewportShared {
 
     pub fn set_hidden(&self, hidden: bool) {
         self.hidden.store(hidden, Ordering::Relaxed);
+    }
+
+    /// Frames presented (displayed) so far — the UI polls this to detect that a fresh frame at a new
+    /// size actually landed, so it can lift a resize mask instead of guessing with a timer.
+    pub fn presented_count(&self) -> u32 {
+        self.presented.load(Ordering::Relaxed)
     }
 }
 
@@ -120,6 +127,7 @@ struct State {
     globals: Vec<(u32, String, u32)>,
     frame_pending: bool,
     stats: PresentationStats,
+    shared: Option<Arc<ViewportShared>>, // mirror presented frames into the shared counter the UI polls
 }
 
 impl Dispatch<WlRegistry, ()> for State {
@@ -177,6 +185,9 @@ impl Dispatch<WpPresentationFeedback, ()> for State {
             wp_presentation_feedback::Event::Presented {
                 refresh, seq_hi, seq_lo, flags, ..
             } => {
+                if let Some(shared) = &state.shared {
+                    shared.presented.fetch_add(1, Ordering::Relaxed);
+                }
                 let stats = &mut state.stats;
                 let seq = ((seq_hi as u64) << 32) | seq_lo as u64;
                 stats.presented += 1;
@@ -331,6 +342,7 @@ fn run(
 
     let registry = conn.display().get_registry(&qh, ());
     let mut state = State::default();
+    state.shared = Some(shared.clone());
     queue.roundtrip(&mut state).map_err(|err| format!("registry roundtrip: {err}"))?;
 
     let find = |wanted: &str| -> Option<(u32, u32)> {
