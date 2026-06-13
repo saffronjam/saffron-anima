@@ -8,6 +8,7 @@
 /// that rewrites the full bag. A write optimistically folds the new value in (and the
 /// echoed result) so the control reflects the change at once; the reconcile poll re-reads
 /// the full bag right after.
+import { useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
@@ -122,8 +123,26 @@ export function RenderPanel() {
     }
   };
 
+  // Render settings persist with the project, so their edits are scene-tab undoable. A
+  // toggle/AA records inline (discrete); exposure scrubbing records one entry per gesture.
+  const recordRender = (
+    label: string,
+    undo: () => Promise<unknown>,
+    redo: () => Promise<unknown>,
+  ): void => {
+    useEditorStore.getState().pushEdit({ label, undo, redo }, "scene");
+  };
+
   const onAa = (mode: AaMode): void => {
+    const prior = useEditorStore.getState().renderStats?.aa ?? "off";
     optimistic({ aa: mode });
+    if (prior !== mode) {
+      recordRender(
+        "Anti-aliasing",
+        () => client.setAa(prior),
+        () => client.setAa(mode),
+      );
+    }
     void client
       .setAa(mode)
       .then((res) => optimistic({ aa: res.aa }))
@@ -132,12 +151,20 @@ export function RenderPanel() {
 
   const onToggle = (
     field: keyof RenderStats,
+    label: string,
     set: (on: boolean) => Promise<unknown>,
     next: boolean,
   ): void => {
     const cur = useEditorStore.getState().renderStats;
-    const previous = cur ? cur[field] : next;
+    const previous = cur ? cur[field] === true : !next;
     optimistic({ [field]: next } as Partial<RenderStats>);
+    if (previous !== next) {
+      recordRender(
+        label,
+        () => set(previous),
+        () => set(next),
+      );
+    }
     void set(next)
       .then((res) => {
         const echoed = (res as Record<string, unknown>)[field];
@@ -151,7 +178,40 @@ export function RenderPanel() {
       });
   };
 
+  // Exposure scrub: capture the prior at drag start, record once at drag end. A typed
+  // edit (no gesture) records inline.
+  const exposurePrior = useRef<number | null>(null);
+  const onExposureDragStart = (): void => {
+    exposurePrior.current = useEditorStore.getState().renderStats?.exposureEv ?? 0;
+    setDragActive(true);
+  };
+  const onExposureDragEnd = (): void => {
+    setDragActive(false);
+    const prior = exposurePrior.current;
+    exposurePrior.current = null;
+    if (prior === null) {
+      return;
+    }
+    const after = useEditorStore.getState().renderStats?.exposureEv ?? 0;
+    if (prior !== after) {
+      recordRender(
+        "Exposure",
+        () => client.setExposure(prior),
+        () => client.setExposure(after),
+      );
+    }
+  };
   const onExposure = (ev: number): void => {
+    if (exposurePrior.current === null) {
+      const prior = useEditorStore.getState().renderStats?.exposureEv ?? 0;
+      if (prior !== ev) {
+        recordRender(
+          "Exposure",
+          () => client.setExposure(prior),
+          () => client.setExposure(ev),
+        );
+      }
+    }
     optimistic({ exposureEv: ev });
     void client
       .setExposure(ev)
@@ -204,7 +264,7 @@ export function RenderPanel() {
                 checked={cfg[t.field as keyof typeof cfg] === true}
                 disabled={disabled}
                 tooltip={tooltip}
-                onCheckedChange={(next) => onToggle(t.field, t.set, next)}
+                onCheckedChange={(next) => onToggle(t.field, t.label, t.set, next)}
               />
             );
           })}
@@ -219,8 +279,8 @@ export function RenderPanel() {
               max={8}
               step={0.05}
               onChange={onExposure}
-              onDragStart={() => setDragActive(true)}
-              onDragEnd={() => setDragActive(false)}
+              onDragStart={onExposureDragStart}
+              onDragEnd={onExposureDragEnd}
             />
           </div>
         </div>

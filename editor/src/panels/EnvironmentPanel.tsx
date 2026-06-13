@@ -23,6 +23,7 @@ import { NumberDrag } from "../components/NumberDrag";
 import { ColorField } from "../components/ColorField";
 import { AssetPicker } from "../components/AssetPicker";
 import type { Environment, Vec3 } from "../protocol";
+import { humanizeFieldName } from "@/lib/humanize";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -147,14 +148,83 @@ export function EnvironmentPanel() {
 
   const env = environment;
 
-  // Optimistic local write + coalesced send of the one changed field.
+  // Undo capture: a gesture touches exactly one field, captured on its first tick and
+  // recorded as one entry at drag end; a discrete edit records inline. The shared drag
+  // bracket needs no per-field binding because `patch`/`patchAtmos` carry the field.
+  const gesturing = useRef(false);
+  const envGesture = useRef<{ atmos: boolean; field: string; prior: unknown } | null>(null);
+
+  // Record one scene-tab undo entry for an environment / atmosphere field (scene-global,
+  // no selection); a no-op is dropped. Replay re-sends the same merge command.
+  const recordEnvEdit = (field: keyof Environment, prior: unknown, after: unknown): void => {
+    if (JSON.stringify(prior) === JSON.stringify(after)) {
+      return;
+    }
+    useEditorStore.getState().pushEdit(
+      {
+        label: humanizeFieldName(field),
+        undo: () => client.setEnvironment({ [field]: prior } as Partial<Environment>),
+        redo: () => client.setEnvironment({ [field]: after } as Partial<Environment>),
+      },
+      "scene",
+    );
+  };
+  const recordAtmosEdit = (field: keyof Atmosphere, prior: unknown, after: unknown): void => {
+    if (JSON.stringify(prior) === JSON.stringify(after)) {
+      return;
+    }
+    useEditorStore.getState().pushEdit(
+      {
+        label: humanizeFieldName(field),
+        undo: () => client.setAtmosphere({ [field]: prior } as Partial<Atmosphere>),
+        redo: () => client.setAtmosphere({ [field]: after } as Partial<Atmosphere>),
+      },
+      "scene",
+    );
+  };
+
+  // Optimistic local write + coalesced send of the one changed field. A discrete edit
+  // records immediately; a gesture captures its field + prior on the first tick.
   const patch = (field: keyof Environment, value: Environment[keyof Environment]): void => {
+    if (gesturing.current) {
+      if (envGesture.current === null) {
+        envGesture.current = { atmos: false, field, prior: structuredClone(env[field]) };
+      }
+    } else {
+      recordEnvEdit(field, structuredClone(env[field]), structuredClone(value));
+    }
     setEnvironment({ ...env, [field]: value } as Environment);
     coalescerFor(field).push({ [field]: value } as Partial<Environment>);
   };
 
-  const onDragStart = (): void => setDragActive(true);
-  const onDragEnd = (): void => setDragActive(false);
+  const onDragStart = (): void => {
+    setDragActive(true);
+    gesturing.current = true;
+    envGesture.current = null;
+  };
+  const onDragEnd = (): void => {
+    setDragActive(false);
+    gesturing.current = false;
+    const g = envGesture.current;
+    envGesture.current = null;
+    const live = useEditorStore.getState().environment;
+    if (!g || !live) {
+      return;
+    }
+    if (g.atmos) {
+      recordAtmosEdit(
+        g.field as keyof Atmosphere,
+        g.prior,
+        structuredClone(live.atmosphere[g.field as keyof Atmosphere]),
+      );
+    } else {
+      recordEnvEdit(
+        g.field as keyof Environment,
+        g.prior,
+        structuredClone(live[g.field as keyof Environment]),
+      );
+    }
+  };
 
   const onVecChannel =
     (field: "clearColor" | "ambientColor") =>
@@ -168,6 +238,13 @@ export function EnvironmentPanel() {
   // re-bakes the LUT chain next frame; the merged environment round-trips back.
   const atmos = env.atmosphere;
   const patchAtmos = <K extends keyof Atmosphere>(field: K, value: Atmosphere[K]): void => {
+    if (gesturing.current) {
+      if (envGesture.current === null) {
+        envGesture.current = { atmos: true, field, prior: structuredClone(atmos[field]) };
+      }
+    } else {
+      recordAtmosEdit(field, structuredClone(atmos[field]), structuredClone(value));
+    }
     setEnvironment({ ...env, atmosphere: { ...atmos, [field]: value } } as Environment);
     atmosCoalescerFor(field).push({ [field]: value } as Partial<Atmosphere>);
   };
