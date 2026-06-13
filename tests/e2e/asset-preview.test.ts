@@ -218,6 +218,41 @@ test("set-asset-preview-options toggles the floor slab live", async () => {
   await engine.call("exit-asset-preview");
 });
 
+test("suspend routes activeScene back to the authored scene; resume returns to the preview", async () => {
+  await engine.call("exit-asset-preview");
+  const authoredBefore = await listEntityIds();
+
+  await engine.call("enter-asset-preview", { asset: legModel });
+  const previewEntities = await listEntityIds();
+  expect(previewEntities).not.toEqual(authoredBefore); // the preview scene is a different entity set
+
+  // Suspend parks the preview without dropping it — activeScene routes to the authored scene again.
+  await engine.call("suspend-asset-preview");
+  expect(await listEntityIds()).toEqual(authoredBefore);
+  // previewAsset stays set (the preview is alive, just parked), so resume can restore it.
+  expect((await engine.call<PlayStateResult>("get-play-state")).previewAsset).toBe(legModel);
+
+  await engine.call("resume-asset-preview");
+  expect(await listEntityIds()).toEqual(previewEntities); // back to the same preview — no re-spawn
+
+  await engine.call("exit-asset-preview");
+  expect(await listEntityIds()).toEqual(authoredBefore);
+});
+
+test("an enter -> suspend -> resume -> exit round-trip leaves project.json byte-identical", async () => {
+  await engine.call("exit-asset-preview");
+  await engine.call("save-project");
+  const before = readFileSync(projectPath, "utf8");
+
+  await engine.call("enter-asset-preview", { asset: legModel });
+  await engine.call("suspend-asset-preview");
+  await engine.call("resume-asset-preview");
+  await engine.call("exit-asset-preview");
+
+  await engine.call("save-project");
+  expect(readFileSync(projectPath, "utf8")).toBe(before);
+});
+
 test("the engine logged no validation errors", async () => {
   await engine.settle();
   expect(engine.validationErrors()).toEqual([]);
