@@ -77,6 +77,12 @@ export namespace se
     // Lets every command accept either `--name value` or a bare positional.
     auto positionalOr(const json& params, const std::string& name, std::size_t index) -> json;
     auto asString(const json& value, std::string fallback) -> std::string;
+
+    // The render-view wire string <-> ViewId mapping, the single place the control layer translates a
+    // view name (set-active-view / set-viewport-size). "scene" -> Scene, "assetPreview" -> AssetPreview.
+    auto viewIdFromWire(const std::string& wire) -> Result<ViewId>;
+    auto viewIdWire(ViewId view) -> std::string;
+
     auto resolveEntity(EngineContext& ctx, const json& params) -> Result<Entity>;
     auto entityRefDto(Scene& scene, Entity entity) -> EntityRef;
     auto entityRef(Scene& scene, Entity entity) -> json;

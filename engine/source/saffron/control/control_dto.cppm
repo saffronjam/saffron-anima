@@ -598,6 +598,7 @@ export namespace se
 
     struct SetViewportSizeParams
     {
+        std::optional<std::string> view;  // "scene" (default) | "assetPreview" — which view to resize
         std::optional<i32> width;
         std::optional<i32> height;
     };
@@ -606,6 +607,16 @@ export namespace se
     {
         i32 width;
         i32 height;
+    };
+
+    struct SetActiveViewParams
+    {
+        std::string view;  // "scene" | "assetPreview" — the view the engine renders + publishes
+    };
+
+    struct SetActiveViewResult
+    {
+        std::string view;  // the now-active view, echoed back
     };
 
     struct ProjectInfoDto
@@ -1652,6 +1663,7 @@ export namespace se
     auto dtoToJson(const SetDepthPrepassResult& value) -> Json;
     auto dtoToJson(const ViewportNativeInfoResult& value) -> Json;
     auto dtoToJson(const SetViewportSizeResult& value) -> Json;
+    auto dtoToJson(const SetActiveViewResult& value) -> Json;
     auto dtoToJson(const ProjectInfoDto& value) -> Json;
     auto dtoToJson(const ImportModelResult& value) -> Json;
     auto dtoToJson(const ScanAssetsResult& value) -> Json;
@@ -1742,6 +1754,7 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<CreateScriptParams>) -> Result<CreateScriptParams>;
     auto parseDto(const Json& params, DtoTag<ToggleParams>) -> Result<ToggleParams>;
     auto parseDto(const Json& params, DtoTag<SetViewportSizeParams>) -> Result<SetViewportSizeParams>;
+    auto parseDto(const Json& params, DtoTag<SetActiveViewParams>) -> Result<SetActiveViewParams>;
     auto parseDto(const Json& params, DtoTag<SetGiParams>) -> Result<SetGiParams>;
     auto parseDto(const Json& params, DtoTag<NewProjectParams>) -> Result<NewProjectParams>;
     auto parseDto(const Json& params, DtoTag<PathParams>) -> Result<PathParams>;

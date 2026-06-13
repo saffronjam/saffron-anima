@@ -388,8 +388,9 @@ namespace se
             f32 minY = 0.0f;
         };
 
-        // The previewed model's world-space bounding sphere, from its mesh's rest-pose AABB. Works for a
-        // skinned-mesh root (SkinnedMeshComponent) or a static-mesh root (MeshComponent) alike.
+        // The previewed model's world-space bounding sphere, from its mesh's rest-pose AABB. The mesh
+        // lives on the model's mesh entity — the root itself for a static model, or a descendant of the
+        // container root for a skinned model.
         auto computePreviewBounds(Scene& scene, AssetServer& assets, Renderer& renderer, Entity root) -> PreviewBounds
         {
             PreviewBounds out;
@@ -397,24 +398,25 @@ namespace se
             {
                 return out;
             }
+            const Entity meshEntity = animatableDescendant(scene, root);
             Uuid meshId{ 0 };
-            if (hasComponent<SkinnedMeshComponent>(scene, root))
+            if (hasComponent<SkinnedMeshComponent>(scene, meshEntity))
             {
-                meshId = getComponent<SkinnedMeshComponent>(scene, root).mesh;
+                meshId = getComponent<SkinnedMeshComponent>(scene, meshEntity).mesh;
             }
-            else if (hasComponent<MeshComponent>(scene, root))
+            else if (hasComponent<MeshComponent>(scene, meshEntity))
             {
-                meshId = getComponent<MeshComponent>(scene, root).mesh;
+                meshId = getComponent<MeshComponent>(scene, meshEntity).mesh;
             }
             updateWorldTransforms(scene);
             auto gpu = meshId.value != 0 ? loadMeshAsset(assets, renderer, meshId) : Ref<GpuMesh>{};
             if (!gpu)
             {
-                out.center = worldTranslation(scene, root);
+                out.center = worldTranslation(scene, meshEntity);
                 out.minY = out.center.y - 1.0f;
                 return out;
             }
-            const glm::mat4 world = worldMatrix(scene, root);
+            const glm::mat4 world = worldMatrix(scene, meshEntity);
             glm::vec3 lo{ 0.0f };
             glm::vec3 hi{ 0.0f };
             for (int c = 0; c < 8; c = c + 1)
@@ -523,16 +525,16 @@ namespace se
             {
                 return;
             }
-            const bool wasSuspended = ctx.previewSuspended;
+            const bool wasActive = ctx.previewActiveView;
             ctx.previewScene.reset();
             ctx.previewAsset = Uuid{ 0 };
             ctx.previewRootEntity = Entity{ entt::null };
             ctx.previewFloorEntity = Entity{ entt::null };
             ctx.previewBoneByNode.clear();
-            ctx.previewSuspended = false;
-            // While suspended the authored fly-cam/overlay/selection are already live (suspend restored
-            // them), so only an ACTIVE exit restores the enter-time stash.
-            if (!wasSuspended)
+            ctx.previewActiveView = false;
+            // With the scene view active the authored fly-cam/overlay/selection are already live (the view
+            // switch restored them), so only exiting from the active preview view restores the enter stash.
+            if (wasActive)
             {
                 ctx.camera = ctx.savedCamera;
                 ctx.skeletonOverlay = ctx.savedOverlay;
@@ -546,43 +548,45 @@ namespace se
             ctx.animationVersion += 1;
         }
 
-        // Park the active preview: restore the authored fly-cam/overlay/selection (so the scene tab shows
-        // the authored scene) while keeping previewScene alive for an instant resume. activeScene routes
-        // back to the authored scene and previewing() clears, so the scene is editable again.
-        void suspendAssetPreview(SceneEditContext& ctx)
+        // Make the scene view active while a preview scene is alive: park the preview orbit camera and
+        // restore the authored fly-cam/overlay/selection (so the scene view shows the authored scene).
+        // activeScene routes back to the authored scene and previewing() clears, so it is editable again.
+        // A no-op unless the preview is currently the active view.
+        void deactivatePreviewView(SceneEditContext& ctx)
         {
-            if (!ctx.previewScene || ctx.previewSuspended)
+            if (!ctx.previewScene || !ctx.previewActiveView)
             {
                 return;
             }
-            ctx.suspendedCamera = ctx.camera;  // park the preview orbit
+            ctx.parkedPreviewCamera = ctx.camera;  // park the preview orbit
             ctx.camera = ctx.savedCamera;
             ctx.skeletonOverlay = ctx.savedOverlay;
             const Entity restore = ctx.savedSelection.handle != entt::null && valid(ctx.scene, ctx.savedSelection)
                                        ? ctx.savedSelection
                                        : Entity{ entt::null };
             setSelection(ctx, restore);
-            ctx.previewSuspended = true;
+            ctx.previewActiveView = false;
             ctx.sceneVersion += 1;
             ctx.animationVersion += 1;
         }
 
-        // Resume a suspended preview: re-stash the authored view (the user may have moved the fly-cam or
-        // changed selection on the scene tab), restore the parked preview orbit + overlay, and reselect
-        // the previewed root. No re-spawn — the preview scene persisted.
-        void resumeAssetPreview(SceneEditContext& ctx)
+        // Make the preview view active again: re-stash the authored view (the user may have moved the
+        // fly-cam or changed selection while the scene view was active), restore the parked preview orbit
+        // + overlay, and reselect the previewed root. No re-spawn — the preview scene persisted. A no-op
+        // unless a preview scene is alive but not currently active.
+        void activatePreviewView(SceneEditContext& ctx)
         {
-            if (!ctx.previewScene || !ctx.previewSuspended)
+            if (!ctx.previewScene || ctx.previewActiveView)
             {
                 return;
             }
             ctx.savedCamera = ctx.camera;
             ctx.savedSelection = ctx.selected;
             ctx.savedOverlay = ctx.skeletonOverlay;
-            ctx.camera = ctx.suspendedCamera;
+            ctx.camera = ctx.parkedPreviewCamera;
             ctx.skeletonOverlay.show = true;  // the preview forces the skeleton overlay on (mirrors enter)
             ctx.skeletonOverlay.highlightJoint = -1;
-            ctx.previewSuspended = false;
+            ctx.previewActiveView = true;
             setSelection(ctx, ctx.previewRootEntity);
             ctx.sceneVersion += 1;
             ctx.animationVersion += 1;
@@ -1108,17 +1112,21 @@ namespace se
                 {
                     return Err(root.error());
                 }
-                const bool rigged = hasComponent<SkinnedMeshComponent>(preview, *root);
-                if (!rigged && !hasComponent<MeshComponent>(preview, *root))
+                // A skinned model is a container root; its rig (SkinnedMesh/AnimationPlayer) sits on
+                // a descendant. Resolve it for the component lookups; a non-skinned model resolves to
+                // its own single mesh entity.
+                const Entity animatable = animatableDescendant(preview, *root);
+                const bool rigged = hasComponent<SkinnedMeshComponent>(preview, animatable);
+                if (!rigged && !hasComponent<MeshComponent>(preview, animatable))
                 {
                     return Err(std::format("model '{}' has no renderable mesh — re-import the asset", meta.name));
                 }
 
                 // Open-from-clip: that clip becomes the active clip; the model opens paused at the rest
                 // pose (previewInEdit off until the first transport action arms it — UE5's behavior).
-                if (entry->type == AssetType::Animation && hasComponent<AnimationPlayerComponent>(preview, *root))
+                if (entry->type == AssetType::Animation && hasComponent<AnimationPlayerComponent>(preview, animatable))
                 {
-                    AnimationPlayerComponent& player = getComponent<AnimationPlayerComponent>(preview, *root);
+                    AnimationPlayerComponent& player = getComponent<AnimationPlayerComponent>(preview, animatable);
                     player.clip = entry->id;
                     player.time = 0.0f;
                     player.playing = false;
@@ -1133,7 +1141,7 @@ namespace se
                 // A static model has no skin: the bone table + boneByNode stay empty.
                 if (rigged)
                 {
-                    const SkinnedMeshComponent& skin = getComponent<SkinnedMeshComponent>(preview, *root);
+                    const SkinnedMeshComponent& skin = getComponent<SkinnedMeshComponent>(preview, animatable);
                     const std::vector<Uuid> boneUuids = skin.bones;
                     std::vector<i32> jointNodes;
                     if (auto it = meta.skin.find("joints"); it != meta.skin.end() && it->is_array())
@@ -1160,12 +1168,21 @@ namespace se
                 }
 
                 // Commit. Stash camera + selection + overlay prefs only on a fresh enter (a swap keeps
-                // the original authored stash, so exiting always lands back on the authored state).
+                // the original authored stash, so exiting always lands back on the authored state). A
+                // fresh enter also makes the preview the active view: route the renderer's active view to
+                // AssetPreview and flip previewActiveView so activeScene/previewing target it.
                 if (!previewing(ctx.sceneEdit))
                 {
                     ctx.sceneEdit.savedCamera = ctx.sceneEdit.camera;
                     ctx.sceneEdit.savedSelection = ctx.sceneEdit.selected;
                     ctx.sceneEdit.savedOverlay = ctx.sceneEdit.skeletonOverlay;
+                    ctx.sceneEdit.previewActiveView = true;
+                    // Seed the preview view's target to the current (scene) size so it renders immediately;
+                    // the editor may override it with set-viewport-size {assetPreview}. Read before the
+                    // switch, while the scene view is still active.
+                    setViewportDesiredSize(ctx.renderer, ViewId::AssetPreview, viewportWidth(ctx.renderer),
+                                           viewportHeight(ctx.renderer));
+                    setActiveView(ctx.renderer, ViewId::AssetPreview);
                 }
                 const Entity rootEntity = *root;
                 ctx.sceneEdit.previewScene.emplace(std::move(preview));
@@ -1192,7 +1209,13 @@ namespace se
             "exit-asset-preview — close the asset preview and restore the authored scene + camera",
             [](EngineContext& ctx, const EmptyParams&) -> Result<PlayStateResult>
             {
-                leaveAssetPreview(ctx.sceneEdit);  // no-op when not previewing (idempotent on tab close)
+                // Closing the active preview view returns the renderer to the scene view; a tab-close
+                // while the scene view was already active leaves the renderer untouched.
+                if (previewing(ctx.sceneEdit))
+                {
+                    setActiveView(ctx.renderer, ViewId::Scene);
+                }
+                leaveAssetPreview(ctx.sceneEdit);  // no-op when no preview is alive (idempotent on tab close)
                 return PlayStateResult{
                     playStateName(ctx.sceneEdit.playState),           static_cast<i32>(ctx.sceneEdit.playVersion),
                     static_cast<i32>(ctx.sceneEdit.sceneVersion),     ctx.sceneEdit.hadPrimaryCamera,
@@ -1200,33 +1223,38 @@ namespace se
                 };
             });
 
-        // Park/un-park the preview without dropping it, so the asset tab staying open across a tab switch
-        // resumes instantly (no re-spawn, the orbit camera is preserved). Both are idempotent no-ops when
-        // the state doesn't match.
-        registerCommand<EmptyParams, PlayStateResult>(
-            reg, "suspend-asset-preview",
-            "suspend-asset-preview — park the active preview (restore the authored scene; keep it for resume)",
-            [](EngineContext& ctx, const EmptyParams&) -> Result<PlayStateResult>
+        // Switch the active view the engine renders + publishes. Routes renderer.activeView (which selects
+        // the render target + shm publisher + temporal state) and, when a preview scene is alive, performs
+        // the scene/camera swap so activeScene + ctx.camera follow the chosen view: AssetPreview restores
+        // the preview orbit + previewed root + overlay; Scene parks the orbit and restores the authored
+        // fly-cam + selection. The swap is a no-op when no preview is alive (plain scene viewport).
+        registerCommand<SetActiveViewParams, SetActiveViewResult>(
+            reg, "set-active-view", "set-active-view {view} — switch the rendered view (scene | assetPreview)",
+            [](EngineContext& ctx, const SetActiveViewParams& params) -> Result<SetActiveViewResult>
             {
-                suspendAssetPreview(ctx.sceneEdit);
-                return PlayStateResult{
-                    playStateName(ctx.sceneEdit.playState),           static_cast<i32>(ctx.sceneEdit.playVersion),
-                    static_cast<i32>(ctx.sceneEdit.sceneVersion),     ctx.sceneEdit.hadPrimaryCamera,
-                    static_cast<i32>(ctx.sceneEdit.animationVersion), WireUuid{ ctx.sceneEdit.previewAsset.value }
-                };
-            });
-
-        registerCommand<EmptyParams, PlayStateResult>(
-            reg, "resume-asset-preview",
-            "resume-asset-preview — un-park a suspended preview (restore its orbit + selection)",
-            [](EngineContext& ctx, const EmptyParams&) -> Result<PlayStateResult>
-            {
-                resumeAssetPreview(ctx.sceneEdit);
-                return PlayStateResult{
-                    playStateName(ctx.sceneEdit.playState),           static_cast<i32>(ctx.sceneEdit.playVersion),
-                    static_cast<i32>(ctx.sceneEdit.sceneVersion),     ctx.sceneEdit.hadPrimaryCamera,
-                    static_cast<i32>(ctx.sceneEdit.animationVersion), WireUuid{ ctx.sceneEdit.previewAsset.value }
-                };
+                auto viewId = viewIdFromWire(params.view);
+                if (!viewId)
+                {
+                    return Err(viewId.error());
+                }
+                // Seed an unsized preview target from the current view size before switching, so a
+                // direct set-active-view assetPreview (no prior set-viewport-size) still renders.
+                const ViewTargets& previewView = ctx.renderer.views[static_cast<std::size_t>(ViewId::AssetPreview)];
+                if (*viewId == ViewId::AssetPreview && previewView.desiredWidth == 0)
+                {
+                    setViewportDesiredSize(ctx.renderer, ViewId::AssetPreview, viewportWidth(ctx.renderer),
+                                           viewportHeight(ctx.renderer));
+                }
+                setActiveView(ctx.renderer, *viewId);
+                if (*viewId == ViewId::AssetPreview)
+                {
+                    activatePreviewView(ctx.sceneEdit);
+                }
+                else
+                {
+                    deactivatePreviewView(ctx.sceneEdit);
+                }
+                return SetActiveViewResult{ viewIdWire(*viewId) };
             });
 
         // Preview-scene settings (UE5's Preview Scene Settings, v1 = Show Floor). Adds or removes the

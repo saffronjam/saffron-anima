@@ -242,23 +242,24 @@ export namespace se
         SkeletonOverlayOptions savedOverlay;      // overlay prefs stashed on enter (preview forces it on)
         bool previewShowFloor = true;             // the preview floor slab toggle (set-asset-preview-options)
         Entity previewFloorEntity{ entt::null };  // the spawned floor slab in previewScene (for the toggle)
-        // Suspend keeps the preview scene alive but makes activeScene route to the authored scene again
-        // (the asset tab is open but not active), so switching tab↔tab is instant — no re-spawn, the
-        // orbit camera is parked here and restored on resume. previewing() reads false while suspended,
-        // so the authored scene is fully editable.
-        bool previewSuspended = false;
-        SceneEditCamera suspendedCamera;  // the preview orbit fly-cam, parked while suspended
+        // True when the asset preview is the active view (set-active-view AssetPreview). The preview scene
+        // can stay alive while this is false (the asset tab is open but the scene view is active), so a
+        // view switch is instant — no re-spawn; the orbit camera is parked in parkedPreviewCamera and
+        // restored when the preview view becomes active again. activeScene routes to the preview only while
+        // this holds, and previewing() reads it, so the authored scene is fully editable when it is false.
+        bool previewActiveView = false;
+        SceneEditCamera parkedPreviewCamera;  // the preview orbit fly-cam, parked while the scene view is active
     };
 
     // Append to the bounded script-error ring, stamping seq + the current play tick.
     void pushScriptError(SceneEditContext& ctx, u64 entityUuid, std::string script, std::string message);
 
-    // The scene every consumer addresses: the asset preview while previewing, the play duplicate while
-    // playing/paused, the authored scene in Edit. Preview takes precedence (it is entered only from
-    // Edit). Nothing else may branch on playState/previewScene to pick a scene.
+    // The scene every consumer addresses: the asset preview while it is the active view, the play
+    // duplicate while playing/paused, the authored scene in Edit. Preview takes precedence (it is entered
+    // only from Edit). Nothing else may branch on playState/previewScene to pick a scene.
     inline auto activeScene(SceneEditContext& ctx) -> Scene&
     {
-        if (ctx.previewScene && !ctx.previewSuspended)
+        if (ctx.previewScene && ctx.previewActiveView)
         {
             return *ctx.previewScene;
         }
@@ -269,13 +270,14 @@ export namespace se
         return *ctx.playScene;
     }
 
-    // True while an asset preview is ACTIVE (entered and not suspended). Commands that mutate the
-    // authored scene or project must refuse while this holds — activeScene routes to the preview, so
-    // they would otherwise edit or render the wrong scene (and could leak preview state into a save). A
-    // suspended preview reads false: the authored scene is active again and fully editable.
+    // True while the asset preview is the ACTIVE view (entered and selected via set-active-view).
+    // Commands that mutate the authored scene or project must refuse while this holds — activeScene routes
+    // to the preview, so they would otherwise edit or render the wrong scene (and could leak preview state
+    // into a save). With the scene view active this reads false: the authored scene is active again and
+    // fully editable, even if a preview scene is kept alive in the background.
     inline auto previewing(const SceneEditContext& ctx) -> bool
     {
-        return ctx.previewScene.has_value() && !ctx.previewSuspended;
+        return ctx.previewScene.has_value() && ctx.previewActiveView;
     }
 
     // The payload dragged from an asset tile onto a component picker field.

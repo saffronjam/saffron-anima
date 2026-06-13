@@ -70,6 +70,24 @@ namespace se
         return fallback;
     }
 
+    auto viewIdFromWire(const std::string& wire) -> Result<ViewId>
+    {
+        if (wire == "scene")
+        {
+            return ViewId::Scene;
+        }
+        if (wire == "assetPreview")
+        {
+            return ViewId::AssetPreview;
+        }
+        return Err(std::format("unknown view '{}' (expected 'scene' or 'assetPreview')", wire));
+    }
+
+    auto viewIdWire(ViewId view) -> std::string
+    {
+        return view == ViewId::AssetPreview ? "assetPreview" : "scene";
+    }
+
     auto resolveEntity(EngineContext& ctx, const json& params) -> Result<Entity>
     {
         const json selector = positionalOr(params, "entity", 0);

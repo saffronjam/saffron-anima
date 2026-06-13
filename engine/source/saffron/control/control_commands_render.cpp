@@ -677,12 +677,17 @@ namespace se
 
         registerCommand<SetViewportSizeParams, SetViewportSizeResult>(
             reg, "set-viewport-size",
-            "set-viewport-size {width, height} — set the offscreen render size (device pixels)",
+            "set-viewport-size {view, width, height} — set a view's offscreen render size (device pixels)",
             [](EngineContext& ctx, const SetViewportSizeParams& params) -> Result<SetViewportSizeResult>
             {
+                auto view = viewIdFromWire(params.view.value_or("scene"));
+                if (!view)
+                {
+                    return Err(view.error());
+                }
                 const i32 width = std::max(1, params.width.value_or(static_cast<i32>(viewportWidth(ctx.renderer))));
                 const i32 height = std::max(1, params.height.value_or(static_cast<i32>(viewportHeight(ctx.renderer))));
-                setViewportDesiredSize(ctx.renderer, static_cast<u32>(width), static_cast<u32>(height));
+                setViewportDesiredSize(ctx.renderer, *view, static_cast<u32>(width), static_cast<u32>(height));
                 return SetViewportSizeResult{ width, height };
             });
     }

@@ -943,7 +943,17 @@ namespace se
         SetViewportSizeParams out;
 
         {
-            auto value = optionalField(params, "width", 0, true);
+            auto value = optionalField(params, "view", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readString(*value, "view");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.view = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "width", 1, true);
             if (value && !value->is_null())
             {
                 auto parsed = readI32(*value, "width");
@@ -953,7 +963,7 @@ namespace se
         }
 
         {
-            auto value = optionalField(params, "height", 1, true);
+            auto value = optionalField(params, "height", 2, true);
             if (value && !value->is_null())
             {
                 auto parsed = readI32(*value, "height");
@@ -2600,6 +2610,20 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<SetActiveViewParams>) -> Result<SetActiveViewParams>
+    {
+        SetActiveViewParams out;
+
+        {
+            auto value = requiredField(params, "view", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readString(**value, "view");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.view = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<CleanAssetsParams>) -> Result<CleanAssetsParams>
     {
         CleanAssetsParams out;
@@ -4073,6 +4097,13 @@ namespace se
         Json out = Json::object();
         out["index"] = value.index;
         out["entity"] = dtoToJson(value.entity);
+        return out;
+    }
+
+    auto dtoToJson(const SetActiveViewResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["view"] = value.view;
         return out;
     }
 
