@@ -23,6 +23,7 @@ import { errorText, notifyError } from "../lib/flash";
 import { Button } from "@/components/ui/button";
 import { DockRoot } from "@/components/dock/DockRoot";
 import { DockPanelsHost } from "@/components/dock/DockPanelsHost";
+import { RevealBands, type RevealBand } from "@/components/dock/RevealBands";
 import {
   AssetPreviewProvider,
   Preparing,
@@ -30,6 +31,14 @@ import {
 } from "./assetEditorPanels";
 import { useEditorStore } from "../state/store";
 import type { AssetModelResult } from "../protocol";
+
+/// The empty asset-editor edge regions that accept a torn tab while collapsed: the right dock and
+/// the bottom timeline strip (the persistent `aeRight` / `assetTimeline` leaves).
+const AE_REVEAL_BANDS: RevealBand[] = [
+  { leafId: "leaf:aeLeft", edge: "left" },
+  { leafId: "leaf:aeRight", edge: "right" },
+  { leafId: "leaf:aeBottom", edge: "bottom" },
+];
 
 /// Orbit drag sensitivity (degrees of yaw/pitch per CSS pixel) and zoom factor per wheel notch.
 const ORBIT_SENS_DEG_PER_PX = 0.4;
@@ -87,8 +96,6 @@ export function AssetEditorWorkspace({ assetId, active }: { assetId: string; act
   const [errorMessage, setErrorMessage] = useState("");
   const [model, setModel] = useState<AssetModelResult | null>(null);
   const [rootEntity, setRootEntity] = useState<string | null>(null);
-  // The viewport has resized + presented at the final pane size (masks the one resize behind the spinner).
-  const [viewportSettled, setViewportSettled] = useState(false);
   const [floor, setFloor] = useState(true);
   // Overlay toggles default on (the engine forces show=on while previewing); local mirror for the chips.
   const [showBones, setShowBones] = useState(true);
@@ -111,12 +118,9 @@ export function AssetEditorWorkspace({ assetId, active }: { assetId: string; act
   const rafId = useRef<number | null>(null);
   const lastFrameTs = useRef(0);
 
-  // Glue the single subsurface into this pane while this tab is ACTIVE and the layout is final (the host
-  // mounts with the correct panels), and lift the spinner after the first settled resize presents. When
-  // inactive (the tab is parked, preview suspended) the hook disables so the scene viewport drives the
-  // subsurface; re-activating re-runs the hook (a fresh resize + mask) for the resumed preview.
-  const onViewportSettled = useCallback(() => setViewportSettled(true), []);
-  useSubsurfaceBounds(hostRef, { enabled: active && ready, onSettled: onViewportSettled });
+  // Drive this pane's OWN "assetPreview" viewport surface (permanently sized to the pane). Gated on
+  // `active && ready` so a parked/loading pane emits nothing; App.tsx parks the surface when inactive.
+  useSubsurfaceBounds(hostRef, "assetPreview", { enabled: active && ready });
 
   // One coalesced set-camera in flight at a time (the serialized wire — never one call per frame tick).
   const cameraCoalescer = useMemo(
@@ -231,22 +235,11 @@ export function AssetEditorWorkspace({ assetId, active }: { assetId: string; act
     };
   }, [assetId]);
 
-  // Suspend/resume the preview as this tab loses/gains focus (the mount enters, the unmount exits). The
-  // engine keeps the preview scene alive across a suspend, so resuming is instant (no re-spawn) and the
-  // orbit camera is preserved. The first run is the mount itself (already entered) — skip it.
-  const firstActiveRun = useRef(true);
-  useEffect(() => {
-    if (firstActiveRun.current) {
-      firstActiveRun.current = false;
-      return;
-    }
-    if (active) {
-      setViewportSettled(false); // re-mask while the resumed preview resizes back into this pane
-      void client.resumeAssetPreview().catch((err: unknown) => notifyError(errorText(err)));
-    } else {
-      void client.suspendAssetPreview().catch((err: unknown) => notifyError(errorText(err)));
-    }
-  }, [active]);
+  // This pane owns its OWN viewport surface (the "assetPreview" view), permanently sized to the pane.
+  // App.tsx drives set-active-view + per-view park on a tab switch — switching is instant (the surface
+  // keeps its last frame frozen, no re-spawn), so this workspace has no per-`active` lifecycle work: it
+  // enters the preview on mount, exits on unmount, and otherwise just drives its surface bounds (gated on
+  // `active` so the parked pane's 0x0 host emits nothing).
 
   const onBoneSelect = useCallback((joint: number) => {
     setHighlightJoint(joint);
@@ -415,7 +408,6 @@ export function AssetEditorWorkspace({ assetId, active }: { assetId: string; act
       highlightJoint,
       onBoneSelect,
       hostRef,
-      viewportSettled,
       orbit: { onPointerDown, onPointerMove, onPointerUp, onWheel },
       active,
       ready,
@@ -425,7 +417,6 @@ export function AssetEditorWorkspace({ assetId, active }: { assetId: string; act
       rootEntity,
       highlightJoint,
       onBoneSelect,
-      viewportSettled,
       onPointerDown,
       onPointerMove,
       onPointerUp,
@@ -499,6 +490,7 @@ export function AssetEditorWorkspace({ assetId, active }: { assetId: string; act
         <AssetPreviewProvider value={previewContext}>
           <DockPanelsHost space="assetEditor" />
           <div className="relative min-h-0 flex-1">
+            <RevealBands space="assetEditor" bands={AE_REVEAL_BANDS} />
             <DockRoot space="assetEditor" />
           </div>
         </AssetPreviewProvider>

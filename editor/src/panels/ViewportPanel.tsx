@@ -3,13 +3,12 @@
 /// never renders pixels — it owns the screen rectangle and forwards pointer input to
 /// the engine over the control plane. A <LoadingOverlay/> sibling covers the region
 /// while the renderer is not yet ready.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { client } from "../control/client";
 import { makeCoalescer } from "../control/coalesce";
 import { useEditorStore } from "../state/store";
 import { LoadingOverlay } from "../app/LoadingOverlay";
 import { useSubsurfaceBounds } from "../lib/useSubsurfaceBounds";
-import { waitForFreshFrame } from "../lib/waitForFreshFrame";
 import { bindingFor } from "../lib/keybindings";
 import { ASSET_DND_MIME, assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
 import { errorText, notify, notifyError } from "../lib/flash";
@@ -79,32 +78,6 @@ export function ViewportPanel() {
   const setDragActive = useEditorStore((s) => s.setDragActive);
   const viewportHidden = useEditorStore((s) => s.viewportHidden);
   const playState = useEditorStore((s) => s.playState);
-  const sceneTabActive = useEditorStore((s) => s.activeViewTabId === "scene");
-
-  // Returning to the scene tab resizes the subsurface back from whatever the previous tab used (an asset
-  // editor's pane), which the compositor would briefly show as a stretched old frame. Cover the region
-  // opaque from the moment the tab activates until the presenter displays a fresh frame at the scene size.
-  const [resizeMask, setResizeMask] = useState(false);
-  const firstActivation = useRef(true);
-  useEffect(() => {
-    if (firstActivation.current) {
-      firstActivation.current = false;
-      return; // startup is covered by LoadingOverlay, not the resize mask
-    }
-    if (!sceneTabActive) {
-      return;
-    }
-    let cancelled = false;
-    setResizeMask(true);
-    void waitForFreshFrame().then(() => {
-      if (!cancelled) {
-        setResizeMask(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [sceneTabActive]);
 
   // Coalescers stream the hover and drag phases to the engine at >= GIZMO_STREAM_MS
   // apart, buffering only the latest NDC so a burst of pointermove collapses to one
@@ -179,9 +152,10 @@ export function ViewportPanel() {
     };
   }, [setPhase]);
 
-  // Bounds-sync: keep the engine's subsurface glued to the host div on resize / dock-split / layout
-  // changes (extracted so the asset editor's preview pane can drive the same single subsurface).
-  useSubsurfaceBounds(hostRef);
+  // Bounds-sync: keep the Scene view's subsurface glued to the host div on resize / dock-split / layout
+  // changes. The shared hook is parameterized by view id — the asset editor's preview pane drives its
+  // own "assetPreview" surface through the same hook.
+  useSubsurfaceBounds(hostRef, "scene");
 
   useEffect(() => {
     const pressed = new Set<string>();
@@ -597,9 +571,6 @@ export function ViewportPanel() {
       }}
     >
       <div ref={hostRef} className="viewport-host" />
-      {resizeMask ? (
-        <div className="absolute inset-0 z-10 bg-background" aria-hidden="true" />
-      ) : null}
       <LoadingOverlay />
     </div>
   );

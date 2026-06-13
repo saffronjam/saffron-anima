@@ -24,7 +24,7 @@ import { useMouseHistoryNav } from "./useMouseHistoryNav";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectStartupModal } from "./ProjectStartupModal";
 import { SettingsModal } from "./SettingsModal";
-import type { ProjectInfo } from "../control/client";
+import type { ProjectInfo, ViewId } from "../control/client";
 import { AssetPreview } from "../components/AssetViewer";
 import { CaptureFlame } from "../components/CaptureFlame";
 import { MaterialGraphEditor } from "../panels/MaterialGraphEditor";
@@ -56,7 +56,6 @@ export function App() {
   logRender("App");
   const setPhase = useEditorStore((s) => s.setPhase);
   const setProject = useEditorStore((s) => s.setProject);
-  const setViewportHidden = useEditorStore((s) => s.setViewportHidden);
   const phase = useEditorStore((s) => s.engineStatus.phase);
   const activeViewTabId = useEditorStore((s) => s.activeViewTabId);
   const projectPath = useEditorStore((s) => s.project?.path);
@@ -82,27 +81,34 @@ export function App() {
   // most-recently-active asset tab mounted, sticky until its tab closes; switching to a different asset
   // tab remounts via the key (a real model swap).
   const [mountedAssetId, setMountedAssetId] = useState<string | null>(null);
-  useEffect(() => {
-    if (activeKind === "assetEditor" && activeAssetEditorId !== null) {
-      setMountedAssetId(activeAssetEditorId);
-    }
-  }, [activeKind, activeAssetEditorId]);
   const mountedAssetTabExists = useEditorStore(
     (s) =>
       mountedAssetId !== null &&
       s.viewTabs.some((tab) => tab.kind === "assetEditor" && tab.assetId === mountedAssetId),
   );
   useEffect(() => {
-    if (mountedAssetId !== null && !mountedAssetTabExists) {
-      setMountedAssetId(null); // its tab closed — unmount (exits the preview)
+    // One source of truth for which asset editor is mounted. An ACTIVE asset tab is always the mounted
+    // one — and this branch takes precedence so that closing the active asset tab while another asset tab
+    // becomes active swaps the preview to it (remount via the key) rather than unmounting. Only when no
+    // asset tab is active AND the kept (sticky) asset's tab has since closed do we unmount + exit the
+    // preview; otherwise the most-recently-active asset stays mounted (hidden) so returning is instant.
+    if (activeKind === "assetEditor" && activeAssetEditorId !== null) {
+      setMountedAssetId(activeAssetEditorId);
+    } else if (mountedAssetId !== null && !mountedAssetTabExists) {
+      setMountedAssetId(null);
     }
-  }, [mountedAssetId, mountedAssetTabExists]);
+  }, [activeKind, activeAssetEditorId, mountedAssetId, mountedAssetTabExists]);
   const [revealed, setRevealed] = useState(didRevealWindow);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const sceneTabActive = activeViewTabId === "scene";
-  // The asset editor also presents the live subsurface (in its own preview pane), so it keeps the
-  // viewport unparked exactly like the scene tab; every other tab parks it.
-  const subsurfaceVisible = sceneTabActive || activeKind === "assetEditor";
+  // viewportHidden is the MODAL-only global hide (the startup / asset-image modals set it via the store).
+  // Per-view park is derived from the active tab: each view's own surface is parked unless its tab is the
+  // active pane (or a modal covers the region). activeRenderView tells the engine which scene+camera to
+  // render into which target.
+  const viewportHidden = useEditorStore((s) => s.viewportHidden);
+  const activeRenderView: ViewId = activeKind === "assetEditor" ? "assetPreview" : "scene";
+  const sceneParked = viewportHidden || !sceneTabActive;
+  const assetParked = viewportHidden || activeKind !== "assetEditor";
 
   // W/E/R → translate/rotate/scale, gated off while a text field is focused.
   useGizmoShortcuts();
@@ -226,22 +232,41 @@ export function App() {
     setProjectModalOpen(false);
   };
 
+  // Push the full per-view state to the engine, gated on the control socket being up (phase === 'ready')
+  // — the startup push must not fire before the engine answers (the calls would silently fail and never
+  // re-run), and it re-pushes on any later park/active-view change. Per view: park its surface unless its
+  // tab is the active pane (a parked surface detaches; its ring keeps the last frame, so unparking re-shows
+  // it instantly — preserve-last), and tell the engine which view to render + address (routes
+  // activeScene/camera + the per-view target; a scene↔asset change resets that view's temporal state).
+  // setActiveView is sequenced through sceneEntitiesLive so the reconcile poll never writes the
+  // still-preview entity list into the Scene hierarchy while the engine switches views (set false now,
+  // restored when the switch resolves). Force a layout-settled so the shown view commits its pane bounds
+  // immediately (no debounce delay).
   useEffect(() => {
-    if (subsurfaceVisible) {
-      setViewportHidden(false);
-      requestAnimationFrame(() => emitLayoutSettled({ force: true }));
+    if (phase !== "ready") {
       return;
     }
-    setViewportHidden(true);
-  }, [subsurfaceVisible, setViewportHidden]);
+    void client.setViewportParked("scene", sceneParked).catch(() => {});
+    void client.setViewportParked("assetPreview", assetParked).catch(() => {});
+    useEditorStore.getState().setSceneEntitiesLive(false);
+    void client
+      .setActiveView(activeRenderView)
+      .catch(() => {})
+      .finally(() => useEditorStore.getState().setSceneEntitiesLive(activeRenderView === "scene"));
+    requestAnimationFrame(() => emitLayoutSettled({ force: true }));
+  }, [phase, sceneParked, assetParked, activeRenderView]);
 
-  // The single bridge to the presenter's park state: whatever sets the store flag
-  // (the asset View modal, the asset workspace tab), the subsurface follows — even
-  // while the dock is display:none and the ViewportPanel's host rect is 0x0.
-  const viewportHidden = useEditorStore((s) => s.viewportHidden);
+  // Startup bounds commit, decoupled from the push above: the host div has a 0-size rect until the
+  // window is shown, so a commit fired on phase-ready alone (the merged push, and the hook's mount
+  // commit) is skipped — leaving the scene surface AND the shared backdrop without bounds, so the
+  // viewport stays blank/see-through until an asset round-trip re-commits. Once BOTH the engine is
+  // reachable and the window is revealed, force a layout-settle so the visible view commits its pane
+  // bounds (and the backdrop its window size) with a real rect — the same path the round-trip uses.
   useEffect(() => {
-    void client.setViewportHidden(viewportHidden).catch(() => {});
-  }, [viewportHidden]);
+    if (phase === "ready" && revealed) {
+      requestAnimationFrame(() => emitLayoutSettled({ force: true }));
+    }
+  }, [phase, revealed]);
 
   return (
     <TooltipProvider delayDuration={300}>

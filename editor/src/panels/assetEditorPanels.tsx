@@ -27,7 +27,6 @@ export interface AssetPreviewContextValue {
   highlightJoint: number;
   onBoneSelect(joint: number): void;
   hostRef: RefObject<HTMLDivElement | null>;
-  viewportSettled: boolean;
   orbit: AssetPreviewOrbitHandlers;
   /// Whether this asset tab is the active main tab (its preview is live, not suspended).
   active: boolean;
@@ -68,10 +67,10 @@ export function Preparing({ className }: { className: string }) {
   );
 }
 
-/// The locked preview leaf body: the transparent hole down to the engine's subsurface, with
-/// the orbit handlers and the resize mask. No bg — the pane stays transparent.
+/// The locked preview leaf body: the transparent hole down to the engine's own "assetPreview" subsurface
+/// (permanently sized to this pane — no resize mask needed). No bg — the pane stays transparent.
 export function AssetPreviewPanel() {
-  const { hostRef, viewportSettled, orbit } = useAssetPreview();
+  const { hostRef, orbit } = useAssetPreview();
   return (
     <div
       className="relative h-full w-full overflow-hidden"
@@ -82,9 +81,6 @@ export function AssetPreviewPanel() {
       onWheel={orbit.onWheel}
     >
       <div ref={hostRef} className="viewport-host" />
-      {viewportSettled ? null : (
-        <Preparing className="absolute inset-0 z-10 flex items-center justify-center bg-background" />
-      )}
     </div>
   );
 }
