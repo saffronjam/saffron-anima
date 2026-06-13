@@ -22,7 +22,7 @@ import { useEditorStore, buildTree, reanchorPastBones, type TreeNode } from "../
 import { ASSET_DND_MIME, assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
 import { errorText, notify, notifyError } from "../lib/flash";
 import { matchesBinding } from "../lib/keybindings";
-import { orderedComponentNames } from "./InspectorPanel";
+import { orderedComponentNames } from "../lib/componentOrder";
 import type { EntityListEntry } from "../protocol";
 import { logRender } from "../lib/renderLog";
 import { Input } from "@/components/ui/input";
@@ -58,7 +58,11 @@ const INDENT_PX = 12;
 
 /// True when `candidateId` is `rootId` or sits anywhere in its subtree, walking the
 /// candidate's ancestry through `parentId` (bounded so corrupt data cannot loop).
-function isInSubtree(entities: EntityListEntry[], rootId: string, candidateId: string): boolean {
+export function isInSubtree(
+  entities: EntityListEntry[],
+  rootId: string,
+  candidateId: string,
+): boolean {
   const parentOf = new Map(entities.map((e) => [e.id, e.parentId]));
   let cursor: string | undefined = candidateId;
   for (let steps = 0; cursor && cursor !== "0" && steps <= entities.length; steps++) {
@@ -72,7 +76,7 @@ function isInSubtree(entities: EntityListEntry[], rootId: string, candidateId: s
 
 /// The dragged entity's subtree (itself + every descendant), so per-row drop
 /// validity is a Set lookup instead of an ancestry walk per row.
-function subtreeIds(entities: EntityListEntry[], rootId: string): Set<string> {
+export function subtreeIds(entities: EntityListEntry[], rootId: string): Set<string> {
   const childrenOf = new Map<string, string[]>();
   for (const e of entities) {
     const parent = e.parentId ?? "0";
@@ -186,8 +190,8 @@ export function HierarchyTree({ actions }: { actions: TreeActions }) {
       <ContextMenuTrigger
         asChild
         // Resolve the row under a right-click into the ref; an empty-area click
-        // suppresses the menu (preventDefault makes Radix skip opening), matching the
-        // old per-row triggers that left blank space menu-less.
+        // suppresses the menu (preventDefault makes Radix skip opening), so blank
+        // space stays menu-less.
         onContextMenu={(event) => {
           const el =
             event.target instanceof Element ? event.target.closest("[data-entity-id]") : null;

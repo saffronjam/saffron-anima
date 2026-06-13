@@ -33,47 +33,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-
-/// Canonical component order (mirrors the C++ registry order / the `Components`
-/// schema key order). Components present but not listed render in insertion order
-/// after these. This is ordering only — never a per-component render switch.
-const COMPONENT_ORDER = [
-  "Name",
-  "Transform",
-  "Mesh",
-  "Camera",
-  "Material",
-  "MaterialSet",
-  "Script",
-  "DirectionalLight",
-  "PointLight",
-  "SpotLight",
-  "ReflectionProbe",
-] as const;
+import { COMPONENT_ORDER, orderedComponentNames } from "../lib/componentOrder";
 
 /// Components that cannot be removed (parity with the C++ `removable=false` flag on
 /// Name/Transform). Everything else shows a Remove control.
 const NON_REMOVABLE = new Set<string>(["Name", "Transform"]);
-
-/// Components the Inspector never renders: Relationship carries the hierarchy's
-/// durable parent uuid, edited through the tree / `set-parent` — never as a raw field;
-/// Bone is an empty joint tag (bone-ness shows in the outliner, not as a section).
-const HIDDEN_COMPONENTS = new Set<string>(["Relationship", "Bone"]);
 
 /// The full registered component set (for the Add Component list). Derived from the
 /// known order; a regenerated schema with new components extends COMPONENT_ORDER.
 /// MaterialSet is excluded: its slots come from a multi-material import, and an empty
 /// one added by hand has nothing to edit.
 const ADDABLE_COMPONENTS = COMPONENT_ORDER.filter((c) => c !== "Name" && c !== "MaterialSet");
-
-/// Shared with the hierarchy's component subrows so the tree leaves and the
-/// Inspector sections stay in lockstep (same order, same hidden set).
-export function orderedComponentNames(components: Record<string, unknown>): string[] {
-  const present = Object.keys(components).filter((c) => !HIDDEN_COMPONENTS.has(c));
-  const known = COMPONENT_ORDER.filter((c) => present.includes(c));
-  const extra = present.filter((c) => !COMPONENT_ORDER.includes(c as never));
-  return [...known, ...extra];
-}
 
 export function InspectorPanel() {
   logRender("InspectorPanel");
