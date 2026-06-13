@@ -65,6 +65,49 @@ FetchContent_Declare(LuaBridge3
     SYSTEM)
 FetchContent_MakeAvailable(LuaBridge3)
 
+# --- Jolt Physics (jrouwe/JoltPhysics, MIT; built from source, static) ---------
+# Cross-platform determinism ON from the start (the engine wants bit-exact sims
+# across machines for future lockstep networking/replay; modest perf cost, still
+# single precision). OVERRIDE_CXX_FLAGS OFF so Jolt honors our libc++/gnu++26
+# preset instead of forcing its own. Samples/tests/tools excluded. Jolt's CMake
+# lives under Build/, so SOURCE_SUBDIR points there; it exports the target `Jolt`.
+# SYSTEM keeps its headers out of our warning set.
+set(CROSS_PLATFORM_DETERMINISTIC ON  CACHE BOOL "" FORCE)
+set(DOUBLE_PRECISION             OFF CACHE BOOL "" FORCE)
+set(OVERRIDE_CXX_FLAGS           OFF CACHE BOOL "" FORCE)
+set(TARGET_SAMPLES               OFF CACHE BOOL "" FORCE)
+set(TARGET_UNIT_TESTS            OFF CACHE BOOL "" FORCE)
+set(TARGET_HELLO_WORLD           OFF CACHE BOOL "" FORCE)
+set(TARGET_VIEWER                OFF CACHE BOOL "" FORCE)
+set(TARGET_PERFORMANCE_TEST      OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(JoltPhysics
+    GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
+    GIT_TAG v5.3.0 GIT_SHALLOW ON
+    SOURCE_SUBDIR Build
+    SYSTEM)
+FetchContent_MakeAvailable(JoltPhysics)
+# Jolt builds itself with -Werror; clang 21 flags its determinism pairing
+# (-ffp-model=precise + -ffp-contract=off) under -Woverriding-option, which fails
+# its own build. Drop -Werror for Jolt's TUs (third-party code, like vma/cgltf/stb
+# below) — this touches only Jolt's compilation, never the engine's warning set.
+target_compile_options(Jolt PRIVATE -Wno-error)
+
+# Jolt's INTERFACE compile options (-mavx2/-pthread/…) must NOT reach every engine
+# TU: -pthread toggles POSIX thread support, which CMake's per-target `import std`
+# module (std.pcm) is built without, so it leaks a config mismatch that breaks every
+# `import std` unit. Only the one TU that includes <Jolt/...> (physics.cpp) needs the
+# arch/thread flags, and the pimpl keeps Jolt types out of every other TU — so capture
+# the flags here and re-apply them to that single source in engine/CMakeLists.txt.
+# Jolt's defines + include dirs + link still propagate (harmless, and the physics TU
+# needs the JPH_* defines for ABI parity).
+get_target_property(SAFFRON_JOLT_COMPILE_OPTIONS Jolt INTERFACE_COMPILE_OPTIONS)
+set_target_properties(Jolt PROPERTIES INTERFACE_COMPILE_OPTIONS "")
+# -pthread toggles the module's POSIX-thread langopt, so even on the single physics
+# TU it would mismatch the Saffron.Physics BMI (built without it). It is only needed
+# at link (Jolt links Threads::Threads), so drop it from the per-TU compile options;
+# the arch flags (-mavx2/…) are ABI-relevant and tolerated across BMI boundaries.
+list(REMOVE_ITEM SAFFRON_JOLT_COMPILE_OPTIONS "-pthread")
+
 # --- VMA implementation TU ----------------------------------------------------
 # VMA is header-only; one translation unit must define VMA_IMPLEMENTATION.
 add_library(vma STATIC ${CMAKE_SOURCE_DIR}/cmake/vma_impl.cpp)
@@ -111,7 +154,8 @@ target_link_libraries(saffron_third_party INTERFACE
     tinyobjloader
     nanosvg
     lua_static
-    LuaBridge)
+    LuaBridge
+    Jolt)
 # The engine bans exceptions; make nlohmann/json turn would-be throws into abort()
 # so any stray .at()/operator[] on missing keys fails loudly instead of throwing.
 # GLM_FORCE_DEPTH_ZERO_TO_ONE makes glm::perspective emit Vulkan's [0,1] clip depth.
