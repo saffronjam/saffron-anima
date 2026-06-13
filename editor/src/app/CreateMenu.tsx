@@ -24,12 +24,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 
-/// The single hand-maintained surface mapping menu labels to `add-entity`
-/// presets (the preset union itself comes from the typed client / protocol).
-/// Icons follow the C++ Lucide SVG mapping (editor_app.cppm:101-107): cube=Box,
-/// point-light=Lightbulb, spot-light=Flashlight, camera=Camera (directional-light
-/// uses Sun, empty uses a neutral marker). Exported so the phase-8 menu bar's
-/// The list is kept separate from the component so future add surfaces can reuse it.
+/// The hand-maintained mapping of menu labels to `add-entity` presets and their
+/// Lucide icons (the preset union itself comes from the typed client / protocol):
+/// empty, cube, point light, spot light, directional light, camera, and reflection
+/// probe. Exported so other add surfaces can reuse the same list.
 export const CREATE_PRESETS: { label: string; preset: EntityPreset; icon: LucideIcon }[] = [
   { label: "Empty", preset: "empty", icon: CircleDashed },
   { label: "Cube", preset: "cube", icon: Box },

@@ -2,9 +2,9 @@
 /// / rotate / scale), matching the C++ editor's W/E/R cycle (editor_gizmo.cpp); F
 /// focuses the editor camera on the selection; Escape deselects.
 ///
-/// INPUT MODEL (spike-0b, recorded in the phase-3 migration plan): the editor input
-/// is **control-command-driven** — the webview owns the DOM and forwards intent to
-/// the engine over the control socket. The engine renders windowless and gets no raw
+/// INPUT MODEL: the editor input is **control-command-driven** — the webview owns
+/// the DOM and forwards intent to the engine over the control socket. The engine
+/// renders windowless and gets no raw
 /// keyboard from the webview, so the webview is the right place to bind W/E/R: it
 /// sets `store.gizmo` optimistically and fires `set-gizmo` (mirroring the Topbar
 /// buttons). The engine therefore never handles W/E/R itself, so this hook cannot

@@ -1,9 +1,9 @@
 /// Glues ONE view's Wayland subsurface to its pane's host div. Each viewport pane (the scene viewport
 /// and the asset-editor preview) has its OWN surface + render target + shm ring, permanently sized to
-/// its pane — so a tab switch parks/unparks surfaces but never re-binds or resizes a shared one (the
-/// stale-frame bug that fix removes). Pass the view id; the hook routes `set_viewport_bounds {view}` to
-/// that view's surface. A degenerate (<=0) rect no-ops via the computeBounds null guard, so a host that
-/// is `display:none` (its tab inactive) emits nothing; `enabled: false` disables the hook outright.
+/// its pane — so a tab switch parks/unparks surfaces but never re-binds or resizes a shared one. Pass
+/// the view id; the hook routes `set_viewport_bounds {view}` to that view's surface. A degenerate (<=0)
+/// rect no-ops via the computeBounds null guard, so a host that is `display:none` (its tab inactive)
+/// emits nothing; `enabled: false` disables the hook outright.
 import { useEffect, type RefObject } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { client, type ViewId, type ViewportBounds } from "../control/client";

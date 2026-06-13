@@ -4,7 +4,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Box,
-  Clapperboard,
   File,
   Flame,
   House,
@@ -143,14 +142,8 @@ function tabIcon(tab: ViewTab): LucideIcon {
   if (tab.kind === "assetEditor") {
     return Box;
   }
-  if (tab.assetType === "mesh") {
-    return Box;
-  }
   if (tab.assetType === "texture") {
     return ImageIcon;
-  }
-  if (tab.assetType === "animation") {
-    return Clapperboard;
   }
   return File;
 }
