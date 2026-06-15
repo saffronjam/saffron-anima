@@ -47,11 +47,11 @@ beforeAll(async () => {
   writeFileSync(
     join(srcDir, "prober.lua"),
     `local Prober = {}
-function Prober.on_update(self, dt)
+function Prober:on_update(dt)
   local p = self.entity:get_position()
   local hit = se.raycast(p.x, p.y, p.z, 0, -1, 0, 20)
   if hit.hit and hit.entity ~= nil then
-    self.entity:set_position(99, hit.point.y, p.z)
+    self.entity:set_position(se.vec3(99, hit.point.y, p.z))
   end
 end
 return Prober
