@@ -16,6 +16,10 @@
 - Physics 3D bodies for entities with wireframe representation.
 - Physics-based two-way bound animations after physics.
 
+## Scripting
+
+- Swap the scripting VM from stock Lua 5.5 to Luau for a real in-language gradual type system, replacing the LuaLS-annotation overlay (`library/se.lua` + the drift tripwire) with actual typed sources; evaluate the impact on the LuaBridge bindings, the sandbox, and cross-platform determinism.
+
 ## Game systems
 
 - Research game UI and overlay authoring for health bars and HUDs, including how Unreal Engine 5 and Unity approach it.
