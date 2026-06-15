@@ -48,9 +48,10 @@ export function TimelineTransport({
       return;
     }
     if (playing) {
-      void guard(() => client.pauseAnimation(entityId));
+      void guard(() => client.setAnimationPlaying(entityId, false));
     } else if (activeClipId) {
-      void guard(() => client.playAnimation(entityId, String(activeClipId), { loop: looping }));
+      // Resume from the current playhead — play-animation would restart the clip at frame 0.
+      void guard(() => client.setAnimationPlaying(entityId, true));
     }
   };
   const onToggleLoop = (): void => {

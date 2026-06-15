@@ -286,10 +286,13 @@ export function AssetEditorWorkspace({ assetId, active }: { assetId: string; act
       e.preventDefault();
       const st = useEditorStore.getState().animationState;
       if (st?.playing) {
-        void client.pauseAnimation(rootEntity).catch((err: unknown) => notifyError(errorText(err)));
-      } else if (st?.clip) {
         void client
-          .playAnimation(rootEntity, String(st.clip), { loop: st.wrap !== "once" })
+          .setAnimationPlaying(rootEntity, false)
+          .catch((err: unknown) => notifyError(errorText(err)));
+      } else if (st?.clip) {
+        // Resume from the current playhead — play-animation would restart the clip at frame 0.
+        void client
+          .setAnimationPlaying(rootEntity, true)
           .catch((err: unknown) => notifyError(errorText(err)));
       }
     };
