@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Edge } from "@xyflow/react";
-import {
-  type FlowNode,
-  type MaterialGraph,
-  flowToGraph,
-  graphToFlow,
-} from "./graph";
+import { type FlowNode, type MaterialGraph, flowToGraph, graphToFlow } from "./graph";
 
 describe("graphToFlow / flowToGraph round-trip", () => {
   // A small graph: a constant node feeding materialOutput.baseColor. Both nodes carry an
@@ -88,7 +83,13 @@ describe("edge handling", () => {
       type: "saffron",
       position: { x: 0, y: 0 },
       data: {
-        spec: { type: "constant", label: "Constant", category: "input", inputs: [], outputs: ["rgba"] },
+        spec: {
+          type: "constant",
+          label: "Constant",
+          category: "input",
+          inputs: [],
+          outputs: ["rgba"],
+        },
         props: {},
       },
     };

@@ -94,18 +94,18 @@ describe("matchesBinding", () => {
   });
 
   test("a press 'f' does NOT fire when ctrl is held (exact-modifier match)", () => {
-    expect(
-      matchesBinding(ev({ key: "f", code: "KeyF", ctrlKey: true }), "camera.focus", {}),
-    ).toBe(false);
+    expect(matchesBinding(ev({ key: "f", code: "KeyF", ctrlKey: true }), "camera.focus", {})).toBe(
+      false,
+    );
   });
 
   test("a press command honors an override binding", () => {
     expect(
       matchesBinding(ev({ key: "g", code: "KeyG" }), "camera.focus", { "camera.focus": "g" }),
     ).toBe(true);
-    expect(matchesBinding(ev({ key: "f", code: "KeyF" }), "camera.focus", { "camera.focus": "g" })).toBe(
-      false,
-    );
+    expect(
+      matchesBinding(ev({ key: "f", code: "KeyF" }), "camera.focus", { "camera.focus": "g" }),
+    ).toBe(false);
   });
 });
 

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type FolderNode, buildFolderTree, folderAncestorPaths, folderLabel } from "./AssetFolderTree";
+import {
+  type FolderNode,
+  buildFolderTree,
+  folderAncestorPaths,
+  folderLabel,
+} from "./AssetFolderTree";
 
 describe("folderLabel", () => {
   test("returns the last segment of a multi-segment path", () => {
@@ -53,9 +58,7 @@ describe("buildFolderTree", () => {
   });
 
   test("a single top-level folder becomes one childless root", () => {
-    expect(buildFolderTree(["models"])).toEqual([
-      { path: "models", name: "models", children: [] },
-    ]);
+    expect(buildFolderTree(["models"])).toEqual([{ path: "models", name: "models", children: [] }]);
   });
 
   test("a nested path synthesizes its intermediate ancestor nodes", () => {

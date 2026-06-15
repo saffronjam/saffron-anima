@@ -115,9 +115,7 @@ describe("subtreeIds", () => {
   });
 
   test("the top of a cycle-free forest enumerates its whole tree only", () => {
-    expect(subtreeIds(forest, "root")).toEqual(
-      new Set(["root", "a", "a1", "a2", "a2x", "b"]),
-    );
+    expect(subtreeIds(forest, "root")).toEqual(new Set(["root", "a", "a1", "a2", "a2x", "b"]));
     // The disjoint tree is untouched.
     expect(subtreeIds(forest, "other")).toEqual(new Set(["other", "p"]));
   });

@@ -80,9 +80,7 @@ afterEach(() => {
 function advanceTo(target: number): void {
   nowMs = target;
   for (;;) {
-    const due = timers
-      .filter((t) => t.fireAt <= nowMs)
-      .sort((a, b) => a.fireAt - b.fireAt);
+    const due = timers.filter((t) => t.fireAt <= nowMs).sort((a, b) => a.fireAt - b.fireAt);
     if (due.length === 0) {
       break;
     }

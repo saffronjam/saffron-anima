@@ -60,9 +60,10 @@ describe("readAssetPayload", () => {
   });
 
   test("falls back to id when ids has a non-string element", () => {
-    expect(
-      readAssetPayload(withAsset(JSON.stringify({ ids: ["a", 3], id: "fallback" }))),
-    ).toEqual({ id: "fallback", type: undefined });
+    expect(readAssetPayload(withAsset(JSON.stringify({ ids: ["a", 3], id: "fallback" })))).toEqual({
+      id: "fallback",
+      type: undefined,
+    });
   });
 
   test("returns null when ids is non-string-array and there is no string id", () => {

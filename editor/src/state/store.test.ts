@@ -74,10 +74,7 @@ describe("buildTree", () => {
 
 describe("reanchorPastBones", () => {
   test("drops bone rows from the result", () => {
-    const out = reanchorPastBones([
-      entry("mesh"),
-      entry("bone", { bone: true, parentId: "mesh" }),
-    ]);
+    const out = reanchorPastBones([entry("mesh"), entry("bone", { bone: true, parentId: "mesh" })]);
     expect(out.map((e) => e.id)).toEqual(["mesh"]);
   });
 

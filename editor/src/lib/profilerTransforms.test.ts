@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type {
-  ProfileCaptureDto,
-  ProfileCaptureMetadataDto,
-  ProfileSpanDto,
-} from "../protocol";
+import type { ProfileCaptureDto, ProfileCaptureMetadataDto, ProfileSpanDto } from "../protocol";
 import { type CaptureTree, spansToFlameTree } from "./captureTree";
 import { captureToChromeTrace } from "./chromeTrace";
 
@@ -33,7 +29,10 @@ function metadata(extra: Partial<ProfileCaptureMetadataDto> = {}): ProfileCaptur
   };
 }
 
-function capture(spans: ProfileSpanDto[], meta: Partial<ProfileCaptureMetadataDto> = {}): ProfileCaptureDto {
+function capture(
+  spans: ProfileSpanDto[],
+  meta: Partial<ProfileCaptureMetadataDto> = {},
+): ProfileCaptureDto {
   return { spans, metadata: metadata(meta) };
 }
 
@@ -48,9 +47,30 @@ describe("spansToFlameTree", () => {
     // Index 1: cpu child nested under index 0.
     // Index 2: gpu root, the earliest start -> the shared origin.
     const spans: ProfileSpanDto[] = [
-      span({ name: "frame", lane: "cpu", startNs: 3_000_000, endNs: 5_000_000, parentIndex: -1, depth: 0 }),
-      span({ name: "pass", lane: "cpu", startNs: 3_500_000, endNs: 4_000_000, parentIndex: 0, depth: 1 }),
-      span({ name: "gpu-pass", lane: "gpu", startNs: 1_000_000, endNs: 2_500_000, parentIndex: -1, depth: 0 }),
+      span({
+        name: "frame",
+        lane: "cpu",
+        startNs: 3_000_000,
+        endNs: 5_000_000,
+        parentIndex: -1,
+        depth: 0,
+      }),
+      span({
+        name: "pass",
+        lane: "cpu",
+        startNs: 3_500_000,
+        endNs: 4_000_000,
+        parentIndex: 0,
+        depth: 1,
+      }),
+      span({
+        name: "gpu-pass",
+        lane: "gpu",
+        startNs: 1_000_000,
+        endNs: 2_500_000,
+        parentIndex: -1,
+        depth: 0,
+      }),
     ];
     const tree: CaptureTree = spansToFlameTree(spans);
 
@@ -91,7 +111,14 @@ describe("spansToFlameTree", () => {
 
   test("clamps a negative-width span (endNs < startNs) to zero duration", () => {
     const spans: ProfileSpanDto[] = [
-      span({ name: "backwards", lane: "cpu", startNs: 5_000_000, endNs: 4_000_000, parentIndex: -1, depth: 0 }),
+      span({
+        name: "backwards",
+        lane: "cpu",
+        startNs: 5_000_000,
+        endNs: 4_000_000,
+        parentIndex: -1,
+        depth: 0,
+      }),
     ];
     const tree = spansToFlameTree(spans);
     expect(tree.originNs).toBe(5_000_000);
