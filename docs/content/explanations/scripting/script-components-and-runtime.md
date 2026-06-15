@@ -68,7 +68,7 @@ Module functions, available as `se.*` inside every script.
 
 | Function | Returns | Notes |
 |---|---|---|
-| `se.log(message)` | — | writes to the engine log under the `script` subsystem |
+| `se.log(message)` | — | writes to the engine log under the `script` subsystem AND into the editor's [Script Logs panel](../../ui-and-editor/script-logs-panel/) (drained over `drain-script-logs`, tagged with the logging entity) |
 | `se.vec3(x, y, z)` | `se.Vec3` | construct a vector value |
 | `se.lerp(a, b, t)` | `se.Vec3` | linear blend of two vectors |
 | `se.look_at(eye, target, up)` | `se.Vec3` | Euler XYZ radians aiming `eye` at `target` (default up `+Y`); feed straight to `:set_rotation` |
