@@ -1,5 +1,5 @@
 // Driving animation over the control plane: list-clips / play-animation / get-animation-state /
-// seek-animation / pause-animation / set-animation-loop. play-animation previews in Edit (no
+// seek-animation / set-animation-playing / set-animation-loop. play-animation previews in Edit (no
 // Play needed), so the playhead advances through the host's per-frame evaluator and the state
 // command reports it. The pose math + GPU path are covered by the animation self-test and the
 // playback screenshot test; this file proves the wire.
@@ -55,7 +55,7 @@ test("play-animation advances the playhead in Edit preview", async () => {
 });
 
 test("seek-animation sets the playhead, pause freezes it", async () => {
-  await engine.call<AnimState>("pause-animation", { entity: meshId });
+  await engine.call<AnimState>("set-animation-playing", { entity: meshId, playing: false });
   const seeked = await engine.call<AnimState>("seek-animation", { entity: meshId, time: 0.25 });
   expect(seeked.time).toBeCloseTo(0.25, 3);
   expect(seeked.playing).toBe(false);
@@ -64,6 +64,23 @@ test("seek-animation sets the playhead, pause freezes it", async () => {
   const state = await engine.call<AnimState>("get-animation-state", { entity: meshId });
   expect(state.playing).toBe(false);
   expect(state.time).toBeCloseTo(0.25, 3); // paused, so the playhead did not move
+});
+
+test("set-animation-playing resumes from the paused playhead, not the start", async () => {
+  await engine.call("play-animation", { entity: meshId, clip: "Bend", loop: true });
+  await engine.settle(200);
+  const paused = await engine.call<AnimState>("set-animation-playing", { entity: meshId, playing: false });
+  expect(paused.playing).toBe(false);
+  expect(paused.time).toBeGreaterThan(0); // advanced before the pause
+
+  // Resuming must continue from the paused time, not reset to 0 (the bug this guards).
+  const resumed = await engine.call<AnimState>("set-animation-playing", { entity: meshId, playing: true });
+  expect(resumed.playing).toBe(true);
+  expect(resumed.time).toBeCloseTo(paused.time, 3);
+
+  await engine.settle(200);
+  const later = await engine.call<AnimState>("get-animation-state", { entity: meshId });
+  expect(later.time).toBeGreaterThan(paused.time); // kept advancing from where it resumed
 });
 
 test("set-animation-loop changes the wrap mode", async () => {
