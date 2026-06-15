@@ -66,6 +66,13 @@ export namespace se
         glm::vec4 weights{ 0.0f };  // normalized blend weights
     };
 
+    // A world-space ray for picking/queries. `dir` is assumed unit-length (the caller normalizes).
+    struct Ray
+    {
+        glm::vec3 origin{ 0.0f };
+        glm::vec3 dir{ 0.0f, 0.0f, -1.0f };
+    };
+
     /// One animated joint channel: a sampled curve targeting a joint's translation,
     /// rotation, or scale. A faithful, lossless mirror of a glTF animation channel +
     /// sampler — bound to a joint by stable index plus the durable node name.
@@ -348,6 +355,20 @@ export namespace se
     // Recomputes smooth vertex normals from the triangles. Used when a source omits them.
     void generateNormals(Mesh& mesh);
 
+    // Unions the eight corners of the local AABB [lo, hi], transformed by `model`, into
+    // outMin/outMax. Accumulates (does not reset), so callers union across a joint palette
+    // by seeding outMin = +inf and outMax = -inf before the first call.
+    void worldAabbFromCorners(const glm::mat4& model, glm::vec3 lo, glm::vec3 hi, glm::vec3& outMin, glm::vec3& outMax);
+
+    // Slab test of `ray` against the axis-aligned box [boxMin, boxMax]. On a hit, writes the entry/exit
+    // ray parameters (tEnter may be negative when the origin is inside). Returns false on a miss.
+    auto rayAabbSlab(const Ray& ray, glm::vec3 boxMin, glm::vec3 boxMax, f32& tEnter, f32& tExit) -> bool;
+
+    // Two-sided Möller–Trumbore ray-triangle test (winding-agnostic). On a hit in front of the origin,
+    // writes the ray parameter to outT and returns true. Rejects degenerate/parallel triangles and any
+    // hit at or behind the origin, so a ray starting inside a mesh reports only forward surfaces.
+    auto rayTriangle(const Ray& ray, glm::vec3 v0, glm::vec3 v1, glm::vec3 v2, f32& outT) -> bool;
+
     // Headless check: import cube.obj + cube.gltf from modelsDir, bake one to a
     // .smesh and read it back, logging the outcome.
     void runGeometrySelfTest(const std::string& modelsDir);
@@ -551,6 +572,75 @@ namespace se
                 vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
             }
         }
+    }
+
+    void worldAabbFromCorners(const glm::mat4& model, glm::vec3 lo, glm::vec3 hi, glm::vec3& outMin, glm::vec3& outMax)
+    {
+        for (u32 corner = 0; corner < 8; corner = corner + 1)
+        {
+            glm::vec3 p = lo;
+            if (corner & 1u)
+            {
+                p.x = hi.x;
+            }
+            if (corner & 2u)
+            {
+                p.y = hi.y;
+            }
+            if (corner & 4u)
+            {
+                p.z = hi.z;
+            }
+            const glm::vec3 world = glm::vec3(model * glm::vec4(p, 1.0f));
+            outMin = glm::min(outMin, world);
+            outMax = glm::max(outMax, world);
+        }
+    }
+
+    auto rayAabbSlab(const Ray& ray, glm::vec3 boxMin, glm::vec3 boxMax, f32& tEnter, f32& tExit) -> bool
+    {
+        const glm::vec3 invDir = 1.0f / ray.dir;  // inf for an axis-aligned component is fine here
+        const glm::vec3 t0 = (boxMin - ray.origin) * invDir;
+        const glm::vec3 t1 = (boxMax - ray.origin) * invDir;
+        const glm::vec3 tlo = glm::min(t0, t1);
+        const glm::vec3 thi = glm::max(t0, t1);
+        tEnter = glm::max(glm::max(tlo.x, tlo.y), tlo.z);
+        tExit = glm::min(glm::min(thi.x, thi.y), thi.z);
+        return tExit >= 0.0f && tEnter <= tExit;
+    }
+
+    auto rayTriangle(const Ray& ray, glm::vec3 v0, glm::vec3 v1, glm::vec3 v2, f32& outT) -> bool
+    {
+        constexpr f32 kParallelEps = 1e-8f;  // |det| below this is degenerate or edge-on
+        constexpr f32 kForwardEps = 1e-5f;   // reject hits at/behind the origin
+        const glm::vec3 edge1 = v1 - v0;
+        const glm::vec3 edge2 = v2 - v0;
+        const glm::vec3 pvec = glm::cross(ray.dir, edge2);
+        const f32 det = glm::dot(edge1, pvec);
+        if (det > -kParallelEps && det < kParallelEps)
+        {
+            return false;
+        }
+        const f32 invDet = 1.0f / det;
+        const glm::vec3 tvec = ray.origin - v0;
+        const f32 u = glm::dot(tvec, pvec) * invDet;
+        if (u < 0.0f || u > 1.0f)
+        {
+            return false;
+        }
+        const glm::vec3 qvec = glm::cross(tvec, edge1);
+        const f32 v = glm::dot(ray.dir, qvec) * invDet;
+        if (v < 0.0f || u + v > 1.0f)
+        {
+            return false;
+        }
+        const f32 t = glm::dot(edge2, qvec) * invDet;
+        if (t <= kForwardEps)
+        {
+            return false;
+        }
+        outT = t;
+        return true;
     }
 
     // Read a glTF texture view's encoded image bytes (embedded buffer view or external file).
@@ -2043,6 +2133,56 @@ namespace se
         }
     }
 
+    // Direct checks of the picking math (no GPU): the integration is covered by the e2e pick suite.
+    void runPickMathSelfTest()
+    {
+        const glm::vec3 a{ 0.0f, 0.0f, 0.0f };
+        const glm::vec3 b{ 1.0f, 0.0f, 0.0f };
+        const glm::vec3 c{ 0.0f, 1.0f, 0.0f };
+        const glm::vec3 down{ 0.0f, 0.0f, -1.0f };
+        const glm::vec3 up{ 0.0f, 0.0f, 1.0f };
+        f32 t = 0.0f;
+        // A ray down -Z onto the triangle's interior hits exactly one unit away.
+        const bool centerHits =
+            rayTriangle(Ray{ glm::vec3{ 0.25f, 0.25f, 1.0f }, down }, a, b, c, t) && glm::abs(t - 1.0f) < 1e-4f;
+        // The corner gap (u + v > 1) is inside the AABB but off the triangle: a miss.
+        const bool gapMisses = !rayTriangle(Ray{ glm::vec3{ 0.9f, 0.9f, 1.0f }, down }, a, b, c, t);
+        // A triangle entirely behind the origin is rejected by the forward-t gate.
+        const bool behindMisses = !rayTriangle(Ray{ glm::vec3{ 0.25f, 0.25f, -1.0f }, down }, a, b, c, t);
+        // Two-sided: striking the back face from below still reports a forward hit.
+        const bool backfaceHits =
+            rayTriangle(Ray{ glm::vec3{ 0.25f, 0.25f, -1.0f }, up }, a, b, c, t) && glm::abs(t - 1.0f) < 1e-4f;
+
+        // A 45° rotation about Z grows a unit box's world AABB to ~√2 in x/y while z is unchanged.
+        const f32 angle = 0.7853981634f;  // π/4
+        const f32 cs = glm::cos(angle);
+        const f32 sn = glm::sin(angle);
+        glm::mat4 rot{ 1.0f };
+        rot[0][0] = cs;
+        rot[0][1] = sn;
+        rot[1][0] = -sn;
+        rot[1][1] = cs;
+        glm::vec3 lo{ std::numeric_limits<f32>::max() };
+        glm::vec3 hi{ std::numeric_limits<f32>::lowest() };
+        worldAabbFromCorners(rot, glm::vec3(-0.5f), glm::vec3(0.5f), lo, hi);
+        const bool aabbGrows = glm::abs(hi.x - glm::sqrt(0.5f)) < 1e-3f && glm::abs(hi.z - 0.5f) < 1e-3f;
+        f32 tEnter = 0.0f;
+        f32 tExit = 0.0f;
+        const bool slabHits = rayAabbSlab(Ray{ glm::vec3{ 0.0f, 0.0f, 2.0f }, down }, lo, hi, tEnter, tExit);
+        const bool slabMisses = !rayAabbSlab(Ray{ glm::vec3{ 5.0f, 5.0f, 2.0f }, down }, lo, hi, tEnter, tExit);
+
+        if (centerHits && gapMisses && behindMisses && backfaceHits && aabbGrows && slabHits && slabMisses)
+        {
+            logInfo("pick math (ray-triangle / slab / world-AABB) OK");
+        }
+        else
+        {
+            logError(std::format("pick math self-test FAILED (center={}, gap={}, behind={}, backface={}, "
+                                 "aabb={}, slabHit={}, slabMiss={})",
+                                 centerHits, gapMisses, behindMisses, backfaceHits, aabbGrows, slabHits, slabMisses));
+        }
+    }
+
     void runGeometrySelfTest(const std::string& modelsDir)
     {
         auto obj = translateModel(modelsDir + "/cube.obj");
@@ -2124,5 +2264,6 @@ namespace se
 
         runTranslateDeterminismSelfTest(modelsDir);
         runContainerSelfTest();
+        runPickMathSelfTest();
     }
 }
