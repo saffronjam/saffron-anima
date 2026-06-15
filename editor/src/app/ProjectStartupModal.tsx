@@ -32,6 +32,10 @@ export function ProjectStartupModal({
   const resetSceneState = useEditorStore((s) => s.resetSceneState);
   const setProject = useEditorStore((s) => s.setProject);
   const setViewportHidden = useEditorStore((s) => s.setViewportHidden);
+  const setProjectModalOpen = useEditorStore((s) => s.setProjectModalOpen);
+  // At startup there is no project yet and a choice is mandatory, so the modal is locked open.
+  // Reopened from the project menu (a project already loaded) it is dismissable instead.
+  const dismissable = useEditorStore((s) => s.project !== null);
   const [info, setInfo] = useState<AppDataInfo | null>(null);
   const [recents, setRecents] = useState<RecentProject[]>([]);
   const [name, setName] = useState("");
@@ -129,13 +133,18 @@ export function ProjectStartupModal({
   };
 
   return (
-    <Dialog open={modalOpen} onOpenChange={() => {}}>
-      <DialogContent showCloseButton={false} className="sm:max-w-[760px]">
+    <Dialog
+      open={modalOpen}
+      onOpenChange={(next) => {
+        if (!next && dismissable) {
+          setProjectModalOpen(false);
+        }
+      }}
+    >
+      <DialogContent showCloseButton={dismissable} className="sm:max-w-[760px]">
         <DialogHeader>
           <DialogTitle>Open a project</DialogTitle>
-          <DialogDescription>
-            Choose a recent project or create a new one before editing.
-          </DialogDescription>
+          <DialogDescription>Choose a recent project or create a new one.</DialogDescription>
         </DialogHeader>
 
         <div className="grid min-h-[320px] min-w-0 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(160px,10rem)]">
@@ -260,4 +269,3 @@ export function validProjectName(name: string): boolean {
   }
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(name);
 }
-

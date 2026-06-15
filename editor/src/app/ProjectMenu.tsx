@@ -1,5 +1,6 @@
 /// Project-level file operations exposed from the topbar project selector.
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ChevronDown } from "lucide-react";
 import { client } from "../control/client";
@@ -25,6 +26,7 @@ export function ProjectMenu() {
   const nativeDialogOpen = useEditorStore((s) => s.nativeDialogOpen);
   const devMode = useEditorStore((s) => s.devMode);
   const playState = useEditorStore((s) => s.playState);
+  const setProjectModalOpen = useEditorStore((s) => s.setProjectModalOpen);
 
   const ready = phase === "ready";
   // Saving/loading/reloading are locked during play: open/reload swap the scene out
@@ -32,6 +34,18 @@ export function ProjectMenu() {
   // save is greyed too so play-mode tweaks are never mistaken for authored, saved state.
   const editing = playState === "edit";
   const label = project?.displayName ?? "No project";
+
+  // "New Project" reuses the startup project picker (the one create/open flow); it is dismissable
+  // now that a project is already loaded.
+  const newProject = (): void => {
+    setProjectModalOpen(true);
+  };
+
+  // "Exit" closes the window; Tauri's ExitRequested handler tears the engine down — the same path
+  // as the titlebar close button.
+  const exitApp = (): void => {
+    void getCurrentWindow().close();
+  };
 
   const saveProject = async (): Promise<void> => {
     try {
@@ -117,6 +131,10 @@ export function ProjectMenu() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-52">
+          <DropdownMenuItem onSelect={() => newProject()} disabled={!editing}>
+            New Project...
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => void saveProject()} disabled={!editing}>
             Save Project
           </DropdownMenuItem>
@@ -141,6 +159,8 @@ export function ProjectMenu() {
               </DropdownMenuItem>
             </>
           ) : null}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => exitApp()}>Exit</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
@@ -202,4 +222,3 @@ function VsCodeIcon({ className }: { className?: string }) {
     </svg>
   );
 }
-

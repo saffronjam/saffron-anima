@@ -99,7 +99,8 @@ export function App() {
     }
   }, [activeKind, activeAssetEditorId, mountedAssetId, mountedAssetTabExists]);
   const [revealed, setRevealed] = useState(didRevealWindow);
-  const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const projectModalOpen = useEditorStore((s) => s.projectModalOpen);
+  const setProjectModalOpen = useEditorStore((s) => s.setProjectModalOpen);
   const sceneTabActive = activeViewTabId === "scene";
   // viewportHidden is the MODAL-only global hide (the startup / asset-image modals set it via the store).
   // Per-view park is derived from the active tab: each view's own surface is parked unless its tab is the
@@ -225,7 +226,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [phase, setProject]);
+  }, [phase, setProject, setProjectModalOpen]);
 
   const handleProjectLoaded = (project: ProjectInfo): void => {
     setProject(project);
