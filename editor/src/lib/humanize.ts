@@ -35,6 +35,7 @@ const ABBREVIATIONS = new Set([
 /// `ormTexture` → "ORM texture".
 export function humanizeFieldName(key: string): string {
   const words = key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/[_-]+/g, " ")
     .trim()
@@ -51,4 +52,8 @@ export function humanizeFieldName(key: string): string {
       return i === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word;
     })
     .join(" ");
+}
+
+export function humanizeComponentName(name: string): string {
+  return humanizeFieldName(name);
 }
