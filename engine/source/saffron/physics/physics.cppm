@@ -65,6 +65,10 @@ export namespace se
     /// A Jolt-free summary the control plane echoes.
     auto physicsWorldStats(const PhysicsWorld& world) -> PhysicsWorldStats;
 
+    /// Snapshot every live body (owner entity, motion, active state, world position) via read-only
+    /// BodyInterface getters — never perturbs the deterministic sim. Empty when the world is null.
+    auto listPhysicsBodies(const PhysicsWorld& world) -> std::vector<PhysicsBodyInfo>;
+
     /// Decodes a baked mesh to CPU vertices for convex-hull / mesh-shape cooking. The Host binds it
     /// to loadMeshCpuAsset, keeping <Jolt/...> out of Saffron.Assets and the asset reader out of the
     /// Jolt TU. Jolt-free `Mesh` (Saffron.Geometry) crosses the seam.

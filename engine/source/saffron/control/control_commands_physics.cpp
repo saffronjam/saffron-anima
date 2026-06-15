@@ -66,6 +66,40 @@ namespace se
                                            .dynamicCount = stats.dynamicCount };
             });
 
+        registerCommand<EmptyParams, PhysicsBodiesResult>(
+            reg, "physics-bodies",
+            "physics-bodies — every live body's entity, motion, active state, and world position",
+            [](EngineContext& ctx, const EmptyParams&) -> Result<PhysicsBodiesResult>
+            {
+                PhysicsBodiesResult result;
+                if (ctx.physics == nullptr)
+                {
+                    return result;  // Edit: no world, an empty list (the editor polls unconditionally)
+                }
+                auto motionName = [](MotionType m) -> const char*
+                {
+                    switch (m)
+                    {
+                    case MotionType::Static:
+                        return "static";
+                    case MotionType::Kinematic:
+                        return "kinematic";
+                    case MotionType::Dynamic:
+                        return "dynamic";
+                    }
+                    return "static";
+                };
+                for (const PhysicsBodyInfo& body : listPhysicsBodies(*ctx.physics))
+                {
+                    result.bodies.push_back(PhysicsBodyDto{
+                        .entity = WireUuid{ body.entity },
+                        .motion = motionName(body.motion),
+                        .active = body.active,
+                        .position = Vec3{ .x = body.position.x, .y = body.position.y, .z = body.position.z } });
+                }
+                return result;
+            });
+
         registerCommand<FitColliderParams, FitColliderResult>(
             reg, "fit-collider", "fit-collider {entity} — re-fit a Collider's shape to the entity's mesh AABB",
             [](EngineContext& ctx, const FitColliderParams& params) -> Result<FitColliderResult>

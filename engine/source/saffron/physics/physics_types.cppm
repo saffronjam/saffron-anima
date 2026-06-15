@@ -50,6 +50,16 @@ export namespace se
         i32 dynamicCount = 0;
     };
 
+    /// One live body's read-only snapshot for the editor's physics panel (Jolt-free POD): owner
+    /// entity uuid, motion type, sleep/active state, and world position.
+    struct PhysicsBodyInfo
+    {
+        u64 entity = 0;
+        MotionType motion = MotionType::Static;
+        bool active = false;
+        glm::vec3 position{ 0.0f };
+    };
+
     /// One ray/shape query hit against the live physics world (world space, Jolt-free POD).
     struct PhysicsRayHit
     {

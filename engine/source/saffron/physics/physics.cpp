@@ -656,6 +656,27 @@ namespace se
         return stats;
     }
 
+    auto listPhysicsBodies(const PhysicsWorld& world) -> std::vector<PhysicsBodyInfo>
+    {
+        std::vector<PhysicsBodyInfo> out;
+        const PhysicsWorldImpl* impl = world.impl();
+        if (impl == nullptr)
+        {
+            return out;
+        }
+        const JPH::BodyInterface& bi = impl->system.GetBodyInterface();
+        out.reserve(impl->bodies.size());
+        for (const BodyEntry& entry : impl->bodies)
+        {
+            const JPH::RVec3 pos = bi.GetPosition(entry.id);
+            out.push_back(PhysicsBodyInfo{ .entity = entry.uuid,
+                                           .motion = entry.motion,
+                                           .active = bi.IsActive(entry.id),
+                                           .position = glm::vec3(pos.GetX(), pos.GetY(), pos.GetZ()) });
+        }
+        return out;
+    }
+
     void populatePhysicsWorld(PhysicsWorld& world, Scene& scene, const MeshCookSource& cook)
     {
         PhysicsWorldImpl* impl = world.impl();
