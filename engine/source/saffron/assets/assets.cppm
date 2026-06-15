@@ -1159,12 +1159,14 @@ function ScriptSelf:on_contact(other, point, normal) end ---@param other se.Enti
 
 se = {}
 function se.log(message) end                 ---@param message string
-function se.is_key_pressed(key) end          ---@param key string @return boolean
-function se.just_pressed(key) end            ---@param key string @return boolean
-function se.just_released(key) end           ---@param key string @return boolean
+function se.is_key_down(key) end             ---@param key string @return boolean held this tick
+function se.is_key_pressed(key) end          ---@param key string @return boolean went down this tick (edge)
+function se.is_key_up(key) end               ---@param key string @return boolean went up this tick (edge)
 function se.mouse_position() end             ---@return se.Vec3
 function se.mouse_delta() end                ---@return se.Vec3
-function se.mouse_button(n) end              ---@param n string @return boolean
+function se.is_mouse_down(button) end        ---@param button string @return boolean held this tick
+function se.is_mouse_pressed(button) end     ---@param button string @return boolean went down this tick (edge)
+function se.is_mouse_up(button) end          ---@param button string @return boolean went up this tick (edge)
 function se.mouse_scroll() end               ---@return number
 function se.get_entity_by_name(name) end     ---@param name string @return se.Entity
 function se.find_all_by_name(name) end       ---@param name string @return se.Entity[]
