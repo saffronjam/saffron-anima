@@ -135,6 +135,49 @@ export interface BonePhysics {
   bones: BonePhysicsDto[];
 }
 
+export interface BVec3 {
+  x: boolean;
+  y: boolean;
+  z: boolean;
+}
+
+export interface PhysicsMaterial {
+  friction: number;
+  restitution: number;
+}
+
+export interface Rigidbody {
+  motion: "static" | "kinematic" | "dynamic";
+  mass: number;
+  linearDamping: number;
+  angularDamping: number;
+  gravityFactor: number;
+  lockPosition: BVec3;
+  lockRotation: BVec3;
+  collisionLayer: number;
+}
+
+export interface Collider {
+  shape: "box" | "sphere" | "capsule" | "convexhull" | "mesh";
+  halfExtents: Vec3;
+  sourceMesh: WireUuid;
+  offset: Vec3;
+  material: PhysicsMaterial;
+  isSensor: boolean;
+}
+
+export interface KinematicBones {
+  enabled: boolean;
+  driven: number[];
+}
+
+export interface CharacterController {
+  maxSpeed: number;
+  maxSlopeAngle: number;
+  maxStepHeight: number;
+  gravityFactor: number;
+}
+
 export interface AtmosphereSettingsDto {
   enabled: boolean;
   planetRadius: number;
@@ -166,6 +209,10 @@ export interface Components {
   Bone?: Bone;
   FootIk?: FootIk;
   BonePhysics?: BonePhysics;
+  Rigidbody?: Rigidbody;
+  Collider?: Collider;
+  KinematicBones?: KinematicBones;
+  CharacterController?: CharacterController;
 }
 
 export type ComponentBody =
@@ -186,6 +233,10 @@ export type ComponentBody =
   | ModelInstance
   | FootIk
   | BonePhysics
+  | Rigidbody
+  | Collider
+  | KinematicBones
+  | CharacterController
   | Record<string, unknown>;
 
 export interface EntityRef {
@@ -743,6 +794,11 @@ export interface PlayAnimationParams {
   paused?: boolean;
 }
 
+export interface SetAnimationPlayingParams {
+  entity: WireUuid | string | number;
+  playing: boolean;
+}
+
 export interface SeekAnimationParams {
   entity: WireUuid | string | number;
   time: number;
@@ -772,6 +828,7 @@ export interface DebugOverlaysResult {
   sceneAabb: boolean;
   lightVolumes: boolean;
   grid: boolean;
+  colliders: boolean;
 }
 
 export interface DebugOverlaysParams {
@@ -779,6 +836,7 @@ export interface DebugOverlaysParams {
   sceneAabb?: boolean;
   lightVolumes?: boolean;
   grid?: boolean;
+  colliders?: boolean;
 }
 
 export interface SetSkeletonHighlightParams {
@@ -830,6 +888,17 @@ export interface PhysicsStateResult {
   active: boolean;
   bodyCount: number;
   dynamicCount: number;
+}
+
+export interface PhysicsBodiesResult {
+  bodies: PhysicsBodyDto[];
+}
+
+export interface PhysicsBodyDto {
+  entity: WireUuid;
+  motion: string;
+  active: boolean;
+  position: Vec3;
 }
 
 export interface FitColliderParams {
@@ -1613,7 +1682,7 @@ export interface CommandParamsMap {
   "get-animation-state": AnimationStateParams;
   "list-clips": ListClipsParams;
   "play-animation": PlayAnimationParams;
-  "pause-animation": AnimationStateParams;
+  "set-animation-playing": SetAnimationPlayingParams;
   "seek-animation": SeekAnimationParams;
   "set-animation-loop": SetAnimationLoopParams;
   "stop-preview": AnimationStateParams;
@@ -1628,6 +1697,7 @@ export interface CommandParamsMap {
   "set-foot-ik": SetFootIkParams;
   "get-script-status": EmptyParams;
   "physics-state": EmptyParams;
+  "physics-bodies": EmptyParams;
   "fit-collider": FitColliderParams;
   "drain-contacts": DrainContactsParams;
   "set-kinematic-bones": SetKinematicBonesParams;
@@ -1765,7 +1835,7 @@ export interface CommandResultMap {
   "get-animation-state": AnimationStateResult;
   "list-clips": ListClipsResult;
   "play-animation": AnimationStateResult;
-  "pause-animation": AnimationStateResult;
+  "set-animation-playing": AnimationStateResult;
   "seek-animation": AnimationStateResult;
   "set-animation-loop": AnimationStateResult;
   "stop-preview": AnimationStateResult;
@@ -1780,6 +1850,7 @@ export interface CommandResultMap {
   "set-foot-ik": FootIkResult;
   "get-script-status": ScriptStatusResult;
   "physics-state": PhysicsStateResult;
+  "physics-bodies": PhysicsBodiesResult;
   "fit-collider": FitColliderResult;
   "drain-contacts": DrainContactsResult;
   "set-kinematic-bones": KinematicBonesResult;

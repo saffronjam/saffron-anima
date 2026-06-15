@@ -1014,13 +1014,13 @@
       }
     },
     {
-      "name": "pause-animation",
-      "summary": "stop advancing time, keep the pose shown",
+      "name": "set-animation-playing",
+      "summary": "resume or pause without moving the playhead",
       "params": [
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/AnimationStateParams"
+            "$ref": "#/components/schemas/SetAnimationPlayingParams"
           }
         }
       ],
@@ -1123,7 +1123,7 @@
     },
     {
       "name": "get-debug-overlays",
-      "summary": "the viewport debug-overlay toggles (bounds|sceneAabb|lightVolumes)",
+      "summary": "the viewport debug-overlay toggles (bounds|sceneAabb|lightVolumes|grid|colliders)",
       "params": [
         {
           "name": "params",
@@ -1141,7 +1141,7 @@
     },
     {
       "name": "set-debug-overlays",
-      "summary": "toggle viewport debug overlays {bounds?, sceneAabb?, lightVolumes?, grid?}",
+      "summary": "toggle viewport debug overlays {bounds?, sceneAabb?, lightVolumes?, grid?, colliders?}",
       "params": [
         {
           "name": "params",
@@ -1280,6 +1280,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/PhysicsStateResult"
+        }
+      }
+    },
+    {
+      "name": "physics-bodies",
+      "summary": "every live body's entity, motion, active state, and world position",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PhysicsBodiesResult"
         }
       }
     },
@@ -3757,6 +3775,9 @@
           },
           "grid": {
             "type": "boolean"
+          },
+          "colliders": {
+            "type": "boolean"
           }
         },
         "required": []
@@ -3776,13 +3797,17 @@
           },
           "grid": {
             "type": "boolean"
+          },
+          "colliders": {
+            "type": "boolean"
           }
         },
         "required": [
           "bounds",
           "sceneAabb",
           "lightVolumes",
-          "grid"
+          "grid",
+          "colliders"
         ]
       },
       "DeleteAssetFolderParams": {
@@ -5382,6 +5407,45 @@
           "vramCritFrac"
         ]
       },
+      "PhysicsBodiesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bodies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PhysicsBodyDto"
+            }
+          }
+        },
+        "required": [
+          "bodies"
+        ]
+      },
+      "PhysicsBodyDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "type": "string"
+          },
+          "motion": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "position": {
+            "$ref": "#/components/schemas/Vec3"
+          }
+        },
+        "required": [
+          "entity",
+          "motion",
+          "active",
+          "position"
+        ]
+      },
       "PhysicsStateResult": {
         "type": "object",
         "additionalProperties": false,
@@ -6604,6 +6668,29 @@
         "required": [
           "entity",
           "wrap"
+        ]
+      },
+      "SetAnimationPlayingParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "playing": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entity",
+          "playing"
         ]
       },
       "SetAssetPreviewOptionsParams": {

@@ -394,8 +394,8 @@
       "skip": "needs a rigged entity + an imported clip (covered by the e2e)"
     },
     {
-      "name": "pause-animation",
-      "params": "AnimationStateParams",
+      "name": "set-animation-playing",
+      "params": "SetAnimationPlayingParams",
       "result": "AnimationStateResult",
       "status": "typed",
       "skip": "needs a rigged entity with an animation player (covered by the e2e)"
@@ -495,6 +495,13 @@
       "name": "physics-state",
       "params": "EmptyParams",
       "result": "PhysicsStateResult",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "physics-bodies",
+      "params": "EmptyParams",
+      "result": "PhysicsBodiesResult",
       "status": "typed",
       "fixture": "empty"
     },

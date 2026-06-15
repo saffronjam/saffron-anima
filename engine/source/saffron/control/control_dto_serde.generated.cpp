@@ -1796,6 +1796,28 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<SetAnimationPlayingParams>) -> Result<SetAnimationPlayingParams>
+    {
+        SetAnimationPlayingParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "playing", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readBool(**value, "playing");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.playing = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<SeekAnimationParams>) -> Result<SeekAnimationParams>
     {
         SeekAnimationParams out;
@@ -1927,6 +1949,16 @@ namespace se
                 auto parsed = readBool(*value, "grid");
                 if (!parsed) { return Err(std::move(parsed.error())); }
                 out.grid = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "colliders", 4, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readBool(*value, "colliders");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.colliders = std::move(*parsed);
             }
         }
         return out;
@@ -4118,6 +4150,7 @@ namespace se
         out["sceneAabb"] = value.sceneAabb;
         out["lightVolumes"] = value.lightVolumes;
         out["grid"] = value.grid;
+        out["colliders"] = value.colliders;
         return out;
     }
 
@@ -4160,6 +4193,23 @@ namespace se
         out["active"] = value.active;
         out["bodyCount"] = value.bodyCount;
         out["dynamicCount"] = value.dynamicCount;
+        return out;
+    }
+
+    auto dtoToJson(const PhysicsBodiesResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["bodies"] = dtoVectorToJson(value.bodies);
+        return out;
+    }
+
+    auto dtoToJson(const PhysicsBodyDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["entity"] = dtoToJson(value.entity);
+        out["motion"] = value.motion;
+        out["active"] = value.active;
+        out["position"] = dtoToJson(value.position);
         return out;
     }
 

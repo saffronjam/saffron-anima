@@ -409,10 +409,10 @@ const commands: CommandDef[] = [
     summary: "play a clip on a rig (previews in Edit too)",
   },
   {
-    name: "pause-animation",
-    params: "AnimationStateParams",
+    name: "set-animation-playing",
+    params: "SetAnimationPlayingParams",
     result: "AnimationStateResult",
-    summary: "stop advancing time, keep the pose shown",
+    summary: "resume or pause without moving the playhead",
   },
   {
     name: "seek-animation",
@@ -448,13 +448,13 @@ const commands: CommandDef[] = [
     name: "get-debug-overlays",
     params: "EmptyParams",
     result: "DebugOverlaysResult",
-    summary: "the viewport debug-overlay toggles (bounds|sceneAabb|lightVolumes)",
+    summary: "the viewport debug-overlay toggles (bounds|sceneAabb|lightVolumes|grid|colliders)",
   },
   {
     name: "set-debug-overlays",
     params: "DebugOverlaysParams",
     result: "DebugOverlaysResult",
-    summary: "toggle viewport debug overlays {bounds?, sceneAabb?, lightVolumes?, grid?}",
+    summary: "toggle viewport debug overlays {bounds?, sceneAabb?, lightVolumes?, grid?, colliders?}",
   },
   {
     name: "set-skeleton-highlight",
@@ -497,6 +497,12 @@ const commands: CommandDef[] = [
     params: "EmptyParams",
     result: "PhysicsStateResult",
     summary: "live physics world summary (active, body + dynamic counts)",
+  },
+  {
+    name: "physics-bodies",
+    params: "EmptyParams",
+    result: "PhysicsBodiesResult",
+    summary: "every live body's entity, motion, active state, and world position",
   },
   {
     name: "fit-collider",
@@ -999,6 +1005,7 @@ const commandFixtures = new Map<string, string>([
   ["get-play-state", "empty"],
   ["get-script-status", "empty"],
   ["physics-state", "empty"],
+  ["physics-bodies", "empty"],
   ["drain-contacts", "alarms-since-0"],
   ["drain-script-errors", "alarms-since-0"],
   ["get-script-schema", "script-schema-file"],
@@ -1087,7 +1094,7 @@ const commandSkips = new Map<string, string>([
   ["get-animation-state", "needs a rigged entity with an animation player (covered by the e2e)"],
   ["list-clips", "needs a project with imported animation clips (covered by the e2e)"],
   ["play-animation", "needs a rigged entity + an imported clip (covered by the e2e)"],
-  ["pause-animation", "needs a rigged entity with an animation player (covered by the e2e)"],
+  ["set-animation-playing", "needs a rigged entity with an animation player (covered by the e2e)"],
   ["seek-animation", "needs a rigged entity with an animation player (covered by the e2e)"],
   ["set-animation-loop", "needs a rigged entity with an animation player (covered by the e2e)"],
   ["stop-preview", "needs a rigged entity with an animation player (covered by the e2e)"],
@@ -1913,6 +1920,49 @@ export interface BonePhysics {
   bones: BonePhysicsDto[];
 }
 
+export interface BVec3 {
+  x: boolean;
+  y: boolean;
+  z: boolean;
+}
+
+export interface PhysicsMaterial {
+  friction: number;
+  restitution: number;
+}
+
+export interface Rigidbody {
+  motion: "static" | "kinematic" | "dynamic";
+  mass: number;
+  linearDamping: number;
+  angularDamping: number;
+  gravityFactor: number;
+  lockPosition: BVec3;
+  lockRotation: BVec3;
+  collisionLayer: number;
+}
+
+export interface Collider {
+  shape: "box" | "sphere" | "capsule" | "convexhull" | "mesh";
+  halfExtents: Vec3;
+  sourceMesh: WireUuid;
+  offset: Vec3;
+  material: PhysicsMaterial;
+  isSensor: boolean;
+}
+
+export interface KinematicBones {
+  enabled: boolean;
+  driven: number[];
+}
+
+export interface CharacterController {
+  maxSpeed: number;
+  maxSlopeAngle: number;
+  maxStepHeight: number;
+  gravityFactor: number;
+}
+
 export interface AtmosphereSettingsDto {
   enabled: boolean;
   planetRadius: number;
@@ -1944,6 +1994,10 @@ export interface Components {
   Bone?: Bone;
   FootIk?: FootIk;
   BonePhysics?: BonePhysics;
+  Rigidbody?: Rigidbody;
+  Collider?: Collider;
+  KinematicBones?: KinematicBones;
+  CharacterController?: CharacterController;
 }
 
 export type ComponentBody =
@@ -1964,6 +2018,10 @@ export type ComponentBody =
   | ModelInstance
   | FootIk
   | BonePhysics
+  | Rigidbody
+  | Collider
+  | KinematicBones
+  | CharacterController
   | Record<string, unknown>;`;
   const paramsMap = commands
     .map((command) => `  ${JSON.stringify(command.name)}: ${command.params};`)

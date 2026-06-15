@@ -488,6 +488,19 @@ export namespace se
         bool overflowed;
     };
 
+    struct PhysicsBodyDto
+    {
+        WireUuid entity;
+        std::string motion;  // "static" | "kinematic" | "dynamic"
+        bool active;         // awake vs sleeping
+        Vec3 position;       // world-space body origin
+    };
+
+    struct PhysicsBodiesResult
+    {
+        std::vector<PhysicsBodyDto> bodies;
+    };
+
     struct SetKinematicBonesParams
     {
         EntitySelector entity;
@@ -1503,6 +1516,12 @@ export namespace se
         std::string wrap;  // "once" | "loop" | "pingpong"
     };
 
+    struct SetAnimationPlayingParams
+    {
+        EntitySelector entity;
+        bool playing;  // true resumes from the current playhead; false pauses (keeps the pose shown)
+    };
+
     struct AnimationStateParams
     {
         EntitySelector entity;
@@ -1541,6 +1560,7 @@ export namespace se
         std::optional<bool> sceneAabb;
         std::optional<bool> lightVolumes;
         std::optional<bool> grid;
+        std::optional<bool> colliders;
     };
 
     struct DebugOverlaysResult
@@ -1549,6 +1569,7 @@ export namespace se
         bool sceneAabb;
         bool lightVolumes;
         bool grid;
+        bool colliders;
     };
 
     struct SetSkeletonHighlightParams
@@ -1810,6 +1831,8 @@ export namespace se
     auto dtoToJson(const FitColliderResult& value) -> Json;
     auto dtoToJson(const ContactEventDto& value) -> Json;
     auto dtoToJson(const DrainContactsResult& value) -> Json;
+    auto dtoToJson(const PhysicsBodyDto& value) -> Json;
+    auto dtoToJson(const PhysicsBodiesResult& value) -> Json;
     auto dtoToJson(const KinematicBonesResult& value) -> Json;
     auto dtoToJson(const MoveCharacterResult& value) -> Json;
     auto dtoToJson(const RaycastResult& value) -> Json;
@@ -1991,6 +2014,7 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<PlayAnimationParams>) -> Result<PlayAnimationParams>;
     auto parseDto(const Json& params, DtoTag<SeekAnimationParams>) -> Result<SeekAnimationParams>;
     auto parseDto(const Json& params, DtoTag<SetAnimationLoopParams>) -> Result<SetAnimationLoopParams>;
+    auto parseDto(const Json& params, DtoTag<SetAnimationPlayingParams>) -> Result<SetAnimationPlayingParams>;
     auto parseDto(const Json& params, DtoTag<AnimationStateParams>) -> Result<AnimationStateParams>;
     auto parseDto(const Json& params, DtoTag<SetSkeletonOverlayParams>) -> Result<SetSkeletonOverlayParams>;
     auto parseDto(const Json& params, DtoTag<DebugOverlaysParams>) -> Result<DebugOverlaysParams>;
