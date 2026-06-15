@@ -1698,24 +1698,45 @@ namespace se
             });
 
         registerCommand<ScriptInputParams, ScriptInputResult>(
-            reg, "script-input", "script-input {keys} — set the key state visible to Lua scripts",
+            reg, "script-input",
+            "script-input {keys, mouseButtons?, mouseX?, mouseY?, scroll?} — forward gameplay input to Lua",
             [](EngineContext& ctx, const ScriptInputParams& params) -> Result<ScriptInputResult>
             {
-                ctx.sceneEdit.scriptInputKeys.clear();
+                ScriptInputState& input = ctx.sceneEdit.scriptInput;
+                input.held.clear();
                 for (const std::string& key : params.keys)
                 {
                     const std::string normalized = normalizeScriptKey(key);
                     if (!normalized.empty())
                     {
-                        ctx.sceneEdit.scriptInputKeys.insert(normalized);
+                        input.held.insert(normalized);
                     }
                 }
-                std::vector<std::string> keys;
-                keys.reserve(ctx.sceneEdit.scriptInputKeys.size());
-                for (const std::string& key : ctx.sceneEdit.scriptInputKeys)
+                if (params.mouseButtons)
                 {
-                    keys.push_back(key);
+                    input.mouseButtons.clear();
+                    for (const std::string& button : *params.mouseButtons)
+                    {
+                        const std::string normalized = normalizeScriptKey(button);
+                        if (!normalized.empty())
+                        {
+                            input.mouseButtons.insert(normalized);
+                        }
+                    }
                 }
+                if (params.mouseX)
+                {
+                    input.mouseX = *params.mouseX;
+                }
+                if (params.mouseY)
+                {
+                    input.mouseY = *params.mouseY;
+                }
+                if (params.scroll)
+                {
+                    input.scroll = *params.scroll;
+                }
+                std::vector<std::string> keys(input.held.begin(), input.held.end());
                 std::ranges::sort(keys);
                 return ScriptInputResult{ std::move(keys) };
             });
