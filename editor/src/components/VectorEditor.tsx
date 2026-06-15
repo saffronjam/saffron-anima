@@ -1,14 +1,13 @@
 /// Multi-axis vector editor (ported from the worktree `VectorEditor`, generalized
 /// from a fixed Vec3 to N named axes). Each axis label is a pointer-capture
-/// drag-scrub handle (clientX delta * step); each value is a numeric `<input>` that
-/// swallows its own pointer so typing never starts a scrub. Used for `vec3`/`vec4`
-/// fields. Unit conversion (degrees) is handled by `fieldRenderer` before/after, so
-/// this widget stays unit-agnostic. Renders drag-local state (useScrubValue) so the
-/// readouts never wait on the wire; emits one atomic patch per edit. The panel owns
-/// coalescing and drag-gating.
+/// drag-scrub handle (clientX delta * step); each value is a `NumericInput` that
+/// swallows its own pointer so typing never starts a scrub and only commits a parsed
+/// value on blur. Used for `vec3`/`vec4` fields. Unit conversion (degrees) is handled
+/// by `fieldRenderer` before/after, so this widget stays unit-agnostic. Renders
+/// drag-local state (useScrubValue) so the readouts never wait on the wire; emits one
+/// atomic patch per edit. The panel owns coalescing and drag-gating.
 import { useRef } from "react";
-import { formatNumber } from "./NumberDrag";
-import { Input } from "@/components/ui/input";
+import { NumericInput, formatNumber } from "./NumericInput";
 import { cn } from "@/lib/utils";
 import { useScrubValue } from "@/lib/useScrubValue";
 
@@ -106,15 +105,12 @@ export function VectorEditor({
           >
             {labels?.[i] ?? axis.toUpperCase()}
           </span>
-          <Input
-            type="number"
-            step={step}
-            value={format(scrub.value[axis] ?? 0)}
+          <NumericInput
+            value={scrub.value[axis] ?? 0}
+            format={format}
             className="h-7 rounded-none border-0 bg-transparent px-1 py-0.5 font-mono text-[11px] shadow-none focus-visible:ring-0"
             onPointerDown={(event) => event.stopPropagation()}
-            onChange={(event) =>
-              scrub.set({ ...scrub.value, [axis]: Number(event.currentTarget.value) })
-            }
+            onCommit={(v) => scrub.set({ ...scrub.value, [axis]: v })}
           />
         </label>
       ))}

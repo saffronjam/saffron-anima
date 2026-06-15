@@ -1,32 +1,15 @@
 /// A single-axis drag-scrub number field (ported from the worktree `VectorEditor`
 /// drag math, generalized to one axis). Pointer-capture on the wrapper scrubs the
-/// value by `clientX` delta * step; the numeric `<input>` swallows its own pointer
-/// so typing in the box never starts a scrub. Optional `track` renders a 0..1-style
-/// slider fill behind the value for `slider` fields. Renders drag-local state
-/// (useScrubValue) so the readout never waits on the wire; the panel owns
-/// coalescing and drag-gating (onDragStart/onDragEnd bracket a scrub).
+/// value by `clientX` delta * step; the `NumericInput` swallows its own pointer so
+/// typing in the box never starts a scrub, and only commits a parsed value on blur
+/// (never per-keystroke). Optional `track` renders a 0..1-style slider fill behind
+/// the value for `slider` fields. Renders drag-local state (useScrubValue) so the
+/// readout never waits on the wire; the panel owns coalescing and drag-gating
+/// (onDragStart/onDragEnd bracket a scrub).
 import { useRef } from "react";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useScrubValue } from "@/lib/useScrubValue";
-
-export function formatNumber(value: number): string {
-  if (!Number.isFinite(value)) {
-    return "0";
-  }
-  return Number(value.toFixed(3)).toString();
-}
-
-function clamp(value: number, min?: number, max?: number): number {
-  let v = value;
-  if (min !== undefined && v < min) {
-    v = min;
-  }
-  if (max !== undefined && v > max) {
-    v = max;
-  }
-  return v;
-}
+import { NumericInput, clampNumber } from "./NumericInput";
 
 export interface NumberDragProps {
   value: number;
@@ -71,7 +54,7 @@ export function NumberDrag({
       return;
     }
     const delta = event.clientX - drag.startX;
-    const next = clamp(drag.startValue + delta * step, min, max);
+    const next = clampNumber(drag.startValue + delta * step, min, max);
     scrub.set(Number(next.toFixed(3)));
   }
 
@@ -85,7 +68,7 @@ export function NumberDrag({
 
   const fill =
     track && min !== undefined && max !== undefined && max > min
-      ? ((clamp(scrub.value, min, max) - min) / (max - min)) * 100
+      ? ((clampNumber(scrub.value, min, max) - min) / (max - min)) * 100
       : null;
 
   return (
@@ -102,18 +85,16 @@ export function NumberDrag({
           style={{ width: `${fill}%` }}
         />
       ) : null}
-      <Input
-        type="number"
-        step={step}
+      <NumericInput
+        value={scrub.value}
         min={min}
         max={max}
-        value={formatNumber(scrub.value)}
         className={cn(
           "relative h-7 rounded-sm bg-background px-1.5 py-0.5 font-mono text-[11px]",
           track && "bg-transparent",
         )}
         onPointerDown={(event) => event.stopPropagation()}
-        onChange={(event) => scrub.set(clamp(Number(event.currentTarget.value), min, max))}
+        onCommit={(v) => scrub.set(v)}
       />
     </div>
   );
