@@ -33,9 +33,10 @@ project file and is what the editor shows to users.
 ## How it works
 
 A project save serializes one JSON document: a version, the project name, the display name,
-the asset catalog, the scene, the renderer settings, and the editor camera. The catalog lists every asset by id,
-name, type, and path. The scene half is the registry-driven scene serializer. A load reverses
-this, after first making the GPU idle so the previous project's resources can be released safely.
+the asset catalog, the scene, the renderer settings, the editor camera, and the debug overlays.
+The catalog lists every asset by id, name, type, and path. The scene half is the registry-driven
+scene serializer. A load reverses this, after first making the GPU idle so the previous project's
+resources can be released safely.
 
 ## One document
 
@@ -67,6 +68,12 @@ this, after first making the GPU idle so the previous project's resources can be
     "yaw": -37.0,
     "pitch": -29.0,
     "fov": 45.0
+  },
+  "debugOverlays": {
+    "bounds": false,
+    "sceneAabb": false,
+    "lightVolumes": false,
+    "grid": true
   }
 }
 ```
@@ -96,6 +103,11 @@ shows the framing it was saved with. The serde lives in SceneEdit — the camera
 state, not an asset — and `saveProject`/`loadProject` just carry the block; callers in the
 control commands and the host startup path apply it. A project without the block keeps the
 current camera, like the render settings.
+
+The [debug overlays](../../ui-and-editor/debug-visualization/) ride along through the same
+caller-applied seam: `debugOverlays` stores the bounding-box / scene-AABB / light-volume / grid
+toggles, so a reopened project restores which overlays were on. They also live on `SceneEditContext`,
+so their serde (`debugOverlaysToJson`/`debugOverlaysFromJson`) is in SceneEdit, not the asset layer.
 
 ## Loading replaces both, after a device idle
 
@@ -150,6 +162,7 @@ paths working. New imports and new saves use `models/`.
 | Catalog ↔ JSON | `assets.cppm` | `catalogToJson`, `catalogFromJson`, `assetTypeName` |
 | Render settings ↔ JSON | `assets.cppm` | `renderSettingsToJson`, `applyRenderSettings` |
 | Editor camera ↔ JSON | `scene_edit_camera.cpp` | `sceneEditCameraToJson`, `sceneEditCameraFromJson` |
+| Debug overlays ↔ JSON | `scene_edit_context.cpp` | `debugOverlaysToJson`, `debugOverlaysFromJson` |
 | Legacy migration | `assets.cppm` | `newAssetServer` |
 | Project commands | `control_commands_asset.cpp` | `get-project`, `new-project`, `open-project`, `save-project` |
 | Scene half | `scene.cppm` | `sceneToJson`, `sceneFromJson` |

@@ -14,11 +14,15 @@ click in empty space can still land — and skinned meshes are skipped entirely.
 **bounding-box** overlay makes that box visible, so the over-select is something you see rather
 than guess at.
 
-These are **transient editor state**: they live on the `SceneEditContext`, never serialize into a
-project, and are not on the undo stack — the same footing as the [skeleton overlay](../asset-editor/),
-not the [Render panel's](../metrics-dashboard/) persisted render config. They render only in Edit,
-as world-space lines in the editor overlay pass, into the depth-tested bucket so scene geometry
-occludes them.
+These are **editor view state**: they live on the `SceneEditContext` and are not on the undo stack
+(toggling one is not an undo entry, unlike the [Render panel's](../metrics-dashboard/) feature
+toggles). They do persist with the project, though — `saveProject` carries a `debugOverlays` block,
+so a reopened project restores them, the way the
+[editor camera](../../geometry-and-assets/project-serialization/) rides along. They render as
+world-space lines in the editor overlay pass, into the depth-tested bucket so scene geometry occludes
+them. Most are Edit-only; the **collider** overlay is the exception — it reads the authored
+`ColliderComponent` (present in Edit and Play), so it also draws during simulation, tracking the bodies
+as they move.
 
 ## Overlays
 
@@ -28,6 +32,7 @@ occludes them.
 | **Scene AABB** | The whole-scene box the directional-shadow / DDGI fit derives each frame (yellow) | `renderScene` recomputes and discards this every frame; the overlay recomputes the same union for display. |
 | **Light Volumes** | Point-light range as three great-circle rings; spot-light cone from apex to base ring | The spot direction matches the lighting upload (`normalize(worldRotation · direction)`), so the cone shows where the light actually shines. Directional lights are skipped (their position is arbitrary). |
 | **Grid** | An infinite ground-plane reference grid with red (X) / blue (Z) axis lines | Not a line overlay — a fullscreen analytic render-graph pass (`grid.slang`): the fragment reconstructs the world ray from the inverse view-projection, intersects `y = 0`, anti-aliases the lines with `fwidth`, fades with distance, and writes `SV_Depth` so geometry occludes it. Runs at 1× after tonemap, before the line overlay. |
+| **Colliders** | The physics collision shape per `ColliderComponent` — an oriented box / sphere / capsule wireframe (cook-source AABB for hull/mesh) | Drawn **scale-free** to match the simulated Jolt body (world position + rotation, the collider offset rotated-only — never the entity's world matrix, which carries scale). Cyan for solid colliders, **green** for sensors (triggers), **orange** for the selected one. Draws in Edit *and* Play. The per-bone ragdoll capsules and the character-controller capsule are not entity colliders, so they are not drawn. |
 
 ## Driving it
 
@@ -76,11 +81,11 @@ se render-stats -o json | jq .viewMode    # "normal"
 
 | What | File | Symbols |
 |---|---|---|
-| Overlay state (transient, per session) | `sceneedit/scene_edit_context.cppm` | `DebugOverlayOptions`, `SceneEditContext::debugOverlays` |
+| Overlay state + project serde | `sceneedit/scene_edit_context.cppm` · `scene_edit_context.cpp` | `DebugOverlayOptions`, `SceneEditContext::debugOverlays`, `debugOverlaysToJson`/`debugOverlaysFromJson` |
 | View-mode state + device feature | `rendering/renderer_types.cppm` · `rendering/renderer.cppm` | `ViewMode`, `Renderer::viewMode`, `setViewMode`/`viewMode`, `VulkanContext::fillModeNonSolid` |
 | Wireframe PSO variant | `rendering/renderer_pipelines.cpp` · `rendering/renderer_drawlist.cpp` | `newMeshPipeline`/`requestMeshPipeline` (wireframe), the per-draw gate |
 | Buffer-channel output | `engine/assets/shaders/mesh.slang` · `lighting.slang` · `rendering/renderer_lighting.cpp` | the fragment debug branch, `debugViewChannel()`, the `pointShadowMeta.w` pack |
 | Control commands | `control/control_commands_scene.cpp` · `control/control_commands_render.cpp` | `get-debug-overlays`, `set-debug-overlays`, `set-view-mode`, `RenderStatsDto::viewMode` |
-| World-space line builders | `host/host.cppm` | `buildDebugOverlays`, `addWorldAabb`, `addWorldRing`, `submitSceneEditOverlay` |
+| World-space line builders | `host/host.cppm` | `buildDebugOverlays`, `buildColliderOverlays`, `addWorldAabb`, `addWorldRing`, `addWorldOrientedBox`, `addWorldArc`, `submitSceneEditOverlay` |
 | Grid pass + shader | `rendering/renderer.cppm` · `rendering/renderer_pipelines.cpp` · `engine/assets/shaders/grid.slang` | the grid `RgPass`, `newGridPipeline`, `recordGrid`, `Renderer::showGrid` (from `RenderSceneOptions::showGrid`) |
 | Editor panel + state | `editor/src/panels/RenderPanel.tsx` · `editor/src/state/store.ts` | `DEBUG_OVERLAYS`, `VIEW_MODES`, `onDebugToggle`, `onViewMode`, `debugOverlays` slice |
