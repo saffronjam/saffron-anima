@@ -63,6 +63,11 @@ export namespace sa
         glm::mat4 matrix{ 1.0f };
     };
 
+    struct ComponentOrderComponent
+    {
+        std::vector<std::string> names;
+    };
+
     // Tags a skeleton joint (set by the glTF skin import) so the outliner can filter
     // bone rows. Serialized as an empty object; a bone is otherwise an ordinary entity.
     struct BoneComponent
@@ -623,6 +628,7 @@ export namespace sa
         addComponent<NameComponent>(scene, entity, std::move(name));
         addComponent<TransformComponent>(scene, entity);
         addComponent<RelationshipComponent>(scene, entity);
+        addComponent<ComponentOrderComponent>(scene, entity, std::vector<std::string>{ "Name", "Transform" });
         return entity;
     }
 
@@ -1194,10 +1200,11 @@ export namespace sa
     // every cross-cutting feature dispatches through it instead of a switch.
     //
     // Version history: 1 = entities only; 2 = adds the top-level "environment" block;
-    // 3 = adds the per-entity Relationship component (durable parent uuid).
+    // 3 = adds the per-entity Relationship component (durable parent uuid);
+    // 4 = adds per-entity component order.
     // sceneFromJson migrates older documents: v1 defaults the environment, and a
     // pre-v3 document has no Relationship, so every entity loads as a root.
-    inline constexpr int SceneVersion = 3;
+    inline constexpr int SceneVersion = 4;
 
     struct ComponentTraits
     {
@@ -1347,6 +1354,138 @@ export namespace sa
         return &reg.rows[it->second];
     }
 
+    auto presentComponentNames(ComponentRegistry& reg, Scene& scene, Entity entity) -> std::vector<std::string>
+    {
+        std::vector<std::string> names;
+        for (const ComponentTraits& traits : reg.rows)
+        {
+            if (traits.name != "Relationship" && traits.name != "Bone" && traits.has(scene, entity))
+            {
+                names.push_back(traits.name);
+            }
+        }
+        return names;
+    }
+
+    auto canonicalComponentOrder(ComponentRegistry& reg, Scene& scene, Entity entity) -> std::vector<std::string>
+    {
+        return presentComponentNames(reg, scene, entity);
+    }
+
+    auto componentOrder(ComponentRegistry& reg, Scene& scene, Entity entity) -> const std::vector<std::string>&
+    {
+        if (!hasComponent<ComponentOrderComponent>(scene, entity))
+        {
+            addComponent<ComponentOrderComponent>(scene, entity);
+        }
+        ComponentOrderComponent& order = getComponent<ComponentOrderComponent>(scene, entity);
+        std::vector<std::string> canonical = canonicalComponentOrder(reg, scene, entity);
+        std::unordered_set<std::string> present(canonical.begin(), canonical.end());
+        std::unordered_set<std::string> kept;
+        std::vector<std::string> next;
+        next.reserve(canonical.size());
+        for (const std::string& name : order.names)
+        {
+            if (present.contains(name) && !kept.contains(name))
+            {
+                next.push_back(name);
+                kept.insert(name);
+            }
+        }
+        for (const std::string& name : canonical)
+        {
+            if (!kept.contains(name))
+            {
+                next.push_back(name);
+            }
+        }
+        order.names = std::move(next);
+        return order.names;
+    }
+
+    auto setComponentOrder(ComponentRegistry& reg, Scene& scene, Entity entity, std::vector<std::string> names)
+        -> Result<void>
+    {
+        std::vector<std::string> canonical = canonicalComponentOrder(reg, scene, entity);
+        std::unordered_set<std::string> present(canonical.begin(), canonical.end());
+        std::unordered_set<std::string> seen;
+        if (names.size() != canonical.size())
+        {
+            return Err(std::format("component order must contain {} entries", canonical.size()));
+        }
+        for (const std::string& name : names)
+        {
+            if (!present.contains(name))
+            {
+                return Err(std::format("component order contains non-present component '{}'", name));
+            }
+            if (seen.contains(name))
+            {
+                return Err(std::format("component order contains duplicate component '{}'", name));
+            }
+            seen.insert(name);
+        }
+        if (!hasComponent<ComponentOrderComponent>(scene, entity))
+        {
+            addComponent<ComponentOrderComponent>(scene, entity);
+        }
+        getComponent<ComponentOrderComponent>(scene, entity).names = std::move(names);
+        return {};
+    }
+
+    void appendComponentOrder(ComponentRegistry& reg, Scene& scene, Entity entity, const std::string& name)
+    {
+        if (!hasComponent<ComponentOrderComponent>(scene, entity))
+        {
+            addComponent<ComponentOrderComponent>(scene, entity);
+        }
+        ComponentOrderComponent& order = getComponent<ComponentOrderComponent>(scene, entity);
+        std::vector<std::string> canonical = canonicalComponentOrder(reg, scene, entity);
+        std::unordered_set<std::string> present(canonical.begin(), canonical.end());
+        std::unordered_set<std::string> kept;
+        std::vector<std::string> next;
+        next.reserve(canonical.size());
+        for (const std::string& item : order.names)
+        {
+            if (item != name && present.contains(item) && !kept.contains(item))
+            {
+                next.push_back(item);
+                kept.insert(item);
+            }
+        }
+        for (const std::string& item : canonical)
+        {
+            if (item != name && !kept.contains(item))
+            {
+                next.push_back(item);
+                kept.insert(item);
+            }
+        }
+        if (present.contains(name))
+        {
+            next.push_back(name);
+        }
+        order.names = std::move(next);
+    }
+
+    void removeComponentOrder(ComponentRegistry& reg, Scene& scene, Entity entity, const std::string& name)
+    {
+        ComponentOrderComponent& order = hasComponent<ComponentOrderComponent>(scene, entity)
+                                             ? getComponent<ComponentOrderComponent>(scene, entity)
+                                             : addComponent<ComponentOrderComponent>(scene, entity);
+        std::erase(order.names, name);
+        static_cast<void>(componentOrder(reg, scene, entity));
+    }
+
+    void sortComponentOrder(ComponentRegistry& reg, Scene& scene, Entity entity)
+    {
+        if (!hasComponent<ComponentOrderComponent>(scene, entity))
+        {
+            addComponent<ComponentOrderComponent>(scene, entity);
+        }
+        getComponent<ComponentOrderComponent>(scene, entity).names = canonicalComponentOrder(reg, scene, entity);
+    }
+
     // Scene& is non-const because entt views/storage iteration require it; these
     // functions do not logically mutate the scene.
     auto serializeEntity(ComponentRegistry& reg, Scene& scene, Entity entity) -> nlohmann::json
@@ -1361,7 +1500,7 @@ export namespace sa
             const ComponentTraits* traits = findById(reg, id);
             if (traits == nullptr)
             {
-                continue;  // unregistered/internal storage (e.g. IdComponent) — skipped
+                continue;  // unregistered/internal storage (e.g. IdComponent/ComponentOrderComponent) — skipped
             }
             components[traits->name] = traits->serialize(scene, entity);
         }
@@ -1402,6 +1541,7 @@ export namespace sa
                                  nlohmann::json entry;
                                  entry["id"] = uuidToJson(id.id.value);
                                  entry["components"] = serializeEntity(reg, scene, entity);
+                                 entry["componentOrder"] = componentOrder(reg, scene, entity);
                                  doc["entities"].push_back(std::move(entry));
                              });
         return doc;
@@ -1453,6 +1593,23 @@ export namespace sa
                     return Err(result.error());
                 }
             }
+            if (version >= 4 && entry.contains("componentOrder") && entry["componentOrder"].is_array())
+            {
+                std::vector<std::string> order;
+                for (const nlohmann::json& item : entry["componentOrder"])
+                {
+                    if (item.is_string())
+                    {
+                        order.push_back(item.get<std::string>());
+                    }
+                }
+                addComponent<ComponentOrderComponent>(scene, Entity{ handle }, std::move(order));
+            }
+            else
+            {
+                sortComponentOrder(reg, scene, Entity{ handle });
+            }
+            static_cast<void>(componentOrder(reg, scene, Entity{ handle }));
         }
 
         // Resolve cross-entity references (uuid -> live handle). Parent uuids may point
@@ -1576,14 +1733,19 @@ export namespace sa
         Entity leaf = createEntity(tree, "Leaf");
         getComponent<TransformComponent>(tree, root).translation = glm::vec3(5.0f, 0.0f, 0.0f);
         static_cast<void>(setParent(tree, leaf, root, false));
+        expect(setComponentOrder(reg, tree, root, std::vector<std::string>{ "Transform", "Name" }).has_value(),
+               "component order accepts the visible component set");
 
         nlohmann::json doc = sceneToJson(reg, tree);
+        expect(doc["entities"][0].contains("componentOrder"), "scene json carries component order");
 
         Scene loadedTree;
         expect(sceneFromJson(reg, loadedTree, doc).has_value(), "hierarchy doc loads");
         {
             Entity loadedRoot = findByEntityName(loadedTree, "Root");
             Entity loadedLeaf = findByEntityName(loadedTree, "Leaf");
+            expect(componentOrder(reg, loadedTree, loadedRoot) == std::vector<std::string>{ "Transform", "Name" },
+                   "component order survives scene round trip");
             expect(getComponent<RelationshipComponent>(loadedTree, loadedLeaf).parentHandle == loadedRoot.handle,
                    "loaded leaf resolves its parent handle");
             const std::vector<entt::entity>& kids =
@@ -1626,6 +1788,9 @@ export namespace sa
                                                }
                                            });
             expect(migratedTotal == 2 && migratedRoots == 2, "v2 entities migrate to roots");
+            Entity migratedRoot = findByEntityName(migrated, "Root");
+            expect(componentOrder(reg, migrated, migratedRoot) == std::vector<std::string>{ "Name", "Transform" },
+                   "pre-v4 scene derives canonical component order");
         }
 
         // A skinned mesh round-trips by uuid: bones + inverseBind survive, and the

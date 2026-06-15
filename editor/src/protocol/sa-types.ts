@@ -620,6 +620,15 @@ export interface SetComponentResult {
   set: string;
 }
 
+export interface SetComponentOrderParams {
+  entity: WireUuid | string | number;
+  components: string[];
+}
+
+export interface SetComponentOrderResult {
+  components: string[];
+}
+
 export interface SetTransformParams {
   entity: WireUuid | string | number;
   translation?: Vec3;
@@ -679,6 +688,7 @@ export interface InspectResult {
   id: WireUuid;
   name: string;
   components: Components;
+  componentOrder: string[];
 }
 
 export interface WorldTransformResult {
@@ -1693,6 +1703,7 @@ export interface CommandParamsMap {
   "add-component": ComponentParams;
   "remove-component": ComponentParams;
   "set-component": SetComponentParams;
+  "set-component-order": SetComponentOrderParams;
   "set-transform": SetTransformParams;
   "set-material": SetMaterialParams;
   "set-light": SetLightParams;
@@ -1848,6 +1859,7 @@ export interface CommandResultMap {
   "add-component": AddComponentResult;
   "remove-component": RemoveComponentResult;
   "set-component": SetComponentResult;
+  "set-component-order": SetComponentOrderResult;
   "set-transform": EntityRef;
   "set-material": EntityRef;
   "set-light": EntityRef;

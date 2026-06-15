@@ -89,7 +89,9 @@ function validate(schema: any, value: any, path: string, errors: string[]): void
     return;
   }
   if (schema.const !== undefined && value !== schema.const) {
-    errors.push(`${path}: expected const ${JSON.stringify(schema.const)}, got ${JSON.stringify(value)}`);
+    errors.push(
+      `${path}: expected const ${JSON.stringify(schema.const)}, got ${JSON.stringify(value)}`,
+    );
   }
   if (schema.enum && !schema.enum.includes(value)) {
     errors.push(`${path}: ${JSON.stringify(value)} not in enum ${JSON.stringify(schema.enum)}`);
@@ -151,7 +153,10 @@ function assertRawU64(raw: string, label: string, errors: string[]): void {
 }
 
 let nextId = 1;
-function call(cmd: string, params: Record<string, unknown> = {}): Promise<{ envelope: any; raw: string }> {
+function call(
+  cmd: string,
+  params: Record<string, unknown> = {},
+): Promise<{ envelope: any; raw: string }> {
   return new Promise((resolve, reject) => {
     const socket = net.connect({ path: SOCK });
     let buf = "";
@@ -224,7 +229,10 @@ async function meshAssetId(): Promise<string> {
   return id;
 }
 
-async function paramsForFixture(fixture: string, state: { cubeId: string }): Promise<Record<string, unknown>> {
+async function paramsForFixture(
+  fixture: string,
+  state: { cubeId: string },
+): Promise<Record<string, unknown>> {
   switch (fixture) {
     case "empty":
       return {};
@@ -253,6 +261,11 @@ async function paramsForFixture(fixture: string, state: { cubeId: string }): Pro
     }
     case "cube-name-component":
       return { entity: state.cubeId, component: "Name", json: { name: "Component Set Cube" } };
+    case "cube-component-order":
+      return {
+        entity: state.cubeId,
+        components: ["Transform", "Name", "Mesh", "Material", "ModelInstance"],
+      };
     case "cube-transform":
       return { entity: state.cubeId, translation: { x: 1, y: 2, z: 3 } };
     case "cube-material":
@@ -407,10 +420,15 @@ async function main(): Promise<number> {
       errors.push("help: expected ok:true with result.commands");
     } else {
       const live = new Set(help.envelope.result.commands.map((command: any) => command.name));
-      const known = new Set([...manifest.commands.map((command) => command.name), ...manifest.skips.map((skip) => skip.name)]);
+      const known = new Set([
+        ...manifest.commands.map((command) => command.name),
+        ...manifest.skips.map((skip) => skip.name),
+      ]);
       for (const name of live) {
         if (!known.has(name)) {
-          errors.push(`manifest completeness: live help command '${name}' is missing from manifest`);
+          errors.push(
+            `manifest completeness: live help command '${name}' is missing from manifest`,
+          );
         }
       }
       for (const name of known) {
@@ -464,17 +482,28 @@ async function main(): Promise<number> {
         errors.push(`hierarchy set-parent: ${reparent.envelope.error}`);
       }
       const listed = await call("list-entities");
-      validate(schemaForResult("EntityList"), listed.envelope.result, "hierarchy list-entities", errors);
+      validate(
+        schemaForResult("EntityList"),
+        listed.envelope.result,
+        "hierarchy list-entities",
+        errors,
+      );
       assertRawU64(listed.raw, "hierarchy list-entities", errors);
       const entry = (listed.envelope.result as any)?.entities?.find((e: any) => e.id === childId);
       if (!entry || entry.parentId !== hierParentId) {
-        errors.push(`hierarchy: child ${childId} should list parentId ${hierParentId}, got ${entry?.parentId}`);
+        errors.push(
+          `hierarchy: child ${childId} should list parentId ${hierParentId}, got ${entry?.parentId}`,
+        );
       } else {
         checked.push("set-parent -> list-entities parentId round-trip");
       }
 
       const cycle = await call("set-parent", { entity: hierParentId, parent: childId });
-      if (cycle.envelope.ok !== false || typeof cycle.envelope.error !== "string" || cycle.envelope.error.length === 0) {
+      if (
+        cycle.envelope.ok !== false ||
+        typeof cycle.envelope.error !== "string" ||
+        cycle.envelope.error.length === 0
+      ) {
         errors.push("hierarchy: parenting an entity under its own child must fail (cycle)");
       } else {
         checked.push("set-parent cycle -> envelope (ok:false)");
@@ -485,7 +514,9 @@ async function main(): Promise<number> {
         errors.push(`hierarchy detach: ${detach.envelope.error}`);
       }
       const relisted = await call("list-entities");
-      const detached = (relisted.envelope.result as any)?.entities?.find((e: any) => e.id === childId);
+      const detached = (relisted.envelope.result as any)?.entities?.find(
+        (e: any) => e.id === childId,
+      );
       if (!detached || "parentId" in detached) {
         errors.push("hierarchy: detached child must carry no parentId");
       } else {

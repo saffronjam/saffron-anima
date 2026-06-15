@@ -63,18 +63,24 @@ namespace sa
 
     auto fromGlm(const glm::vec3& value) -> Vec3
     {
-        return Vec3{ value.x, value.y, value.z };
+        return Vec3{ .x = value.x, .y = value.y, .z = value.z };
     }
 
     auto cameraDto(const SceneEditCamera& camera) -> EditorCamera
     {
-        return EditorCamera{ fromGlm(camera.position), camera.yaw,      camera.pitch,     camera.fov,
-                             camera.nearPlane,         camera.farPlane, camera.moveSpeed, camera.lookSpeed };
+        return EditorCamera{ .position = fromGlm(camera.position),
+                             .yaw = camera.yaw,
+                             .pitch = camera.pitch,
+                             .fov = camera.fov,
+                             .near = camera.nearPlane,
+                             .far = camera.farPlane,
+                             .moveSpeed = camera.moveSpeed,
+                             .lookSpeed = camera.lookSpeed };
     }
 
     auto environmentDto(Scene& scene) -> EnvironmentDto
     {
-        return EnvironmentDto{ environmentToJson(scene.environment) };
+        return EnvironmentDto{ .value = environmentToJson(scene.environment) };
     }
 
     auto gizmoOpDto(GizmoOp op) -> GizmoOpDto
@@ -149,14 +155,19 @@ namespace sa
 
     auto gizmoStateDto(const SceneEditContext& editor) -> GizmoState
     {
-        return GizmoState{ gizmoOpDto(editor.gizmoOp), gizmoSpaceDto(editor.gizmoSpace), editor.preserveChildren };
+        return GizmoState{ .op = gizmoOpDto(editor.gizmoOp),
+                           .space = gizmoSpaceDto(editor.gizmoSpace),
+                           .preserveChildren = editor.preserveChildren };
     }
 
     auto playStateResultDto(const SceneEditContext& editor) -> PlayStateResult
     {
-        return PlayStateResult{ playStateName(editor.playState),           static_cast<i32>(editor.playVersion),
-                                static_cast<i32>(editor.sceneVersion),     editor.hadPrimaryCamera,
-                                static_cast<i32>(editor.animationVersion), WireUuid{ editor.previewAsset.value } };
+        return PlayStateResult{ .state = playStateName(editor.playState),
+                                .playVersion = static_cast<i32>(editor.playVersion),
+                                .sceneVersion = static_cast<i32>(editor.sceneVersion),
+                                .hasPrimaryCamera = editor.hadPrimaryCamera,
+                                .animationVersion = static_cast<i32>(editor.animationVersion),
+                                .previewAsset = WireUuid{ editor.previewAsset.value } };
     }
 
     auto normalizeScriptKey(std::string key) -> std::string
@@ -234,7 +245,11 @@ namespace sa
 
     auto debugOverlaysState(const DebugOverlayOptions& opts) -> DebugOverlaysResult
     {
-        return DebugOverlaysResult{ opts.bounds, opts.sceneAabb, opts.lightVolumes, opts.grid, opts.colliders };
+        return DebugOverlaysResult{ .bounds = opts.bounds,
+                                    .sceneAabb = opts.sceneAabb,
+                                    .lightVolumes = opts.lightVolumes,
+                                    .grid = opts.grid,
+                                    .colliders = opts.colliders };
     }
 
     auto fitColliderToMesh(EngineContext& ctx, Entity entity) -> bool
@@ -456,7 +471,7 @@ namespace sa
                 }
                 destroyEntity(scene, *entity);
                 ctx.sceneEdit.sceneVersion += 1;
-                return DestroyEntityResult{ WireUuid{ id } };
+                return DestroyEntityResult{ .destroyed = WireUuid{ id } };
             });
 
         registerCommand<SetParentParams, EntityRef>(
@@ -518,8 +533,9 @@ namespace sa
                 {
                     static_cast<void>(fitBoneCapsules(ctx, *entity));  // auto-fit per-bone capsules
                 }
+                appendComponentOrder(ctx.sceneEdit.registry, activeScene(ctx.sceneEdit), *entity, row->name);
                 ctx.sceneEdit.sceneVersion += 1;
-                return AddComponentResult{ row->name };
+                return AddComponentResult{ .added = row->name };
             });
 
         registerCommand<ComponentParams, RemoveComponentResult>(
@@ -541,8 +557,29 @@ namespace sa
                     return Err(std::format("component '{}' is not removable", row->name));
                 }
                 row->remove(activeScene(ctx.sceneEdit), *entity);
+                removeComponentOrder(ctx.sceneEdit.registry, activeScene(ctx.sceneEdit), *entity, row->name);
                 ctx.sceneEdit.sceneVersion += 1;
-                return RemoveComponentResult{ row->name };
+                return RemoveComponentResult{ .removed = row->name };
+            });
+
+        registerCommand<SetComponentOrderParams, SetComponentOrderResult>(
+            reg, "set-component-order", "set-component-order {entity, components}",
+            [](EngineContext& ctx, const SetComponentOrderParams& params) -> Result<SetComponentOrderResult>
+            {
+                auto entity = resolveEntity(ctx, params.entity);
+                if (!entity)
+                {
+                    return Err(entity.error());
+                }
+                auto result =
+                    setComponentOrder(ctx.sceneEdit.registry, activeScene(ctx.sceneEdit), *entity, params.components);
+                if (!result)
+                {
+                    return Err(result.error());
+                }
+                ctx.sceneEdit.sceneVersion += 1;
+                return SetComponentOrderResult{ .components = componentOrder(ctx.sceneEdit.registry,
+                                                                             activeScene(ctx.sceneEdit), *entity) };
             });
 
         // Applies a component's serialized form. Routing through the registry's
@@ -561,10 +598,15 @@ namespace sa
                 {
                     return Err(std::format("unknown component '{}'", params.component));
                 }
+                const bool hadComponent = row->has(activeScene(ctx.sceneEdit), *entity);
                 auto result = row->deserialize(activeScene(ctx.sceneEdit), *entity, params.json);
                 if (!result)
                 {
                     return Err(result.error());
+                }
+                if (!hadComponent)
+                {
+                    appendComponentOrder(ctx.sceneEdit.registry, activeScene(ctx.sceneEdit), *entity, row->name);
                 }
                 // A raw Relationship write changes the durable parent uuid; relink so the
                 // caches follow (a cyclic parent is cut back to root with a warning).
@@ -573,7 +615,7 @@ namespace sa
                     relinkHierarchy(activeScene(ctx.sceneEdit));
                 }
                 ctx.sceneEdit.sceneVersion += 1;
-                return SetComponentResult{ row->name };
+                return SetComponentResult{ .set = row->name };
             });
 
         // Routes through the Transform row's deserialize so the wire shape matches
@@ -920,7 +962,7 @@ namespace sa
                 {
                     setSelection(ctx.sceneEdit, billboard);
                     EntityRef ref = entityRefDto(activeScene(ctx.sceneEdit), billboard);
-                    return PickResult{ true, ref.id, ref.name, PickKind::Billboard };
+                    return PickResult{ .hit = true, .id = ref.id, .name = ref.name, .kind = PickKind::Billboard };
                 }
 
                 // pickEntity flips proj[1][1] to match the renderer's clip space, so it
@@ -930,14 +972,14 @@ namespace sa
                 if (hit.handle == entt::null)
                 {
                     setSelection(ctx.sceneEdit, hit);
-                    return PickResult{ false, std::nullopt, std::nullopt, std::nullopt };
+                    return PickResult{ .hit = false, .id = std::nullopt, .name = std::nullopt, .kind = std::nullopt };
                 }
                 // A model instance is a single subtree; a click anywhere in it selects the whole
                 // model (its container root), not the bare mesh/bone node the ray hit.
                 const Entity selected = modelRootOf(activeScene(ctx.sceneEdit), hit);
                 setSelection(ctx.sceneEdit, selected);
                 EntityRef ref = entityRefDto(activeScene(ctx.sceneEdit), selected);
-                return PickResult{ true, ref.id, ref.name, PickKind::Mesh };
+                return PickResult{ .hit = true, .id = ref.id, .name = ref.name, .kind = PickKind::Mesh };
             });
 
         registerCommand<EntityParams, InspectResult>(
@@ -958,7 +1000,11 @@ namespace sa
                     }
                 }
                 EntityRef ref = entityRefDto(activeScene(ctx.sceneEdit), *entity);
-                return InspectResult{ ref.id, ref.name, std::move(components) };
+                return InspectResult{ .id = ref.id,
+                                      .name = ref.name,
+                                      .components = std::move(components),
+                                      .componentOrder =
+                                          componentOrder(ctx.sceneEdit.registry, activeScene(ctx.sceneEdit), *entity) };
             });
 
         registerCommand<EntityParams, EntityRef>(
@@ -994,7 +1040,8 @@ namespace sa
                 const glm::vec3 t{ world[3] };
                 const glm::vec3 s{ glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])),
                                    glm::length(glm::vec3(world[2])) };
-                return WorldTransformResult{ Vec3{ t.x, t.y, t.z }, Vec3{ s.x, s.y, s.z } };
+                return WorldTransformResult{ .translation = Vec3{ .x = t.x, .y = t.y, .z = t.z },
+                                             .scale = Vec3{ .x = s.x, .y = s.y, .z = s.z } };
             });
 
         registerCommand<EmptyParams, EnvironmentDto>(
@@ -1157,7 +1204,7 @@ namespace sa
             [](EngineContext& ctx, const EmptyParams&) -> Result<DeselectResult>
             {
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
-                return DeselectResult{ static_cast<i32>(ctx.sceneEdit.selectionVersion) };
+                return DeselectResult{ .selectionVersion = static_cast<i32>(ctx.sceneEdit.selectionVersion) };
             });
 
         registerCommand<EmptyParams, PlayStateResult>(
@@ -1232,8 +1279,9 @@ namespace sa
             reg, "get-script-status", "get-script-status — play state, live script instances, error high-water",
             [](EngineContext& ctx, const EmptyParams&) -> Result<ScriptStatusResult>
             {
-                return ScriptStatusResult{ playStateName(ctx.sceneEdit.playState), ctx.sceneEdit.scriptInstanceCount,
-                                           ctx.sceneEdit.scriptErrorSeq };
+                return ScriptStatusResult{ .state = playStateName(ctx.sceneEdit.playState),
+                                           .instances = ctx.sceneEdit.scriptInstanceCount,
+                                           .errorHighWater = ctx.sceneEdit.scriptErrorSeq };
             });
 
         registerCommand<SetScriptOverrideParams, SetScriptOverrideResult>(
@@ -1271,7 +1319,7 @@ namespace sa
                     slot.overrides[params.name] = params.value;
                 }
                 ctx.sceneEdit.sceneVersion += 1;
-                return SetScriptOverrideResult{ slot.scriptPath, slot.overrides };
+                return SetScriptOverrideResult{ .scriptPath = slot.scriptPath, .overrides = slot.overrides };
             });
 
         registerCommand<DrainScriptErrorsParams, DrainScriptErrorsResult>(
@@ -1295,8 +1343,11 @@ namespace sa
                     {
                         continue;
                     }
-                    out.events.push_back(ScriptErrorDto{ event.seq, WireUuid{ event.entityUuid }, event.script,
-                                                         event.message, event.tick });
+                    out.events.push_back(ScriptErrorDto{ .seq = event.seq,
+                                                         .entity = WireUuid{ event.entityUuid },
+                                                         .script = event.script,
+                                                         .message = event.message,
+                                                         .tick = event.tick });
                 }
                 return out;
             });
@@ -1320,8 +1371,11 @@ namespace sa
                     {
                         continue;
                     }
-                    out.events.push_back(ScriptLogDto{ event.seq, WireUuid{ event.entityUuid }, event.message,
-                                                       event.epochMs, event.tick });
+                    out.events.push_back(ScriptLogDto{ .seq = event.seq,
+                                                       .entity = WireUuid{ event.entityUuid },
+                                                       .message = event.message,
+                                                       .epochMs = event.epochMs,
+                                                       .tick = event.tick });
                 }
                 return out;
             });
@@ -1415,6 +1469,8 @@ namespace sa
                     }
                 }
                 getComponent<NameComponent>(scene, fresh).name = copyName;
+                static_cast<void>(setComponentOrder(ctx.sceneEdit.registry, scene, fresh,
+                                                    componentOrder(ctx.sceneEdit.registry, scene, *src)));
                 // The round-trip duplicated the source's parent uuid (the copy joins the
                 // source's parent as a sibling); relink so the copy lands in its parent's
                 // children cache.
@@ -1520,7 +1576,7 @@ namespace sa
                     relinkHierarchy(activeScene(ctx.sceneEdit));
                 }
                 ctx.sceneEdit.sceneVersion += 1;
-                return SetComponentFieldResult{ row->name, params.field };
+                return SetComponentFieldResult{ .set = row->name, .field = params.field };
             });
 
         registerCommand<EmptyParams, EditorCamera>(reg, "get-camera", "get-camera — the editor fly-camera state",
@@ -1697,7 +1753,7 @@ namespace sa
                     h = gizmo.active;
                 }
                 const char* handleName = nativeGizmoHandleName(h);
-                return GizmoPointerResult{ handleName, gizmo.dragging };
+                return GizmoPointerResult{ .hovered = handleName, .dragging = gizmo.dragging };
             });
 
         registerCommand<FlyInputParams, FlyInputResult>(
@@ -1719,7 +1775,7 @@ namespace sa
                 {
                     fly.lookDelta = glm::vec2{ 0.0f };
                 }
-                return FlyInputResult{ fly.active };
+                return FlyInputResult{ .active = fly.active };
             });
 
         registerCommand<ScriptInputParams, ScriptInputResult>(
@@ -1763,7 +1819,7 @@ namespace sa
                 }
                 std::vector<std::string> keys(input.held.begin(), input.held.end());
                 std::ranges::sort(keys);
-                return ScriptInputResult{ std::move(keys) };
+                return ScriptInputResult{ .keys = std::move(keys) };
             });
 
         registerCommand<SetProbesParams, SetProbesResult>(
@@ -1771,7 +1827,7 @@ namespace sa
             [](EngineContext& ctx, const SetProbesParams& params) -> Result<SetProbesResult>
             {
                 setReflectionProbes(ctx.renderer, params.enabled.value_or(true));
-                return SetProbesResult{ reflectionProbesEnabled(ctx.renderer) };
+                return SetProbesResult{ .probes = reflectionProbesEnabled(ctx.renderer) };
             });
 
         registerCommand<EmptyParams, RecaptureProbesResult>(
@@ -1785,22 +1841,27 @@ namespace sa
                                                       probe.dirty = true;
                                                       count = count + 1;
                                                   });
-                return RecaptureProbesResult{ count };
+                return RecaptureProbesResult{ .marked = count };
             });
 
         registerCommand<EmptyParams, ListProbesResult>(
             reg, "list-probes", "list-probes — captured reflection probes (origin/radius/intensity/valid)",
             [](EngineContext& ctx, const EmptyParams&) -> Result<ListProbesResult>
             {
-                ListProbesResult out{ reflectionProbesEnabled(ctx.renderer), 0, {} };
+                ListProbesResult out{ .enabled = reflectionProbesEnabled(ctx.renderer), .count = 0, .probes = {} };
                 const ReflectionProbes& refl = ctx.renderer.reflection;
                 out.count = refl.count;
                 for (u32 i = 0; i < refl.count; i = i + 1)
                 {
                     const ReflectionProbe& probe = refl.probes[i];
-                    out.probes.push_back(ProbeRef{ i, WireUuid{ probe.entity }, fromGlm(probe.origin),
-                                                   probe.influenceRadius, probe.intensity, probe.boxProjection,
-                                                   probe.valid, probe.dirty });
+                    out.probes.push_back(ProbeRef{ .slot = i,
+                                                   .entity = WireUuid{ probe.entity },
+                                                   .origin = fromGlm(probe.origin),
+                                                   .influenceRadius = probe.influenceRadius,
+                                                   .intensity = probe.intensity,
+                                                   .boxProjection = probe.boxProjection,
+                                                   .valid = probe.valid,
+                                                   .dirty = probe.dirty });
                 }
                 return out;
             });

@@ -13,6 +13,7 @@ module;
 #include <limits>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 module Saffron.Control;
@@ -32,8 +33,11 @@ namespace sa
     {
         auto currentProjectInfo(EngineContext& ctx) -> ProjectInfo
         {
-            return ProjectInfo{ ctx.sceneEdit.projectLoaded, ctx.sceneEdit.projectRoot, ctx.sceneEdit.projectPath,
-                                ctx.sceneEdit.projectName, ctx.sceneEdit.projectDisplayName };
+            return ProjectInfo{ .loaded = ctx.sceneEdit.projectLoaded,
+                                .root = ctx.sceneEdit.projectRoot,
+                                .path = ctx.sceneEdit.projectPath,
+                                .name = ctx.sceneEdit.projectName,
+                                .displayName = ctx.sceneEdit.projectDisplayName };
         }
 
         void applyProjectInfo(EngineContext& ctx, const ProjectInfo& project)
@@ -48,7 +52,11 @@ namespace sa
 
         auto projectDto(const ProjectInfo& project) -> ProjectInfoDto
         {
-            return ProjectInfoDto{ project.loaded, project.root, project.path, project.name, project.displayName };
+            return ProjectInfoDto{ .loaded = project.loaded,
+                                   .root = project.root,
+                                   .path = project.path,
+                                   .name = project.name,
+                                   .displayName = project.displayName };
         }
 
         auto requireProjectLoaded(EngineContext& ctx) -> Result<void>
@@ -203,19 +211,21 @@ namespace sa
             {
                 rigged = true;
             }
-            return AssetEntryDto{ WireUuid{ entry.id.value },
-                                  entry.name,
-                                  assetTypeDto(entry.type),
-                                  entry.path,
-                                  optionalFolder(entry.folder),
-                                  container,
-                                  duration,
-                                  rigged };
+            return AssetEntryDto{ .id = WireUuid{ entry.id.value },
+                                  .name = entry.name,
+                                  .type = assetTypeDto(entry.type),
+                                  .path = entry.path,
+                                  .folder = optionalFolder(entry.folder),
+                                  .container = container,
+                                  .duration = duration,
+                                  .rigged = rigged };
         }
 
         auto assetRef(const AssetEntry& entry) -> AssetRef
         {
-            return AssetRef{ WireUuid{ entry.id.value }, entry.name, optionalFolder(entry.folder) };
+            return AssetRef{ .id = WireUuid{ entry.id.value },
+                             .name = entry.name,
+                             .folder = optionalFolder(entry.folder) };
         }
 
         auto assetListDto(const AssetCatalog& catalog) -> AssetList
@@ -298,32 +308,35 @@ namespace sa
         auto collectAssetUsages(Scene& scene, Uuid asset) -> std::vector<AssetUsageDto>
         {
             std::vector<AssetUsageDto> usages;
-            forEach<MeshComponent>(
-                scene,
-                [&](Entity entity, MeshComponent& mesh)
-                {
-                    if (mesh.mesh.value == asset.value)
-                    {
-                        usages.push_back(AssetUsageDto{ entityId(scene, entity), entityName(scene, entity), "mesh" });
-                    }
-                });
-            forEach<MaterialComponent>(
-                scene,
-                [&](Entity entity, MaterialComponent& material)
-                {
-                    if (material.albedoTexture.value == asset.value)
-                    {
-                        usages.push_back(AssetUsageDto{ entityId(scene, entity), entityName(scene, entity), "albedo" });
-                    }
-                    if (material.metallicRoughnessTexture.value == asset.value)
-                    {
-                        usages.push_back(
-                            AssetUsageDto{ entityId(scene, entity), entityName(scene, entity), "metallic-roughness" });
-                    }
-                });
+            forEach<MeshComponent>(scene,
+                                   [&](Entity entity, MeshComponent& mesh)
+                                   {
+                                       if (mesh.mesh.value == asset.value)
+                                       {
+                                           usages.push_back(AssetUsageDto{ .entity = entityId(scene, entity),
+                                                                           .entityName = entityName(scene, entity),
+                                                                           .slot = "mesh" });
+                                       }
+                                   });
+            forEach<MaterialComponent>(scene,
+                                       [&](Entity entity, MaterialComponent& material)
+                                       {
+                                           if (material.albedoTexture.value == asset.value)
+                                           {
+                                               usages.push_back(AssetUsageDto{ .entity = entityId(scene, entity),
+                                                                               .entityName = entityName(scene, entity),
+                                                                               .slot = "albedo" });
+                                           }
+                                           if (material.metallicRoughnessTexture.value == asset.value)
+                                           {
+                                               usages.push_back(AssetUsageDto{ .entity = entityId(scene, entity),
+                                                                               .entityName = entityName(scene, entity),
+                                                                               .slot = "metallic-roughness" });
+                                           }
+                                       });
             if (scene.environment.skyTexture.value == asset.value)
             {
-                usages.push_back(AssetUsageDto{ {}, {}, "environment.skyTexture" });
+                usages.push_back(AssetUsageDto{ .entity = {}, .entityName = {}, .slot = "environment.skyTexture" });
             }
             return usages;
         }
@@ -331,36 +344,38 @@ namespace sa
         auto clearAssetUsages(Scene& scene, Uuid asset) -> std::vector<AssetUsageDto>
         {
             std::vector<AssetUsageDto> cleared;
-            forEach<MeshComponent>(
-                scene,
-                [&](Entity entity, MeshComponent& mesh)
-                {
-                    if (mesh.mesh.value == asset.value)
-                    {
-                        cleared.push_back(AssetUsageDto{ entityId(scene, entity), entityName(scene, entity), "mesh" });
-                        mesh.mesh = Uuid{};
-                    }
-                });
+            forEach<MeshComponent>(scene,
+                                   [&](Entity entity, MeshComponent& mesh)
+                                   {
+                                       if (mesh.mesh.value == asset.value)
+                                       {
+                                           cleared.push_back(AssetUsageDto{ .entity = entityId(scene, entity),
+                                                                            .entityName = entityName(scene, entity),
+                                                                            .slot = "mesh" });
+                                           mesh.mesh = Uuid{};
+                                       }
+                                   });
             forEach<MaterialComponent>(scene,
                                        [&](Entity entity, MaterialComponent& material)
                                        {
                                            if (material.albedoTexture.value == asset.value)
                                            {
-                                               cleared.push_back(AssetUsageDto{ entityId(scene, entity),
-                                                                                entityName(scene, entity), "albedo" });
+                                               cleared.push_back(AssetUsageDto{ .entity = entityId(scene, entity),
+                                                                                .entityName = entityName(scene, entity),
+                                                                                .slot = "albedo" });
                                                material.albedoTexture = Uuid{};
                                            }
                                            if (material.metallicRoughnessTexture.value == asset.value)
                                            {
-                                               cleared.push_back(AssetUsageDto{ entityId(scene, entity),
-                                                                                entityName(scene, entity),
-                                                                                "metallic-roughness" });
+                                               cleared.push_back(AssetUsageDto{ .entity = entityId(scene, entity),
+                                                                                .entityName = entityName(scene, entity),
+                                                                                .slot = "metallic-roughness" });
                                                material.metallicRoughnessTexture = Uuid{};
                                            }
                                        });
             if (scene.environment.skyTexture.value == asset.value)
             {
-                cleared.push_back(AssetUsageDto{ {}, {}, "environment.skyTexture" });
+                cleared.push_back(AssetUsageDto{ .entity = {}, .entityName = {}, .slot = "environment.skyTexture" });
                 scene.environment.skyTexture = Uuid{};
             }
             return cleared;
@@ -387,11 +402,19 @@ namespace sa
             }
             if (reply->pending)
             {
-                return ThumbnailResult{ WireUuid{ id.value }, "png", 0, 0, std::string{}, true };
+                return ThumbnailResult{ .id = WireUuid{ id.value },
+                                        .format = "png",
+                                        .width = 0,
+                                        .height = 0,
+                                        .base64 = std::string{},
+                                        .pending = true };
             }
-            return ThumbnailResult{ WireUuid{ id.value },           "png",
-                                    static_cast<i32>(reply->width), static_cast<i32>(reply->height),
-                                    base64Encode(reply->png),       false };
+            return ThumbnailResult{ .id = WireUuid{ id.value },
+                                    .format = "png",
+                                    .width = static_cast<i32>(reply->width),
+                                    .height = static_cast<i32>(reply->height),
+                                    .base64 = base64Encode(reply->png),
+                                    .pending = false };
         }
 
         struct PreviewBounds
@@ -457,13 +480,13 @@ namespace sa
             }
             Entity floor = createEntity(scene, "PreviewFloor");
             addComponent<MeshComponent>(scene, floor).mesh = PreviewFloorMeshId;
-            MaterialComponent& mat = addComponent<MaterialComponent>(scene, floor);
+            auto& mat = addComponent<MaterialComponent>(scene, floor);
             mat.baseColor = glm::vec4{ 0.32f, 0.33f, 0.35f, 1.0f };
             mat.roughness = 0.92f;
             mat.metallic = 0.0f;
             const f32 span = glm::max(0.5f, bounds.radius * 8.0f);  // cube is [-0.5,0.5]; span = full width
             const f32 thickness = glm::max(0.02f, bounds.radius * 0.08f);
-            TransformComponent& transform = getComponent<TransformComponent>(scene, floor);
+            auto& transform = getComponent<TransformComponent>(scene, floor);
             transform.translation = glm::vec3{ bounds.center.x, bounds.minY - thickness * 0.5f, bounds.center.z };
             transform.scale = glm::vec3{ span, thickness, span };
             return floor;
@@ -508,8 +531,8 @@ namespace sa
                 edit.previewFloorEntity = spawnPreviewFloor(scene, assets, renderer, bounds);
             }
 
-            Entity light = createEntity(scene, "PreviewLight");
-            DirectionalLightComponent& dl = addComponent<DirectionalLightComponent>(scene, light);
+            const Entity light = createEntity(scene, "PreviewLight");
+            auto& dl = addComponent<DirectionalLightComponent>(scene, light);
             dl.direction = glm::normalize(glm::vec3{ -0.4f, -1.0f, -0.5f });  // thumbnail.slang's neutral key
             dl.color = glm::vec3{ 1.0f };
             dl.intensity = 3.0f;
@@ -521,7 +544,7 @@ namespace sa
 
             edit.camera = framePreviewCamera(edit.camera, bounds);
             const f32 fovy = glm::radians(edit.camera.fov);
-            return PreviewFraming{ bounds.center, bounds.radius / glm::tan(fovy * 0.5f) * 1.3f };
+            return PreviewFraming{ .target = bounds.center, .distance = bounds.radius / glm::tan(fovy * 0.5f) * 1.3f };
         }
 
         // Drop the asset preview and restore the authored edit state: the fly-cam (stashed on enter, so
@@ -806,7 +829,7 @@ namespace sa
                 {
                     name = row->name;
                 }
-                return AssetRef{ WireUuid{ extracted->value }, name, std::nullopt };
+                return AssetRef{ .id = WireUuid{ extracted->value }, .name = name, .folder = std::nullopt };
             });
 
         // Reverts an extracted sub-asset: drops the remap + external file, back to the embedded chunk.
@@ -834,7 +857,7 @@ namespace sa
                 {
                     name = row->name;
                 }
-                return AssetRef{ WireUuid{ subId.value }, name, std::nullopt };
+                return AssetRef{ .id = WireUuid{ subId.value }, .name = name, .folder = std::nullopt };
             });
 
         // Re-bakes a model from its stored source (skips when unchanged), preserving extractions; live
@@ -940,7 +963,7 @@ namespace sa
                     return Err(resolved.error());
                 }
                 const Uuid id = (*resolved)->id;
-                DependencyGraph graph =
+                const DependencyGraph graph =
                     buildDependencyGraph(activeScene(ctx.sceneEdit), ctx.assets.catalog, ctx.assets);
                 AssetReferencesResult result;
                 for (const Uuid referrer : graph.referencedBy(id))
@@ -1012,20 +1035,20 @@ namespace sa
                         parents[i] = meta.nodes[i].value("parent", -1);
                     }
                     std::vector<bool> isJoint(nodeCount, false);
-                    i32 skeletonRoot = meta.skin.value("skeletonRoot", -1);
+                    const i32 skeletonRoot = meta.skin.value("skeletonRoot", -1);
                     if (auto it = meta.skin.find("joints"); it != meta.skin.end() && it->is_array())
                     {
                         for (const json& joint : *it)
                         {
                             const i32 index = joint.get<i32>();
-                            if (index >= 0 && static_cast<std::size_t>(index) < nodeCount)
+                            if (index >= 0 && std::cmp_less(index, nodeCount))
                             {
                                 isJoint[static_cast<std::size_t>(index)] = true;
                             }
                         }
                     }
                     std::vector<bool> inRig(nodeCount, false);
-                    if (skeletonRoot >= 0 && static_cast<std::size_t>(skeletonRoot) < nodeCount)
+                    if (skeletonRoot >= 0 && std::cmp_less(skeletonRoot, nodeCount))
                     {
                         inRig[static_cast<std::size_t>(skeletonRoot)] = true;
                     }
@@ -1036,8 +1059,7 @@ namespace sa
                             continue;
                         }
                         i32 node = static_cast<i32>(i);
-                        while (node >= 0 && static_cast<std::size_t>(node) < nodeCount &&
-                               !inRig[static_cast<std::size_t>(node)])
+                        while (node >= 0 && std::cmp_less(node, nodeCount) && !inRig[static_cast<std::size_t>(node)])
                         {
                             inRig[static_cast<std::size_t>(node)] = true;
                             if (node == skeletonRoot)
@@ -1058,8 +1080,7 @@ namespace sa
                         bone.index = static_cast<i32>(i);
                         bone.name = meta.nodes[i].value("name", std::string{});
                         bone.parent = -1;
-                        if (parent >= 0 && static_cast<std::size_t>(parent) < nodeCount &&
-                            inRig[static_cast<std::size_t>(parent)])
+                        if (parent >= 0 && std::cmp_less(parent, nodeCount) && inRig[static_cast<std::size_t>(parent)])
                         {
                             bone.parent = parent;
                         }
@@ -1073,8 +1094,10 @@ namespace sa
                 {
                     if (sub.type == AssetType::Animation)
                     {
-                        result.clips.push_back(
-                            AnimationClipDto{ WireUuid{ sub.subId.value }, sub.name, sub.duration, sub.tracks });
+                        result.clips.push_back(AnimationClipDto{ .id = WireUuid{ sub.subId.value },
+                                                                 .name = sub.name,
+                                                                 .duration = sub.duration,
+                                                                 .tracks = sub.tracks });
                     }
                     else if (sub.type == AssetType::Mesh)
                     {
@@ -1159,7 +1182,7 @@ namespace sa
                 // pose (previewInEdit off until the first transport action arms it — UE5's behavior).
                 if (entry->type == AssetType::Animation && hasComponent<AnimationPlayerComponent>(preview, animatable))
                 {
-                    AnimationPlayerComponent& player = getComponent<AnimationPlayerComponent>(preview, animatable);
+                    auto& player = getComponent<AnimationPlayerComponent>(preview, animatable);
                     player.clip = entry->id;
                     player.time = 0.0f;
                     player.playing = false;
@@ -1199,10 +1222,10 @@ namespace sa
                     {
                         const i32 nodeIdx = jointNodes[k];
                         const Uuid uuid = boneUuids[k];
-                        if (nodeIdx >= 0 && static_cast<std::size_t>(nodeIdx) < nodeCount && uuid.value != 0)
+                        if (nodeIdx >= 0 && std::cmp_less(nodeIdx, nodeCount) && uuid.value != 0)
                         {
                             boneByNode[static_cast<std::size_t>(nodeIdx)] = uuid;
-                            result.bones.push_back(BoneEntityDto{ nodeIdx, WireUuid{ uuid.value } });
+                            result.bones.push_back(BoneEntityDto{ .index = nodeIdx, .entity = WireUuid{ uuid.value } });
                         }
                     }
                 }
@@ -1236,7 +1259,7 @@ namespace sa
                 ctx.sceneEdit.skeletonOverlay.show = true;
                 ctx.sceneEdit.skeletonOverlay.highlightJoint = -1;
                 const PreviewFraming framing = furnishPreviewScene(ctx.sceneEdit, ctx.assets, ctx.renderer, rootEntity);
-                result.target = Vec3{ framing.target.x, framing.target.y, framing.target.z };
+                result.target = Vec3{ .x = framing.target.x, .y = framing.target.y, .z = framing.target.z };
                 result.distance = framing.distance;
                 setSelection(ctx.sceneEdit, rootEntity);
                 ctx.sceneEdit.sceneVersion += 1;
@@ -1256,11 +1279,12 @@ namespace sa
                     setActiveView(ctx.renderer, ViewId::Scene);
                 }
                 leaveAssetPreview(ctx.sceneEdit);  // no-op when no preview is alive (idempotent on tab close)
-                return PlayStateResult{
-                    playStateName(ctx.sceneEdit.playState),           static_cast<i32>(ctx.sceneEdit.playVersion),
-                    static_cast<i32>(ctx.sceneEdit.sceneVersion),     ctx.sceneEdit.hadPrimaryCamera,
-                    static_cast<i32>(ctx.sceneEdit.animationVersion), WireUuid{ ctx.sceneEdit.previewAsset.value }
-                };
+                return PlayStateResult{ .state = playStateName(ctx.sceneEdit.playState),
+                                        .playVersion = static_cast<i32>(ctx.sceneEdit.playVersion),
+                                        .sceneVersion = static_cast<i32>(ctx.sceneEdit.sceneVersion),
+                                        .hasPrimaryCamera = ctx.sceneEdit.hadPrimaryCamera,
+                                        .animationVersion = static_cast<i32>(ctx.sceneEdit.animationVersion),
+                                        .previewAsset = WireUuid{ ctx.sceneEdit.previewAsset.value } };
             });
 
         // Switch the active view the engine renders + publishes. Routes renderer.activeView (which selects
@@ -1350,15 +1374,17 @@ namespace sa
                         exclude.push_back(Uuid{ std::strtoull(id.c_str(), nullptr, 10) });
                     }
                 }
-                CleanReportData data =
+                const CleanReportData data =
                     analyzeClean(activeScene(ctx.sceneEdit), ctx.assets.catalog, ctx.assets, exclude);
                 CleanReport report;
                 report.reclaimableBytes = data.reclaimableBytes;
                 for (const CleanCandidate& candidate : data.candidates)
                 {
-                    report.candidates.push_back(CleanCandidateDto{ WireUuid{ candidate.id.value }, candidate.path,
-                                                                   cleanCategoryName(candidate.category),
-                                                                   candidate.bytes, candidate.reason });
+                    report.candidates.push_back(CleanCandidateDto{ .id = WireUuid{ candidate.id.value },
+                                                                   .path = candidate.path,
+                                                                   .category = cleanCategoryName(candidate.category),
+                                                                   .bytes = candidate.bytes,
+                                                                   .reason = candidate.reason });
                 }
                 return report;
             });
@@ -1605,15 +1631,15 @@ namespace sa
                     }
                 }
 
-                return AssetMetadataDto{ WireUuid{ entry.id.value },
-                                         entry.name,
-                                         assetTypeDto(entry.type),
-                                         entry.path,
-                                         optionalFolder(entry.folder),
-                                         sizeBytes,
-                                         vertexCount,
-                                         triangleCount,
-                                         createdAt };
+                return AssetMetadataDto{ .id = WireUuid{ entry.id.value },
+                                         .name = entry.name,
+                                         .type = assetTypeDto(entry.type),
+                                         .path = entry.path,
+                                         .folder = optionalFolder(entry.folder),
+                                         .sizeBytes = sizeBytes,
+                                         .vertexCount = vertexCount,
+                                         .triangleCount = triangleCount,
+                                         .createdAt = createdAt };
             });
 
         registerCommand<DeleteAssetParams, DeleteAssetResult>(
@@ -1635,7 +1661,7 @@ namespace sa
                 {
                     return Err(index.error());
                 }
-                AssetEntry entry = ctx.assets.catalog.entries[*index];
+                const AssetEntry entry = ctx.assets.catalog.entries[*index];
                 std::vector<AssetUsageDto> cleared = clearAssetUsages(ctx.sceneEdit.scene, entry.id);
                 ctx.assets.catalog.entries.erase(ctx.assets.catalog.entries.begin() +
                                                  static_cast<std::ptrdiff_t>(*index));
@@ -1652,7 +1678,10 @@ namespace sa
                 }
                 removeThumbnailCacheForAsset(ctx.assets, entry.id);  // drop the asset's cached PNGs
                 ctx.sceneEdit.sceneVersion += 1;
-                return DeleteAssetResult{ WireUuid{ entry.id.value }, entry.name, std::move(cleared), fileDeleted };
+                return DeleteAssetResult{ .id = WireUuid{ entry.id.value },
+                                          .name = entry.name,
+                                          .cleared = std::move(cleared),
+                                          .fileDeleted = fileDeleted };
             });
 
         registerCommand<AssignAssetParams, AssignAssetResult>(
@@ -1745,14 +1774,14 @@ namespace sa
                     getComponent<MaterialComponent>(scene, *entity).heightTexture = assignId;
                 }
                 ctx.sceneEdit.sceneVersion += 1;
-                return AssignAssetResult{ WireUuid{ assignId.value }, assignName, params.slot };
+                return AssignAssetResult{ .id = WireUuid{ assignId.value }, .name = assignName, .slot = params.slot };
             });
 
         registerCommand<MaterialCreateParams, MaterialCreateResult>(
             reg, "material-create", "material-create {name} [from-entity]",
             [](EngineContext& ctx, const MaterialCreateParams& params) -> Result<MaterialCreateResult>
             {
-                MaterialAsset asset;
+                const MaterialAsset asset;
                 std::string name = params.name;
                 if (name.empty())
                 {
@@ -1764,7 +1793,7 @@ namespace sa
                     return Err(id.error());
                 }
                 ctx.sceneEdit.sceneVersion += 1;
-                return MaterialCreateResult{ WireUuid{ id->value }, name };
+                return MaterialCreateResult{ .id = WireUuid{ id->value }, .name = name };
             });
 
         registerCommand<MaterialAssignParams, MaterialAssignResult>(
@@ -1807,7 +1836,7 @@ namespace sa
                 // Bake every codegen material's übershader variant to disk (the shipping/precompile
                 // direction): a non-foldable graph needs its per-material shader compiled. Foldable and
                 // graphless materials are skipped (they draw on the shared übershader).
-                MaterialCookResult out{ 0, 0 };
+                MaterialCookResult out{ .compiled = 0, .failed = 0 };
                 for (const AssetEntry& entry : ctx.assets.catalog.entries)
                 {
                     if (entry.type != AssetType::Material)
@@ -1859,7 +1888,7 @@ namespace sa
                 {
                     return Err(spv.error());
                 }
-                return MaterialCompileResult{ WireUuid{ (*resolved)->id.value }, true };
+                return MaterialCompileResult{ .id = WireUuid{ (*resolved)->id.value }, .ok = true };
             });
 
         registerCommand<MaterialImportParams, MaterialImportResultDto>(
@@ -1872,7 +1901,7 @@ namespace sa
                     return Err(result.error());
                 }
                 ctx.sceneEdit.sceneVersion += 1;
-                return MaterialImportResultDto{ WireUuid{ result->material.value }, result->roles };
+                return MaterialImportResultDto{ .id = WireUuid{ result->material.value }, .roles = result->roles };
             });
 
         registerCommand<EmptyParams, MaterialListResult>(
@@ -1884,7 +1913,8 @@ namespace sa
                 {
                     if (entry.type == AssetType::Material)
                     {
-                        out.materials.push_back(MaterialRefDto{ WireUuid{ entry.id.value }, entry.name, entry.folder });
+                        out.materials.push_back(MaterialRefDto{
+                            .id = WireUuid{ entry.id.value }, .name = entry.name, .folder = entry.folder });
                     }
                 }
                 return out;
@@ -1909,10 +1939,10 @@ namespace sa
                 r.id = WireUuid{ (*resolved)->id.value };
                 r.blend = m.blend;
                 r.unlit = m.unlit;
-                r.baseColor = Vec4{ m.baseColor.x, m.baseColor.y, m.baseColor.z, m.baseColor.w };
+                r.baseColor = Vec4{ .x = m.baseColor.x, .y = m.baseColor.y, .z = m.baseColor.z, .w = m.baseColor.w };
                 r.metallic = m.metallic;
                 r.roughness = m.roughness;
-                r.emissive = Vec3{ m.emissive.x, m.emissive.y, m.emissive.z };
+                r.emissive = Vec3{ .x = m.emissive.x, .y = m.emissive.y, .z = m.emissive.z };
                 r.emissiveStrength = m.emissiveStrength;
                 r.albedoTexture = WireUuid{ m.albedoTexture.value };
                 r.ormTexture = WireUuid{ m.ormTexture.value };
@@ -2084,7 +2114,7 @@ namespace sa
                     (void)compileMaterialMeshShader(ctx.assets, m.graph, (*resolved)->id);
                 }
                 ctx.sceneEdit.sceneVersion += 1;
-                return MaterialSetGraphResult{ WireUuid{ (*resolved)->id.value }, foldable };
+                return MaterialSetGraphResult{ .id = WireUuid{ (*resolved)->id.value }, .foldable = foldable };
             });
 
         registerCommand<MaterialCreateInstanceParams, MaterialCreateResult>(
@@ -2109,7 +2139,7 @@ namespace sa
                     return Err(id.error());
                 }
                 ctx.sceneEdit.sceneVersion += 1;
-                return MaterialCreateResult{ WireUuid{ id->value }, name };
+                return MaterialCreateResult{ .id = WireUuid{ id->value }, .name = name };
             });
 
         registerCommand<MaterialSetOverrideParams, MaterialSetOverrideResult>(
@@ -2309,7 +2339,7 @@ namespace sa
                     {
                         return Err(shot.error());
                     }
-                    return ScreenshotResult{ target, params.path, false };
+                    return ScreenshotResult{ .target = target, .path = params.path, .pending = false };
                 }
                 if (target == ScreenshotTargetDto::Window)
                 {
@@ -2319,7 +2349,7 @@ namespace sa
                     {
                         return Err(shot.error());
                     }
-                    return ScreenshotResult{ target, params.path, true };
+                    return ScreenshotResult{ .target = target, .path = params.path, .pending = true };
                 }
                 return Err(std::format("unknown target '{}' (viewport|window)", screenshotTargetName(target)));
             });
@@ -2341,12 +2371,14 @@ namespace sa
                 if (params.action == "clear")
                 {
                     const ThumbnailCacheStats removed = clearThumbnailCacheDir(ctx.assets);
-                    return ThumbnailCacheResult{ static_cast<i32>(removed.entries), static_cast<i64>(removed.bytes) };
+                    return ThumbnailCacheResult{ .entries = static_cast<i32>(removed.entries),
+                                                 .bytes = static_cast<i64>(removed.bytes) };
                 }
                 if (params.action == "stats" || params.action.empty())
                 {
                     const ThumbnailCacheStats stats = thumbnailCacheStats(ctx.assets);
-                    return ThumbnailCacheResult{ static_cast<i32>(stats.entries), static_cast<i64>(stats.bytes) };
+                    return ThumbnailCacheResult{ .entries = static_cast<i32>(stats.entries),
+                                                 .bytes = static_cast<i64>(stats.bytes) };
                 }
                 return Err(std::format("unknown action '{}' (stats|clear)", params.action));
             });

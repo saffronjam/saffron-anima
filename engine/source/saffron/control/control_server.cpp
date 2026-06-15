@@ -36,7 +36,7 @@ namespace sa
     {
         const std::size_t index = reg.rows.size();
         reg.byName[name] = index;
-        reg.rows.push_back(CommandTraits{ std::move(name), std::move(help), std::move(run) });
+        reg.rows.push_back(CommandTraits{ .name = std::move(name), .help = std::move(help), .run = std::move(run) });
     }
 
     auto findCommand(const CommandRegistry& reg, const std::string& name) -> const CommandTraits*
@@ -144,8 +144,8 @@ namespace sa
 
     auto entityRefDto(Scene& scene, Entity entity) -> EntityRef
     {
-        return EntityRef{ WireUuid{ getComponent<IdComponent>(scene, entity).id.value },
-                          getComponent<NameComponent>(scene, entity).name };
+        return EntityRef{ .id = WireUuid{ getComponent<IdComponent>(scene, entity).id.value },
+                          .name = getComponent<NameComponent>(scene, entity).name };
     }
 
     void registerBuiltinCommands(CommandRegistry& reg)
@@ -199,7 +199,7 @@ namespace sa
             ::close(fd);
             return Err(std::format("listen: {}", std::strerror(errno)));
         }
-        return ControlServer{ fd, std::move(path), {} };
+        return ControlServer{ .listenFd = fd, .path = std::move(path), .clients = {} };
     }
 
     void stopControlServer(ControlServer& server)
@@ -257,7 +257,7 @@ namespace sa
             {
                 break;
             }
-            server.clients.push_back(ControlClient{ clientFd, {} });
+            server.clients.push_back(ControlClient{ .fd = clientFd, .inbuf = {} });
         }
 
         for (ControlClient& client : server.clients)

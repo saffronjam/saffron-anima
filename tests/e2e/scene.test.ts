@@ -4,6 +4,9 @@
 // (Ids cross the wire as decimal strings, so a plain JSON.parse keeps them lossless.)
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Engine } from "./harness.ts";
 import type { EntityList } from "@saffron/protocol";
 
@@ -42,7 +45,9 @@ test("add-component / remove-component are observable via inspect", async () => 
   await engine.call("create-entity", { args: [name] });
 
   await engine.call("add-component", { entity: name, component: "Material" });
-  let info = await engine.call<{ components: Record<string, unknown> }>("inspect", { entity: name });
+  let info = await engine.call<{ components: Record<string, unknown> }>("inspect", {
+    entity: name,
+  });
   expect(info.components).toHaveProperty("Material");
 
   await engine.call("remove-component", { entity: name, component: "Material" });
@@ -50,12 +55,63 @@ test("add-component / remove-component are observable via inspect", async () => 
   expect(info.components).not.toHaveProperty("Material");
 });
 
+test("component order is explicit, add-at-bottom, validated, and persisted", async () => {
+  const name = "e2e-component-order";
+  await engine.call("create-entity", { args: [name] });
+
+  let info = await engine.call<Inspect>("inspect", { entity: name });
+  expect(info.componentOrder).toEqual(["Name", "Transform"]);
+
+  await engine.call("add-component", { entity: name, component: "Camera" });
+  await engine.call("add-component", { entity: name, component: "Material" });
+  info = await engine.call<Inspect>("inspect", { entity: name });
+  expect(info.componentOrder).toEqual(["Name", "Transform", "Camera", "Material"]);
+
+  await engine.call("set-component-order", {
+    entity: name,
+    components: ["Material", "Name", "Camera", "Transform"],
+  });
+  info = await engine.call<Inspect>("inspect", { entity: name });
+  expect(info.componentOrder).toEqual(["Material", "Name", "Camera", "Transform"]);
+
+  await expect(
+    engine.call("set-component-order", {
+      entity: name,
+      components: ["Material", "Name", "Camera", "Camera"],
+    }),
+  ).rejects.toThrow(/duplicate|non-present|must contain/);
+
+  await engine.call("remove-component", { entity: name, component: "Camera" });
+  info = await engine.call<Inspect>("inspect", { entity: name });
+  expect(info.componentOrder).toEqual(["Material", "Name", "Transform"]);
+
+  await engine.call("set-component-order", {
+    entity: name,
+    components: ["Name", "Transform", "Material"],
+  });
+  const dir = await mkdtemp(join(tmpdir(), "saffron-component-order-"));
+  const projectPath = join(dir, "project.json");
+  await engine.call("save-project", { path: projectPath });
+  await engine.call("load-project", { path: projectPath });
+
+  info = await engine.call<Inspect>("inspect", { entity: name });
+  expect(info.componentOrder).toEqual(["Name", "Transform", "Material"]);
+});
+
 test("set-gizmo round-trips through get-gizmo", async () => {
   await engine.call("set-gizmo", { op: "rotate", space: "local" });
-  expect(await engine.call("get-gizmo")).toEqual({ op: "rotate", space: "local", preserveChildren: false });
+  expect(await engine.call("get-gizmo")).toEqual({
+    op: "rotate",
+    space: "local",
+    preserveChildren: false,
+  });
 
   await engine.call("set-gizmo", { op: "translate", space: "world" });
-  expect(await engine.call("get-gizmo")).toEqual({ op: "translate", space: "world", preserveChildren: false });
+  expect(await engine.call("get-gizmo")).toEqual({
+    op: "translate",
+    space: "world",
+    preserveChildren: false,
+  });
 });
 
 // Negative oracles: bad input must be REJECTED (ok:false), not silently accepted.
@@ -69,4 +125,9 @@ interface Vec3 {
   x: number;
   y: number;
   z: number;
+}
+
+interface Inspect {
+  components: Record<string, unknown>;
+  componentOrder: string[];
 }

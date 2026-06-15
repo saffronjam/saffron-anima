@@ -11,14 +11,18 @@
 /// single-field merge. High-frequency edits (scrub/slider) funnel through a per-
 /// (component,field) coalescer; the scrub brackets flip `store.dragActive` so the
 /// reconcile poll won't clobber the optimistic value mid-drag.
-import { useEffect, useMemo, useRef } from "react";
-import { X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent } from "react";
+import { ArrowDownAZ, GripVertical, X } from "lucide-react";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
 import { makeCoalescer, type Coalescer } from "../control/coalesce";
 import { errorText, notifyError } from "../lib/flash";
 import { renderField, resolveHint } from "../components/fieldRenderer";
 import { ScriptSlots } from "../components/ScriptSlots";
+import { BoneMaskField } from "../components/BoneMaskField";
+import { FootChainsEditor, type FootChain } from "../components/FootChainsEditor";
+import { BonePhysicsEditor, type BonePhysicsEntry } from "../components/BonePhysicsEditor";
 import type { Material, ScriptSlot, Transform } from "../protocol";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -33,7 +37,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { COMPONENT_ORDER, orderedComponentNames } from "../lib/componentOrder";
+import {
+  COMPONENT_ORDER,
+  canonicalComponentNames,
+  orderedComponentNames,
+} from "../lib/componentOrder";
 
 /// Components that cannot be removed. Name/Transform are the entity baseline;
 /// ModelInstance/SkinnedMesh are import-managed identity (set when a model/rig is
@@ -52,6 +60,21 @@ const ADDABLE_COMPONENTS = COMPONENT_ORDER.filter((c) => !NON_ADDABLE.has(c));
 /// Components only addable on a skinned entity: the rig sidecars index SkinnedMesh.bones,
 /// and the animation player / foot-IK have no meaning without a skeleton to drive.
 const RIG_ONLY = new Set<string>(["KinematicBones", "BonePhysics", "AnimationPlayer", "FootIk"]);
+const SECTION_DRAG_THRESHOLD_PX = 4;
+
+interface ComponentDragState {
+  id: string;
+  startY: number;
+  currentY: number;
+  startScrollTop: number;
+  currentScrollTop: number;
+  dragging: boolean;
+  startIndex: number;
+  previewIndex: number;
+  height: number;
+  order: string[];
+  centers: Record<string, number>;
+}
 
 /// A non-editable label/value row, matching the field grid's two-column layout. Used by the
 /// rig bodies (SkinnedMesh, FootIk, KinematicBones) for import-derived references shown by
@@ -79,6 +102,9 @@ export function InspectorPanel() {
   // (SkinnedMesh mesh/rootBone/joints, FootIk chains, KinematicBones driven) to names.
   const assets = useEditorStore((s) => s.assets);
   const entities = useEditorStore((s) => s.entities);
+  const [componentDrag, setComponentDrag] = useState<ComponentDragState | null>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const settleRef = useRef<Map<string, number> | null>(null);
 
   // Per-(component,field) coalescers, rebuilt when the selection changes so a stale
   // closure never targets the wrong entity.
@@ -107,6 +133,38 @@ export function InspectorPanel() {
   // scroll the section into view when present, and always clear the signal so a
   // stale value never fires on a later render (component absent, selection raced).
   const sectionRefs = useRef(new Map<string, HTMLElement>());
+  useLayoutEffect(() => {
+    const before = settleRef.current;
+    if (!before) {
+      return;
+    }
+    settleRef.current = null;
+    const nodes = [...sectionRefs.current.entries()];
+    for (const [, node] of nodes) {
+      node.style.transition = "none";
+    }
+    const settles: [HTMLElement, number][] = [];
+    for (const [component, node] of nodes) {
+      const top = before.get(component);
+      if (top === undefined) {
+        continue;
+      }
+      const diff = top - node.getBoundingClientRect().top;
+      if (Math.abs(diff) >= 0.5) {
+        settles.push([node, diff]);
+      }
+    }
+    for (const [, node] of nodes) {
+      node.style.transition = "";
+    }
+    for (const [node, diff] of settles) {
+      node.animate([{ transform: `translateY(${diff}px)` }, { transform: "none" }], {
+        duration: 150,
+        easing: "ease-out",
+      });
+    }
+  });
+
   useEffect(() => {
     if (!focusComponent) {
       return;
@@ -119,8 +177,8 @@ export function InspectorPanel() {
 
   const componentsObj = inspected?.components as Record<string, unknown> | undefined;
   const names = useMemo(
-    () => (componentsObj ? orderedComponentNames(componentsObj) : []),
-    [componentsObj],
+    () => (componentsObj ? orderedComponentNames(componentsObj, inspected?.componentOrder) : []),
+    [componentsObj, inspected?.componentOrder],
   );
   // The two rig sidecars are meaningless without a skeleton: only offer them to add when
   // the entity carries a SkinnedMesh. (They keep their COMPONENT_ORDER slot so an
@@ -133,6 +191,55 @@ export function InspectorPanel() {
       ),
     [componentsObj, hasSkin],
   );
+
+  const scrollViewport = (): HTMLElement | null =>
+    scrollAreaRef.current?.querySelector(
+      "[data-radix-scroll-area-viewport], [data-slot='scroll-area-viewport']",
+    ) ?? null;
+
+  function insertionIndexForPointer(
+    drag: ComponentDragState,
+    y: number,
+    scrollTop: number,
+  ): number {
+    const scrollDelta = scrollTop - drag.startScrollTop;
+    const withoutMoving = drag.order.filter((component) => component !== drag.id);
+    for (let i = 0; i < withoutMoving.length; i += 1) {
+      const component = withoutMoving[i];
+      const center = drag.centers[component];
+      if (center !== undefined && y + scrollDelta < center) {
+        return i;
+      }
+    }
+    return withoutMoving.length;
+  }
+
+  useEffect(() => {
+    const viewport = scrollViewport();
+    if (!viewport || !componentDrag) {
+      return;
+    }
+    const onScroll = (): void => {
+      setComponentDrag((drag) => {
+        if (!drag) {
+          return null;
+        }
+        const scrollTop = viewport.scrollTop;
+        const delta = drag.currentY - drag.startY + (scrollTop - drag.startScrollTop);
+        const dragging = drag.dragging || Math.abs(delta) >= SECTION_DRAG_THRESHOLD_PX;
+        return {
+          ...drag,
+          currentScrollTop: scrollTop,
+          dragging,
+          previewIndex: dragging
+            ? insertionIndexForPointer(drag, drag.currentY, scrollTop)
+            : drag.previewIndex,
+        };
+      });
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, [componentDrag]);
 
   if (!selectedId || !inspected || !componentsObj) {
     return (
@@ -207,6 +314,171 @@ export function InspectorPanel() {
 
   const setDragActive = useEditorStore.getState().setDragActive;
   const pushEdit = useEditorStore.getState().pushEdit;
+
+  const applyComponentOrderOptimistic = (order: string[]): void => {
+    const current = useEditorStore.getState().componentsBySelected;
+    if (!current) {
+      return;
+    }
+    useEditorStore.getState().setComponentsBySelected({ ...current, componentOrder: order });
+  };
+
+  const applyComponentOrder = (id: string, order: string[]): Promise<unknown> =>
+    client.setComponentOrder(id, order);
+
+  const recordComponentOrderEdit = (id: string, prior: string[], after: string[]): void => {
+    if (JSON.stringify(prior) === JSON.stringify(after)) {
+      return;
+    }
+    pushEdit(
+      {
+        label: "Reorder components",
+        selectionId: id,
+        undo: () => applyComponentOrder(id, prior),
+        redo: () => applyComponentOrder(id, after),
+      },
+      "scene",
+    );
+  };
+
+  const commitComponentOrder = (next: string[]): void => {
+    const id = selectedId;
+    const prior = [...names];
+    if (JSON.stringify(prior) === JSON.stringify(next)) {
+      return;
+    }
+    applyComponentOrderOptimistic(next);
+    void applyComponentOrder(id, next)
+      .then(() => recordComponentOrderEdit(id, prior, next))
+      .catch((err: unknown) => {
+        applyComponentOrderOptimistic(prior);
+        notifyError(errorText(err));
+      });
+  };
+
+  const moveComponentToIndex = (component: string, index: number): void => {
+    const without = names.filter((name) => name !== component);
+    const insertAt = Math.min(Math.max(index, 0), without.length);
+    commitComponentOrder([...without.slice(0, insertAt), component, ...without.slice(insertAt)]);
+  };
+
+  const beginComponentDrag = (component: string, event: PointerEvent<HTMLButtonElement>): void => {
+    if (event.button !== 0) {
+      return;
+    }
+    const node = sectionRefs.current.get(component);
+    if (!node) {
+      return;
+    }
+    const order = [...names];
+    const startIndex = order.indexOf(component);
+    if (startIndex < 0) {
+      return;
+    }
+    const centers: Record<string, number> = {};
+    for (const candidate of order) {
+      const section = sectionRefs.current.get(candidate);
+      if (section) {
+        const rect = section.getBoundingClientRect();
+        centers[candidate] = rect.top + rect.height / 2;
+      }
+    }
+    const rect = node.getBoundingClientRect();
+    const scrollTop = scrollViewport()?.scrollTop ?? 0;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragActive(true);
+    setComponentDrag({
+      id: component,
+      startY: event.clientY,
+      currentY: event.clientY,
+      startScrollTop: scrollTop,
+      currentScrollTop: scrollTop,
+      dragging: false,
+      startIndex,
+      previewIndex: startIndex,
+      height: rect.height,
+      order,
+      centers,
+    });
+  };
+
+  const moveComponentDrag = (event: PointerEvent<HTMLButtonElement>): void => {
+    if (!componentDrag) {
+      return;
+    }
+    const scrollTop = scrollViewport()?.scrollTop ?? componentDrag.currentScrollTop;
+    const delta = event.clientY - componentDrag.startY + (scrollTop - componentDrag.startScrollTop);
+    const dragging = componentDrag.dragging || Math.abs(delta) >= SECTION_DRAG_THRESHOLD_PX;
+    setComponentDrag({
+      ...componentDrag,
+      currentY: event.clientY,
+      currentScrollTop: scrollTop,
+      dragging,
+      previewIndex: dragging
+        ? insertionIndexForPointer(componentDrag, event.clientY, scrollTop)
+        : componentDrag.previewIndex,
+    });
+  };
+
+  const endComponentDrag = (component: string, event: PointerEvent<HTMLButtonElement>): void => {
+    if (!componentDrag || componentDrag.id !== component) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const nextIndex = componentDrag.previewIndex;
+    if (componentDrag.dragging) {
+      const tops = new Map<string, number>();
+      for (const [name, node] of sectionRefs.current) {
+        tops.set(name, node.getBoundingClientRect().top);
+      }
+      settleRef.current = tops;
+    }
+    setComponentDrag(null);
+    setDragActive(false);
+    if (componentDrag.dragging) {
+      moveComponentToIndex(componentDrag.id, nextIndex);
+    }
+  };
+
+  const resetComponentDrag = (): void => {
+    setComponentDrag(null);
+    setDragActive(false);
+  };
+
+  const componentDragStyle = (component: string): CSSProperties | undefined => {
+    if (!componentDrag?.dragging) {
+      return undefined;
+    }
+    if (component === componentDrag.id) {
+      const scrollDelta = componentDrag.currentScrollTop - componentDrag.startScrollTop;
+      return {
+        transform: `translateY(${componentDrag.currentY - componentDrag.startY + scrollDelta}px)`,
+      };
+    }
+    const index = componentDrag.order.indexOf(component);
+    if (
+      componentDrag.previewIndex > componentDrag.startIndex &&
+      index > componentDrag.startIndex &&
+      index <= componentDrag.previewIndex
+    ) {
+      return { transform: `translateY(-${componentDrag.height}px)` };
+    }
+    if (
+      componentDrag.previewIndex < componentDrag.startIndex &&
+      index >= componentDrag.previewIndex &&
+      index < componentDrag.startIndex
+    ) {
+      return { transform: `translateY(${componentDrag.height}px)` };
+    }
+    return undefined;
+  };
+
+  const onSortComponents = (): void => {
+    commitComponentOrder(canonicalComponentNames(componentsObj));
+  };
 
   // Record one scene-tab undo entry for a field edit; a no-op (prior === after) is
   // dropped. Undo/redo replay through `applyWrite` against the captured entity id.
@@ -387,6 +659,8 @@ export function InspectorPanel() {
   // the user's values, not engine defaults.
   const onRemove = (component: string): void => {
     const id = selectedId;
+    const priorOrder = [...names];
+    const afterOrder = names.filter((name) => name !== component);
     const priorBody = structuredClone((componentsObj[component] ?? {}) as Record<string, unknown>);
     void client
       .removeComponent(id, component)
@@ -398,8 +672,12 @@ export function InspectorPanel() {
             undo: async () => {
               await client.addComponent(id, component);
               await client.setComponent(id, component, priorBody);
+              await client.setComponentOrder(id, priorOrder);
             },
-            redo: () => client.removeComponent(id, component),
+            redo: async () => {
+              await client.removeComponent(id, component);
+              await client.setComponentOrder(id, afterOrder);
+            },
           },
           "scene",
         );
@@ -408,6 +686,7 @@ export function InspectorPanel() {
   };
   const onAdd = (component: string): void => {
     const id = selectedId;
+    const afterOrder = [...names, component];
     void client
       .addComponent(id, component)
       .then(() => {
@@ -416,7 +695,10 @@ export function InspectorPanel() {
             label: `Add ${component}`,
             selectionId: id,
             undo: () => client.removeComponent(id, component),
-            redo: () => client.addComponent(id, component),
+            redo: async () => {
+              await client.addComponent(id, component);
+              await client.setComponentOrder(id, afterOrder);
+            },
           },
           "scene",
         );
@@ -519,22 +801,6 @@ export function InspectorPanel() {
       );
     }
 
-    if (component === "BonePhysics") {
-      // The bones[] vector is auto-fit on skinned import and edited via the ragdoll
-      // controls (Physics panel), not as a JSON field grid — show a read-only readout.
-      const count = Array.isArray(dto.bones) ? dto.bones.length : 0;
-      return (
-        <div className="flex flex-col gap-1 px-0.5 py-0.5">
-          <span className="text-[11px] text-foreground">
-            {count} bone {count === 1 ? "body" : "bodies"} (auto-fit on import)
-          </span>
-          <span className="text-[10px] text-muted-foreground">
-            Ragdoll blend is driven from the Physics panel.
-          </span>
-        </div>
-      );
-    }
-
     // Resolve the read-only id references in the rig bodies to display names: mesh ids hit the
     // asset catalog; rootBone/bone ids are scene entities (joints carry a Name); foot-IK and
     // kinematic-bone arrays hold integer indices into the rig's SkinnedMesh.bones.
@@ -557,13 +823,13 @@ export function InspectorPanel() {
       const bones = skin && Array.isArray(skin.bones) ? (skin.bones as unknown[]) : [];
       return bones.map((b) => String(b));
     };
-    const jointName = (idx: unknown): string => {
-      const bones = rigBones();
-      if (typeof idx !== "number" || idx < 0 || idx >= bones.length) {
-        return "(none)";
-      }
-      return entityName(bones[idx]);
-    };
+    // The rig's joints as {index, id (bone uuid), name} for the bone pickers and per-bone cards.
+    const rigJoints = (): { index: number; id: string; name: string }[] =>
+      rigBones().map((id, index) => ({
+        index,
+        id,
+        name: entities.find((e) => e.id === id)?.name ?? `Joint ${index}`,
+      }));
 
     if (component === "SkinnedMesh") {
       // Import-derived rig data is read-only: the bone uuid array and the inverse-bind matrices
@@ -586,59 +852,55 @@ export function InspectorPanel() {
     }
 
     if (component === "FootIk") {
-      // enabled/groundHeight are the editable scalars; chains[] is a read-only per-chain joint
-      // summary (its joints are indices into SkinnedMesh.bones, set on import — no inspector
-      // authoring path for chains yet).
-      const chains = Array.isArray(dto.chains) ? (dto.chains as Record<string, unknown>[]) : [];
+      // enabled/groundHeight are scalars (the generic grid); chains[] is the two-bone IK limbs,
+      // edited as add/remove cards with joints picked by name. Writes round-trip the whole FootIk
+      // DTO through set-component (consumed by the animation evaluator on the next frame in Play).
+      const chains = Array.isArray(dto.chains) ? (dto.chains as FootChain[]) : [];
       return (
         <div className="flex flex-col gap-1.5">
           {fieldGrid("FootIk", { enabled: dto.enabled, groundHeight: dto.groundHeight })}
-          <div className="flex flex-col gap-1 rounded-sm border border-border/60 bg-muted/20 px-2 py-1.5">
-            <span className="text-[11px] text-foreground">
-              {chains.length} IK {chains.length === 1 ? "chain" : "chains"}
-            </span>
-            {chains.map((c) => {
-              const upper = jointName(c.upper);
-              const mid = jointName(c.mid);
-              const end = jointName(c.end);
-              return (
-                <span
-                  key={`${upper}>${mid}>${end}`}
-                  className="truncate font-mono text-[10px] text-muted-foreground"
-                >
-                  {upper} → {mid} → {end}
-                </span>
-              );
-            })}
-          </div>
+          <FootChainsEditor
+            chains={chains}
+            joints={rigJoints()}
+            onChange={(next) => onFieldChange("FootIk", "chains", next)}
+            onDragStart={() => onFieldDragStart("FootIk", "chains")}
+            onDragEnd={() => onFieldDragEnd("FootIk", "chains")}
+          />
         </div>
       );
     }
 
     if (component === "KinematicBones") {
-      // enabled is the editable toggle; driven[] holds integer indices into SkinnedMesh.bones
-      // (empty = every joint) — shown read-only by resolved joint name.
-      const driven = Array.isArray(dto.driven) ? (dto.driven as unknown[]) : [];
-      const total = rigBones().length;
+      // enabled is the toggle; driven[] is the joint subset that gets kinematic bodies (empty = all),
+      // edited as a bone-mask. Built from this array at the next play edge.
+      const driven = Array.isArray(dto.driven)
+        ? (dto.driven as unknown[]).filter((v): v is number => typeof v === "number")
+        : [];
       return (
         <div className="flex flex-col gap-1.5">
           {fieldGrid("KinematicBones", { enabled: dto.enabled })}
-          <div className="flex flex-col gap-1 rounded-sm border border-border/60 bg-muted/20 px-2 py-1.5">
-            <span className="text-[11px] text-foreground">
-              {driven.length === 0
-                ? `All ${total} ${total === 1 ? "joint" : "joints"} driven`
-                : `${driven.length} of ${total} joints driven`}
-            </span>
-            {driven.map((idx) => (
-              <span
-                key={String(idx)}
-                className="truncate font-mono text-[10px] text-muted-foreground"
-              >
-                {jointName(idx)}
-              </span>
-            ))}
-          </div>
+          <BoneMaskField
+            value={driven}
+            joints={rigJoints()}
+            onChange={(next) => onFieldChange("KinematicBones", "driven", next)}
+          />
         </div>
+      );
+    }
+
+    if (component === "BonePhysics") {
+      // Per-bone ragdoll/collision data, 1:1 with the skeleton: fixed-length cards labeled by joint
+      // name. Edits round-trip the whole bones[] through set-component and apply when physics builds
+      // at the next play edge.
+      const bones = Array.isArray(dto.bones) ? (dto.bones as BonePhysicsEntry[]) : [];
+      return (
+        <BonePhysicsEditor
+          bones={bones}
+          joints={rigJoints()}
+          onChange={(next) => onFieldChange("BonePhysics", "bones", next)}
+          onDragStart={() => onFieldDragStart("BonePhysics", "bones")}
+          onDragEnd={() => onFieldDragEnd("BonePhysics", "bones")}
+        />
       );
     }
 
@@ -647,11 +909,12 @@ export function InspectorPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea ref={scrollAreaRef} className="min-h-0 flex-1">
         <div className="flex flex-col gap-2 p-1.5">
           {names.map((component) => {
             const dto = (componentsObj[component] ?? {}) as Record<string, unknown>;
             const removable = !NON_REMOVABLE.has(component);
+            const dragged = componentDrag?.dragging && componentDrag.id === component;
             return (
               <section
                 key={component}
@@ -662,12 +925,36 @@ export function InspectorPanel() {
                     sectionRefs.current.delete(component);
                   }
                 }}
-                className="overflow-hidden rounded-md border border-border bg-background"
+                className={[
+                  "overflow-hidden rounded-md border border-border bg-background transition-[transform,border-color,box-shadow] duration-150 ease-out",
+                  dragged ? "relative z-10 shadow-lg transition-none" : "",
+                ].join(" ")}
+                style={componentDragStyle(component)}
               >
-                <header className="flex h-8 items-center justify-between border-b border-border bg-muted/50 pr-1 pl-2.5">
-                  <span className="text-xs font-semibold tracking-wide text-foreground">
-                    {humanizeComponentName(component)}
-                  </span>
+                <header className="flex h-8 items-center justify-between border-b border-border bg-muted/50 pr-1 pl-1">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          className="cursor-grab text-muted-foreground active:cursor-grabbing"
+                          onPointerDown={(event) => beginComponentDrag(component, event)}
+                          onPointerMove={moveComponentDrag}
+                          onPointerUp={(event) => endComponentDrag(component, event)}
+                          onPointerCancel={resetComponentDrag}
+                          onLostPointerCapture={resetComponentDrag}
+                        >
+                          <GripVertical />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Reorder {component}</TooltipContent>
+                    </Tooltip>
+                    <span className="truncate text-xs font-semibold tracking-wide text-foreground">
+                      {humanizeComponentName(component)}
+                    </span>
+                  </div>
                   {removable ? (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -694,26 +981,48 @@ export function InspectorPanel() {
 
           <Separator className="my-1" />
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="w-full"
-                disabled={missing.length === 0}
+          <div className="flex items-center gap-1.5">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="min-w-0 flex-1"
+                  disabled={missing.length === 0}
+                >
+                  Add Component
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="w-(--radix-dropdown-menu-trigger-width)"
               >
-                Add Component
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
-              {missing.map((component) => (
-                <DropdownMenuItem key={component} onSelect={() => onAdd(component)}>
-                  {humanizeComponentName(component)}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                {missing.map((component) => (
+                  <DropdownMenuItem key={component} onSelect={() => onAdd(component)}>
+                    {humanizeComponentName(component)}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  className="flex-none"
+                  onClick={onSortComponents}
+                  disabled={
+                    JSON.stringify(names) === JSON.stringify(canonicalComponentNames(componentsObj))
+                  }
+                >
+                  <ArrowDownAZ />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Sort components</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
       </ScrollArea>
     </div>

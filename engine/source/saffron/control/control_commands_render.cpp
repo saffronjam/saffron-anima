@@ -207,23 +207,33 @@ namespace sa
         out.spans.reserve(capture.spans.size());
         for (const ProfileSpan& s : capture.spans)
         {
-            ProfileSpanDto span{ s.name, profileLaneDto(s.lane), s.startNs, s.endNs, s.parentIndex, s.depth, {} };
+            ProfileSpanDto span{ .name = s.name,
+                                 .lane = profileLaneDto(s.lane),
+                                 .startNs = s.startNs,
+                                 .endNs = s.endNs,
+                                 .parentIndex = s.parentIndex,
+                                 .depth = s.depth,
+                                 .pipelineStats = {} };
             if (s.hasStats)
             {
-                span.pipelineStats = PipelineStatsDto{ s.stats.inputVertices,
-                                                       s.stats.vertexInvocations,
-                                                       s.stats.clippingInvocations,
-                                                       s.stats.clippingPrimitives,
-                                                       s.stats.fragmentInvocations,
-                                                       s.stats.computeInvocations,
-                                                       s.stats.pixels };
+                span.pipelineStats = PipelineStatsDto{ .inputVertices = s.stats.inputVertices,
+                                                       .vertexInvocations = s.stats.vertexInvocations,
+                                                       .clippingInvocations = s.stats.clippingInvocations,
+                                                       .clippingPrimitives = s.stats.clippingPrimitives,
+                                                       .fragmentInvocations = s.stats.fragmentInvocations,
+                                                       .computeInvocations = s.stats.computeInvocations,
+                                                       .pixels = s.stats.pixels };
             }
             out.spans.push_back(std::move(span));
         }
-        out.metadata = ProfileCaptureMetadataDto{ capture.meta.softwareGpu, capture.meta.correlated,
-                                                  capture.meta.deviceName,  capture.meta.timestampPeriod,
-                                                  capture.meta.targetFps,   profilerModeDto(capture.meta.mode),
-                                                  capture.meta.filter,      capture.meta.frameCount };
+        out.metadata = ProfileCaptureMetadataDto{ .softwareGpu = capture.meta.softwareGpu,
+                                                  .correlated = capture.meta.correlated,
+                                                  .deviceName = capture.meta.deviceName,
+                                                  .timestampPeriod = capture.meta.timestampPeriod,
+                                                  .targetFps = capture.meta.targetFps,
+                                                  .mode = profilerModeDto(capture.meta.mode),
+                                                  .filter = capture.meta.filter,
+                                                  .frameCount = capture.meta.frameCount };
         return out;
     }
 
@@ -303,43 +313,43 @@ namespace sa
     auto renderStatsDto(Renderer& renderer) -> RenderStatsDto
     {
         const RenderStats stats = renderStats(renderer);
-        return RenderStatsDto{ static_cast<i32>(stats.drawCalls),
-                               static_cast<i32>(stats.batches),
-                               static_cast<i32>(stats.instances),
-                               stats.frameMs,
-                               stats.fps,
-                               stats.gpuMs,
-                               stats.cpuFrameMs,
-                               stats.gpuMs,
-                               stats.cpuWaitMs,
-                               static_cast<i32>(stats.triangles),
-                               static_cast<i32>(stats.descriptorBinds),
-                               static_cast<i32>(stats.commandBuffers),
-                               static_cast<i32>(stats.queueSubmits),
-                               static_cast<i32>(stats.pipelinesCreated),
-                               stats.vramUsageBytes,
-                               stats.vramBudgetBytes,
-                               stats.softwareGpu,
-                               profilerModeDto(stats.profilerMode),
-                               clusteredEnabled(renderer),
-                               depthPrepassEnabled(renderer),
-                               shadowsEnabled(renderer),
-                               iblEnabled(renderer),
-                               ssaoEnabled(renderer),
-                               contactShadowsEnabled(renderer),
-                               ssgiEnabled(renderer),
-                               ddgiEnabled(renderer),
-                               rtSupported(renderer),
-                               rtShadowsEnabled(renderer),
-                               restirEnabled(renderer),
-                               static_cast<i32>(rtBlasCount(renderer)),
-                               static_cast<i32>(pipelineCount(renderer)),
-                               static_cast<i32>(bindlessTextureCount(renderer)),
-                               static_cast<i32>(bindlessFreeCount(renderer)),
-                               true,
-                               exposureEv(renderer),
-                               aaModeDto(aaMode(renderer)),
-                               viewModeDto(viewMode(renderer)) };
+        return RenderStatsDto{ .drawCalls = static_cast<i32>(stats.drawCalls),
+                               .batches = static_cast<i32>(stats.batches),
+                               .instances = static_cast<i32>(stats.instances),
+                               .frameMs = stats.frameMs,
+                               .fps = stats.fps,
+                               .gpuMs = stats.gpuMs,
+                               .cpuFrameMs = stats.cpuFrameMs,
+                               .gpuFrameMs = stats.gpuMs,
+                               .cpuWaitMs = stats.cpuWaitMs,
+                               .triangles = static_cast<i32>(stats.triangles),
+                               .descriptorBinds = static_cast<i32>(stats.descriptorBinds),
+                               .commandBuffers = static_cast<i32>(stats.commandBuffers),
+                               .queueSubmits = static_cast<i32>(stats.queueSubmits),
+                               .pipelinesCreated = static_cast<i32>(stats.pipelinesCreated),
+                               .vramUsageBytes = stats.vramUsageBytes,
+                               .vramBudgetBytes = stats.vramBudgetBytes,
+                               .softwareGpu = stats.softwareGpu,
+                               .profilerMode = profilerModeDto(stats.profilerMode),
+                               .clustered = clusteredEnabled(renderer),
+                               .depthPrepass = depthPrepassEnabled(renderer),
+                               .shadows = shadowsEnabled(renderer),
+                               .ibl = iblEnabled(renderer),
+                               .ssao = ssaoEnabled(renderer),
+                               .contactShadows = contactShadowsEnabled(renderer),
+                               .ssgi = ssgiEnabled(renderer),
+                               .ddgi = ddgiEnabled(renderer),
+                               .rtSupported = rtSupported(renderer),
+                               .rtShadows = rtShadowsEnabled(renderer),
+                               .restir = restirEnabled(renderer),
+                               .blasCount = static_cast<i32>(rtBlasCount(renderer)),
+                               .pipelines = static_cast<i32>(pipelineCount(renderer)),
+                               .bindlessTextures = static_cast<i32>(bindlessTextureCount(renderer)),
+                               .bindlessFree = static_cast<i32>(bindlessFreeCount(renderer)),
+                               .hdr = true,
+                               .exposureEv = exposureEv(renderer),
+                               .aa = aaModeDto(aaMode(renderer)),
+                               .viewMode = viewModeDto(viewMode(renderer)) };
     }
 
     auto passTimingsDto(Renderer& renderer) -> RenderPassTimingsDto
@@ -347,7 +357,7 @@ namespace sa
         RenderPassTimingsDto out;
         for (const PassTiming& timing : passTimings(renderer))
         {
-            out.passes.push_back(RenderPassTimingDto{ timing.name, timing.gpuMs });
+            out.passes.push_back(RenderPassTimingDto{ .name = timing.name, .gpuMs = timing.gpuMs });
         }
         out.gpuTotalMs = passTimingsTotalMs(renderer);
         out.softwareGpu = softwareGpu(renderer);
@@ -357,9 +367,14 @@ namespace sa
 
     auto perfConfigDto(const PerfConfig& config) -> PerfConfigDto
     {
-        return PerfConfigDto{ config.targetFps,      perfBudgetMs(config),  config.greenBudgetFrac,
-                              config.greenMedianMul, config.amberMedianMul, config.frozenMs,
-                              config.vramWarnFrac,   config.vramCritFrac };
+        return PerfConfigDto{ .targetFps = config.targetFps,
+                              .budgetMs = perfBudgetMs(config),
+                              .greenBudgetFrac = config.greenBudgetFrac,
+                              .greenMedianMul = config.greenMedianMul,
+                              .amberMedianMul = config.amberMedianMul,
+                              .frozenMs = config.frozenMs,
+                              .vramWarnFrac = config.vramWarnFrac,
+                              .vramCritFrac = config.vramCritFrac };
     }
 
     auto frameHistoryDto(Renderer& renderer, i32 samples) -> FrameHistoryDto
@@ -380,8 +395,10 @@ namespace sa
         {
             for (const FrameSample& sample : frameSamples(renderer, static_cast<u32>(samples)))
             {
-                out.samples.push_back(FrameSampleDto{ static_cast<i64>(sample.frameIndex), sample.cpuMs, sample.gpuMs,
-                                                      sample.cpuWaitMs });
+                out.samples.push_back(FrameSampleDto{ .frameIndex = static_cast<i64>(sample.frameIndex),
+                                                      .cpuMs = sample.cpuMs,
+                                                      .gpuMs = sample.gpuMs,
+                                                      .cpuWaitMs = sample.cpuWaitMs });
             }
         }
         return out;
@@ -408,17 +425,17 @@ namespace sa
         {
             state = AlarmStateDto::Resolved;
         }
-        return AlarmEventDto{ static_cast<i64>(event.seq),
-                              std::to_string(event.fingerprint),
-                              event.metric,
-                              event.pass,
-                              alarmSeverityDto(event.severity),
-                              state,
-                              event.value,
-                              event.threshold,
-                              static_cast<i64>(event.sinceFrame),
-                              static_cast<i32>(event.count),
-                              event.durationMs };
+        return AlarmEventDto{ .seq = static_cast<i64>(event.seq),
+                              .fingerprint = std::to_string(event.fingerprint),
+                              .metric = event.metric,
+                              .pass = event.pass,
+                              .severity = alarmSeverityDto(event.severity),
+                              .state = state,
+                              .value = event.value,
+                              .threshold = event.threshold,
+                              .sinceFrame = static_cast<i64>(event.sinceFrame),
+                              .count = static_cast<i32>(event.count),
+                              .durationMs = event.durationMs };
     }
 
     auto drainAlarmsDto(Renderer& renderer, i64 since) -> DrainAlarmsResult
@@ -445,9 +462,14 @@ namespace sa
         ActiveAlarmsDto out;
         for (const ActiveAlarm& alarm : activeAlarms(renderer))
         {
-            out.alarms.push_back(ActiveAlarmDto{ std::to_string(alarm.fingerprint), alarm.metric, alarm.pass,
-                                                 alarmSeverityDto(alarm.severity), alarm.value, alarm.threshold,
-                                                 static_cast<i64>(alarm.sinceFrame), static_cast<i32>(alarm.count) });
+            out.alarms.push_back(ActiveAlarmDto{ .fingerprint = std::to_string(alarm.fingerprint),
+                                                 .metric = alarm.metric,
+                                                 .pass = alarm.pass,
+                                                 .severity = alarmSeverityDto(alarm.severity),
+                                                 .value = alarm.value,
+                                                 .threshold = alarm.threshold,
+                                                 .sinceFrame = static_cast<i64>(alarm.sinceFrame),
+                                                 .count = static_cast<i32>(alarm.count) });
         }
         return out;
     }
@@ -457,9 +479,10 @@ namespace sa
         registerCommand<PingParams, PingResult>(reg, "ping", "liveness + engine info",
                                                 [](EngineContext&, const PingParams&) -> Result<PingResult>
                                                 {
-                                                    return PingResult{ true, std::string{ EngineName },
-                                                                       std::string{ EngineVersion },
-                                                                       static_cast<i32>(::getpid()) };
+                                                    return PingResult{ .pong = true,
+                                                                       .engine = std::string{ EngineName },
+                                                                       .version = std::string{ EngineVersion },
+                                                                       .pid = static_cast<i32>(::getpid()) };
                                                 });
 
         registerCommand(reg, "help", "list available commands",
@@ -484,9 +507,10 @@ namespace sa
             [](EngineContext& ctx, const ProfilerSetModeParams& params) -> Result<ProfilerModeResult>
             {
                 setProfilerMode(ctx.renderer, profilerModeFromDto(params.mode.value_or(ProfilerModeDto::Off)));
-                return ProfilerModeResult{ profilerModeDto(profilerMode(ctx.renderer)),
-                                           profilerTimestampsSupported(ctx.renderer),
-                                           profilerPipelineStatsSupported(ctx.renderer), softwareGpu(ctx.renderer) };
+                return ProfilerModeResult{ .mode = profilerModeDto(profilerMode(ctx.renderer)),
+                                           .timestampsSupported = profilerTimestampsSupported(ctx.renderer),
+                                           .pipelineStatsSupported = profilerPipelineStatsSupported(ctx.renderer),
+                                           .softwareGpu = softwareGpu(ctx.renderer) };
             });
 
         registerCommand<EmptyParams, RenderPassTimingsDto>(
@@ -504,7 +528,7 @@ namespace sa
                 const u32 id =
                     startProfileCapture(ctx.renderer, mode, frames, params.filter.value_or(std::string{}),
                                         params.includeCpu.value_or(true), params.includePipelineStats.value_or(false));
-                return CaptureStartResult{ id, true };
+                return CaptureStartResult{ .captureId = id, .ack = true };
             });
 
         registerCommand<EmptyParams, CaptureStopResult>(
@@ -552,11 +576,11 @@ namespace sa
             "profiler.capture-status — non-destructive capture progress (poll until ready, then stop)",
             [](EngineContext& ctx, const EmptyParams&) -> Result<CaptureStatusResult>
             {
-                return CaptureStatusResult{ captureStateDto(profileCaptureState(ctx.renderer)),
-                                            profileCaptureCapturedFrames(ctx.renderer),
-                                            profileCaptureTargetFrames(ctx.renderer),
-                                            captureModeDto(profileCaptureMode(ctx.renderer)),
-                                            profileStatsSupported(ctx.renderer) };
+                return CaptureStatusResult{ .state = captureStateDto(profileCaptureState(ctx.renderer)),
+                                            .capturedFrames = profileCaptureCapturedFrames(ctx.renderer),
+                                            .targetFrames = profileCaptureTargetFrames(ctx.renderer),
+                                            .mode = captureModeDto(profileCaptureMode(ctx.renderer)),
+                                            .pipelineStatsSupported = profileStatsSupported(ctx.renderer) };
             });
 
         registerCommand<FrameHistoryParams, FrameHistoryDto>(
@@ -621,7 +645,7 @@ namespace sa
             [](EngineContext& ctx, const SetAaParams& params) -> Result<SetAaResult>
             {
                 applyAaMode(ctx.renderer, params.mode.value_or(AaModeDto::Off));
-                return SetAaResult{ aaModeDto(aaMode(ctx.renderer)) };
+                return SetAaResult{ .aa = aaModeDto(aaMode(ctx.renderer)) };
             });
 
         registerCommand<SetViewModeParams, SetViewModeResult>(
@@ -630,7 +654,7 @@ namespace sa
             [](EngineContext& ctx, const SetViewModeParams& params) -> Result<SetViewModeResult>
             {
                 setViewMode(ctx.renderer, viewModeFromDto(params.mode.value_or(ViewModeDto::Lit)));
-                return SetViewModeResult{ viewModeDto(viewMode(ctx.renderer)) };
+                return SetViewModeResult{ .viewMode = viewModeDto(viewMode(ctx.renderer)) };
             });
 
         registerCommand<ToggleParams, SetClusteredResult>(
@@ -639,7 +663,7 @@ namespace sa
             {
                 const bool enabled = params.enabled.value_or(true);
                 setClustered(ctx.renderer, enabled);
-                return SetClusteredResult{ enabled };
+                return SetClusteredResult{ .clustered = enabled };
             });
 
         registerCommand<ToggleParams, SetIblResult>(
@@ -647,7 +671,7 @@ namespace sa
             [](EngineContext& ctx, const ToggleParams& params) -> Result<SetIblResult>
             {
                 setIbl(ctx.renderer, params.enabled.value_or(true));
-                return SetIblResult{ iblEnabled(ctx.renderer) };
+                return SetIblResult{ .ibl = iblEnabled(ctx.renderer) };
             });
 
         registerCommand<ToggleParams, SetSsaoResult>(
@@ -655,7 +679,7 @@ namespace sa
             [](EngineContext& ctx, const ToggleParams& params) -> Result<SetSsaoResult>
             {
                 setSsao(ctx.renderer, params.enabled.value_or(true));
-                return SetSsaoResult{ ssaoEnabled(ctx.renderer) };
+                return SetSsaoResult{ .ssao = ssaoEnabled(ctx.renderer) };
             });
 
         registerCommand<ToggleParams, SetContactShadowsResult>(
@@ -663,7 +687,7 @@ namespace sa
             [](EngineContext& ctx, const ToggleParams& params) -> Result<SetContactShadowsResult>
             {
                 setContactShadows(ctx.renderer, params.enabled.value_or(true));
-                return SetContactShadowsResult{ contactShadowsEnabled(ctx.renderer) };
+                return SetContactShadowsResult{ .contactShadows = contactShadowsEnabled(ctx.renderer) };
             });
 
         registerCommand<ToggleParams, SetSsgiResult>(
@@ -671,7 +695,7 @@ namespace sa
             [](EngineContext& ctx, const ToggleParams& params) -> Result<SetSsgiResult>
             {
                 setSsgi(ctx.renderer, params.enabled.value_or(true));
-                return SetSsgiResult{ ssgiEnabled(ctx.renderer) };
+                return SetSsgiResult{ .ssgi = ssgiEnabled(ctx.renderer) };
             });
 
         registerCommand<ToggleParams, SetRtShadowsResult>(
@@ -683,7 +707,7 @@ namespace sa
                     return Err(std::string{ "ray tracing not supported on this device" });
                 }
                 setRtShadows(ctx.renderer, params.enabled.value_or(true));
-                return SetRtShadowsResult{ rtShadowsEnabled(ctx.renderer) };
+                return SetRtShadowsResult{ .rtShadows = rtShadowsEnabled(ctx.renderer) };
             });
 
         registerCommand<ToggleParams, SetRestirResult>(
@@ -695,7 +719,7 @@ namespace sa
                     return Err(std::string{ "ray tracing not supported on this device" });
                 }
                 setRestir(ctx.renderer, params.enabled.value_or(true));
-                return SetRestirResult{ restirEnabled(ctx.renderer) };
+                return SetRestirResult{ .restir = restirEnabled(ctx.renderer) };
             });
 
         registerCommand<SetGiParams, SetGiResult>(
@@ -703,7 +727,7 @@ namespace sa
             [](EngineContext& ctx, const SetGiParams& params) -> Result<SetGiResult>
             {
                 setDdgi(ctx.renderer, params.mode == GiModeDto::Ddgi);
-                return SetGiResult{ ddgiEnabled(ctx.renderer) };
+                return SetGiResult{ .ddgi = ddgiEnabled(ctx.renderer) };
             });
 
         registerCommand<ToggleParams, SetShadowsResult>(
@@ -712,7 +736,7 @@ namespace sa
             {
                 const bool enabled = params.enabled.value_or(true);
                 setShadows(ctx.renderer, enabled);
-                return SetShadowsResult{ enabled };
+                return SetShadowsResult{ .shadows = enabled };
             });
 
         registerCommand<ToggleParams, SetSkinningResult>(
@@ -721,7 +745,7 @@ namespace sa
             {
                 const bool enabled = params.enabled.value_or(true);
                 setSkinning(ctx.renderer, enabled);
-                return SetSkinningResult{ enabled };
+                return SetSkinningResult{ .skinning = enabled };
             });
 
         registerCommand<SetExposureParams, SetExposureResult>(
@@ -729,7 +753,7 @@ namespace sa
             [](EngineContext& ctx, const SetExposureParams& params) -> Result<SetExposureResult>
             {
                 setExposure(ctx.renderer, params.ev);
-                return SetExposureResult{ exposureEv(ctx.renderer) };
+                return SetExposureResult{ .exposureEv = exposureEv(ctx.renderer) };
             });
 
         registerCommand<ToggleParams, SetDepthPrepassResult>(
@@ -738,7 +762,7 @@ namespace sa
             {
                 const bool enabled = params.enabled.value_or(true);
                 setDepthPrepass(ctx.renderer, enabled);
-                return SetDepthPrepassResult{ enabled };
+                return SetDepthPrepassResult{ .depthPrepass = enabled };
             });
 
         registerCommand<EmptyParams, ViewportNativeInfoResult>(
@@ -746,14 +770,14 @@ namespace sa
             [](EngineContext& ctx, const EmptyParams&) -> Result<ViewportNativeInfoResult>
             {
                 std::string controlPath = controlSocketPath();
-                return ViewportNativeInfoResult{ "linux",
-                                                 "wayland-subsurface",
-                                                 "engine-ready",
-                                                 controlPath,
-                                                 static_cast<i32>(viewportWidth(ctx.renderer)),
-                                                 static_cast<i32>(viewportHeight(ctx.renderer)),
-                                                 "engine renders offscreen; the editor presents frames "
-                                                 "from shared memory on a wayland subsurface" };
+                return ViewportNativeInfoResult{ .platform = "linux",
+                                                 .transport = "wayland-subsurface",
+                                                 .status = "engine-ready",
+                                                 .controlSocket = controlPath,
+                                                 .width = static_cast<i32>(viewportWidth(ctx.renderer)),
+                                                 .height = static_cast<i32>(viewportHeight(ctx.renderer)),
+                                                 .message = "engine renders offscreen; the editor presents frames "
+                                                            "from shared memory on a wayland subsurface" };
             });
 
         registerCommand<SetViewportSizeParams, SetViewportSizeResult>(
@@ -769,7 +793,7 @@ namespace sa
                 const i32 width = std::max(1, params.width.value_or(static_cast<i32>(viewportWidth(ctx.renderer))));
                 const i32 height = std::max(1, params.height.value_or(static_cast<i32>(viewportHeight(ctx.renderer))));
                 setViewportDesiredSize(ctx.renderer, *view, static_cast<u32>(width), static_cast<u32>(height));
-                return SetViewportSizeResult{ width, height };
+                return SetViewportSizeResult{ .width = width, .height = height };
             });
     }
 }

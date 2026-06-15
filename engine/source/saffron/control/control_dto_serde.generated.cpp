@@ -1128,6 +1128,28 @@ namespace sa
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<SetComponentOrderParams>) -> Result<SetComponentOrderParams>
+    {
+        SetComponentOrderParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "components", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readVector<std::string>(**value, "components");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.components = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<SetTransformParams>) -> Result<SetTransformParams>
     {
         SetTransformParams out;
@@ -4107,6 +4129,13 @@ namespace sa
         return out;
     }
 
+    auto dtoToJson(const SetComponentOrderResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["components"] = dtoVectorToJson(value.components);
+        return out;
+    }
+
     auto dtoToJson(const PickResult& value) -> Json
     {
         Json out = Json::object();
@@ -4123,6 +4152,7 @@ namespace sa
         out["id"] = dtoToJson(value.id);
         out["name"] = value.name;
         out["components"] = value.components;
+        out["componentOrder"] = dtoVectorToJson(value.componentOrder);
         return out;
     }
 

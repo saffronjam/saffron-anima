@@ -21,7 +21,7 @@ The panel reads `componentsBySelected` (the `inspect` result, kept fresh by the 
 ))}
 ```
 
-The render path has no `if (component === "Transform")` branch. Components draw in a canonical order (`Name`, `Transform`, `Mesh`, …) and any unknown component falls in after, but that is ordering only, never a render switch.
+The render path has no `if (component === "Transform")` branch. Components draw in the selected entity's authored order, which is returned by `inspect` and saved with the scene. New sections are added at the bottom, drag reordering writes a new order through the control plane, and the sort action restores the canonical order (`Name`, `Transform`, `Mesh`, …). Any unknown component falls in after the known set, but that is ordering only, never a render switch.
 
 ## Picking a widget
 
@@ -35,9 +35,15 @@ A hint also carries min/max/step, slider-vs-drag, the option list for a closed e
 
 One unit conversion lives at the widget boundary. `Transform.rotation` is radians on the wire but shown in degrees, driven by the hint's `convertRadians` flag. SpotLight `innerAngle`/`outerAngle` are degrees on both sides, so their `unit:"deg"` is a label and clamp only, no conversion. Material's `baseColor`/`emissive` use color swatches, `metallic`/`roughness` are sliders, and `albedoTexture` and `Mesh.mesh` are [asset pickers](../asset-pickers-and-drag-drop/).
 
-## Import-derived components
+## Rig components
 
-A few components carry data the importer fills, not the user. A rig's `SkinnedMesh` holds the bone-entity array and the per-joint inverse-bind matrices; `FootIk.chains` and `KinematicBones.driven` hold integer indices into that bone array. Through the generic grid these become an editable JSON blob of ids and matrices — noise no one hand-edits and easy to corrupt. So those components get a small bespoke body: the editable scalars (`FootIk.enabled`/`groundHeight`, `KinematicBones.enabled`) stay live widgets, while the import-derived parts render read-only and resolved to names — the mesh and root bone by catalog/entity name, the IK chains and driven set by joint name (each index resolved through `SkinnedMesh.bones` to that joint entity's `Name`), and a joint count in place of the raw matrices. `BonePhysics` shows a one-line body-count readout for the same reason; its ragdoll blend is driven from the [Physics panel](../physics-panel/). The resolution is entirely client-side — the joint names are already in the [hierarchy](../hierarchy-panel/) entity list, so no extra engine round-trip is needed.
+A few components carry data keyed to the skeleton, so they get a bespoke body instead of the raw-id JSON the generic grid would produce. `SkinnedMesh` is genuinely not user-authored — its bone-entity array and inverse-bind matrices are import-derived — so it stays read-only: mesh and root bone resolved to names, a joint count in place of the matrices. The other three are **editable by joint name**, never by raw index:
+
+- **`FootIk`** — `enabled`/`groundHeight` are scalar fields; `chains` is an add/remove list of two-bone IK limbs, each picking Upper/Mid/End from a joint dropdown plus a pole vector.
+- **`KinematicBones`** — `enabled` toggles the feature; `driven` is a joint-subset mask with an "All joints" switch (an empty wire array means *every* joint) and a per-joint checklist.
+- **`BonePhysics`** — a fixed-length list (1:1 with the skeleton) of collapsible per-bone cards, each tuning the ragdoll body: collider half-extents, mass, the joint constraint type, its swing/twist limits (shown in degrees, stored in radians), and the PD drive gains.
+
+Joint names resolve entirely client-side — the bone entities are already in the [hierarchy](../hierarchy-panel/) list (`SkinnedMesh.bones[i]` → joint entity → `Name`), so no engine round-trip is needed. All three write the whole array back through the normal `set-component` read-modify-write, and the edits apply at the right moment: foot IK reads `chains` each frame, while the kinematic bodies and the ragdoll are built from `driven`/`bones` when physics starts at the next Play (not mid-Play). The runtime ragdoll blend is still driven from the [Physics panel](../physics-panel/).
 
 ## Read-modify-write
 
@@ -71,19 +77,21 @@ The release always ends the stream with one exact write: the widget flushes its 
 
 ## Add and remove
 
-`add-component` and `remove-component` are guarded the same way the engine guards them. Remove only shows for removable components: `Name`, `Transform`, and the import-managed identity components `ModelInstance` and `SkinnedMesh` are in `NON_REMOVABLE`, so the inspector cannot strip an entity of its identity, its place in the world, or its rig. The Add Component dropdown lists every registered component the entity lacks, minus two exclusions: components written only by import (`ModelInstance`, `SkinnedMesh`, and `MaterialSet`) never appear, and the rig sidecars that index a skeleton (`AnimationPlayer`, `FootIk`, `KinematicBones`, `BonePhysics`) appear only on an entity that already carries a `SkinnedMesh`. Selecting one calls `add-component`, and the new component appears on the next reconcile tick.
+`add-component` and `remove-component` are guarded the same way the engine guards them. Remove only shows for removable components: `Name`, `Transform`, and the import-managed identity components `ModelInstance` and `SkinnedMesh` are in `NON_REMOVABLE`, so the inspector cannot strip an entity of its identity, its place in the world, or its rig. The Add Component dropdown lists every registered component the entity lacks, minus two exclusions: components written only by import (`ModelInstance`, `SkinnedMesh`, and `MaterialSet`) never appear, and the rig sidecars that index a skeleton (`AnimationPlayer`, `FootIk`, `KinematicBones`, `BonePhysics`) appear only on an entity that already carries a `SkinnedMesh`. Selecting one calls `add-component`, and the engine appends the new section to the entity's stored component order.
+
+Each section header has a drag handle. Dragging follows the tab-strip pattern: after a small pointer threshold, neighboring sections slide apart to show the landing slot, and the reordered list commits only on release. A drop sends the full visible component order to `set-component-order`, and undo/redo replays that same command. The hierarchy's selected-entity component subrows read the same order, so clicking a subrow always scrolls to the section in the matching position. The stored order excludes hidden structural sections such as `Relationship` and `Bone`.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
 | The generic panel | `editor/src/panels/InspectorPanel.tsx` | `InspectorPanel`, `NON_REMOVABLE`, `NON_ADDABLE`, `RIG_ONLY` |
-| Component order + rig bodies | `editor/src/lib/componentOrder.ts`, `editor/src/panels/InspectorPanel.tsx` | `COMPONENT_ORDER`, `orderedComponentNames`, `ReadonlyRow` |
+| Component order + rig bodies | `editor/src/lib/componentOrder.ts`, `editor/src/panels/InspectorPanel.tsx` | `COMPONENT_ORDER`, `canonicalComponentNames`, `orderedComponentNames`, `ReadonlyRow` |
 | Field-kind dispatch | `editor/src/components/fieldRenderer.tsx` | `renderField`, `resolveHint`, `FIELD_HINTS`, `AssetKind` |
 | Color canvas + label casing | `editor/src/components/ColorField.tsx`, `editor/src/lib/humanize.ts` | `ColorField`, `humanizeFieldName` |
 | Read-modify-write routing | `editor/src/panels/InspectorPanel.tsx` | `onFieldChange`, `sendWrite`, `coalescerFor` |
 | Optimistic overlay | `editor/src/state/store.ts` | `applyOptimisticComponent`, `dragActive` |
-| Edits (engine) | `control_commands_scene.cpp` | `set-component`, `set-transform`, `set-material`, `set-component-field`, `add-component`, `remove-component` |
+| Edits (engine) | `control_commands_scene.cpp` | `set-component`, `set-transform`, `set-material`, `set-component-field`, `set-component-order`, `add-component`, `remove-component` |
 | Smoothed drags (engine) | `scene_edit_gizmo.cpp`, `scene_edit_context.cppm` | `stepEditSmoothing`, `MaterialSmoothTarget`, `TransformSmoothTarget` |
 | Drag-local widgets | `editor/src/lib/useScrubValue.ts` | `useScrubValue`, `ScrubValue` |
 

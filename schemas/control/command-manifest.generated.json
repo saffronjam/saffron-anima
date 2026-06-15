@@ -247,6 +247,13 @@
       "fixture": "cube-name-component"
     },
     {
+      "name": "set-component-order",
+      "params": "SetComponentOrderParams",
+      "result": "SetComponentOrderResult",
+      "status": "typed",
+      "fixture": "cube-component-order"
+    },
+    {
       "name": "set-transform",
       "params": "SetTransformParams",
       "result": "EntityRef",

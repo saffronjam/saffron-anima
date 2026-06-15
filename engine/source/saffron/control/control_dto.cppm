@@ -1338,6 +1338,17 @@ export namespace sa
         std::string set;
     };
 
+    struct SetComponentOrderParams
+    {
+        EntitySelector entity;
+        std::vector<std::string> components;
+    };
+
+    struct SetComponentOrderResult
+    {
+        std::vector<std::string> components;
+    };
+
     struct SetTransformParams
     {
         EntitySelector entity;
@@ -1396,6 +1407,7 @@ export namespace sa
         WireUuid id;
         std::string name;
         Json components;
+        std::vector<std::string> componentOrder;
     };
 
     struct EnvironmentDto
@@ -1942,6 +1954,7 @@ export namespace sa
     auto dtoToJson(const AddComponentResult& value) -> Json;
     auto dtoToJson(const RemoveComponentResult& value) -> Json;
     auto dtoToJson(const SetComponentResult& value) -> Json;
+    auto dtoToJson(const SetComponentOrderResult& value) -> Json;
     auto dtoToJson(const PickResult& value) -> Json;
     auto dtoToJson(const InspectResult& value) -> Json;
     auto dtoToJson(const EnvironmentDto& value) -> Json;
@@ -2032,6 +2045,7 @@ export namespace sa
     auto parseDto(const Json& params, DtoTag<SetParentParams>) -> Result<SetParentParams>;
     auto parseDto(const Json& params, DtoTag<ComponentParams>) -> Result<ComponentParams>;
     auto parseDto(const Json& params, DtoTag<SetComponentParams>) -> Result<SetComponentParams>;
+    auto parseDto(const Json& params, DtoTag<SetComponentOrderParams>) -> Result<SetComponentOrderParams>;
     auto parseDto(const Json& params, DtoTag<SetTransformParams>) -> Result<SetTransformParams>;
     auto parseDto(const Json& params, DtoTag<SetMaterialParams>) -> Result<SetMaterialParams>;
     auto parseDto(const Json& params, DtoTag<SetLightParams>) -> Result<SetLightParams>;

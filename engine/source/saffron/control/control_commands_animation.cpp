@@ -255,8 +255,10 @@ namespace sa
                     {
                         continue;
                     }
-                    out.clips.push_back(
-                        AnimationClipDto{ WireUuid{ entry.id.value }, entry.name, entry.duration, entry.tracks });
+                    out.clips.push_back(AnimationClipDto{ .id = WireUuid{ entry.id.value },
+                                                          .name = entry.name,
+                                                          .duration = entry.duration,
+                                                          .tracks = entry.tracks });
                 }
                 return out;
             });
@@ -432,13 +434,13 @@ namespace sa
                 SceneEditContext& edit = ctx.sceneEdit;
                 if (!previewing(edit) || edit.previewBoneByNode.empty())
                 {
-                    return PickSkeletonJointResult{ false, -1 };
+                    return PickSkeletonJointResult{ .found = false, .nodeIndex = -1 };
                 }
                 const u32 width = viewportWidth(ctx.renderer);
                 const u32 height = viewportHeight(ctx.renderer);
                 if (width == 0 || height == 0)
                 {
-                    return PickSkeletonJointResult{ false, -1 };
+                    return PickSkeletonJointResult{ .found = false, .nodeIndex = -1 };
                 }
                 Scene& scene = activeScene(edit);
                 updateWorldTransforms(scene);  // pick against the same world joint positions the overlay draws
@@ -472,7 +474,7 @@ namespace sa
                         bestNode = static_cast<i32>(node);
                     }
                 }
-                return PickSkeletonJointResult{ bestNode >= 0, bestNode };
+                return PickSkeletonJointResult{ .found = bestNode >= 0, .nodeIndex = bestNode };
             });
 
         registerCommand<GetFootIkParams, FootIkResult>(
