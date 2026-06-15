@@ -94,16 +94,18 @@ user confirms it against real output — say "this should fix it, please verify 
   instead serves the trace from a loopback CORS server (`serve_trace`/`start_trace_server`) and
   opens `ui.perfetto.dev/#!/?url=…` pointing back at it — the response must carry
   `Access-Control-Allow-Private-Network: true` or Chromium's PNA blocks the loopback fetch.
-- **Surface operation failures through the Toaster, not a hand-rolled error state.** A
-  rejected control call (or any user-triggered operation that fails) is shown with a Sonner
-  toast via `notifyError(errorText(err))` from `lib/flash.ts` — `errorText` normalizes the
-  engine's rejection string, and `<Toaster />` (mounted once in `App.tsx`) renders it. Use
-  `notify(...)` for a non-error result toast (save/load/import) and `toast.error/warning`
-  directly only for the fingerprint-keyed alarm stream (`alarmToasts.ts`). Do not add a
-  per-component `useState<string|null>` error banner for transient failures; the inline
-  `useFlash()` banner is only for panel-anchored *status* (the project menu / startup
-  modal), never over the viewport. A silently-swallowed `catch` is a bug — the user must see
-  why an action did nothing.
+- **Surface operation failures through the Toaster — NEVER invent a new error location.** There
+  is exactly **one** place a user-triggered operation failure is shown: a Sonner toast via
+  `notifyError(errorText(err))` from `lib/flash.ts` (`errorText` normalizes the engine's rejection
+  string; `<Toaster />` is mounted once in `App.tsx`). This is absolute — do **not** hand-roll any
+  alternative: no per-component `useState<string|null>` error banner, no inline destructive `<p>`
+  strip at the bottom of a panel, no `console.error` left as the only signal, no `alert`. Every
+  `catch` on a control call ends in `notifyError(errorText(err))` (a silently-swallowed `catch` is a
+  bug — the user must see why an action did nothing). The Inspector's add/remove/fit-collider, every
+  panel button, every drag-drop op: all route here. Use `notify(...)` for a non-error *result* toast
+  (save/load/import) and `toast.error/warning` directly only for the fingerprint-keyed alarm stream
+  (`alarmToasts.ts`). The inline `useFlash()` banner is **only** for panel-anchored *status* (the
+  project-menu / startup modal), never for a transient operation failure and never over the viewport.
 - **State sync is a focus-gated poll, not push.** `store.ts` reconciles at ~6 Hz, gated on
   `document.hasFocus()` and `phase === 'ready'`, keyed on the engine's `sceneVersion` /
   `selectionVersion` stamps. High-frequency edits (field scrubs, gizmo drags) use coalescers
