@@ -22,4 +22,4 @@ added.
 | `component-registry` | the closures itable, `registerComponent<C>`, lookup by name/id | `scene.cppm` · `ComponentRegistry` |
 | `scene-serialization` | registry-driven JSON save/load, UUID stability | `scene.cppm` |
 | `asset-catalog-in-scene` | `AssetCatalog` lives here; `Scene` borrows a `const AssetCatalog*` | `scene.cppm` · `AssetCatalog` |
-| `picking` | ray vs. world-space mesh AABB, click-to-select | `assets.cppm` · `pickEntity` |
+| `picking` | ray vs. mesh triangles (AABB broad-phase), static + skinned, click-to-select | `assets.cppm` · `pickEntity` |

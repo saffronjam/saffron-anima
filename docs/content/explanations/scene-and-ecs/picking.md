@@ -6,12 +6,15 @@ weight = 7
 # Picking
 
 Picking maps a point on screen to the scene entity beneath it. A left-click in the viewport casts a
-ray from the camera through the cursor, tests it against each entity's world-space mesh bounds, and
-selects the nearest hit.
+ray from the camera through the cursor and selects the nearest entity its geometry actually
+intersects. Each mesh is tested in two phases: a cheap world-AABB **broad phase** rejects meshes the
+ray comes nowhere near, then a ray-vs-triangle **narrow phase** finds the true surface hit. The
+narrow phase is what makes a click land on the silhouette and not on the empty air inside a loose
+bounding box.
 
-The goal is "which object", not a pixel-exact silhouette. A bounding-box test answers that question
-cheaply and is robust enough for click selection. `pickEntity` lives in `Saffron.Assets` because it
-needs the GPU mesh bounds the asset server caches.
+`pickEntity` lives in `Saffron.Assets` because it needs the cached meshes the asset server owns. It
+covers both static `MeshComponent` and skinned `SkinnedMeshComponent` meshes, so rigged imports are
+selectable too.
 
 ## From click to ray
 
@@ -36,52 +39,54 @@ Two clip-space points share the same xy: one on the near plane (depth 0, the eng
 world-space origin and direction. Reusing the renderer's flip and depth range is what makes the ray
 land where the pixel was drawn.
 
-## World AABB per entity
+## Broad phase: world AABB
 
-`pickEntity` walks `forEach<TransformComponent, MeshComponent>`, resolves each mesh through
-`loadMeshAsset` (skipping anything that fails to load), and builds a world-space AABB by
-transforming the mesh's eight local-AABB corners and taking their min/max:
+For each candidate `pickEntity` builds a world-space AABB from the mesh's eight local-AABB corners
+(`worldAabbFromCorners`) and runs the standard ray-AABB slab test (`rayAabbSlab`). Both live in
+`Saffron.Geometry`; the same corner helper feeds the renderer's scene-bounds fit and the debug
+overlay boxes, so there is one definition of "world AABB of a mesh".
 
 ```cpp
-const glm::vec3 lo = meshRef->boundsMin;
-const glm::vec3 hi = meshRef->boundsMax;
-for (u32 corner = 0; corner < 8; corner = corner + 1)
+glm::vec3 worldMin{ FLT_MAX };
+glm::vec3 worldMax{ -FLT_MAX };
+worldAabbFromCorners(model, meshRef->boundsMin, meshRef->boundsMax, worldMin, worldMax);
+f32 tEnter, tExit;
+if (!rayAabbSlab(ray, worldMin, worldMax, tEnter, tExit)) return;  // ray misses the box → skip
+```
+
+The box is re-axis-aligned in world space, so a rotated mesh gets a fat, loose fit — a long diagonal
+antenna inflates the box with empty air. The broad phase only *rejects*; it never decides the hit, so
+that looseness costs nothing but a few extra narrow-phase tests.
+
+## Narrow phase: ray vs. triangle
+
+A mesh whose AABB the ray crosses is tested triangle by triangle. The mesh keeps a CPU copy of its
+positions and indices (`GpuMesh::cpuPositions` / `cpuIndices`, filled once at upload), so picking
+never reads back from the GPU. Each triangle's three vertices are transformed to world space and run
+through a two-sided Möller–Trumbore test (`rayTriangle`):
+
+```cpp
+for (triangle in cpuIndices)
 {
-    glm::vec3 p = lo;
-    if (corner & 1u) p.x = hi.x;
-    if (corner & 2u) p.y = hi.y;
-    if (corner & 4u) p.z = hi.z;
-    const glm::vec3 world = glm::vec3(model * glm::vec4(p, 1.0f));
-    worldMin = glm::min(worldMin, world);
-    worldMax = glm::max(worldMax, world);
+    f32 t;
+    if (rayTriangle(ray, v0, v1, v2, t) && t < best) best = t;  // nearest forward surface
 }
 ```
 
-Transforming eight corners is cheap and keeps the slab test in one coordinate system. The resulting
-box is axis-aligned in world space, so a rotated mesh gets a looser fit. That is acceptable for
-click selection.
+`rayTriangle` is winding-agnostic (a back face hit counts) and only accepts hits in front of the
+origin, so a ray starting inside a mesh reports the surface ahead, not one behind it. The nearest
+triangle hit across all meshes wins; a miss everywhere returns `Entity{ entt::null }` and the caller
+clears the selection.
 
-## The slab test
+## Skinned meshes
 
-Each candidate runs the standard ray-AABB slab intersection using the precomputed `invDir`:
-
-```cpp
-const glm::vec3 t0 = (worldMin - origin) * invDir;
-const glm::vec3 t1 = (worldMax - origin) * invDir;
-const glm::vec3 tlo = glm::min(t0, t1);
-const glm::vec3 thi = glm::max(t0, t1);
-const f32 tEnter = glm::max(glm::max(tlo.x, tlo.y), tlo.z);
-const f32 tExit  = glm::min(glm::min(thi.x, thi.y), thi.z);
-if (tExit < 0.0f || tEnter > tExit) return;   // miss or box behind the ray
-f32 t = tEnter;
-if (t < 0.0f) t = tExit;                       // origin inside the box
-```
-
-`invDir` is `1.0f / dir`. An axis-aligned ray component produces an infinity there, which the
-`min`/`max` handle correctly, so no special-casing is needed. The intersection distance `t` is
-`tEnter`, or `tExit` when the camera is inside the box. The function keeps the smallest `t` across
-all entities, so the nearest object wins. A miss everywhere returns `Entity{ entt::null }`, and the
-caller clears the selection.
+A second pass handles `SkinnedMeshComponent`. Its vertices are deformed on the GPU, so picking
+reproduces the same skin on the CPU: it builds the joint palette with `jointMatrices`
+(`worldMatrix(bone) * inverseBind`) and blends each vertex, `Σ wₖ · (palette[jointₖ] · restPos)`,
+exactly as `skin.slang` does. Because the joints already place the vertices in world space, the
+deformed positions feed `rayTriangle` directly with no model matrix. The broad-phase AABB unions the
+bind-pose box through every joint, mirroring the renderer's skinned scene-bounds fit. Without this
+pass rigged models drew but could never be clicked.
 
 > [!TIP]
 > Picking depends on the AABB matching the flipped projection. The renderer applies
@@ -93,9 +98,11 @@ caller clears the selection.
 
 | What | File | Symbols |
 |---|---|---|
-| The pick | `assets.cppm` | `pickEntity` |
-| Mesh local bounds | `geometry.cppm` | `boundsMin`, `boundsMax` |
-| Mesh resolve | `assets.cppm` | `loadMeshAsset` |
+| The pick (both phases, both mesh kinds) | `assets.cppm` | `pickEntity` |
+| Ray + intersection math | `geometry.cppm` | `Ray`, `rayTriangle`, `rayAabbSlab`, `worldAabbFromCorners` |
+| CPU pick geometry | `renderer_types.cppm` | `GpuMesh::cpuPositions`, `cpuIndices`, `cpuSkin` |
+| Mesh resolve + local bounds | `assets.cppm` | `loadMeshAsset`, `boundsMin`, `boundsMax` |
+| Skinned deform palette | `scene.cppm` | `jointMatrices` |
 | Matched projection | `scene.cppm` | `cameraProjection`, `CameraView` |
 
 ## Related
