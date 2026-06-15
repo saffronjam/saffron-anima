@@ -25,6 +25,7 @@ Every editor operation rides the JSON-over-unix-socket [control protocol](../too
 | `editor-settings` | the gear-button settings modal, the rebindable-keybinding registry + delta `settings.json`, the `load/save_editor_settings` bridge | `SettingsModal.tsx` · `lib/keybindings.ts` · `src-tauri/src/lib.rs` |
 | `hierarchy-panel` | the React tree outliner (`parentId` → forest), drag-reparent, the Environment sentinel, Create presets | `HierarchyPanel.tsx` · `HierarchyTree.tsx` |
 | `inspector` | the DTO-typed component inspector (fieldRenderer + FIELD_HINTS), RMW writes, add/remove guarded | `InspectorPanel.tsx` · `fieldRenderer.tsx` |
+| `physics-inspector` | the split Rigidbody/Collider sections: the enum/lockAxes/struct field kinds (motion/shape Selects, X/Y/Z lock grid, nested material sliders), Fit-to-mesh, collider-alone-static note, skinned-only rig sidecars | `fieldRenderer.tsx` · `EnumField.tsx` · `LockAxesField.tsx` · `InspectorPanel.tsx` |
 | `asset-pickers-and-drag-drop` | the AssetPicker uuid combo, type-gated HTML5 drag-drop | `AssetPicker.tsx` · `AssetTile.tsx` |
 | `assets-panel-and-thumbnails` | the React asset browser, virtual folders, asset tabs, `get-thumbnail` base64 PNG + blob-URL cache, import dialog | `AssetsPanel.tsx` · `AssetTile.tsx` · `AssetViewer.tsx` |
 | `selection` | select/get-selection/deselect, the version-stamped reconcile round-trip, optimistic select | `state/store.ts` · `ViewportPanel.tsx` |
@@ -34,3 +35,4 @@ Every editor operation rides the JSON-over-unix-socket [control protocol](../too
 | `mesh-thumbnails` | the engine `renderMeshThumbnail` 3/4 preview, read back as a base64 PNG | `renderer_thumbnail.cpp` |
 | [`metrics-dashboard`](metrics-dashboard/) | the gated metrics poll, the uPlot live frame-time graph, per-pass + VRAM views, shared thresholds, the alarm toasts/log/badge | `RenderStatsPanel.tsx` · `FrameTimeGraph.tsx` · `state/store.ts` |
 | [`profiler-panel`](profiler-panel/) | the capture tab beside Stats, the Start/Stop state machine, the table/flame/icicle views + cross-highlight, Chrome-Trace + Perfetto export | `ProfilerPanel.tsx` · `CaptureControls.tsx` · `lib/captureTree.ts` |
+| `physics-panel` | the play-mode physics diagnostics dock panel: live body counts + the contact/trigger feed (open-AND-playing gated), and the per-selection ragdoll blend + character move controls | `PhysicsPanel.tsx` · `state/store.ts` · `control_commands_physics.cpp` |

@@ -31,9 +31,13 @@ The render path has no `if (component === "Transform")` branch. Components draw 
 2. The value's shape — `{x,y,z}`→vec3, `{x,y,z,w}`→vec4, number, boolean, string.
 3. A read-only text fallback, so an unmapped field is still visible.
 
-A hint also carries min/max/step, slider-vs-drag, and the asset kind for uuid fields. Field labels are sentence-cased from the wire key (`humanizeFieldName`: `albedoTexture` → "Albedo texture"), and color fields open a saturation/hue (and alpha) canvas in a popover rather than the native OS picker. Selecting **(none)** in a mesh or material-texture picker clears the slot — the engine treats the `0` asset id as "unassigned" rather than rejecting it.
+A hint also carries min/max/step, slider-vs-drag, the option list for a closed enum (drawn as a Select — `Rigidbody.motion`, `Collider.shape`, `AnimationPlayer.wrap` and `transitionMode`), and the asset kind a uuid field picks from: `mesh`, `texture`, `material`, `model` (the `.smodel` a `ModelInstance` came from), or `animation` (an `AnimationPlayer` clip). Without a hint an enum or id would fall to step 3 and render as a free-text box, so each closed enum and each id reference is hinted. Field labels are sentence-cased from the wire key (`humanizeFieldName`: `albedoTexture` → "Albedo texture"), and color fields open a saturation/hue (and alpha) canvas in a popover rather than the native OS picker. Selecting **(none)** in a mesh or material-texture picker clears the slot — the engine treats the `0` asset id as "unassigned" rather than rejecting it.
 
 One unit conversion lives at the widget boundary. `Transform.rotation` is radians on the wire but shown in degrees, driven by the hint's `convertRadians` flag. SpotLight `innerAngle`/`outerAngle` are degrees on both sides, so their `unit:"deg"` is a label and clamp only, no conversion. Material's `baseColor`/`emissive` use color swatches, `metallic`/`roughness` are sliders, and `albedoTexture` and `Mesh.mesh` are [asset pickers](../asset-pickers-and-drag-drop/).
+
+## Import-derived components
+
+A few components carry data the importer fills, not the user. A rig's `SkinnedMesh` holds the bone-entity array and the per-joint inverse-bind matrices; `FootIk.chains` and `KinematicBones.driven` hold integer indices into that bone array. Through the generic grid these become an editable JSON blob of ids and matrices — noise no one hand-edits and easy to corrupt. So those components get a small bespoke body: the editable scalars (`FootIk.enabled`/`groundHeight`, `KinematicBones.enabled`) stay live widgets, while the import-derived parts render read-only and resolved to names — the mesh and root bone by catalog/entity name, the IK chains and driven set by joint name (each index resolved through `SkinnedMesh.bones` to that joint entity's `Name`), and a joint count in place of the raw matrices. `BonePhysics` shows a one-line body-count readout for the same reason; its ragdoll blend is driven from the [Physics panel](../physics-panel/). The resolution is entirely client-side — the joint names are already in the [hierarchy](../hierarchy-panel/) entity list, so no extra engine round-trip is needed.
 
 ## Read-modify-write
 
@@ -67,14 +71,15 @@ The release always ends the stream with one exact write: the widget flushes its 
 
 ## Add and remove
 
-`add-component` and `remove-component` are guarded the same way the engine guards them. Remove only shows for removable components: `Name` and `Transform` are in `NON_REMOVABLE`, so the inspector cannot strip an entity of its identity or place in the world. The Add Component dropdown lists every registered component the entity does not already have; selecting one calls `add-component`, and the new component appears on the next reconcile tick.
+`add-component` and `remove-component` are guarded the same way the engine guards them. Remove only shows for removable components: `Name`, `Transform`, and the import-managed identity components `ModelInstance` and `SkinnedMesh` are in `NON_REMOVABLE`, so the inspector cannot strip an entity of its identity, its place in the world, or its rig. The Add Component dropdown lists every registered component the entity lacks, minus two exclusions: components written only by import (`ModelInstance`, `SkinnedMesh`, and `MaterialSet`) never appear, and the rig sidecars that index a skeleton (`AnimationPlayer`, `FootIk`, `KinematicBones`, `BonePhysics`) appear only on an entity that already carries a `SkinnedMesh`. Selecting one calls `add-component`, and the new component appears on the next reconcile tick.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The generic panel | `editor/src/panels/InspectorPanel.tsx` | `InspectorPanel`, `orderedComponentNames`, `NON_REMOVABLE` |
-| Field-kind dispatch | `editor/src/components/fieldRenderer.tsx` | `renderField`, `resolveHint`, `FIELD_HINTS` |
+| The generic panel | `editor/src/panels/InspectorPanel.tsx` | `InspectorPanel`, `NON_REMOVABLE`, `NON_ADDABLE`, `RIG_ONLY` |
+| Component order + rig bodies | `editor/src/lib/componentOrder.ts`, `editor/src/panels/InspectorPanel.tsx` | `COMPONENT_ORDER`, `orderedComponentNames`, `ReadonlyRow` |
+| Field-kind dispatch | `editor/src/components/fieldRenderer.tsx` | `renderField`, `resolveHint`, `FIELD_HINTS`, `AssetKind` |
 | Color canvas + label casing | `editor/src/components/ColorField.tsx`, `editor/src/lib/humanize.ts` | `ColorField`, `humanizeFieldName` |
 | Read-modify-write routing | `editor/src/panels/InspectorPanel.tsx` | `onFieldChange`, `sendWrite`, `coalescerFor` |
 | Optimistic overlay | `editor/src/state/store.ts` | `applyOptimisticComponent`, `dragActive` |
