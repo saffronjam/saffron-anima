@@ -501,6 +501,17 @@ export namespace se
         std::vector<PhysicsBodyDto> bodies;
     };
 
+    struct ApplyImpulseParams
+    {
+        EntitySelector entity;
+        Vec3 impulse;
+    };
+
+    struct ApplyImpulseResult
+    {
+        Vec3 velocity;  // the body's linear velocity after the impulse
+    };
+
     struct SetKinematicBonesParams
     {
         EntitySelector entity;
@@ -1734,7 +1745,11 @@ export namespace se
 
     struct ScriptInputParams
     {
-        std::vector<std::string> keys;
+        std::vector<std::string> keys;                         // the full held-key set (always replaces)
+        std::optional<std::vector<std::string>> mouseButtons;  // "left"/"right"/"middle"; replaces when present
+        std::optional<f32> mouseX;                             // viewport-relative pointer; unchanged when absent
+        std::optional<f32> mouseY;
+        std::optional<f32> scroll;
     };
 
     struct ScriptInputResult
@@ -1833,6 +1848,7 @@ export namespace se
     auto dtoToJson(const DrainContactsResult& value) -> Json;
     auto dtoToJson(const PhysicsBodyDto& value) -> Json;
     auto dtoToJson(const PhysicsBodiesResult& value) -> Json;
+    auto dtoToJson(const ApplyImpulseResult& value) -> Json;
     auto dtoToJson(const KinematicBonesResult& value) -> Json;
     auto dtoToJson(const MoveCharacterResult& value) -> Json;
     auto dtoToJson(const RaycastResult& value) -> Json;
@@ -2023,6 +2039,7 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<SetAssetPreviewOptionsParams>) -> Result<SetAssetPreviewOptionsParams>;
     auto parseDto(const Json& params, DtoTag<SetFootIkParams>) -> Result<SetFootIkParams>;
     auto parseDto(const Json& params, DtoTag<FitColliderParams>) -> Result<FitColliderParams>;
+    auto parseDto(const Json& params, DtoTag<ApplyImpulseParams>) -> Result<ApplyImpulseParams>;
     auto parseDto(const Json& params, DtoTag<DrainContactsParams>) -> Result<DrainContactsParams>;
     auto parseDto(const Json& params, DtoTag<SetKinematicBonesParams>) -> Result<SetKinematicBonesParams>;
     auto parseDto(const Json& params, DtoTag<MoveCharacterParams>) -> Result<MoveCharacterParams>;
