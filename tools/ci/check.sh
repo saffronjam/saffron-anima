@@ -24,6 +24,7 @@ step "engine build (toolbox, -j1)"
   git diff --exit-code -- \
     engine/source/saffron/control/control_dto_serde.generated.cpp \
     engine/source/saffron/scene/scene_component_serde.generated.cpp \
+    engine/source/saffron/assets/script_component_defs.generated.hpp \
     editor/src/protocol/se-types.ts \
     schemas/control/openrpc.generated.json \
     schemas/control/command-manifest.generated.json
@@ -39,6 +40,9 @@ step "engine present-only smoke (bounded, headless)"
 
 step "control DTO contract test (live help/results vs generated manifest/OpenRPC)"
 ( cd "$REPO/tools/check-control-schema" && bun run check.ts ) || fail=1
+
+step "script-API def drift (live Lua bindings vs library/se.lua)"
+( bun "$REPO/tools/check-script-defs/check.ts" ) || fail=1
 
 step "project startup and asset layout smoke"
 ( "$REPO/tools/check-projects/check.sh" ) || fail=1
