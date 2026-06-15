@@ -17,6 +17,10 @@ import type {
   CaptureStartResult,
   CaptureStatusResult,
   CaptureStopResult,
+  PhysicsStateResult,
+  PhysicsBodiesResult,
+  DrainContactsResult,
+  RagdollResult,
   ComponentBody,
   CommandParamsMap,
   CommandResultMap,
@@ -209,6 +213,39 @@ export const client = {
   ): Promise<unknown> {
     return call("set-component-field", { entity: id, component, field, value });
   },
+  /// Re-fit an entity's Collider shape to its mesh AABB (the substitute for interactive
+  /// collider-resize handles); bumps sceneVersion engine-side so the inspector re-reads.
+  fitCollider(id: string): Promise<unknown> {
+    return call("fit-collider", { entity: id });
+  },
+
+  // Physics telemetry + controls. physics-state / drain-contacts are Edit-safe (inactive/empty
+  // when the world is null); the ragdoll commands error when null and move-character is inert in
+  // Edit, so the panel play-gates them. WireUuid fields cross as decimal strings — never Number().
+  physicsState(): Promise<PhysicsStateResult> {
+    return call("physics-state");
+  },
+  physicsBodies(): Promise<PhysicsBodiesResult> {
+    return call("physics-bodies");
+  },
+  drainContacts(since: number): Promise<DrainContactsResult> {
+    return call("drain-contacts", { since });
+  },
+  enableRagdoll(entity: string, enabled?: boolean): Promise<RagdollResult> {
+    return call("enable-ragdoll", enabled === undefined ? { entity } : { entity, enabled });
+  },
+  setRagdoll(p: {
+    entity: string;
+    active?: boolean;
+    bodyWeight?: number;
+    bone?: number;
+    weight?: number;
+  }): Promise<RagdollResult> {
+    return call("set-ragdoll", p);
+  },
+  getRagdoll(entity: string): Promise<RagdollResult> {
+    return call("get-ragdoll", { entity });
+  },
 
   pick(u: number, v: number): Promise<PickResult> {
     return call("pick", { u, v });
@@ -251,8 +288,10 @@ export const client = {
   ): Promise<AnimationStateResult> {
     return call("play-animation", { entity, clip, ...opts });
   },
-  pauseAnimation(entity: string): Promise<AnimationStateResult> {
-    return call("pause-animation", { entity });
+  /// Resume (playing=true) or pause (playing=false) without moving the playhead — the play/pause
+  /// toggle. Distinct from play-animation, which loads a clip and restarts it at frame 0.
+  setAnimationPlaying(entity: string, playing: boolean): Promise<AnimationStateResult> {
+    return call("set-animation-playing", { entity, playing });
   },
   /// Set the playhead (previews in Edit). Works in Play, Paused, and Edit-preview alike. `seekBlend`
   /// eases the pose to the seeked time over that many seconds instead of snapping (smooth scrubbing).
@@ -310,6 +349,8 @@ export const client = {
     bounds?: boolean;
     sceneAabb?: boolean;
     lightVolumes?: boolean;
+    grid?: boolean;
+    colliders?: boolean;
   }): Promise<DebugOverlaysResult> {
     return call("set-debug-overlays", opts);
   },

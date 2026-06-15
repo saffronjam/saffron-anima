@@ -62,10 +62,15 @@ import type {
   ProfileCaptureDto,
   RenderPassTimingsDto,
   RenderStats,
+  PhysicsStateResult,
+  PhysicsBodyDto,
+  ContactEventDto,
 } from "../protocol";
 
 /// Cap on the retained alarm-log entries (the dashboard shows the most recent).
 const ALARM_LOG_LIMIT = 200;
+/// Cap on the retained physics contact/trigger feed (newest-N, like the alarm log).
+const CONTACT_LOG_LIMIT = 200;
 /// Frames requested from the engine per metrics poll — its full ring, so no frames are
 /// missed between polls (the client dedups the overlap by frame index).
 const FRAME_HISTORY_SAMPLES = 1000;
@@ -152,6 +157,11 @@ export interface EditorState {
   lastLocation: Partial<Record<DockPanelId, DockNodeId>>;
   environment: Environment | null;
   renderStats: RenderStats | null;
+  /// Live physics world stats + contact feed (Physics panel), filled by the open+playing poll.
+  physicsState: PhysicsStateResult | null;
+  physicsBodies: PhysicsBodyDto[];
+  contactLog: ContactEventDto[];
+  contactsOverflowed: boolean;
   /// Viewport debug-overlay toggles (set-debug-overlays); filled by the render-panel-gated poll.
   debugOverlays: DebugOverlaysResult | null;
   /// Performance-telemetry slices, filled by the gated metrics poll only while the
@@ -224,6 +234,10 @@ export interface EditorState {
   /// webview stays live; this flag is the app-side lock that stops a second dialog
   /// from being opened and greys the controls that would open one.
   nativeDialogOpen: boolean;
+  /// True while the project picker (`ProjectStartupModal`) is showing. Forced open at
+  /// startup until a project loads; the project menu's "New Project" reopens it (then
+  /// dismissable, since a project is already loaded).
+  projectModalOpen: boolean;
   /// Show the SELECTED entity's components as read-only leaf subrows in the
   /// hierarchy (sourced from componentsBySelected — never an extra inspect).
   /// A persisted view preference, default off so the outliner stays clean.
@@ -350,6 +364,10 @@ export interface EditorState {
   /// Set the selected rig's animation state and available clips together (poll-driven).
   setAnimationState(state: AnimationStateResult | null, clips: AnimationClipDto[]): void;
   setRenderStats(renderStats: RenderStats | null): void;
+  setPhysicsState(physicsState: PhysicsStateResult | null): void;
+  setPhysicsBodies(physicsBodies: PhysicsBodyDto[]): void;
+  appendContactEvents(events: ContactEventDto[], overflowed: boolean): void;
+  clearContacts(): void;
   setDebugOverlays(debugOverlays: DebugOverlaysResult | null): void;
   setPerfConfig(perfConfig: PerfConfigDto | null): void;
   setFrameHistory(frameHistory: FrameHistoryDto | null): void;
@@ -390,6 +408,7 @@ export interface EditorState {
   setPlayState(playState: PlayState): void;
   setViewportHidden(viewportHidden: boolean): void;
   setNativeDialogOpen(nativeDialogOpen: boolean): void;
+  setProjectModalOpen(projectModalOpen: boolean): void;
   toggleComponentSubrows(): void;
   toggleHideBones(): void;
   setFocusComponent(focusComponent: string | null): void;
@@ -444,6 +463,10 @@ export const useEditorStore = create<EditorState>((set) => ({
   lastLocation: {},
   environment: null,
   renderStats: null,
+  physicsState: null,
+  physicsBodies: [],
+  contactLog: [],
+  contactsOverflowed: false,
   debugOverlays: null,
   perfConfig: null,
   frameHistory: null,
@@ -475,6 +498,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   animationClips: [],
   viewportHidden: false,
   nativeDialogOpen: false,
+  projectModalOpen: false,
   showComponentSubrows: loadShowSubrows(),
   hideBones: loadHideBones(),
   focusComponent: null,
@@ -938,6 +962,18 @@ export const useEditorStore = create<EditorState>((set) => ({
   setDebugOverlays: (debugOverlays) => set({ debugOverlays }),
   setAnimationState: (animationState, animationClips) => set({ animationState, animationClips }),
   setRenderStats: (renderStats) => set({ renderStats }),
+  setPhysicsState: (physicsState) => set({ physicsState }),
+  setPhysicsBodies: (physicsBodies) => set({ physicsBodies }),
+  appendContactEvents: (events, overflowed) =>
+    set((s) => {
+      if (events.length === 0) {
+        return overflowed === s.contactsOverflowed ? {} : { contactsOverflowed: overflowed };
+      }
+      // Newest-first, bounded ring (the engine drains oldest→newest, so prepend reversed).
+      const contactLog = [...events].reverse().concat(s.contactLog).slice(0, CONTACT_LOG_LIMIT);
+      return { contactLog, contactsOverflowed: overflowed };
+    }),
+  clearContacts: () => set({ contactLog: [], contactsOverflowed: false }),
   setPerfConfig: (perfConfig) => set({ perfConfig }),
   setFrameHistory: (frameHistory) => set({ frameHistory }),
   setPassTimings: (passTimings) => set({ passTimings }),
@@ -1063,6 +1099,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   setPlayState: (playState) => set({ playState }),
   setViewportHidden: (viewportHidden) => set({ viewportHidden }),
   setNativeDialogOpen: (nativeDialogOpen) => set({ nativeDialogOpen }),
+  setProjectModalOpen: (projectModalOpen) => set({ projectModalOpen }),
   toggleComponentSubrows: () =>
     set((s) => {
       const showComponentSubrows = !s.showComponentSubrows;
@@ -1586,6 +1623,9 @@ export function startReconcile(client: Client): () => void {
   // Script-error cursor, same protocol; the toast dedup resets per play session.
   let scriptErrorSince = 0;
   let lastPlayStateForScripts: PlayState = "edit";
+  // Physics contact cursor; reset on each fresh play session (the engine ring restarts).
+  let contactsSince = 0;
+  let lastPlayStateForPhysics: PlayState = "edit";
   let pendingRefresh: {
     selectedId: string | null;
     sceneChanged: boolean;
@@ -1814,6 +1854,36 @@ export function startReconcile(client: Client): () => void {
         }
         useEditorStore.getState().setDebugOverlays(overlays);
       }
+
+      // The Physics panel: live world stats + the contact/trigger feed. Polled ONLY while the
+      // panel is open AND play is active (the world exists only in play) — a closed panel or
+      // Edit adds zero round-trips. The contact cursor + feed reset on each fresh play session.
+      const physicsPlayState = useEditorStore.getState().playState;
+      if (isPanelOpen(useEditorStore.getState(), "physics") && physicsPlayState !== "edit") {
+        if (lastPlayStateForPhysics === "edit") {
+          contactsSince = 0;
+          useEditorStore.getState().clearContacts();
+        }
+        const ps = await client.physicsState();
+        if (stopped) {
+          return;
+        }
+        useEditorStore.getState().setPhysicsState(ps);
+        const bodies = await client.physicsBodies();
+        if (stopped) {
+          return;
+        }
+        useEditorStore.getState().setPhysicsBodies(bodies.bodies);
+        const contactsDrained = await client.drainContacts(contactsSince);
+        if (stopped) {
+          return;
+        }
+        useEditorStore
+          .getState()
+          .appendContactEvents(contactsDrained.events, contactsDrained.overflowed);
+        contactsSince = Math.max(contactsSince, contactsDrained.highWaterSeq);
+      }
+      lastPlayStateForPhysics = physicsPlayState;
     } catch {
       // Engine briefly busy; the next tick recovers.
     } finally {

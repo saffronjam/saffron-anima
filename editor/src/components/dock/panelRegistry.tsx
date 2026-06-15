@@ -17,6 +17,7 @@ import { EnvironmentPanel } from "../../panels/EnvironmentPanel";
 import { RenderPanel } from "../../panels/RenderPanel";
 import { RenderStatsPanel } from "../../panels/RenderStatsPanel";
 import { ProfilerPanel } from "../../panels/ProfilerPanel";
+import { PhysicsPanel } from "../../panels/PhysicsPanel";
 import { MaterialEditorPanel } from "../../panels/MaterialEditorPanel";
 import { TimelinePanel } from "../../panels/TimelinePanel";
 import { HierarchyPanel } from "../../panels/HierarchyPanel";
@@ -78,6 +79,14 @@ export const SCENE_PANEL_REGISTRY: Record<SceneDockPanelId, DockPanelDef> = {
     group: "diagnostics",
     renderer: "onlyWhenVisible",
     component: ProfilerPanel,
+  },
+  physics: {
+    id: "physics",
+    title: "Physics",
+    closable: true,
+    group: "diagnostics",
+    renderer: "onlyWhenVisible",
+    component: PhysicsPanel,
   },
   material: {
     id: "material",
