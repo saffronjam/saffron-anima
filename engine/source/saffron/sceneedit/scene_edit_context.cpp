@@ -4,6 +4,7 @@ module;
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include <nlohmann/json.hpp>
 
 #include <string>
 
@@ -12,6 +13,7 @@ module Saffron.SceneEdit;
 import Saffron.Core;
 import Saffron.Signal;
 import Saffron.Scene;
+import Saffron.Json;
 
 namespace se
 {
@@ -20,6 +22,28 @@ namespace se
         ctx.selected = entity;
         ctx.selectionVersion += 1;
         ctx.onSelectionChanged.publish(entity);
+    }
+
+    auto debugOverlaysToJson(const DebugOverlayOptions& opts) -> nlohmann::json
+    {
+        return nlohmann::json{ { "bounds", opts.bounds },
+                               { "sceneAabb", opts.sceneAabb },
+                               { "lightVolumes", opts.lightVolumes },
+                               { "grid", opts.grid },
+                               { "colliders", opts.colliders } };
+    }
+
+    void debugOverlaysFromJson(DebugOverlayOptions& opts, const nlohmann::json& j)
+    {
+        if (!j.is_object())
+        {
+            return;
+        }
+        opts.bounds = jsonBoolOr(j, "bounds", opts.bounds);
+        opts.sceneAabb = jsonBoolOr(j, "sceneAabb", opts.sceneAabb);
+        opts.lightVolumes = jsonBoolOr(j, "lightVolumes", opts.lightVolumes);
+        opts.grid = jsonBoolOr(j, "grid", opts.grid);
+        opts.colliders = jsonBoolOr(j, "colliders", opts.colliders);
     }
 
     auto gizmoOpName(GizmoOp op) -> const char*

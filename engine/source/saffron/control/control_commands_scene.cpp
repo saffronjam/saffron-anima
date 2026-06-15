@@ -234,7 +234,7 @@ namespace se
 
     auto debugOverlaysState(const DebugOverlayOptions& opts) -> DebugOverlaysResult
     {
-        return DebugOverlaysResult{ opts.bounds, opts.sceneAabb, opts.lightVolumes, opts.grid };
+        return DebugOverlaysResult{ opts.bounds, opts.sceneAabb, opts.lightVolumes, opts.grid, opts.colliders };
     }
 
     auto fitColliderToMesh(EngineContext& ctx, Entity entity) -> bool
@@ -276,9 +276,15 @@ namespace se
             return false;  // a single degenerate point — nothing to size against (a planar mesh is fine)
         }
         auto& collider = getComponent<ColliderComponent>(scene, entity);
-        // Mesh-local AABB; the body transform carries the entity scale, so never bake it in here.
-        const glm::vec3 half = (hi - lo) * 0.5f;
-        collider.offset = (lo + hi) * 0.5f;
+        // The Jolt body is built scale-free (worldTranslation + worldRotation only, physics.cpp), so the
+        // entity's WORLD scale must be baked into the fitted extents + offset for the collider to match the
+        // scaled visual mesh. Per-axis world scale = the length of each worldMatrix basis column (exact for
+        // a TRS transform). Mesh-local AABB, then scaled into the body-local (unscaled) frame.
+        const glm::mat4 world = worldMatrix(scene, entity);
+        const glm::vec3 worldScale{ glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])),
+                                    glm::length(glm::vec3(world[2])) };
+        const glm::vec3 half = (hi - lo) * 0.5f * worldScale;
+        collider.offset = (lo + hi) * 0.5f * worldScale;
         collider.sourceMesh = meshId;  // cook source for hull/mesh; analytic shapes ignore it
         switch (collider.shape)
         {
@@ -1570,7 +1576,8 @@ namespace se
 
         registerCommand<DebugOverlaysParams, DebugOverlaysResult>(
             reg, "set-debug-overlays",
-            "set-debug-overlays {bounds?, sceneAabb?, lightVolumes?, grid?} — toggle viewport debug overlays",
+            "set-debug-overlays {bounds?, sceneAabb?, lightVolumes?, grid?, colliders?} — toggle viewport debug "
+            "overlays",
             [](EngineContext& ctx, const DebugOverlaysParams& params) -> Result<DebugOverlaysResult>
             {
                 DebugOverlayOptions& opts = ctx.sceneEdit.debugOverlays;
@@ -1589,6 +1596,10 @@ namespace se
                 if (params.grid)
                 {
                     opts.grid = *params.grid;
+                }
+                if (params.colliders)
+                {
+                    opts.colliders = *params.colliders;
                 }
                 return debugOverlaysState(opts);
             });

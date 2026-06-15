@@ -182,14 +182,15 @@ export namespace se
         i32 highlightJoint = -1;  // get-asset-model node index of the tinted joint while previewing, -1 = none
     };
 
-    // Transient viewport debug overlays (set-debug-overlays), drawn as world-space lines in the
-    // editor overlay pass. Opt-in, Edit-only, never persisted into the project.
+    // Viewport debug overlays (set-debug-overlays), drawn as world-space lines in the editor
+    // overlay pass. Opt-in, Edit-only, saved into project.json via debugOverlaysToJson.
     struct DebugOverlayOptions
     {
         bool bounds = false;        // per-entity world AABB (the pick volume for static meshes)
         bool sceneAabb = false;     // the whole-scene AABB the shadow/DDGI fit uses
         bool lightVolumes = false;  // point-light range spheres + spot cones
         bool grid = false;          // infinite analytic ground grid (a render-graph pass)
+        bool colliders = false;     // physics collision shapes (box/sphere/capsule wireframes), Edit + Play
     };
 
     // The editor's mutable state: the scene being edited, the component registry
@@ -346,6 +347,11 @@ export namespace se
     // reopened project shows the same framing. Missing fields keep their current value.
     auto sceneEditCameraToJson(const SceneEditCamera& camera) -> nlohmann::json;
     void sceneEditCameraFromJson(SceneEditCamera& camera, const nlohmann::json& j);
+
+    // The viewport debug overlays (bounds / scene-AABB / light-volumes / grid), saved into
+    // project.json so a reopened project restores them. Missing fields keep their current value.
+    auto debugOverlaysToJson(const DebugOverlayOptions& opts) -> nlohmann::json;
+    void debugOverlaysFromJson(DebugOverlayOptions& opts, const nlohmann::json& j);
 
     // Fly the editor camera from host-gathered SDL input (active while RMB is held): mouse
     // look + WASD move, Space up / Shift down (world Y). Call from onUpdate with the frame dt.

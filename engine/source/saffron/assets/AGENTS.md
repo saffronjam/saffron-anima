@@ -41,8 +41,8 @@ GPU caches. Imported by `Saffron.Control` (the asset/scene/animation command fil
 - **Texture colorspace is set at import.** Albedo/emissive upload as sRGB; data maps (normal,
   metallic-roughness, occlusion, height) upload linear (`linear = !srgb`).
 - **`project.json` is version-gated** (`ProjectVersion`, a mismatch is an error) and bundles assets +
-  folders + scene + render settings + an optional `editorCamera` block, which is round-tripped back to
-  the caller because the camera belongs to `Saffron.SceneEdit`, not here.
+  folders + scene + render settings + optional `editorCamera` and `debugOverlays` blocks, which are
+  round-tripped back to the caller because the camera and overlays belong to `Saffron.SceneEdit`, not here.
 
 A change here that adds drivable/inspectable state still needs a `registerCommand` in `Saffron.Control`
 (most asset commands live in `control_commands_asset.cpp`) and a `docs/` update — see the root `AGENTS.md`.

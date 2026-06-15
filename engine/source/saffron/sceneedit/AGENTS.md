@@ -45,5 +45,6 @@ command) and `Saffron.Host` (per-frame call ordering + the gizmo vertex builder)
 
 Note: the gizmo **geometry** (`buildNativeGizmo`, `OverlayVertex`) lives in `Saffron.Host`; only the
 hit-test/projection/drag **math** lives here. A new editor-session field belongs on `SceneEditContext`
-(never on `Scene`, never serialized into the project); add a matching control command + version stamp if
-it is drivable, and extend `runPlayModeSelfTest` for any play-mode invariant.
+(never on `Scene`); it stays out of the scene serde, though a couple of view fields (the fly-camera, the
+debug overlays) are round-tripped into `project.json` through the save/load caller. Add a matching control
+command + version stamp if it is drivable, and extend `runPlayModeSelfTest` for any play-mode invariant.

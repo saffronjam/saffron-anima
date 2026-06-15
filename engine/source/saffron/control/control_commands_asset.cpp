@@ -10,6 +10,7 @@ module;
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -433,25 +434,9 @@ namespace se
                 return out;
             }
             const glm::mat4 world = worldMatrix(scene, meshEntity);
-            glm::vec3 lo{ 0.0f };
-            glm::vec3 hi{ 0.0f };
-            for (int c = 0; c < 8; c = c + 1)
-            {
-                const glm::vec3 corner{ (c & 1) ? gpu->boundsMax.x : gpu->boundsMin.x,
-                                        (c & 2) ? gpu->boundsMax.y : gpu->boundsMin.y,
-                                        (c & 4) ? gpu->boundsMax.z : gpu->boundsMin.z };
-                const glm::vec3 w = glm::vec3(world * glm::vec4(corner, 1.0f));
-                if (c == 0)
-                {
-                    lo = w;
-                    hi = w;
-                }
-                else
-                {
-                    lo = glm::min(lo, w);
-                    hi = glm::max(hi, w);
-                }
-            }
+            glm::vec3 lo{ std::numeric_limits<f32>::max() };
+            glm::vec3 hi{ std::numeric_limits<f32>::lowest() };
+            worldAabbFromCorners(world, gpu->boundsMin, gpu->boundsMax, lo, hi);
             out.center = (lo + hi) * 0.5f;
             out.radius = glm::length(hi - lo) * 0.5f;
             out.minY = lo.y;
@@ -689,14 +674,16 @@ namespace se
                 }
                 ProjectInfo project;
                 nlohmann::json editorCamera;
+                nlohmann::json debugOverlays;
                 auto result = loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
-                                          project, params.path, &editorCamera);
+                                          project, params.path, &editorCamera, &debugOverlays);
                 if (!result)
                 {
                     return Err(result.error());
                 }
                 applyProjectInfo(ctx, project);
                 sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
+                debugOverlaysFromJson(ctx.sceneEdit.debugOverlays, debugOverlays);
                 ctx.sceneEdit.sceneVersion += 1;
                 ctx.sceneEdit.scriptInputKeys.clear();
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
@@ -2227,7 +2214,8 @@ namespace se
                     project.displayName = defaultDisplayName(project.name);
                 }
                 auto result = saveProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
-                                          project, path, sceneEditCameraToJson(ctx.sceneEdit.camera));
+                                          project, path, sceneEditCameraToJson(ctx.sceneEdit.camera),
+                                          debugOverlaysToJson(ctx.sceneEdit.debugOverlays));
                 if (!result)
                 {
                     return Err(result.error());
@@ -2252,14 +2240,16 @@ namespace se
                 const std::string path = params.path.value_or("project.json");
                 ProjectInfo project;
                 nlohmann::json editorCamera;
+                nlohmann::json debugOverlays;
                 Result<void> result = loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
-                                                  project, path, &editorCamera);
+                                                  project, path, &editorCamera, &debugOverlays);
                 if (!result)
                 {
                     return Err(result.error());
                 }
                 applyProjectInfo(ctx, project);
                 sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
+                debugOverlaysFromJson(ctx.sceneEdit.debugOverlays, debugOverlays);
                 ctx.sceneEdit.sceneVersion += 1;
                 ctx.sceneEdit.scriptInputKeys.clear();
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
@@ -2287,14 +2277,16 @@ namespace se
                 const std::string path = ctx.sceneEdit.projectPath;
                 ProjectInfo project;
                 nlohmann::json editorCamera;
+                nlohmann::json debugOverlays;
                 Result<void> result = loadProject(ctx.assets, ctx.renderer, ctx.sceneEdit.registry, ctx.sceneEdit.scene,
-                                                  project, path, &editorCamera);
+                                                  project, path, &editorCamera, &debugOverlays);
                 if (!result)
                 {
                     return Err(result.error());
                 }
                 applyProjectInfo(ctx, project);
                 sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
+                debugOverlaysFromJson(ctx.sceneEdit.debugOverlays, debugOverlays);
                 ctx.sceneEdit.sceneVersion += 1;
                 ctx.sceneEdit.scriptInputKeys.clear();
                 setSelection(ctx.sceneEdit, Entity{ entt::null });

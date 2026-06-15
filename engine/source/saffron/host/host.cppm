@@ -660,6 +660,47 @@ namespace se
         }
     }
 
+    // addWorldRing generalized to a sub-range: a world-space arc of `radius` in the plane spanned
+    // by unit axes a, b, swept over [t0, t1]. Used for the capsule's pole hemispheres.
+    void addWorldArc(std::vector<se::OverlayVertex>& vertices, const glm::mat4& viewProjection, glm::vec3 center,
+                     glm::vec3 a, glm::vec3 b, se::f32 radius, se::f32 t0, se::f32 t1, glm::vec4 color, se::u32 width,
+                     se::u32 height)
+    {
+        constexpr se::u32 segments = 16;
+        glm::vec3 prev = center + (a * std::cos(t0) + b * std::sin(t0)) * radius;
+        for (se::u32 i = 1; i <= segments; i = i + 1)
+        {
+            const se::f32 t = t0 + (t1 - t0) * static_cast<se::f32>(i) / static_cast<se::f32>(segments);
+            const glm::vec3 cur = center + (a * std::cos(t) + b * std::sin(t)) * radius;
+            addClippedOverlayLine(vertices, viewProjection, prev, cur, 1.5f, color, width, height);
+            prev = cur;
+        }
+    }
+
+    // An oriented box: transform the 8 local ±he corners by `model` and draw the 12 edges. Unlike
+    // addWorldAabb (which re-encloses axis-aligned), this keeps the box oriented by `model`.
+    void addWorldOrientedBox(std::vector<se::OverlayVertex>& vertices, const glm::mat4& viewProjection,
+                             const glm::mat4& model, glm::vec3 he, glm::vec4 color, se::u32 width, se::u32 height)
+    {
+        std::array<glm::vec3, 8> corners{};
+        for (se::u32 corner = 0; corner < 8; corner = corner + 1)
+        {
+            const glm::vec3 local{ (corner & 1u) != 0u ? he.x : -he.x, (corner & 2u) != 0u ? he.y : -he.y,
+                                   (corner & 4u) != 0u ? he.z : -he.z };
+            corners[corner] = glm::vec3(model * glm::vec4(local, 1.0f));
+        }
+        constexpr std::array<std::pair<se::u32, se::u32>, 12> Edges{
+            std::pair{ 0u, 1u }, std::pair{ 1u, 3u }, std::pair{ 3u, 2u }, std::pair{ 2u, 0u },
+            std::pair{ 4u, 5u }, std::pair{ 5u, 7u }, std::pair{ 7u, 6u }, std::pair{ 6u, 4u },
+            std::pair{ 0u, 4u }, std::pair{ 1u, 5u }, std::pair{ 2u, 6u }, std::pair{ 3u, 7u }
+        };
+        for (const auto& edge : Edges)
+        {
+            addClippedOverlayLine(vertices, viewProjection, corners[edge.first], corners[edge.second], 1.5f, color,
+                                  width, height);
+        }
+    }
+
     // The viewport debug overlays (set-debug-overlays): per-entity bounds = the exact box
     // pickEntity tests (static draw + skinned joint-union), the whole-scene AABB the shadow
     // fit uses, and point/spot light volumes. World-space lines, depth-tested, Edit-only.
@@ -685,31 +726,6 @@ namespace se
         glm::vec3 sceneMax{ std::numeric_limits<se::f32>::lowest() };
         bool haveScene = false;
 
-        // Transform the 8 local-AABB corners by `model` and re-enclose axis-aligned in world
-        // space — the exact box pickEntity tests.
-        auto worldAabb = [](const glm::mat4& model, glm::vec3 lo, glm::vec3 hi, glm::vec3& outMin, glm::vec3& outMax)
-        {
-            for (se::u32 corner = 0; corner < 8; corner = corner + 1)
-            {
-                glm::vec3 p = lo;
-                if (corner & 1u)
-                {
-                    p.x = hi.x;
-                }
-                if (corner & 2u)
-                {
-                    p.y = hi.y;
-                }
-                if (corner & 4u)
-                {
-                    p.z = hi.z;
-                }
-                const glm::vec3 world = glm::vec3(model * glm::vec4(p, 1.0f));
-                outMin = glm::min(outMin, world);
-                outMax = glm::max(outMax, world);
-            }
-        };
-
         se::forEach<se::TransformComponent, se::MeshComponent>(
             scene,
             [&](se::Entity entity, se::TransformComponent&, se::MeshComponent& mesh)
@@ -721,7 +737,8 @@ namespace se
                 }
                 glm::vec3 lo{ std::numeric_limits<se::f32>::max() };
                 glm::vec3 hi{ std::numeric_limits<se::f32>::lowest() };
-                worldAabb(se::worldMatrix(scene, entity), meshRef->boundsMin, meshRef->boundsMax, lo, hi);
+                se::worldAabbFromCorners(se::worldMatrix(scene, entity), meshRef->boundsMin, meshRef->boundsMax, lo,
+                                         hi);
                 if (opts.bounds)
                 {
                     addWorldAabb(vertices, viewProjection, lo, hi, StaticBoundsColor, width, height);
@@ -750,7 +767,7 @@ namespace se
                 glm::vec3 hi{ std::numeric_limits<se::f32>::lowest() };
                 for (const glm::mat4& joint : palette)
                 {
-                    worldAabb(joint, meshRef->boundsMin, meshRef->boundsMax, lo, hi);
+                    se::worldAabbFromCorners(joint, meshRef->boundsMin, meshRef->boundsMax, lo, hi);
                 }
                 if (opts.bounds)
                 {
@@ -819,6 +836,119 @@ namespace se
         }
     }
 
+    // The physics collider overlay (set-debug-overlays {colliders}): a world-space wireframe per
+    // ColliderComponent — oriented box / sphere / capsule, or the cook-source mesh AABB for hull/mesh.
+    // Drawn SCALE-FREE to match the Jolt body: position + rotation only (populatePhysicsWorld), with the
+    // collider offset in the rotated body-local frame (wrapOffset) — never worldMatrix (which carries
+    // entity scale). Reads the authored ColliderComponent, present in Edit AND Play, so it lives outside
+    // editChrome and carries its own preview guard.
+    void buildColliderOverlays(se::SceneEditContext& editor, se::AssetServer& assets, se::Renderer& renderer,
+                               const se::CameraView& cam, se::u32 width, se::u32 height,
+                               std::vector<se::OverlayVertex>& vertices)
+    {
+        if (!editor.debugOverlays.colliders || editor.previewScene.has_value() || width == 0 || height == 0)
+        {
+            return;
+        }
+        se::Scene& scene = se::activeScene(editor);
+        const se::f32 aspect = static_cast<se::f32>(width) / static_cast<se::f32>(height);
+        const glm::mat4 viewProjection = se::cameraProjection(cam, aspect) * cam.view;
+        constexpr glm::vec4 ColliderColor{ 0.20f, 0.95f, 0.85f, 0.9f };  // cyan: solid colliders
+        constexpr glm::vec4 SensorColor{ 0.30f, 0.90f, 0.40f, 0.9f };    // green: trigger volumes
+        constexpr glm::vec4 SelectedColor{ 1.0f, 0.55f, 0.1f, 1.0f };    // orange: the selected collider
+
+        se::forEach<se::TransformComponent, se::ColliderComponent>(
+            scene,
+            [&](se::Entity entity, se::TransformComponent&, se::ColliderComponent& collider)
+            {
+                const glm::vec4 color = editor.selected.handle == entity.handle ? SelectedColor
+                                        : collider.isSensor                     ? SensorColor
+                                                                                : ColliderColor;
+                // Scale-free body frame: T(pos) * R(rot) * T(offset) — the offset rides the rotated
+                // body-local frame (wrapOffset), the body carries no scale (populatePhysicsWorld).
+                const glm::mat4 model = glm::translate(glm::mat4(1.0f), se::worldTranslation(scene, entity)) *
+                                        glm::mat4_cast(se::worldRotation(scene, entity)) *
+                                        glm::translate(glm::mat4(1.0f), collider.offset);
+                const glm::vec3 he = glm::max(collider.halfExtents, glm::vec3(0.01f));
+                const glm::vec3 center = glm::vec3(model[3]);
+
+                switch (collider.shape)
+                {
+                case se::ColliderComponent::Shape::Box:
+                    addWorldOrientedBox(vertices, viewProjection, model, he, color, width, height);
+                    break;
+                case se::ColliderComponent::Shape::Sphere:
+                {
+                    // Sphere radius packs from halfExtents.x (mirrors physics.cpp createShape); the three
+                    // world-axis rings are rotation-invariant.
+                    addWorldRing(vertices, viewProjection, center, glm::vec3{ 1, 0, 0 }, glm::vec3{ 0, 1, 0 }, he.x,
+                                 color, width, height);
+                    addWorldRing(vertices, viewProjection, center, glm::vec3{ 0, 1, 0 }, glm::vec3{ 0, 0, 1 }, he.x,
+                                 color, width, height);
+                    addWorldRing(vertices, viewProjection, center, glm::vec3{ 1, 0, 0 }, glm::vec3{ 0, 0, 1 }, he.x,
+                                 color, width, height);
+                    break;
+                }
+                case se::ColliderComponent::Shape::Capsule:
+                {
+                    // Y-up capsule: radius from halfExtents.x, half-height from halfExtents.y. Axes from
+                    // the body rotation columns.
+                    const se::f32 radius = he.x;
+                    const se::f32 halfHeight = he.y;
+                    const glm::vec3 right = glm::normalize(glm::vec3(model[0]));
+                    const glm::vec3 up = glm::normalize(glm::vec3(model[1]));
+                    const glm::vec3 fwd = glm::normalize(glm::vec3(model[2]));
+                    const glm::vec3 topC = center + up * halfHeight;
+                    const glm::vec3 botC = center - up * halfHeight;
+                    addWorldRing(vertices, viewProjection, topC, right, fwd, radius, color, width, height);
+                    addWorldRing(vertices, viewProjection, botC, right, fwd, radius, color, width, height);
+                    for (const glm::vec3& side : { right, -right, fwd, -fwd })
+                    {
+                        addClippedOverlayLine(vertices, viewProjection, topC + side * radius, botC + side * radius,
+                                              1.5f, color, width, height);
+                    }
+                    const se::f32 pi = glm::pi<se::f32>();
+                    addWorldArc(vertices, viewProjection, topC, right, up, radius, 0.0f, pi, color, width, height);
+                    addWorldArc(vertices, viewProjection, topC, fwd, up, radius, 0.0f, pi, color, width, height);
+                    addWorldArc(vertices, viewProjection, botC, right, up, radius, pi, 2.0f * pi, color, width, height);
+                    addWorldArc(vertices, viewProjection, botC, fwd, up, radius, pi, 2.0f * pi, color, width, height);
+                    break;
+                }
+                case se::ColliderComponent::Shape::ConvexHull:
+                case se::ColliderComponent::Shape::Mesh:
+                {
+                    // The documented cook-source-AABB approximation (no CPU hull edges are kept): resolve
+                    // the cook mesh (sourceMesh, else the entity's Mesh, else SkinnedMesh) and draw its
+                    // bounds box, oriented by the same scale-free body frame.
+                    se::Uuid meshId = collider.sourceMesh;
+                    if (meshId.value == 0 && se::hasComponent<se::MeshComponent>(scene, entity))
+                    {
+                        meshId = se::getComponent<se::MeshComponent>(scene, entity).mesh;
+                    }
+                    else if (meshId.value == 0 && se::hasComponent<se::SkinnedMeshComponent>(scene, entity))
+                    {
+                        meshId = se::getComponent<se::SkinnedMeshComponent>(scene, entity).mesh;
+                    }
+                    if (meshId.value == 0)
+                    {
+                        break;
+                    }
+                    const se::Ref<se::GpuMesh> meshRef = se::loadMeshAsset(assets, renderer, meshId);
+                    if (!meshRef)
+                    {
+                        break;
+                    }
+                    const glm::vec3 boundsCenter = (meshRef->boundsMin + meshRef->boundsMax) * 0.5f;
+                    const glm::vec3 boundsHe =
+                        glm::max((meshRef->boundsMax - meshRef->boundsMin) * 0.5f, glm::vec3(0.01f));
+                    const glm::mat4 boxModel = model * glm::translate(glm::mat4(1.0f), boundsCenter);
+                    addWorldOrientedBox(vertices, viewProjection, boxModel, boundsHe, color, width, height);
+                    break;
+                }
+                }
+            });
+    }
+
     // Builds the editor overlay and submits it once per frame: camera frustums are
     // depth-tested against the scene (occluded by geometry); billboards, the active gizmo,
     // and the skeleton overlay always draw on top. The gizmo + billboards + frustums are
@@ -836,6 +966,9 @@ namespace se
             buildSceneEditBillboards(editor, cam, width, height, onTop);
             buildNativeGizmo(editor, cam, width, height, onTop);
         }
+        // Colliders draw in Edit AND Play (they read the authored ColliderComponent), so they sit
+        // outside editChrome like the skeleton overlay, with their own preview guard (inside the call).
+        buildColliderOverlays(editor, assets, renderer, cam, width, height, depthTested);
         buildSkeletonOverlay(editor, cam, width, height, onTop);
         se::submitOverlay(renderer, std::move(depthTested), std::move(onTop));
     }
@@ -1146,6 +1279,7 @@ export namespace se
             {
                 se::ProjectInfo project;
                 nlohmann::json editorCamera;
+                nlohmann::json debugOverlays;
                 se::Result<void> result = {};
                 if (se::validProjectName(selected) && !std::filesystem::exists(se::projectJsonPath(selected)))
                 {
@@ -1155,12 +1289,13 @@ export namespace se
                 else
                 {
                     result = se::loadProject(state->assets, app.renderer, state->editor->registry, state->editor->scene,
-                                             project, selected, &editorCamera);
+                                             project, selected, &editorCamera, &debugOverlays);
                 }
                 if (result)
                 {
                     applyProject(project);
                     se::sceneEditCameraFromJson(state->editor->camera, editorCamera);
+                    se::debugOverlaysFromJson(state->editor->debugOverlays, debugOverlays);
                 }
                 else
                 {
@@ -1184,11 +1319,14 @@ export namespace se
             {
                 se::ProjectInfo project;
                 nlohmann::json editorCamera;
-                if (auto result = se::loadProject(state->assets, app.renderer, state->editor->registry,
-                                                  state->editor->scene, project, defaultProject, &editorCamera))
+                nlohmann::json debugOverlays;
+                if (auto result =
+                        se::loadProject(state->assets, app.renderer, state->editor->registry, state->editor->scene,
+                                        project, defaultProject, &editorCamera, &debugOverlays))
                 {
                     applyProject(project);
                     se::sceneEditCameraFromJson(state->editor->camera, editorCamera);
+                    se::debugOverlaysFromJson(state->editor->debugOverlays, debugOverlays);
                 }
                 else
                 {
