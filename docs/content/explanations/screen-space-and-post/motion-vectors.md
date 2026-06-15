@@ -40,7 +40,7 @@ with, so the Y sign matches the images TAA samples, and no separate flip is need
 |---|---|---|
 | The reprojection | `motion.slang` | `vertexMain`, `fragmentMain`, `curViewProj`/`prevViewProj` |
 | Pass declaration | `renderer.cppm` | `motion` pass, `recordMotion`, `motionDepth` |
-| The consumer | `taa.slang` | `motion` sampler, `histUv = uv + mv` |
+| The consumers | `taa.slang`, `ssgi_accum.slang` | `motion` sampler, `histUv = uv + mv` |
 
 > [!NOTE]
 > The pass tracks camera motion only. Geometry is treated as static: the same world position feeds both
@@ -49,13 +49,15 @@ with, so the Y sign matches the images TAA samples, and no separate flip is need
 > previous-model tracking is a planned addition.
 
 > [!NOTE]
-> The motion pass has its own depth attachment (`motionDepth`) and runs before the scene pass, so the
-> TAA resolve, which runs after, can sample it. It is a dedicated prepass rather than a reuse of the
-> scene depth, because the scene's depth target may be multisampled or otherwise shaped by the active
-> AA mode.
+> The motion pass has its own depth attachment (`motionDepth`) and runs before the scene pass, so both
+> consumers can sample it: SSGI temporal accumulation (before the scene) and the TAA resolve (after).
+> It is a dedicated prepass rather than a reuse of the scene depth, because the scene's depth target may
+> be multisampled or otherwise shaped by the active AA mode. The pass runs whenever TAA *or* SSGI is on,
+> since both own a temporal accumulation that reprojects through it.
 
 ## Related
 
-- [TAA](../taa/) — the only consumer of the motion buffer
+- [TAA](../taa/) — a consumer of the motion buffer, for its resolve reprojection
+- [SSGI](../ssgi/) — its temporal accumulation reprojects last frame's GI through the same buffer
 - [G-buffer](../thin-gbuffer/) — the sibling prepass that records normal + depth
 - [ReSTIR](../../global-illumination-and-raytracing/) — temporal reuse that also wants reprojection
