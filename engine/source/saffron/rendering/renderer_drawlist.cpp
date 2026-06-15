@@ -144,11 +144,17 @@ namespace se
         gpu.submeshes = mesh.submeshes;
         gpu.boundsMin = glm::vec3(std::numeric_limits<f32>::max());
         gpu.boundsMax = glm::vec3(std::numeric_limits<f32>::lowest());
+        // Retain CPU positions/indices (+ skin) for triangle-precise picking; the bounds pass already
+        // walks every vertex, so the positions ride along for free.
+        gpu.cpuPositions.reserve(mesh.vertices.size());
         for (const Vertex& vertex : mesh.vertices)
         {
             gpu.boundsMin = glm::min(gpu.boundsMin, vertex.position);
             gpu.boundsMax = glm::max(gpu.boundsMax, vertex.position);
+            gpu.cpuPositions.push_back(vertex.position);
         }
+        gpu.cpuIndices = mesh.indices;
+        gpu.cpuSkin = skin;
 
         VkBuffer vertexBuffer = VK_NULL_HANDLE;
         VkBuffer indexBuffer = VK_NULL_HANDLE;

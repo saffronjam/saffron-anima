@@ -972,10 +972,10 @@ export namespace se
     }
 
     // Saves the whole project (asset catalog + scene entities + render settings + the editor
-    // camera, when the caller passes one) to one JSON file.
+    // camera and debug overlays, when the caller passes them) to one JSON file.
     auto saveProject(AssetServer& assets, Renderer& renderer, ComponentRegistry& reg, Scene& scene,
-                     const ProjectInfo& project, const std::string& path, const nlohmann::json& editorCamera = {})
-        -> Result<void>
+                     const ProjectInfo& project, const std::string& path, const nlohmann::json& editorCamera = {},
+                     const nlohmann::json& debugOverlays = {}) -> Result<void>
     {
         std::string target = path;
         if (target.empty())
@@ -997,6 +997,10 @@ export namespace se
         if (editorCamera.is_object())
         {
             doc["editorCamera"] = editorCamera;
+        }
+        if (debugOverlays.is_object())
+        {
+            doc["debugOverlays"] = debugOverlays;
         }
 
         const std::filesystem::path parent = std::filesystem::path(target).parent_path();
@@ -1143,11 +1147,11 @@ return {0}
 
     // Loads a project file: replaces the catalog + scene. Clears the GPU caches (after a
     // device idle) so stale Refs are dropped and assets re-resolve from the new catalog.
-    // The saved editor-camera block (if any) lands in `editorCamera` for the caller —
-    // assets cannot apply it, SceneEdit owns the camera.
+    // The saved editor-camera and debug-overlay blocks (if any) land in `editorCamera` /
+    // `debugOverlays` for the caller — assets cannot apply them, SceneEdit owns both.
     auto loadProject(AssetServer& assets, Renderer& renderer, ComponentRegistry& reg, Scene& scene,
-                     ProjectInfo& project, const std::string& selection, nlohmann::json* editorCamera = nullptr)
-        -> Result<void>
+                     ProjectInfo& project, const std::string& selection, nlohmann::json* editorCamera = nullptr,
+                     nlohmann::json* debugOverlays = nullptr) -> Result<void>
     {
         const std::filesystem::path path = projectJsonPath(selection);
         std::ifstream in(path);
@@ -1201,6 +1205,10 @@ return {0}
         if (editorCamera != nullptr)
         {
             *editorCamera = doc.value("editorCamera", nlohmann::json{});
+        }
+        if (debugOverlays != nullptr)
+        {
+            *debugOverlays = doc.value("debugOverlays", nlohmann::json{});
         }
         return sceneFromJson(reg, scene, doc.value("scene", nlohmann::json::object()));
     }
@@ -5578,30 +5586,12 @@ return {0}
                 }
                 ResolvedMaterials materials = resolveEntityMaterials(scene, assets, renderer, entity, meshRef);
                 const glm::mat4 model = worldMatrix(scene, entity);
-                // Accumulate the scene + this draw's world AABB from the 8 transformed corners.
+                // This draw's world AABB feeds the DDGI proxy and widens the scene AABB (shadow/DDGI fit).
                 glm::vec3 boxMin{ std::numeric_limits<f32>::max() };
                 glm::vec3 boxMax{ std::numeric_limits<f32>::lowest() };
-                for (u32 corner = 0; corner < 8; corner = corner + 1)
-                {
-                    glm::vec3 p = meshRef->boundsMin;
-                    if (corner & 1u)
-                    {
-                        p.x = meshRef->boundsMax.x;
-                    }
-                    if (corner & 2u)
-                    {
-                        p.y = meshRef->boundsMax.y;
-                    }
-                    if (corner & 4u)
-                    {
-                        p.z = meshRef->boundsMax.z;
-                    }
-                    const glm::vec3 world = glm::vec3(model * glm::vec4(p, 1.0f));
-                    sceneMin = glm::min(sceneMin, world);
-                    sceneMax = glm::max(sceneMax, world);
-                    boxMin = glm::min(boxMin, world);
-                    boxMax = glm::max(boxMax, world);
-                }
+                worldAabbFromCorners(model, meshRef->boundsMin, meshRef->boundsMax, boxMin, boxMax);
+                sceneMin = glm::min(sceneMin, boxMin);
+                sceneMax = glm::max(sceneMax, boxMax);
                 boxMins.push_back(glm::vec4(boxMin, 0.0f));
                 boxMaxs.push_back(glm::vec4(boxMax, 0.0f));
                 boxAlbedos.push_back(glm::vec4(materials.proxyAlbedo, 0.0f));
@@ -5643,25 +5633,7 @@ return {0}
                     // joint matrix, feeding the scene AABB (shadow/DDGI fit) like any draw.
                     for (const glm::mat4& joint : palette)
                     {
-                        for (u32 corner = 0; corner < 8; corner = corner + 1)
-                        {
-                            glm::vec3 p = meshRef->boundsMin;
-                            if (corner & 1u)
-                            {
-                                p.x = meshRef->boundsMax.x;
-                            }
-                            if (corner & 2u)
-                            {
-                                p.y = meshRef->boundsMax.y;
-                            }
-                            if (corner & 4u)
-                            {
-                                p.z = meshRef->boundsMax.z;
-                            }
-                            const glm::vec3 world = glm::vec3(joint * glm::vec4(p, 1.0f));
-                            sceneMin = glm::min(sceneMin, world);
-                            sceneMax = glm::max(sceneMax, world);
-                        }
+                        worldAabbFromCorners(joint, meshRef->boundsMin, meshRef->boundsMax, sceneMin, sceneMax);
                     }
                     DrawItem item;
                     item.mesh = meshRef;
@@ -5853,9 +5825,13 @@ return {0}
         }
     }
 
-    // Picks the nearest entity whose world-space mesh AABB the camera ray hits. `ndc` is
-    // the click point in clip space [-1,1] matching the rendered image (Y-flipped proj).
-    // Returns a null Entity on a miss (the caller clears the selection).
+    // Picks the nearest entity the camera ray actually strikes: a per-mesh AABB broad-phase rejects far
+    // meshes, then a ray-triangle narrow-phase finds the true surface hit, so a click in the empty space
+    // inside a loose bounding box misses. Covers both static `MeshComponent` (rest verts transformed by
+    // the entity's world matrix) and `SkinnedMeshComponent` (verts CPU-skinned through the joint palette
+    // into world space, exactly as the GPU does). World matrices come from the last frame's flatten
+    // (lockstep with the draw loop); the joint palette is rebuilt fresh. `ndc` is the click point in clip
+    // space [-1,1] matching the rendered image (Y-flipped proj). Returns a null Entity on a miss.
     auto pickEntity(Scene& scene, AssetServer& assets, Renderer& renderer, const CameraView& camera, glm::vec2 ndc)
         -> Entity
     {
@@ -5876,69 +5852,124 @@ return {0}
         const glm::vec4 nearH = invViewProj * glm::vec4(ndc.x, ndc.y, 0.0f, 1.0f);  // GLM 0..1 depth: near = 0
         const glm::vec4 farH = invViewProj * glm::vec4(ndc.x, ndc.y, 1.0f, 1.0f);
         const glm::vec3 origin = glm::vec3(nearH) / nearH.w;
-        const glm::vec3 dir = glm::normalize(glm::vec3(farH) / farH.w - origin);
-        const glm::vec3 invDir = 1.0f / dir;  // inf for axis-aligned components is fine for the slab test
+        const Ray ray{ origin, glm::normalize(glm::vec3(farH) / farH.w - origin) };
 
         Entity hit{ entt::null };
         f32 nearest = std::numeric_limits<f32>::max();
-        forEach<TransformComponent, MeshComponent>(scene,
-                                                   [&](Entity entity, TransformComponent&, MeshComponent& mesh)
-                                                   {
-                                                       auto meshRef = loadMeshAsset(assets, renderer, mesh.mesh);
-                                                       if (!meshRef)
-                                                       {
-                                                           return;
-                                                       }
-                                                       // World AABB from the 8 transformed local-AABB corners; the
-                                                       // world matrix comes from the last frame's flatten (lockstep
-                                                       // with the draw loop).
-                                                       const glm::mat4 model = worldMatrix(scene, entity);
-                                                       const glm::vec3 lo = meshRef->boundsMin;
-                                                       const glm::vec3 hi = meshRef->boundsMax;
-                                                       glm::vec3 worldMin{ std::numeric_limits<f32>::max() };
-                                                       glm::vec3 worldMax{ std::numeric_limits<f32>::lowest() };
-                                                       for (u32 corner = 0; corner < 8; corner = corner + 1)
-                                                       {
-                                                           glm::vec3 p = lo;
-                                                           if (corner & 1u)
-                                                           {
-                                                               p.x = hi.x;
-                                                           }
-                                                           if (corner & 2u)
-                                                           {
-                                                               p.y = hi.y;
-                                                           }
-                                                           if (corner & 4u)
-                                                           {
-                                                               p.z = hi.z;
-                                                           }
-                                                           const glm::vec3 world =
-                                                               glm::vec3(model * glm::vec4(p, 1.0f));
-                                                           worldMin = glm::min(worldMin, world);
-                                                           worldMax = glm::max(worldMax, world);
-                                                       }
+        auto considerHit = [&](Entity entity, f32 t)
+        {
+            if (t < nearest)
+            {
+                nearest = t;
+                hit = entity;
+            }
+        };
+        // Walks a triangle soup (flat indices into `positions`, already in world space) and reports the
+        // nearest forward triangle hit, if any.
+        auto nearestTriangle = [&](const std::vector<glm::vec3>& positions, const std::vector<u32>& indices,
+                                   f32& outT) -> bool
+        {
+            f32 best = std::numeric_limits<f32>::max();
+            bool found = false;
+            for (std::size_t i = 0; i + 2 < indices.size(); i = i + 3)
+            {
+                f32 t = 0.0f;
+                if (rayTriangle(ray, positions[indices[i]], positions[indices[i + 1]], positions[indices[i + 2]], t) &&
+                    t < best)
+                {
+                    best = t;
+                    found = true;
+                }
+            }
+            outT = best;
+            return found;
+        };
 
-                                                       const glm::vec3 t0 = (worldMin - origin) * invDir;
-                                                       const glm::vec3 t1 = (worldMax - origin) * invDir;
-                                                       const glm::vec3 tlo = glm::min(t0, t1);
-                                                       const glm::vec3 thi = glm::max(t0, t1);
-                                                       const f32 tEnter = glm::max(glm::max(tlo.x, tlo.y), tlo.z);
-                                                       const f32 tExit = glm::min(glm::min(thi.x, thi.y), thi.z);
-                                                       if (tExit < 0.0f || tEnter > tExit)
-                                                       {
-                                                           return;
-                                                       }
-                                                       f32 t = tEnter;
-                                                       if (t < 0.0f)
-                                                       {
-                                                           t = tExit;  // ray origin inside the box
-                                                       }
-                                                       if (t < nearest)
-                                                       {
-                                                           nearest = t;
-                                                           hit = entity;
-                                                       }
-                                                   });
+        forEach<TransformComponent, MeshComponent>(
+            scene,
+            [&](Entity entity, TransformComponent&, MeshComponent& mesh)
+            {
+                auto meshRef = loadMeshAsset(assets, renderer, mesh.mesh);
+                if (!meshRef || meshRef->cpuPositions.empty())
+                {
+                    return;
+                }
+                const glm::mat4 model = worldMatrix(scene, entity);
+                glm::vec3 worldMin{ std::numeric_limits<f32>::max() };
+                glm::vec3 worldMax{ std::numeric_limits<f32>::lowest() };
+                worldAabbFromCorners(model, meshRef->boundsMin, meshRef->boundsMax, worldMin, worldMax);
+                f32 tEnter = 0.0f;
+                f32 tExit = 0.0f;
+                if (!rayAabbSlab(ray, worldMin, worldMax, tEnter, tExit))
+                {
+                    return;
+                }
+                std::vector<glm::vec3> world(meshRef->cpuPositions.size());
+                for (std::size_t v = 0; v < world.size(); v = v + 1)
+                {
+                    world[v] = glm::vec3(model * glm::vec4(meshRef->cpuPositions[v], 1.0f));
+                }
+                f32 t = 0.0f;
+                if (nearestTriangle(world, meshRef->cpuIndices, t))
+                {
+                    considerHit(entity, t);
+                }
+            });
+
+        forEach<TransformComponent, SkinnedMeshComponent>(
+            scene,
+            [&](Entity entity, TransformComponent&, SkinnedMeshComponent& skin)
+            {
+                auto meshRef = loadMeshAsset(assets, renderer, skin.mesh);
+                if (!meshRef || meshRef->cpuPositions.empty() || meshRef->cpuSkin.empty())
+                {
+                    return;
+                }
+                std::vector<glm::mat4> palette;
+                jointMatrices(scene, skin, palette);
+                if (palette.empty())
+                {
+                    return;
+                }
+                // Conservative broad-phase: union the bind-pose box through every joint (mirrors the
+                // skinned scene-bounds fit). Cheap enough to reject before paying for CPU skinning.
+                glm::vec3 worldMin{ std::numeric_limits<f32>::max() };
+                glm::vec3 worldMax{ std::numeric_limits<f32>::lowest() };
+                for (const glm::mat4& joint : palette)
+                {
+                    worldAabbFromCorners(joint, meshRef->boundsMin, meshRef->boundsMax, worldMin, worldMax);
+                }
+                f32 tEnter = 0.0f;
+                f32 tExit = 0.0f;
+                if (!rayAabbSlab(ray, worldMin, worldMax, tEnter, tExit))
+                {
+                    return;
+                }
+                // Skin every vertex into world space once, then ray-triangle. deformed = Σ w_k · (palette
+                // · pos); matches skin.slang, so picking agrees with what the screen shows.
+                std::vector<glm::vec3> deformed(meshRef->cpuPositions.size());
+                for (std::size_t v = 0; v < deformed.size(); v = v + 1)
+                {
+                    const VertexSkin& inf = meshRef->cpuSkin[v];
+                    glm::vec3 acc{ 0.0f };
+                    for (int k = 0; k < 4; k = k + 1)
+                    {
+                        const f32 w = inf.weights[k];
+                        const std::size_t j = static_cast<std::size_t>(inf.joints[k]);
+                        if (w == 0.0f || j >= palette.size())
+                        {
+                            continue;
+                        }
+                        acc += w * glm::vec3(palette[j] * glm::vec4(meshRef->cpuPositions[v], 1.0f));
+                    }
+                    deformed[v] = acc;
+                }
+                f32 t = 0.0f;
+                if (nearestTriangle(deformed, meshRef->cpuIndices, t))
+                {
+                    considerHit(entity, t);
+                }
+            });
         return hit;
     }
 
