@@ -1029,6 +1029,25 @@ export interface ScriptErrorDto {
   tick: number;
 }
 
+export interface DrainScriptLogsParams {
+  since?: number;
+}
+
+export interface DrainScriptLogsResult {
+  events: ScriptLogDto[];
+  highWaterSeq: number;
+  oldestSeq: number;
+  overflowed: boolean;
+}
+
+export interface ScriptLogDto {
+  seq: number;
+  entity: WireUuid;
+  message: string;
+  epochMs: number;
+  tick: number;
+}
+
 export interface GetScriptSchemaParams {
   path: string;
 }
@@ -1722,6 +1741,7 @@ export interface CommandParamsMap {
   "set-ragdoll": SetRagdollParams;
   "get-ragdoll": GetRagdollParams;
   "drain-script-errors": DrainScriptErrorsParams;
+  "drain-script-logs": DrainScriptLogsParams;
   "get-script-schema": GetScriptSchemaParams;
   "set-script-override": SetScriptOverrideParams;
   "add-entity": AddEntityParams;
@@ -1876,6 +1896,7 @@ export interface CommandResultMap {
   "set-ragdoll": RagdollResult;
   "get-ragdoll": RagdollResult;
   "drain-script-errors": DrainScriptErrorsResult;
+  "drain-script-logs": DrainScriptLogsResult;
   "get-script-schema": GetScriptSchemaResult;
   "set-script-override": SetScriptOverrideResult;
   "add-entity": EntityRef;

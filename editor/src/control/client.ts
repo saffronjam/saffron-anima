@@ -27,6 +27,7 @@ import type {
   CreateScriptResult,
   DrainAlarmsResult,
   DrainScriptErrorsResult,
+  DrainScriptLogsResult,
   EditorCamera,
   AssetPreviewResult,
   GetScriptSchemaResult,
@@ -371,6 +372,10 @@ export const client = {
   /// Drain contained script errors with seq > since (the cursor mirrors drain-alarms).
   drainScriptErrors(since: number): Promise<DrainScriptErrorsResult> {
     return call("drain-script-errors", { since });
+  },
+  /// Drain se.log lines with seq > since (same seq-cursor protocol as drain-script-errors).
+  drainScriptLogs(since: number): Promise<DrainScriptLogsResult> {
+    return call("drain-script-logs", { since });
   },
   /// A project script's declared fields (path relative to the project src/).
   getScriptSchema(path: string): Promise<GetScriptSchemaResult> {
