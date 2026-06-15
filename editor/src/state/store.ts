@@ -65,12 +65,15 @@ import type {
   PhysicsStateResult,
   PhysicsBodyDto,
   ContactEventDto,
+  ScriptLogDto,
 } from "../protocol";
 
 /// Cap on the retained alarm-log entries (the dashboard shows the most recent).
 const ALARM_LOG_LIMIT = 200;
 /// Cap on the retained physics contact/trigger feed (newest-N, like the alarm log).
 const CONTACT_LOG_LIMIT = 200;
+/// Cap on the retained se.log feed; the engine ring is bounded too, the editor keeps a deeper window.
+const SCRIPT_LOG_LIMIT = 2000;
 /// Frames requested from the engine per metrics poll — its full ring, so no frames are
 /// missed between polls (the client dedups the overlap by frame index).
 const FRAME_HISTORY_SAMPLES = 1000;
@@ -162,6 +165,9 @@ export interface EditorState {
   physicsBodies: PhysicsBodyDto[];
   contactLog: ContactEventDto[];
   contactsOverflowed: boolean;
+  /// se.log output (Script Logs panel), filled by the open+playing poll; cleared on each fresh play.
+  scriptLogs: ScriptLogDto[];
+  scriptLogsOverflowed: boolean;
   /// Viewport debug-overlay toggles (set-debug-overlays); filled by the render-panel-gated poll.
   debugOverlays: DebugOverlaysResult | null;
   /// Performance-telemetry slices, filled by the gated metrics poll only while the
@@ -368,6 +374,8 @@ export interface EditorState {
   setPhysicsBodies(physicsBodies: PhysicsBodyDto[]): void;
   appendContactEvents(events: ContactEventDto[], overflowed: boolean): void;
   clearContacts(): void;
+  appendScriptLogs(events: ScriptLogDto[], overflowed: boolean): void;
+  clearScriptLogs(): void;
   setDebugOverlays(debugOverlays: DebugOverlaysResult | null): void;
   setPerfConfig(perfConfig: PerfConfigDto | null): void;
   setFrameHistory(frameHistory: FrameHistoryDto | null): void;
@@ -467,6 +475,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   physicsBodies: [],
   contactLog: [],
   contactsOverflowed: false,
+  scriptLogs: [],
+  scriptLogsOverflowed: false,
   debugOverlays: null,
   perfConfig: null,
   frameHistory: null,
@@ -974,6 +984,19 @@ export const useEditorStore = create<EditorState>((set) => ({
       return { contactLog, contactsOverflowed: overflowed };
     }),
   clearContacts: () => set({ contactLog: [], contactsOverflowed: false }),
+  appendScriptLogs: (events, overflowed) =>
+    set((s) => {
+      const nextOverflowed = s.scriptLogsOverflowed || overflowed; // sticky: a dropped line stays dropped
+      if (events.length === 0) {
+        return nextOverflowed === s.scriptLogsOverflowed
+          ? {}
+          : { scriptLogsOverflowed: nextOverflowed };
+      }
+      // Chronological (the engine drains oldest→newest by seq); newest at the end, keep the last N.
+      const scriptLogs = s.scriptLogs.concat(events).slice(-SCRIPT_LOG_LIMIT);
+      return { scriptLogs, scriptLogsOverflowed: nextOverflowed };
+    }),
+  clearScriptLogs: () => set({ scriptLogs: [], scriptLogsOverflowed: false }),
   setPerfConfig: (perfConfig) => set({ perfConfig }),
   setFrameHistory: (frameHistory) => set({ frameHistory }),
   setPassTimings: (passTimings) => set({ passTimings }),
@@ -1626,6 +1649,8 @@ export function startReconcile(client: Client): () => void {
   // Physics contact cursor; reset on each fresh play session (the engine ring restarts).
   let contactsSince = 0;
   let lastPlayStateForPhysics: PlayState = "edit";
+  let scriptLogsSince = 0;
+  let lastPlayStateForScriptLogs: PlayState = "edit";
   let pendingRefresh: {
     selectedId: string | null;
     sceneChanged: boolean;
@@ -1884,6 +1909,23 @@ export function startReconcile(client: Client): () => void {
         contactsSince = Math.max(contactsSince, contactsDrained.highWaterSeq);
       }
       lastPlayStateForPhysics = physicsPlayState;
+
+      // The Script Logs panel: se.log output. Polled ONLY while the panel is open AND play is active
+      // (scripts run only in play); the cursor + buffer reset on each fresh play, retained after Stop.
+      const scriptLogsPlayState = useEditorStore.getState().playState;
+      if (isPanelOpen(useEditorStore.getState(), "scriptLogs") && scriptLogsPlayState !== "edit") {
+        if (lastPlayStateForScriptLogs === "edit") {
+          scriptLogsSince = 0;
+          useEditorStore.getState().clearScriptLogs();
+        }
+        const logsDrained = await client.drainScriptLogs(scriptLogsSince);
+        if (stopped) {
+          return;
+        }
+        useEditorStore.getState().appendScriptLogs(logsDrained.events, logsDrained.overflowed);
+        scriptLogsSince = Math.max(scriptLogsSince, logsDrained.highWaterSeq);
+      }
+      lastPlayStateForScriptLogs = scriptLogsPlayState;
     } catch {
       // Engine briefly busy; the next tick recovers.
     } finally {
