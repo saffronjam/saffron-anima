@@ -3,6 +3,7 @@
 ## Editor UX
 
 - Drag and drop models from the asset browser to create entities in the scene.
+- Let Inspector components have an explicit order, with add-at-bottom behavior, drag reordering, and a sort action.
 - Fix browser UI quirks like drag-selecting elements so the editor feels like a normal desktop app.
 
 ## Rendering
