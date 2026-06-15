@@ -570,11 +570,15 @@ namespace se
         vt.aoMap.reset();
         vt.contactMap.reset();
         vt.ssgiMap.reset();
+        vt.ssgiDenoised.reset();
+        vt.ssgiResolved.reset();
         vt.prevColor.reset();
         vt.motion.reset();
         vt.motionDepth.reset();
         vt.history[0].reset();
         vt.history[1].reset();
+        vt.ssgiHistory[0].reset();
+        vt.ssgiHistory[1].reset();
         vt.msaaColor.reset();
         vt.msaaDepth.reset();
         vt.scratch.reset();
@@ -622,6 +626,8 @@ namespace se
         renderer.pipelines.aoBlur.reset();
         renderer.pipelines.contact.reset();
         renderer.pipelines.ssgi.reset();
+        renderer.pipelines.ssgiBlur.reset();
+        renderer.pipelines.ssgiAccum.reset();
         renderer.pipelines.copyColor.reset();
         renderer.pipelines.motion.reset();
         renderer.pipelines.taa.reset();
@@ -1408,6 +1414,42 @@ namespace se
         renderer.graph.hasContact = false;
         renderer.graph.hasSsgi = false;
         renderer.graph.hasGbuffer = false;
+
+        // Motion vectors: a depth-tested prepass writing per-pixel screen motion from camera
+        // reprojection. Produced before the screen-space block so SSGI temporal accumulation can
+        // reproject through it, and before the scene so the TAA resolve (after the scene) can read
+        // it; the graph derives ColorWrite -> SampledReadCompute. Runs for TAA or SSGI, since both
+        // own a temporal accumulation that needs it.
+        bool ssgiAccumRan = false;
+        RgResource motionRes{};
+        if (taa || doSsgi)
+        {
+            motionRes = importImage(graph, activeView(renderer).motion.image, activeView(renderer).motion.view,
+                                    vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
+            RgResource motionDepthRes =
+                importImage(graph, activeView(renderer).motionDepth.image, activeView(renderer).motionDepth.view,
+                            vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
+            RgPass motionPass;
+            motionPass.name = "motion";
+            motionPass.kind = RgPassKind::Graphics;
+            motionPass.colors.push_back(
+                RgAttachment{ motionRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                              vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } } });
+            motionPass.depth =
+                RgAttachment{ motionDepthRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                              vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
+            motionPass.renderArea = offscreen.extent;
+            // The motion pass reads both deformed buffers as vertex input (cur + prev position),
+            // so it must wait on the skin compute writes — declare the reads to derive the barrier.
+            if (doSkin)
+            {
+                motionPass.accesses.push_back(RgAccess{ deformedBuffer, RgUsage::VertexInputRead });
+                motionPass.accesses.push_back(RgAccess{ prevDeformedBuffer, RgUsage::VertexInputRead });
+            }
+            motionPass.execute = [&renderer](vk::CommandBuffer cmd) { recordMotion(renderer, cmd); };
+            addPass(graph, std::move(motionPass));
+        }
+
         if (doScreen)
         {
             renderer.graph.hasGbuffer = true;
@@ -1542,7 +1584,13 @@ namespace se
                                     RgAccess{ prevColorRes, RgUsage::SampledReadCompute },
                                     RgAccess{ ssgiRes, RgUsage::StorageImageRWCompute } };
                 const f32 radius = renderer.ssao.radius;
-                gipass.execute = [&renderer, ssExtent, ssGroups, proj, invProj, radius](vk::CommandBuffer cmd)
+                // Monotonic per-frame index rotates the trace hash so the denoiser/accumulator
+                // has decorrelated noise to average. Bumped at build time, captured by value.
+                renderer.ssao.ssgiFrame = renderer.ssao.ssgiFrame + 1;
+                const f32 ssgiIntensity = renderer.ssao.ssgiIntensity;
+                const f32 ssgiFrame = static_cast<f32>(renderer.ssao.ssgiFrame);
+                gipass.execute = [&renderer, ssExtent, ssGroups, proj, invProj, radius, ssgiIntensity,
+                                  ssgiFrame](vk::CommandBuffer cmd)
                 {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgi->pipeline);
                     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgi->layout, 0,
@@ -1552,47 +1600,82 @@ namespace se
                         glm::mat4 projection;
                         glm::mat4 invProjection;
                         glm::vec4 params;
-                    } push{ proj, invProj, glm::vec4(radius * 2.0f, 1.0f, 8.0f, 0.0f) };
+                    } push{ proj, invProj, glm::vec4(radius * 2.0f, ssgiIntensity, 8.0f, ssgiFrame) };
                     cmd.pushConstants(renderer.pipelines.ssgi->layout, vk::ShaderStageFlagBits::eCompute, 0,
                                       sizeof(push), &push);
                     cmd.dispatch(ssGroups(ssExtent.width), ssGroups(ssExtent.height), 1);
                 };
                 addPass(graph, std::move(gipass));
-                renderer.graph.ssgiResource = ssgiRes;
+
+                // Spatial denoise: depth-aware bilateral blur of the raw trace into ssgiDenoised.
+                RgResource ssgiDenoisedRes =
+                    importImage(graph, activeView(renderer).ssgiDenoised.image, activeView(renderer).ssgiDenoised.view,
+                                vk::ImageAspectFlagBits::eColor, activeView(renderer).ssgiDenoised.layout,
+                                &activeView(renderer).ssgiDenoised.layout);
+                RgPass blurPass;
+                blurPass.name = "ssgi-blur";
+                blurPass.kind = RgPassKind::Compute;
+                blurPass.accesses = { RgAccess{ ssgiRes, RgUsage::SampledReadCompute },
+                                      RgAccess{ gNormalRes, RgUsage::SampledReadCompute },
+                                      RgAccess{ ssgiDenoisedRes, RgUsage::StorageImageRWCompute } };
+                blurPass.execute = [&renderer, ssExtent, ssGroups](vk::CommandBuffer cmd)
+                {
+                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgiBlur->pipeline);
+                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgiBlur->layout, 0,
+                                           activeView(renderer).ssgiBlurSet, {});
+                    cmd.dispatch(ssGroups(ssExtent.width), ssGroups(ssExtent.height), 1);
+                };
+                addPass(graph, std::move(blurPass));
+                // Default: the scene reads the spatially denoised map (the TAA-off path).
+                renderer.graph.ssgiResource = ssgiDenoisedRes;
+
+                // Temporal accumulation: reproject the SSGI history through motion + neighborhood-
+                // clamp + EMA into the stable ssgiResolved map. SSGI owns this accumulation, so it
+                // runs whenever SSGI is on (independent of the final-image AA mode); it shares the
+                // ping-pong parity, flipped once per frame after the scene.
+                {
+                    const u32 p = activeView(renderer).historyIndex;
+                    const bool histValid = activeView(renderer).historyValid;
+                    RgResource ssgiHistReadRes =
+                        importImage(graph, activeView(renderer).ssgiHistory[1 - p].image,
+                                    activeView(renderer).ssgiHistory[1 - p].view, vk::ImageAspectFlagBits::eColor,
+                                    activeView(renderer).ssgiHistory[1 - p].layout,
+                                    &activeView(renderer).ssgiHistory[1 - p].layout);
+                    RgResource ssgiHistWriteRes = importImage(
+                        graph, activeView(renderer).ssgiHistory[p].image, activeView(renderer).ssgiHistory[p].view,
+                        vk::ImageAspectFlagBits::eColor, activeView(renderer).ssgiHistory[p].layout,
+                        &activeView(renderer).ssgiHistory[p].layout);
+                    RgResource ssgiResolvedRes = importImage(
+                        graph, activeView(renderer).ssgiResolved.image, activeView(renderer).ssgiResolved.view,
+                        vk::ImageAspectFlagBits::eColor, activeView(renderer).ssgiResolved.layout,
+                        &activeView(renderer).ssgiResolved.layout);
+                    RgPass accumPass;
+                    accumPass.name = "ssgi-accum";
+                    accumPass.kind = RgPassKind::Compute;
+                    accumPass.accesses = { RgAccess{ ssgiDenoisedRes, RgUsage::SampledReadCompute },
+                                           RgAccess{ ssgiHistReadRes, RgUsage::SampledReadCompute },
+                                           RgAccess{ motionRes, RgUsage::SampledReadCompute },
+                                           RgAccess{ ssgiResolvedRes, RgUsage::StorageImageRWCompute },
+                                           RgAccess{ ssgiHistWriteRes, RgUsage::StorageImageRWCompute } };
+                    accumPass.execute = [&renderer, ssExtent, ssGroups, p, histValid](vk::CommandBuffer cmd)
+                    {
+                        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgiAccum->pipeline);
+                        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, renderer.pipelines.ssgiAccum->layout, 0,
+                                               activeView(renderer).ssgiAccumSets[p], {});
+                        struct
+                        {
+                            glm::vec4 params;
+                        } push{ glm::vec4(TaaHistoryWeight, histValid ? 1.0f : 0.0f, 0.0f, 0.0f) };
+                        cmd.pushConstants(renderer.pipelines.ssgiAccum->layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                          sizeof(push), &push);
+                        cmd.dispatch(ssGroups(ssExtent.width), ssGroups(ssExtent.height), 1);
+                    };
+                    addPass(graph, std::move(accumPass));
+                    renderer.graph.ssgiResource = ssgiResolvedRes;
+                    ssgiAccumRan = true;
+                }
                 renderer.graph.hasSsgi = true;
             }
-        }
-
-        // TAA motion vectors: a depth-tested prepass writing per-pixel screen motion from
-        // camera reprojection. Produced before the scene so the TAA resolve (after the
-        // scene) can read it; the graph derives ColorWrite -> SampledReadCompute.
-        RgResource motionRes{};
-        if (taa)
-        {
-            motionRes = importImage(graph, activeView(renderer).motion.image, activeView(renderer).motion.view,
-                                    vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined, nullptr);
-            RgResource motionDepthRes =
-                importImage(graph, activeView(renderer).motionDepth.image, activeView(renderer).motionDepth.view,
-                            vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined, nullptr);
-            RgPass motionPass;
-            motionPass.name = "motion";
-            motionPass.kind = RgPassKind::Graphics;
-            motionPass.colors.push_back(
-                RgAttachment{ motionRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-                              vk::ClearValue{ vk::ClearColorValue{ std::array<f32, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } } });
-            motionPass.depth =
-                RgAttachment{ motionDepthRes, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-                              vk::ClearValue{ vk::ClearDepthStencilValue{ 1.0f, 0 } } };
-            motionPass.renderArea = offscreen.extent;
-            // The motion pass reads both deformed buffers as vertex input (cur + prev position),
-            // so it must wait on the skin compute writes — declare the reads to derive the barrier.
-            if (doSkin)
-            {
-                motionPass.accesses.push_back(RgAccess{ deformedBuffer, RgUsage::VertexInputRead });
-                motionPass.accesses.push_back(RgAccess{ prevDeformedBuffer, RgUsage::VertexInputRead });
-            }
-            motionPass.execute = [&renderer](vk::CommandBuffer cmd) { recordMotion(renderer, cmd); };
-            addPass(graph, std::move(motionPass));
         }
 
         // DDGI: voxelize the scene proxy -> trace probe rays (software) -> blend irradiance +
@@ -2069,9 +2152,14 @@ namespace se
                 cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
             };
             addPass(graph, std::move(taaPass));
-            // Next frame reads this frame's history; mark it valid + flip parity.
+        }
+        // TAA and/or SSGI accumulation consumed this frame's history parity; mark the history
+        // valid and flip the shared ping-pong index once so next frame reprojects through the
+        // buffer just written. Both temporal passes read the parity before this flip.
+        if (taa || ssgiAccumRan)
+        {
             activeView(renderer).historyValid = true;
-            activeView(renderer).historyIndex = 1 - p;
+            activeView(renderer).historyIndex = 1 - activeView(renderer).historyIndex;
         }
 
         // SSGI history capture: copy the scene's resolved LINEAR-HDR color into prevColor

@@ -2134,6 +2134,8 @@ export namespace se
         activeView(renderer).aoMap.reset();
         activeView(renderer).contactMap.reset();
         activeView(renderer).ssgiMap.reset();
+        activeView(renderer).ssgiDenoised.reset();
+        activeView(renderer).ssgiResolved.reset();
         activeView(renderer).prevColor.reset();
         const u32 w = activeView(renderer).offscreen.extent.width;
         const u32 h = activeView(renderer).offscreen.extent.height;
@@ -2183,6 +2185,20 @@ export namespace se
             return;
         }
         activeView(renderer).ssgiMap = std::move(*ssgiMap);
+        auto ssgiDenoised = newColorImage(renderer, w, h, GNormalFormat, true);  // rgba16f radiance
+        if (!ssgiDenoised)
+        {
+            logError(ssgiDenoised.error());
+            return;
+        }
+        activeView(renderer).ssgiDenoised = std::move(*ssgiDenoised);
+        auto ssgiResolved = newColorImage(renderer, w, h, GNormalFormat, true);  // rgba16f radiance
+        if (!ssgiResolved)
+        {
+            logError(ssgiResolved.error());
+            return;
+        }
+        activeView(renderer).ssgiResolved = std::move(*ssgiResolved);
         auto prevColor = newColorImage(renderer, w, h, OffscreenColorFormat, true);
         if (!prevColor)
         {
@@ -2209,8 +2225,9 @@ export namespace se
             vk::CommandBufferBeginInfo begin{};
             begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
             static_cast<void>(cmd.begin(begin));
-            const std::array<Image*, 4> maps{ &activeView(renderer).aoMap, &activeView(renderer).contactMap,
-                                              &activeView(renderer).ssgiMap, &activeView(renderer).prevColor };
+            const std::array<Image*, 6> maps{ &activeView(renderer).aoMap,        &activeView(renderer).contactMap,
+                                              &activeView(renderer).ssgiMap,      &activeView(renderer).ssgiDenoised,
+                                              &activeView(renderer).ssgiResolved, &activeView(renderer).prevColor };
             for (Image* img : maps)
             {
                 transitionImage(cmd, img->image, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -2269,13 +2286,19 @@ export namespace se
         write(vt.ssgiSet, 0, S, sampled(nearest, gv));
         write(vt.ssgiSet, 1, S, sampled(linear, vt.prevColor.view));
         write(vt.ssgiSet, 2, I, storage(vt.ssgiMap.view));
+        // ssgi_blur: raw ssgiMap + gbuffer -> ssgiDenoised
+        write(vt.ssgiBlurSet, 0, S, sampled(nearest, vt.ssgiMap.view));
+        write(vt.ssgiBlurSet, 1, S, sampled(nearest, gv));
+        write(vt.ssgiBlurSet, 2, I, storage(vt.ssgiDenoised.view));
         // copy_color: offscreen sceneColor + prevColor storage
         write(vt.copyColorSet, 0, S, sampled(linear, vt.offscreen.view));
         write(vt.copyColorSet, 1, I, storage(vt.prevColor.view));
-        // mesh set 4: AO + contact + SSGI (all linear-sampled)
+        // mesh set 4: AO + contact + SSGI (all linear-sampled). The scene reads the temporally
+        // resolved SSGI: accumulation runs whenever SSGI is on (independent of the AA mode) and is
+        // scheduled before the scene pass, so ssgiResolved is always written before this sample.
         write(vt.meshSet, 0, S, sampled(linear, vt.aoMap.view));
         write(vt.meshSet, 1, S, sampled(linear, vt.contactMap.view));
-        write(vt.meshSet, 2, S, sampled(linear, vt.ssgiMap.view));
+        write(vt.meshSet, 2, S, sampled(linear, vt.ssgiResolved.view));
 
         renderer.ssao.generation = renderer.ssao.generation + 1;
         renderer.ssao.ready = true;
@@ -2403,6 +2426,8 @@ export namespace se
         activeView(renderer).motionDepth.reset();
         activeView(renderer).history[0].reset();
         activeView(renderer).history[1].reset();
+        activeView(renderer).ssgiHistory[0].reset();
+        activeView(renderer).ssgiHistory[1].reset();
         activeView(renderer).historyValid = false;
         const u32 w = activeView(renderer).offscreen.extent.width;
         const u32 h = activeView(renderer).offscreen.extent.height;
@@ -2434,6 +2459,17 @@ export namespace se
             }
             activeView(renderer).history[i] = std::move(*hist);
         }
+        for (u32 i = 0; i < 2; i = i + 1)
+        {
+            // rgba16f to hold HDR indirect radiance (NOT the display-format scene color).
+            auto hist = newColorImage(renderer, w, h, GNormalFormat, true);
+            if (!hist)
+            {
+                logError(hist.error());
+                return;
+            }
+            activeView(renderer).ssgiHistory[i] = std::move(*hist);
+        }
 
         // The history images start ShaderReadOnly so their sampler bindings are valid even
         // before the first TAA write (historyValid gates the actual blend).
@@ -2452,13 +2488,15 @@ export namespace se
             vk::CommandBufferBeginInfo begin{};
             begin.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
             static_cast<void>(cmd.begin(begin));
-            for (u32 i = 0; i < 2; i = i + 1)
+            const std::array<Image*, 4> histImages{ &activeView(renderer).history[0], &activeView(renderer).history[1],
+                                                    &activeView(renderer).ssgiHistory[0],
+                                                    &activeView(renderer).ssgiHistory[1] };
+            for (Image* img : histImages)
             {
-                transitionImage(cmd, activeView(renderer).history[i].image, vk::ImageLayout::eUndefined,
-                                vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eTopOfPipe,
-                                vk::AccessFlagBits2::eNone, vk::PipelineStageFlagBits2::eComputeShader,
-                                vk::AccessFlagBits2::eShaderSampledRead);
-                activeView(renderer).history[i].layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+                transitionImage(cmd, img->image, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
+                                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+                                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead);
+                img->layout = vk::ImageLayout::eShaderReadOnlyOptimal;
             }
             static_cast<void>(cmd.end());
             vk::CommandBufferSubmitInfo cmdInfo{};
@@ -2507,6 +2545,48 @@ export namespace se
                 writes[b].setImageInfo(*infos[b]);
             }
             renderer.context.device.updateDescriptorSets(writes, {});
+
+            // SSGI temporal accumulation shares the parity: parity p reads ssgiHistory[1-p],
+            // writes ssgiHistory[p], and resolves into the stable ssgiResolved map the scene reads.
+            vk::DescriptorImageInfo ssgiCur{ renderer.descriptors.linearSampler, activeView(renderer).ssgiDenoised.view,
+                                             vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo ssgiHist{ renderer.descriptors.linearSampler,
+                                              activeView(renderer).ssgiHistory[1 - p].view,
+                                              vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::DescriptorImageInfo ssgiResolvedOut{};
+            ssgiResolvedOut.imageView = activeView(renderer).ssgiResolved.view;
+            ssgiResolvedOut.imageLayout = vk::ImageLayout::eGeneral;
+            vk::DescriptorImageInfo ssgiHistOut{};
+            ssgiHistOut.imageView = activeView(renderer).ssgiHistory[p].view;
+            ssgiHistOut.imageLayout = vk::ImageLayout::eGeneral;
+            std::array<vk::WriteDescriptorSet, 5> ssgiWrites{};
+            const std::array<vk::DescriptorImageInfo*, 5> ssgiInfos{ &ssgiCur, &ssgiHist, &motionInfo, &ssgiResolvedOut,
+                                                                     &ssgiHistOut };
+            for (u32 b = 0; b < 5; b = b + 1)
+            {
+                ssgiWrites[b].dstSet = activeView(renderer).ssgiAccumSets[p];
+                ssgiWrites[b].dstBinding = b;
+                ssgiWrites[b].descriptorType = types[b];
+                ssgiWrites[b].setImageInfo(*ssgiInfos[b]);
+            }
+            renderer.context.device.updateDescriptorSets(ssgiWrites, {});
+        }
+
+        // Repoint the mesh's SSGI sampler (set 4, binding 2) at the authoritative final map for
+        // the current AA state: the temporally resolved map when TAA is on, the spatially
+        // denoised map otherwise. recreateSsaoTargets seeds it too, but TAA toggles route only
+        // through here, so this is the binding of record.
+        {
+            const vk::ImageView ssgiSceneView = renderer.targets.taaEnabled ? activeView(renderer).ssgiResolved.view
+                                                                            : activeView(renderer).ssgiDenoised.view;
+            vk::DescriptorImageInfo info{ renderer.descriptors.linearSampler, ssgiSceneView,
+                                          vk::ImageLayout::eShaderReadOnlyOptimal };
+            vk::WriteDescriptorSet wr{};
+            wr.dstSet = activeView(renderer).meshSet;
+            wr.dstBinding = 2;
+            wr.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            wr.setImageInfo(info);
+            renderer.context.device.updateDescriptorSets(wr, {});
         }
     }
 
@@ -3631,6 +3711,12 @@ export namespace se
                 return Err(ssgiSet.error());
             }
             vt.ssgiSet = *ssgiSet;
+            auto ssgiBlurSet = allocSet(renderer.ssao.compute3Layout, "ssgiBlurSet");
+            if (!ssgiBlurSet)
+            {
+                return Err(ssgiBlurSet.error());
+            }
+            vt.ssgiBlurSet = *ssgiBlurSet;
             auto copyColorSet = allocSet(renderer.ssao.compute2Layout, "copyColorSet");
             if (!copyColorSet)
             {
@@ -3678,6 +3764,12 @@ export namespace se
             return Err(ssgiPipe.error());
         }
         renderer.pipelines.ssgi = *ssgiPipe;
+        auto ssgiBlurPipe = newComputePipeline(renderer, "shaders/ssgi_blur.spv", renderer.ssao.compute3Layout);
+        if (!ssgiBlurPipe)
+        {
+            return Err(ssgiBlurPipe.error());
+        }
+        renderer.pipelines.ssgiBlur = *ssgiBlurPipe;
         auto copyColorPipe = newComputePipeline(renderer, "shaders/copy_color.spv", renderer.ssao.compute2Layout);
         if (!copyColorPipe)
         {
@@ -3728,6 +3820,18 @@ export namespace se
                     return Err(taaSet.error());
                 }
                 vt.taaSets[p] = (*taaSet)[0];
+                // SSGI accumulation reuses the TAA set shape (3 samplers + 2 storage); same
+                // ping-pong parity, written alongside the TAA sets in recreateTaaTargets.
+                vk::DescriptorSetAllocateInfo ssgiAlloc{};
+                ssgiAlloc.descriptorPool = renderer.descriptors.descriptorPool;
+                ssgiAlloc.setSetLayouts(renderer.descriptors.taaSetLayout);
+                auto ssgiAccumSet =
+                    checked(renderer.context.device.allocateDescriptorSets(ssgiAlloc), "allocate ssgiAccumSet");
+                if (!ssgiAccumSet)
+                {
+                    return Err(ssgiAccumSet.error());
+                }
+                vt.ssgiAccumSets[p] = (*ssgiAccumSet)[0];
             }
         }
 
@@ -3745,6 +3849,14 @@ export namespace se
             return Err(taaPipe.error());
         }
         renderer.pipelines.taa = *taaPipe;
+
+        Result<Ref<Pipeline>> ssgiAccumPipe = newComputePipeline(
+            renderer, "shaders/ssgi_accum.spv", renderer.descriptors.taaSetLayout, static_cast<u32>(sizeof(glm::vec4)));
+        if (!ssgiAccumPipe)
+        {
+            return Err(ssgiAccumPipe.error());
+        }
+        renderer.pipelines.ssgiAccum = *ssgiAccumPipe;
 
         recreateTaaTargets(renderer);
 

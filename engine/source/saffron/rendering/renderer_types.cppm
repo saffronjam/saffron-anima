@@ -239,6 +239,12 @@ export namespace se
         std::vector<Submesh> submeshes;
         glm::vec3 boundsMin{ 0.0f };  // local-space AABB, for ray picking
         glm::vec3 boundsMax{ 0.0f };
+        // CPU copy retained for triangle-precise picking. Positions are local/rest space; cpuIndices is
+        // the flat index buffer spanning every submesh; cpuSkin parallels cpuPositions when skinned
+        // (empty otherwise). The narrow-phase ray-triangle test reads these directly.
+        std::vector<glm::vec3> cpuPositions;
+        std::vector<u32> cpuIndices;
+        std::vector<VertexSkin> cpuSkin;
         Ref<AccelerationStructure> blas;  // ray-tracing BLAS (null when RT is unsupported)
 
         GpuMesh() = default;
@@ -249,7 +255,9 @@ export namespace se
             : allocator(other.allocator), vertexBuffer(other.vertexBuffer), vertexAlloc(other.vertexAlloc),
               indexBuffer(other.indexBuffer), indexAlloc(other.indexAlloc), skinBuffer(other.skinBuffer),
               skinAlloc(other.skinAlloc), indexCount(other.indexCount), vertexCount(other.vertexCount),
-              submeshes(std::move(other.submeshes)), boundsMin(other.boundsMin), boundsMax(other.boundsMax)
+              submeshes(std::move(other.submeshes)), boundsMin(other.boundsMin), boundsMax(other.boundsMax),
+              cpuPositions(std::move(other.cpuPositions)), cpuIndices(std::move(other.cpuIndices)),
+              cpuSkin(std::move(other.cpuSkin))
         {
             other.allocator = nullptr;
             other.vertexBuffer = nullptr;
@@ -277,6 +285,9 @@ export namespace se
                 submeshes = std::move(other.submeshes);
                 boundsMin = other.boundsMin;
                 boundsMax = other.boundsMax;
+                cpuPositions = std::move(other.cpuPositions);
+                cpuIndices = std::move(other.cpuIndices);
+                cpuSkin = std::move(other.cpuSkin);
                 other.allocator = nullptr;
                 other.vertexBuffer = nullptr;
                 other.vertexAlloc = nullptr;
@@ -1226,6 +1237,8 @@ export namespace se
         Ref<Pipeline> aoBlur;         // bilateral denoise of the raw AO
         Ref<Pipeline> contact;        // screen-space contact shadows (directional)
         Ref<Pipeline> ssgi;           // screen-space one-bounce GI
+        Ref<Pipeline> ssgiBlur;       // bilateral denoise of the raw SSGI
+        Ref<Pipeline> ssgiAccum;      // temporal accumulation of the denoised SSGI
         Ref<Pipeline> copyColor;      // capture linear-HDR scene color into prevColor
         Ref<Pipeline> motion;         // motion-vector prepass (camera reprojection)
         Ref<Pipeline> taa;            // compute TAA resolve
@@ -1262,13 +1275,17 @@ export namespace se
         Image aoRaw;
         Image aoMap;
         Image contactMap;
-        Image ssgiMap;
+        Image ssgiMap;       // raw one-bounce SSGI trace output
+        Image ssgiDenoised;  // ssgiMap after the bilateral blur (what the scene reads when TAA off)
+        Image ssgiResolved;  // ssgiDenoised after temporal accumulation (what the scene reads when TAA on)
         Image prevColor;
         // TAA: a screen-space motion-vector target (rg16f) + its depth scratch, and two
         // ping-pong history color images. Sized to the viewport, recreated with it.
         Image motion;
         Image motionDepth;
         std::array<Image, 2> history;
+        // SSGI temporal history (rgba16f), ping-pong sharing TAA's parity (historyIndex).
+        std::array<Image, 2> ssgiHistory;
         u32 historyIndex = 0;       // this frame writes history[historyIndex], reads the other
         bool historyValid = false;  // false on the first frame / after a resize
         // MSAA: when sampleCount > 1 the scene renders to these multisampled targets and
@@ -1286,13 +1303,17 @@ export namespace se
         vk::DescriptorSet aoBlurSet;     // aoRaw + gNormal + aoMap    (compute3)
         vk::DescriptorSet contactSet;    // gNormal + contactMap       (compute2)
         vk::DescriptorSet ssgiSet;       // gNormal + prevColor + ssgiMap (compute3)
+        vk::DescriptorSet ssgiBlurSet;   // ssgiMap + gNormal + ssgiDenoised (compute3)
         vk::DescriptorSet copyColorSet;  // offscreen + prevColor      (compute2)
-        vk::DescriptorSet meshSet;       // set 4: aoMap + contactMap + ssgiMap (sampled by the mesh pass)
+        vk::DescriptorSet meshSet;       // set 4: aoMap + contactMap + resolved SSGI (sampled by the mesh pass)
         // Post-process compute sets (Descriptors' layouts): tonemap (offscreen), FXAA (scratch+offscreen),
         // and the two TAA ping-pong-parity sets (scratch/history/motion/offscreen).
         vk::DescriptorSet tonemapSet;
         vk::DescriptorSet fxaaSet;
         std::array<vk::DescriptorSet, 2> taaSets;
+        // SSGI temporal-accumulation sets (taaSetLayout shape), ping-pong by historyIndex:
+        // ssgiDenoised + ssgiHistory[other] + motion -> ssgiResolved + ssgiHistory[this].
+        std::array<vk::DescriptorSet, 2> ssgiAccumSets;
         // Last frame's camera viewProj, for TAA motion vectors; invalid until the first frame
         // stores one. Per-view so a re-activated view reprojects against ITS own last frame.
         glm::mat4 prevViewProj{ 1.0f };
@@ -1477,7 +1498,9 @@ export namespace se
         glm::vec3 sunDirView{ 0.0f, 1.0f, 0.0f };  // direction TO the sun, view space (contact)
         f32 radius = 1.0f;
         f32 strength = 3.0f;
-        vk::Sampler sampler;  // nearest, clamp — samples the G-buffer
+        f32 ssgiIntensity = 1.0f;  // scales the gathered one-bounce radiance
+        u32 ssgiFrame = 0;         // monotonic frame index; rotates the SSGI sample hash
+        vk::Sampler sampler;       // nearest, clamp — samples the G-buffer
         // Two compute set layouts shared by the screen-space passes: 2-binding
         // (sampler + storage) and 3-binding (sampler + sampler + storage). The SETS that bind
         // per-view images live in ViewTargets (one per view); these layouts are device-shared.
