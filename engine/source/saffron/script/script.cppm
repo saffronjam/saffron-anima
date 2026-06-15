@@ -11,6 +11,7 @@ extern "C"
 }
 #include <LuaBridge/LuaBridge.h>
 
+#include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
 #include <expected>
@@ -75,6 +76,26 @@ export namespace se
         std::string message;
     };
 
+    /// One queued inter-script message: a handler name dispatched to the target entity's scripts (or
+    /// every script when target == 0) with the sender entity + an optional payload (a Lua registry ref,
+    /// LUA_NOREF when none). Drained after each instance loop, like the structural ops.
+    struct ScriptMessage
+    {
+        u64 target = 0;  // 0 = broadcast
+        u64 sender = 0;
+        std::string handler;
+        int payloadRef = -2;  // LUA_NOREF
+    };
+
+    /// A rig's live ragdoll state surfaced to Lua (Jolt-free POD), filled by the Host's ragdollState bridge.
+    struct ScriptRagdollState
+    {
+        bool present = false;
+        bool active = false;
+        f32 bodyWeight = 0.0f;
+        i32 bones = 0;
+    };
+
     /// A physics ray hit surfaced to Lua (Jolt-free POD). The Host fills it from raycastWorld; this
     /// keeps Saffron.Script free of a Physics edge — the binding only ever sees plain components.
     struct ScriptRayHit
@@ -101,10 +122,26 @@ export namespace se
         std::vector<ScriptInstance> instances;
         Scene* currentScene = nullptr;
         const ComponentRegistry* currentRegistry = nullptr;
-        const std::unordered_set<std::string>* inputKeys = nullptr;
-        // se.raycast bridge: the Host binds this to raycastWorld so the Lua query reaches the live
-        // physics world without Saffron.Script importing Saffron.Physics. Unset = the query misses.
+        const ScriptInputState* input = nullptr;  // borrowed; the Host fills it (edges + mouse) each tick
+        // Structural ops are deferred: entity:destroy() queues a uuid here and the handle stays valid for
+        // the rest of the handler; the queue is drained + one relinkHierarchy runs after each instance loop.
+        std::vector<u64> pendingDestroy;
+        bool hierarchyDirty = false;
+        // Inter-script messages queued during a tick, dispatched after the instance loop. currentSenderUuid
+        // is the instance whose handler is running (the sender of an entity:send / se.broadcast).
+        std::vector<ScriptMessage> messages;
+        u64 currentSenderUuid = 0;
+        // Physics bridges: the Host binds each to a Saffron.Physics call so Lua reaches the live world
+        // without Saffron.Script importing Saffron.Physics (the raycast pattern). Unset = a safe no-op.
         std::function<ScriptRayHit(f32, f32, f32, f32, f32, f32, f32)> raycast;
+        std::function<ScriptRayHit(f32, f32, f32, f32, f32, f32, f32, f32)> sphereCast;  // + radius
+        std::function<void(u64, glm::vec3)> applyImpulse;
+        std::function<void(u64, glm::vec3)> addForce;
+        std::function<void(u64, glm::vec3)> setVelocity;
+        std::function<glm::vec3(u64)> getVelocity;
+        std::function<bool(u64, bool)> setRagdollEnabled;     // (rig uuid, enable) -> ok
+        std::function<void(u64, bool, f32)> setRagdollBlend;  // (rig uuid, motors active, body weight)
+        std::function<ScriptRagdollState(u64)> ragdollState;
     };
 
     /// Create the VM and instantiate every ScriptComponent slot in the scene:
@@ -113,7 +150,7 @@ export namespace se
     /// logged skip; on_create(self) runs where present. The registry backs
     /// entity:get_component snapshots. Err only when no VM could be created at all.
     auto startScripts(ScriptHost& host, Scene& scene, const ComponentRegistry& registry, std::string_view srcDir,
-                      const std::unordered_set<std::string>& inputKeys) -> Result<void>;
+                      const ScriptInputState& input) -> Result<void>;
 
     /// Run every instance's on_update(self, dt) in instance order. The first
     /// failing instance halts the tick and is returned (pause-on-error policy);
@@ -227,6 +264,10 @@ namespace se
         }
     }
 
+    // Defined in script_runtime.cpp (module-internal): the pure se.Vec3 value type + math helpers,
+    // bound into both this schema VM and the runtime VM so a properties default of se.vec3(...) resolves.
+    void registerScriptValueTypes(lua_State* L);
+
     auto newScriptVm() -> Result<ScriptVm>
     {
         lua_State* L = luaL_newstate();
@@ -240,6 +281,7 @@ namespace se
             .addFunction(
                 "log", +[](const char* message) { logInfo(message); })
             .endNamespace();
+        registerScriptValueTypes(L);
         ScriptVm vm;
         vm.state = L;
         return vm;
