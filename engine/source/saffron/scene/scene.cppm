@@ -1232,11 +1232,14 @@ export namespace se
         f32 mouseX = 0.0f;                             // viewport-relative pointer (raw)
         f32 mouseY = 0.0f;
         f32 scroll = 0.0f;
-        std::unordered_set<std::string> pressed;   // down this tick, up last (derived)
-        std::unordered_set<std::string> released;  // up this tick, down last (derived)
-        f32 mouseDX = 0.0f;                        // per-tick pointer delta (derived)
+        std::unordered_set<std::string> pressed;        // key down this tick, up last (derived)
+        std::unordered_set<std::string> released;       // key up this tick, down last (derived)
+        std::unordered_set<std::string> mousePressed;   // button down this tick, up last (derived)
+        std::unordered_set<std::string> mouseReleased;  // button up this tick, down last (derived)
+        f32 mouseDX = 0.0f;                             // per-tick pointer delta (derived)
         f32 mouseDY = 0.0f;
-        std::unordered_set<std::string> prevHeld;  // derivation memory
+        std::unordered_set<std::string> prevHeld;          // derivation memory
+        std::unordered_set<std::string> prevMouseButtons;  // derivation memory
         f32 prevMouseX = 0.0f;
         f32 prevMouseY = 0.0f;
     };
@@ -1261,9 +1264,26 @@ export namespace se
                 input.released.insert(key);
             }
         }
+        input.mousePressed.clear();
+        input.mouseReleased.clear();
+        for (const std::string& button : input.mouseButtons)
+        {
+            if (!input.prevMouseButtons.contains(button))
+            {
+                input.mousePressed.insert(button);
+            }
+        }
+        for (const std::string& button : input.prevMouseButtons)
+        {
+            if (!input.mouseButtons.contains(button))
+            {
+                input.mouseReleased.insert(button);
+            }
+        }
         input.mouseDX = input.mouseX - input.prevMouseX;
         input.mouseDY = input.mouseY - input.prevMouseY;
         input.prevHeld = input.held;
+        input.prevMouseButtons = input.mouseButtons;
         input.prevMouseX = input.mouseX;
         input.prevMouseY = input.mouseY;
     }
