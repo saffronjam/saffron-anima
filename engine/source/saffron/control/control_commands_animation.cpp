@@ -303,16 +303,19 @@ namespace se
                 return stateOf(ctx, p);
             });
 
-        registerCommand<AnimationStateParams, AnimationStateResult>(
-            reg, "pause-animation", "pause-animation {entity} — stop advancing time (keeps the pose shown)",
-            [](EngineContext& ctx, const AnimationStateParams& params) -> Result<AnimationStateResult>
+        registerCommand<SetAnimationPlayingParams, AnimationStateResult>(
+            reg, "set-animation-playing",
+            "set-animation-playing {entity, playing} — resume (true) or pause (false) without moving the "
+            "playhead",
+            [](EngineContext& ctx, const SetAnimationPlayingParams& params) -> Result<AnimationStateResult>
             {
                 auto player = playerOf(ctx, params.entity);
                 if (!player)
                 {
                     return Err(player.error());
                 }
-                (*player)->playing = false;
+                (*player)->playing = params.playing;
+                (*player)->previewInEdit = true;  // keep driving the Edit preview (paused shows the pose)
                 ctx.sceneEdit.animationVersion += 1;
                 return stateOf(ctx, **player);
             });
