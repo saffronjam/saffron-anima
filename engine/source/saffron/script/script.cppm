@@ -142,6 +142,10 @@ export namespace se
         std::function<bool(u64, bool)> setRagdollEnabled;     // (rig uuid, enable) -> ok
         std::function<void(u64, bool, f32)> setRagdollBlend;  // (rig uuid, motors active, body weight)
         std::function<ScriptRagdollState(u64)> ragdollState;
+        // se.log sink: the Host binds this to push the line into the edit context's script-log ring so the
+        // editor can drain it, without Saffron.Script importing Saffron.SceneEdit (POD signature only).
+        // Unset = se.log still writes the engine log, just not the ring.
+        std::function<void(u64 senderUuid, const char* message)> logSink;
     };
 
     /// Create the VM and instantiate every ScriptComponent slot in the scene:

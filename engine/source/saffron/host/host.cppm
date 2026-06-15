@@ -1303,6 +1303,9 @@ export namespace se
                     .present = s.present, .active = s.active, .bodyWeight = s.bodyWeight, .bones = s.bones
                 };
             };
+            // se.log → the edit context's script-log ring, so the editor's Script Logs panel can drain it.
+            state->script.logSink = [state](se::u64 uuid, const char* msg)
+            { se::pushScriptLog(*state->editor, uuid, msg != nullptr ? msg : ""); };
 
             // Headless self-test entry point: pairs with SAFFRON_EXIT_AFTER_FRAMES for
             // CI-style runs; results land in the log.

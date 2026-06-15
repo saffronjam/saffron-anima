@@ -1253,6 +1253,21 @@ end
                     host.messages.push_back(ScriptMessage{
                         .target = 0, .sender = host.currentSenderUuid, .handler = handler, .payloadRef = payloadRef });
                 })
+            // Override newScriptVm's plain log on the play VM: also route the line to the Host's logSink
+            // (the editor's script-log ring), tagged with the entity whose handler is running.
+            .addFunction("log",
+                         [&host](const char* message)
+                         {
+                             if (message == nullptr)
+                             {
+                                 return;
+                             }
+                             logInfo(message);
+                             if (host.logSink)
+                             {
+                                 host.logSink(host.currentSenderUuid, message);
+                             }
+                         })
             // Cast a ray against the live physics world: se.raycast(ox,oy,oz, dx,dy,dz, maxDist)
             // returns { hit, distance, point=se.Vec3, normal=se.Vec3, entity=<se.Entity or nil> }.
             .addFunction(

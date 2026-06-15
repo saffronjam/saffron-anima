@@ -169,6 +169,21 @@ export namespace se
 
     inline constexpr std::size_t ScriptErrorRingCap = 256;
 
+    // One `se.log(...)` line, kept in a bounded ring on the context and drained over a normal scene
+    // command (the same path as ScriptError; Control never imports the Lua runtime). entityUuid is the
+    // logging entity, or 0 when logged outside an entity handler. epochMs is a wall-clock stamp for
+    // display only — never serialized, never part of determinism.
+    struct ScriptLog
+    {
+        i64 seq = 0;
+        u64 entityUuid = 0;
+        std::string message;
+        i64 epochMs = 0;
+        i64 tick = 0;
+    };
+
+    inline constexpr std::size_t ScriptLogRingCap = 1024;
+
     inline constexpr f32 PlayFixedStep = 1.0f / 60.0f;  // the deterministic `step` tick
     inline constexpr f32 PlayMaxDelta = 1.0f / 3.0f;    // dt clamp so a hitch never spikes the simulation
 
@@ -238,6 +253,8 @@ export namespace se
         i32 scriptInstanceCount = 0;            // live script instances; set by the Host wiring
         std::vector<ScriptError> scriptErrors;  // bounded ring, oldest dropped at ScriptErrorRingCap
         i64 scriptErrorSeq = 0;                 // last assigned ScriptError.seq (drain high-water)
+        std::vector<ScriptLog> scriptLogs;      // bounded ring, oldest dropped at ScriptLogRingCap
+        i64 scriptLogSeq = 0;                   // last assigned ScriptLog.seq (drain high-water)
         ScriptInputState scriptInput;  // raw gameplay input for Lua (held keys + mouse); edges derived per tick
 
         // The asset preview (the asset editor): an isolated scene holding only the previewed model + its
@@ -265,6 +282,9 @@ export namespace se
 
     // Append to the bounded script-error ring, stamping seq + the current play tick.
     void pushScriptError(SceneEditContext& ctx, u64 entityUuid, std::string script, std::string message);
+
+    // Append a `se.log` line to the bounded script-log ring, stamping seq + a wall-clock ms + the tick.
+    void pushScriptLog(SceneEditContext& ctx, u64 entityUuid, std::string message);
 
     // The scene every consumer addresses: the asset preview while it is the active view, the play
     // duplicate while playing/paused, the authored scene in Edit. Preview takes precedence (it is entered

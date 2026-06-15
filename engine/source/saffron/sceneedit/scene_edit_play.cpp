@@ -94,6 +94,7 @@ namespace se
         dropSmoothing(ctx);
         ctx.playTick = 0;
         ctx.scriptErrors.clear();  // each session drains fresh; seq stays monotonic for cursors
+        ctx.scriptLogs.clear();    // ditto for se.log output
         ctx.playScene.emplace(std::move(play));
         publishTransition(ctx, PlayState::Playing);
         // Re-resolve the selection into the duplicate by uuid: the old handle indexes the
@@ -214,6 +215,20 @@ namespace se
             ScriptError{ ctx.scriptErrorSeq, entityUuid, std::move(script), std::move(message), ctx.playTick });
     }
 
+    void pushScriptLog(SceneEditContext& ctx, u64 entityUuid, std::string message)
+    {
+        ctx.scriptLogSeq += 1;
+        if (ctx.scriptLogs.size() >= ScriptLogRingCap)
+        {
+            ctx.scriptLogs.erase(ctx.scriptLogs.begin());
+        }
+        const auto epochMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        ctx.scriptLogs.push_back(
+            ScriptLog{ ctx.scriptLogSeq, entityUuid, std::move(message), static_cast<i64>(epochMs), ctx.playTick });
+    }
+
     void runPlayModeSelfTest()
     {
         u32 failures = 0;
@@ -318,6 +333,19 @@ namespace se
         ctx->previewScene.reset();
         expect(!previewing(*ctx), "clearing previewScene leaves preview");
         expect(&activeScene(*ctx) == &ctx->scene, "activeScene returns to the authored scene");
+
+        // The script-log ring: bounded, monotonic seq, cleared on enterPlay (seq survives).
+        for (std::size_t i = 0; i < ScriptLogRingCap + 8; i += 1)
+        {
+            pushScriptLog(*ctx, cubeUuid, "line");
+        }
+        expect(ctx->scriptLogs.size() == ScriptLogRingCap, "script-log ring caps at ScriptLogRingCap");
+        expect(static_cast<std::size_t>(ctx->scriptLogSeq) == ScriptLogRingCap + 8, "script-log seq is monotonic");
+        const i64 seqBeforeReplay = ctx->scriptLogSeq;
+        expect(enterPlay(*ctx).has_value(), "a third enterPlay succeeds");
+        expect(ctx->scriptLogs.empty(), "enterPlay clears the script-log ring");
+        expect(ctx->scriptLogSeq == seqBeforeReplay, "enterPlay keeps the script-log seq monotonic");
+        static_cast<void>(stopPlay(*ctx));
 
         destroySceneEditContext(ctx);
         if (failures == 0)
