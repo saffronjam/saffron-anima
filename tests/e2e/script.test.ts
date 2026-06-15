@@ -49,7 +49,7 @@ beforeAll(async () => {
     `local Mover = {}
 function Mover.on_update(self, dt)
   local p = self.entity:get_position()
-  self.entity:set_position(p + se.vec3(dt, 0, 0))
+  self.entity:set_position(p + sa.vec3(dt, 0, 0))
 end
 return Mover
 `,
@@ -58,9 +58,9 @@ return Mover
     join(srcDir, "player.lua"),
     `local Player = {}
 function Player.on_update(self, dt)
-  if se.is_key_down("w") then
+  if sa.is_key_down("w") then
     local p = self.entity:get_position()
-    self.entity:set_position(p + se.vec3(dt, 0, 0))
+    self.entity:set_position(p + sa.vec3(dt, 0, 0))
   end
 end
 return Player
@@ -70,7 +70,7 @@ return Player
     join(srcDir, "first.lua"),
     `local First = {}
 function First.on_update(self, dt)
-  self.entity:set_position(se.vec3(5, 0, 0))
+  self.entity:set_position(sa.vec3(5, 0, 0))
 end
 return First
 `,
@@ -80,7 +80,7 @@ return First
     `local Second = {}
 function Second.on_update(self, dt)
   local p = self.entity:get_position()
-  self.entity:set_position(se.vec3(p.x, p.x * 2, p.z))
+  self.entity:set_position(sa.vec3(p.x, p.x * 2, p.z))
 end
 return Second
 `,
@@ -106,9 +106,9 @@ function Reader.on_update(self, dt)
   assert(self.entity:get_component("NoSuchComponent") == nil, "unknown component must be nil")
   local t = self.entity:get_component("Transform")
   assert(t ~= nil, "Transform snapshot missing")
-  self.entity:set_position(se.vec3(t.translation.z * 2, 50, t.translation.z))
-  self.entity:set_rotation(se.vec3(0.5, 0, 0))
-  self.entity:set_scale(se.vec3(2, 2, 2))
+  self.entity:set_position(sa.vec3(t.translation.z * 2, 50, t.translation.z))
+  self.entity:set_rotation(sa.vec3(0.5, 0, 0))
+  self.entity:set_scale(sa.vec3(2, 2, 2))
 end
 return Reader
 `,
@@ -117,11 +117,11 @@ return Reader
     join(srcDir, "chaser.lua"),
     `local Chaser = {}
 function Chaser.on_update(self, dt)
-  assert(not se.get_entity_by_name("No Such Entity"):valid(), "missing lookup must be invalid")
-  local target = se.get_entity_by_name("Target")
+  assert(not sa.get_entity_by_name("No Such Entity"):valid(), "missing lookup must be invalid")
+  local target = sa.get_entity_by_name("Target")
   if target:valid() then
     local p = target:get_position()
-    target:set_position(p + se.vec3(0, 0, dt))
+    target:set_position(p + sa.vec3(0, 0, dt))
   end
 end
 return Chaser
@@ -131,9 +131,9 @@ return Chaser
     join(srcDir, "camera.lua"),
     `local Cam = {}
 function Cam.on_update(self, dt)
-  local cam = se.primary_camera()
+  local cam = sa.primary_camera()
   if cam:valid() then
-    cam:set_position(se.vec3(0, 5, 10))
+    cam:set_position(sa.vec3(0, 5, 10))
   end
 end
 return Cam
@@ -148,16 +148,16 @@ Turret.properties = {
   speed = 2.0,
   label = "idle",
   enabled = true,
-  offset = se.vec3(0, 1, 0),
+  offset = sa.vec3(0, 1, 0),
   weird = { 1, 2 },
 }
 function Turret.on_update(self, dt)
   assert(self.label == "idle" or self.label == "fast", "label: " .. tostring(self.label))
   assert(type(self.enabled) == "boolean", "enabled must be a bool")
-  assert(self.offset.y == 1, "offset must inject as an se.Vec3")
+  assert(self.offset.y == 1, "offset must inject as an sa.Vec3")
   if self.enabled then
     local p = self.entity:get_position()
-    self.entity:set_position(p + se.vec3(self.speed * dt, 0, 0))
+    self.entity:set_position(p + sa.vec3(self.speed * dt, 0, 0))
   end
 end
 return Turret
@@ -180,19 +180,19 @@ end
 return Writer
 `,
   );
-  // se.Vec3 operators + math + write-through fields.
+  // sa.Vec3 operators + math + write-through fields.
   writeFileSync(
     join(srcDir, "vectest.lua"),
     `local VecTest = {}
 function VecTest.on_update(self, dt)
-  local a = se.vec3(1, 2, 3)
-  assert((a + se.vec3(0, 1, 0)).y == 3, "add")
-  assert((a - se.vec3(0, 1, 0)).y == 1, "sub")
+  local a = sa.vec3(1, 2, 3)
+  assert((a + sa.vec3(0, 1, 0)).y == 3, "add")
+  assert((a - sa.vec3(0, 1, 0)).y == 1, "sub")
   assert((a * 2).x == 2, "vec*scalar")
   assert((2 * a).z == 6, "scalar*vec")
-  assert(math.abs(se.vec3(3, 0, 0):length() - 3) < 1e-4, "length")
-  assert(a:dot(se.vec3(1, 0, 0)) == 1, "dot")
-  assert(se.vec3(1, 0, 0):cross(se.vec3(0, 1, 0)).z == 1, "cross")
+  assert(math.abs(sa.vec3(3, 0, 0):length() - 3) < 1e-4, "length")
+  assert(a:dot(sa.vec3(1, 0, 0)) == 1, "dot")
+  assert(sa.vec3(1, 0, 0):cross(sa.vec3(0, 1, 0)).z == 1, "cross")
   local p = self.entity:get_position()
   p.x = 7
   self.entity:set_position(p)
@@ -207,16 +207,16 @@ return VecTest
 function Life.on_update(self, dt)
   if self.done then return end
   self.done = true
-  local a = se.spawn("Alpha")
-  local b = se.spawn("Beta")
+  local a = sa.spawn("Alpha")
+  local b = sa.spawn("Beta")
   assert(b:set_parent(a), "set_parent should succeed")
   assert(b:set_parent(b) == false, "self-parent must fail")
   assert(b:parent():uuid() == a:uuid(), "b's parent is a")
   local kids = a:children()
   assert(#kids == 1, "a has one child")
   assert(kids[1]:uuid() == b:uuid(), "a's child is b")
-  assert(#se.find_all_by_name("Alpha") >= 1, "find_all_by_name finds Alpha")
-  assert(se.find_by_uuid(a:uuid()):uuid() == a:uuid(), "find_by_uuid round-trips")
+  assert(#sa.find_all_by_name("Alpha") >= 1, "find_all_by_name finds Alpha")
+  assert(sa.find_by_uuid(a:uuid()):uuid() == a:uuid(), "find_by_uuid round-trips")
 end
 return Life
 `,
@@ -227,7 +227,7 @@ return Life
     `local Destroyer = {}
 function Destroyer.on_update(self, dt)
   if not self.spawned then
-    self.spawned = se.spawn("Doomed")
+    self.spawned = sa.spawn("Doomed")
   elseif not self.killed then
     assert(self.spawned:valid(), "spawned must be valid")
     self.spawned:destroy()
@@ -240,18 +240,18 @@ end
 return Destroyer
 `,
   );
-  // Coroutine scheduler: a task waits, then acts; se.wait in a bare on_update is ignored (no crash).
+  // Coroutine scheduler: a task waits, then acts; sa.wait in a bare on_update is ignored (no crash).
   writeFileSync(
     join(srcDir, "waiter.lua"),
     `local Waiter = {}
 function Waiter.on_create(self)
-  se.spawn_task(function()
-    se.wait(0.5)
-    self.entity:set_position(se.vec3(42, 0, 0))
+  sa.spawn_task(function()
+    sa.wait(0.5)
+    self.entity:set_position(sa.vec3(42, 0, 0))
   end)
 end
 function Waiter.on_update(self, dt)
-  se.wait(0.1)  -- outside a coroutine: logged + ignored, never a tick error
+  sa.wait(0.1)  -- outside a coroutine: logged + ignored, never a tick error
 end
 return Waiter
 `,
@@ -263,7 +263,7 @@ return Waiter
 function Receiver.on_update(self, dt) end
 function Receiver.boom(self, sender, payload) error("msg boom") end
 function Receiver.ping(self, sender, payload)
-  self.entity:set_position(se.vec3(payload or 0, 0, 0))
+  self.entity:set_position(sa.vec3(payload or 0, 0, 0))
 end
 return Receiver
 `,
@@ -272,8 +272,8 @@ return Receiver
     join(srcDir, "sender.lua"),
     `local Sender = {}
 function Sender.on_create(self)
-  se.broadcast("boom")        -- faulting handler, contained
-  se.broadcast("ping", 7)     -- still delivered after the boom
+  sa.broadcast("boom")        -- faulting handler, contained
+  sa.broadcast("ping", 7)     -- still delivered after the boom
 end
 function Sender.on_update(self, dt) end
 return Sender
@@ -285,9 +285,9 @@ return Sender
     `local Edges = {}
 function Edges.on_create(self) self.count = 0 end
 function Edges.on_update(self, dt)
-  if se.is_key_pressed("e") then
+  if sa.is_key_pressed("e") then
     self.count = self.count + 1
-    self.entity:set_position(se.vec3(self.count, 0, 0))
+    self.entity:set_position(sa.vec3(self.count, 0, 0))
   end
 end
 return Edges
@@ -298,8 +298,8 @@ return Edges
     join(srcDir, "mouse.lua"),
     `local Mouse = {}
 function Mouse.on_update(self, dt)
-  local p = se.mouse_position()
-  self.entity:set_position(se.vec3(p.x, p.y, se.is_mouse_down("left") and 1 or 0))
+  local p = sa.mouse_position()
+  self.entity:set_position(sa.vec3(p.x, p.y, sa.is_mouse_down("left") and 1 or 0))
 end
 return Mouse
 `,
@@ -309,7 +309,7 @@ return Mouse
     join(srcDir, "pusher.lua"),
     `local Pusher = {}
 function Pusher.on_update(self, dt)
-  if not self.pushed then self.pushed = true self.entity:apply_impulse(se.vec3(0, 0, 12)) end
+  if not self.pushed then self.pushed = true self.entity:apply_impulse(sa.vec3(0, 0, 12)) end
 end
 return Pusher
 `,
@@ -317,7 +317,7 @@ return Pusher
   writeFileSync(
     join(srcDir, "walker.lua"),
     `local Walker = {}
-function Walker.on_update(self, dt) self.entity:move_character(se.vec3(3, 0, 0), false) end
+function Walker.on_update(self, dt) self.entity:move_character(sa.vec3(3, 0, 0), false) end
 return Walker
 `,
   );
@@ -327,8 +327,8 @@ return Walker
 function Caster.on_update(self, dt)
   if not self.done then
     self.done = true
-    local hit = se.spherecast(0, 5, 0, 0, -1, 0, 0.5, 20)
-    if hit.hit then self.entity:set_position(se.vec3(1, hit.point.y, 0)) end
+    local hit = sa.spherecast(0, 5, 0, 0, -1, 0, 0.5, 20)
+    if hit.hit then self.entity:set_position(sa.vec3(1, hit.point.y, 0)) end
   end
 end
 return Caster
@@ -484,7 +484,7 @@ test("a script writes components generically and the structural gate refuses cac
   await engine.call("destroy-entity", { entity: cube.id });
 });
 
-test("se.Vec3 operators, math, and write-through fields work", async () => {
+test("sa.Vec3 operators, math, and write-through fields work", async () => {
   const cube = await engine.call<Ref>("add-entity", { args: ["cube"] });
   await attachScripts(cube.id, ["vectest.lua"]);
 
@@ -528,7 +528,7 @@ test("a script spawns + reparents entities (gone on stop); deferred destroy stay
   await engine.call("destroy-entity", { entity: driver2.id });
 });
 
-test("the coroutine scheduler delays a task; se.wait in a bare on_update is ignored", async () => {
+test("the coroutine scheduler delays a task; sa.wait in a bare on_update is ignored", async () => {
   const cube = await engine.call<Ref>("add-entity", { args: ["cube"] });
   await engine.call("set-transform", { entity: cube.id, translation: { x: 1, y: 0, z: 0 } });
   await attachScripts(cube.id, ["waiter.lua"]);
@@ -537,7 +537,7 @@ test("the coroutine scheduler delays a task; se.wait in a bare on_update is igno
   await engine.settle(80); // < 0.5s of accumulated dt (even a clamped first step is 0.33)
   const early = await engine.call<Inspect>("inspect", { entity: cube.id });
   expect(early.components.Transform.translation.x).toBeCloseTo(1); // the task has NOT fired yet
-  expect((await engine.call<PlayState>("get-play-state")).state).toBe("playing"); // bare se.wait didn't crash
+  expect((await engine.call<PlayState>("get-play-state")).state).toBe("playing"); // bare sa.wait didn't crash
 
   await engine.settle(900); // now well past 0.5s
   const late = await engine.call<Inspect>("inspect", { entity: cube.id });

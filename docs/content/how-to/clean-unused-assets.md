@@ -16,7 +16,7 @@ the scene whose assets you want to keep before you start.
 
 1. **Get the report.** It is a dry run — it never deletes:
    ```sh
-   se clean-assets
+   sa clean-assets
    ```
    Each candidate carries a category and a reason. Keep a candidate by passing its id to
    `--exclude` (an explicit root that is always kept).
@@ -35,14 +35,14 @@ the scene whose assets you want to keep before you start.
 4. **Delete only what you confirmed.** `confirm` is required; only `unused` ids are removed, and a
    rescan then surfaces anything the deletion newly orphaned:
    ```sh
-   se delete-unused 12345 67890 --confirm
+   sa delete-unused 12345 67890 --confirm
    ```
 
 ## Verify
 
-- `se clean-assets` no longer lists the deleted ids.
-- `se list-assets` — the in-use models and their sub-assets are still present.
-- The model you instantiated still renders: `se screenshot viewport /tmp/after-clean.png`.
+- `sa clean-assets` no longer lists the deleted ids.
+- `sa list-assets` — the in-use models and their sub-assets are still present.
+- The model you instantiated still renders: `sa screenshot viewport /tmp/after-clean.png`.
 
 ## In the code
 

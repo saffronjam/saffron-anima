@@ -9,7 +9,7 @@ An entity-component-system (ECS) is a data-oriented architecture: game state is 
 storage, entities are identifiers that group components, and logic runs as functions over that data.
 The layout suits a renderer that walks thousands of objects per frame.
 
-SaffronEngine builds its scene on entt for the storage and discards the usual member-function
+Saffron Anima builds its scene on entt for the storage and discards the usual member-function
 ergonomics. There is no `Entity` class with methods and no `Scene` class hiding the registry. The
 world is a struct passed by reference, and every operation on it is a free function.
 

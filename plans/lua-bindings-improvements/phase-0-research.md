@@ -3,7 +3,7 @@
 **Status:** COMPLETED (research captured; informed the design and Phases 1–7)
 
 The grounding for every later phase. Three reference scripting layers, then the binding-idiom
-literature, then the decision on hand-written vs generated `se.lua`.
+literature, then the decision on hand-written vs generated `sa.lua`.
 
 ## Roblox / Luau
 
@@ -68,32 +68,32 @@ literature, then the decision on hand-written vs generated `se.lua`.
   uniformly (one `Stack<glm::vec3>`-style seam), instead of hand-building a table at each call site as
   `getPosition`/`raycast` do today.
 
-## Decision record — `se.lua`: hand-written vs generated
+## Decision record — `sa.lua`: hand-written vs generated
 
 **Context.** The repo's precedent (`tools/gen-control-dto/gen.ts`) is one-source-of-truth: the DTO file
 is authored once, and C++ serde + `@saffron/protocol` TS + OpenRPC + the manifest are all generated; the
 contract test refuses to pass if the generated artifacts are stale. The Lua binding surface has the same
-drift hazard: a hand-written `se.lua` silently diverges from the imperative `.addFunction(...)` calls.
+drift hazard: a hand-written `sa.lua` silently diverges from the imperative `.addFunction(...)` calls.
 
 **Options weighed.**
 
-1. **Hand-write `se.lua` now.** Fast, no tooling. Drifts the moment someone adds an `.addFunction` and
+1. **Hand-write `sa.lua` now.** Fast, no tooling. Drifts the moment someone adds an `.addFunction` and
    forgets the def file. Drift is invisible (autocomplete just lacks an entry; no test fails).
-2. **One declarative binding table** consumed by *both* the LuaBridge registration loop *and* an `se.lua`
+2. **One declarative binding table** consumed by *both* the LuaBridge registration loop *and* an `sa.lua`
    generator. Zero drift by construction (the `gen.ts` model). Cost: a non-trivial binder — every binding
    becomes a table row with a name, a C++ thunk, and a typed signature, and the registration loop reads
    the table instead of fluent `.addFunction` chains. That is a real rewrite of `startScripts`'s
    registration block and a new generator.
 
-**Decision: phase it.** Hand-write `se.lua` in Phases 1–6 **and** add a cheap runtime tripwire to
+**Decision: phase it.** Hand-write `sa.lua` in Phases 1–6 **and** add a cheap runtime tripwire to
 `tools/check-control-schema/check.ts` (or a new `tools/check-script-defs/`): boot the engine, introspect
-the live `se` global table + the `se.Entity` metatable for every exposed name, parse `se.lua` for its
+the live `se` global table + the `sa.Entity` metatable for every exposed name, parse `sa.lua` for its
 `---@field`/method names, and **fail if the live surface has a name the def file lacks** (and warn on the
 reverse). This catches the only failure mode that matters (a binding with no annotation) with ~30 lines
 and no binder rewrite. Then in **Phase 7**, once the surface has stabilized across Phases 1–6, lift the
-list into one declarative table that the registration loop and an `se.lua` generator both consume — at
+list into one declarative table that the registration loop and an `sa.lua` generator both consume — at
 which point the tripwire becomes a "generated file is fresh" check exactly like the DTO one, and the
-hand-written `se.lua` is deleted (no-legacy: the generated file replaces it).
+hand-written `sa.lua` is deleted (no-legacy: the generated file replaces it).
 
 **Why not table-first immediately:** the high-value pure bindings (component write, Vec3, lifecycle)
 should not wait on a binder rewrite, and designing the declarative schema is easier once the real surface

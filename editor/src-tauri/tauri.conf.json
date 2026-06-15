@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Saffron Editor",
+  "productName": "Saffron Anima",
   "version": "0.1.0",
-  "identifier": "dev.saffron.engine.editor",
+  "identifier": "dev.saffron.anima.editor",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Saffron Editor",
+        "title": "Saffron Anima",
         "width": 1600,
         "height": 900,
         "minWidth": 1200,

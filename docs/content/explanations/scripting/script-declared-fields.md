@@ -11,7 +11,7 @@ changed. The `.lua` file owns the fields and their defaults — the scene never 
 editing a default in the script updates every instance that has no override.
 
 ```lua
----@class Turret : se.ScriptSelf
+---@class Turret : sa.ScriptSelf
 ---@field speed number
 local Turret = {}
 
@@ -19,13 +19,13 @@ Turret.properties = {
   speed   = 5.0,                -- number   -> float
   target  = "Player",          -- string   -> text
   enabled = true,              -- bool     -> checkbox
-  offset  = se.vec3(0, 1, 0),  -- se.Vec3  -> vec3
+  offset  = sa.vec3(0, 1, 0),  -- sa.Vec3  -> vec3
 }
 
 function Turret:on_update(dt)
   if self.enabled then
     local p = self.entity:get_position()
-    self.entity:set_position(p + se.vec3(0, self.speed * dt, 0))
+    self.entity:set_position(p + sa.vec3(0, self.speed * dt, 0))
   end
 end
 
@@ -34,11 +34,11 @@ return Turret
 
 ## How it works
 
-Each field's type is inferred from its default's Lua type: number, boolean, string, or an `se.Vec3`
-(built with `se.vec3(x, y, z)`). Anything else — an arbitrary table, a bare 3-number list — is
+Each field's type is inferred from its default's Lua type: number, boolean, string, or an `sa.Vec3`
+(built with `sa.vec3(x, y, z)`). Anything else — an arbitrary table, a bare 3-number list — is
 skipped with a logged note rather than an error; a richer descriptor form
 (`{ default = 5, min = 0 }`) is a deferred extension. The `---@class` annotation is optional but
-lets the LuaLS server (see [the scaffolded `library/se.lua`](../script-components-and-runtime/#editor-autocomplete))
+lets the LuaLS server (see [the scaffolded `library/sa.lua`](../script-components-and-runtime/#editor-autocomplete))
 type `self` and autocomplete the field and method set.
 
 The schema is read in a throwaway VM with the same minimal library set as the play runtime

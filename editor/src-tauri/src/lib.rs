@@ -183,9 +183,9 @@ fn viewport_shm_name(view: &str) -> String {
 }
 
 fn engine_binary() -> String {
-    std::env::var("SAFFRON_ENGINE_BIN").unwrap_or_else(|_| {
+    std::env::var("SAFFRON_ANIMA_BIN").unwrap_or_else(|_| {
         repo_root()
-            .join("build/debug/bin/SaffronEngine")
+            .join("build/debug/bin/SaffronAnima")
             .to_string_lossy()
             .into_owned()
     })
@@ -250,7 +250,7 @@ fn write_settings_file(settings: &EditorSettings) -> Result<(), String> {
 }
 
 fn configure_main_window(window: &tauri::WebviewWindow) {
-    let _ = window.set_title("Saffron Editor");
+    let _ = window.set_title("Saffron Anima");
     let _ = window.set_min_size(Some(LogicalSize::new(
         MAIN_WINDOW_MIN_WIDTH,
         MAIN_WINDOW_MIN_HEIGHT,
@@ -370,7 +370,7 @@ fn teardown(state: &EditorState) {
     }
 }
 
-// ONE generic passthrough: any `se` command reaches the engine with zero Rust changes.
+// ONE generic passthrough: any `sa` command reaches the engine with zero Rust changes.
 // Async so the blocking socket round trip runs on a worker, never the main thread
 // driving the webview event loop (a sync command would stall the UI during edit streams).
 #[tauri::command]
@@ -760,7 +760,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("failed to build Saffron editor")
+        .expect("failed to build Saffron Anima")
         .run(|handle, event| {
             if let RunEvent::ExitRequested { .. } = event {
                 let state = handle.state::<EditorState>();

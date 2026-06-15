@@ -95,10 +95,10 @@ later upgrade, not built now.
 ## Driving it
 
 ```sh
-se set-perf-config --targetFps 5000  # an impossibly tight budget, to force a breach
-se drain-alarms --since 0            # FIRING events + high-water/oldest/overflow cursor
-se list-active-alarms                # the current firing set (the badge)
-se set-perf-config --targetFps 60    # relax → the next drain shows the RESOLVED
+sa set-perf-config --targetFps 5000  # an impossibly tight budget, to force a breach
+sa drain-alarms --since 0            # FIRING events + high-water/oldest/overflow cursor
+sa list-active-alarms                # the current firing set (the badge)
+sa set-perf-config --targetFps 60    # relax → the next drain shows the RESOLVED
 ```
 
 ## In the code

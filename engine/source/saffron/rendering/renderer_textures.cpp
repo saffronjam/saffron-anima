@@ -35,7 +35,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Detail;
 
-namespace se
+namespace sa
 {
     // Full mip chain length for a width x height image (down to 1x1).
     static auto mipCount(u32 width, u32 height) -> u32

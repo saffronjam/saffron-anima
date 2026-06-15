@@ -62,7 +62,7 @@ froxels.
 The cap is also the one case where the clustered path and the
 [brute-force fallback](../brute-force-fallback/) diverge. Below the cap the two are
 pixel-identical, because every light the clustered loop skips contributes exactly zero. Above
-the cap, the clustered loop drops lights the brute-force loop still sees. `se set-clustered 0`
+the cap, the clustered loop drops lights the brute-force loop still sees. `sa set-clustered 0`
 forces the brute-force path and reveals the difference.
 
 ## In the code

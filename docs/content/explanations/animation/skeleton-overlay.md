@@ -50,8 +50,8 @@ state. Both report `{ show, axes, jointSize }`. All three set-params are optiona
 patches only what it passes:
 
 ```sh
-se set-skeleton-overlay --show true --axes true   # bones + per-joint axes
-se set-skeleton-overlay --show false              # hide it again
+sa set-skeleton-overlay --show true --axes true   # bones + per-joint axes
+sa set-skeleton-overlay --show false              # hide it again
 ```
 
 The options live on `SceneEditContext` as `SkeletonOverlayOptions`, beside the gizmo state, so they

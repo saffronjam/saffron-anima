@@ -3,7 +3,7 @@
 /// breadcrumbs, with an Import button (Tauri file dialog), an OS file-drop target,
 /// and the View modal. Imports route by extension: images → import-texture (no
 /// spawn), everything else → import-model (spawns + selects an entity, like
-/// `se import-model`).
+/// `sa import-model`).
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DragEvent as ReactDragEvent,
@@ -274,7 +274,7 @@ export function AssetsPanel() {
   );
 
   // OS file-drop: Tauri delivers native file drops via the webview drag-drop event
-  // (a distinct channel from the HTML5 `application/x-se-asset` tile DnD). We only
+  // (a distinct channel from the HTML5 `application/x-sa-asset` tile DnD). We only
   // import when the drop position is inside this panel's rect, so dropping a model
   // on the viewport doesn't trigger a catalog import here.
   useEffect(() => {

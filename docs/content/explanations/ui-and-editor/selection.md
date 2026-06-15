@@ -24,7 +24,7 @@ selectEntity(id);                              // local highlight, no wait
 void client.selectEntity(id).catch(() => {});  // tell the engine
 ```
 
-The engine bumps a `selectionVersion` on every selection change, whether from `select`, `deselect`, `pick`, or a destroy that clears it. The reconcile poll reads `get-selection` each tick; it returns `{entity, selectionVersion, sceneVersion}`, and re-applies the selection only when the version or the selected id has changed. The common case (nothing changed) costs one cheap call, while an external change such as `se select` still propagates back into the store within a tick.
+The engine bumps a `selectionVersion` on every selection change, whether from `select`, `deselect`, `pick`, or a destroy that clears it. The reconcile poll reads `get-selection` each tick; it returns `{entity, selectionVersion, sceneVersion}`, and re-applies the selection only when the version or the selected id has changed. The common case (nothing changed) costs one cheap call, while an external change such as `sa select` still propagates back into the store within a tick.
 
 ```ts
 const nextSelectedId = selection.entity ? selection.entity.id : null;

@@ -18,7 +18,7 @@
 
 ## Scripting
 
-- Swap the scripting VM from stock Lua 5.5 to Luau for a real in-language gradual type system, replacing the LuaLS-annotation overlay (`library/se.lua` + the drift tripwire) with actual typed sources; evaluate the impact on the LuaBridge bindings, the sandbox, and cross-platform determinism.
+- Swap the scripting VM from stock Lua 5.5 to Luau for a real in-language gradual type system, replacing the LuaLS-annotation overlay (`library/sa.lua` + the drift tripwire) with actual typed sources; evaluate the impact on the LuaBridge bindings, the sandbox, and cross-platform determinism.
 
 ## Game systems
 

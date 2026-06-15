@@ -43,7 +43,7 @@ import Saffron.Geometry;
 import Saffron.Rendering;
 import Saffron.Scene;
 
-namespace se
+namespace sa
 {
     auto thumbnailCacheDir(const AssetServer& assets) -> std::filesystem::path
     {

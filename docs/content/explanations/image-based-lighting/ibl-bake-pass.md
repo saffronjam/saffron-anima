@@ -40,7 +40,7 @@ The last step writes the three samplers the mesh fragment binds as set 3 — irr
 
 ## The runtime gate
 
-The mesh shader samples set 3 only when `globals.counts.z != 0`, which is `useIbl && ibl.ready` — both the toggle and the bake-completed flag. IBL contributes the moment the bake finishes, and `se set-ibl 0` returns to the flat scalar ambient without touching the baked textures.
+The mesh shader samples set 3 only when `globals.counts.z != 0`, which is `useIbl && ibl.ready` — both the toggle and the bake-completed flag. IBL contributes the moment the bake finishes, and `sa set-ibl 0` returns to the flat scalar ambient without touching the baked textures.
 
 ## In the code
 

@@ -69,4 +69,4 @@ The Bone Physics section is read-only: its per-bone bodies are auto-fit on skinn
 | Enum + lock widgets | `editor/src/components/EnumField.tsx` · `LockAxesField.tsx` | `EnumField`, `LockAxesField` |
 | Collider Fit-to-mesh + static note, Bone Physics readout | `editor/src/panels/InspectorPanel.tsx` | `componentBody` (`Collider`/`BonePhysics` bodies), `onFitCollider` |
 | Addability + section order | `editor/src/lib/componentOrder.ts` · `InspectorPanel.tsx` | `COMPONENT_ORDER`, the `missing` memo + `RIG_ONLY` |
-| Typed component shapes | `tools/gen-control-dto/gen.ts` → `editor/src/protocol/se-types.ts` | `Rigidbody`, `Collider`, `KinematicBones`, `CharacterController`, `BVec3`, `PhysicsMaterial` |
+| Typed component shapes | `tools/gen-control-dto/gen.ts` → `editor/src/protocol/sa-types.ts` | `Rigidbody`, `Collider`, `KinematicBones`, `CharacterController`, `BVec3`, `PhysicsMaterial` |

@@ -25,7 +25,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Detail;
 
-namespace se
+namespace sa
 {
     // The pipeline-statistics counters captured per pass, in ascending VkQueryPipelineStatisticFlagBits
     // bit order (the order vkGetQueryPoolResults returns them). The decode in readbackGpuTimings

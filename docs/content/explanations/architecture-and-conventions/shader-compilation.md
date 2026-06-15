@@ -34,7 +34,7 @@ add_custom_command(
 The editor wires it up so the shaders build alongside the executable and land in `bin/shaders/`:
 
 ```cmake
-saffron_compile_shaders(SaffronEngine
+saffron_compile_shaders(SaffronAnima
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
     ${SAFFRON_RUNTIME_DIR}/shaders)
 ```
@@ -63,7 +63,7 @@ one `.slang` file compile into a single `.spv`.
 |---|---|---|
 | The compile function | `cmake/CompileShaders.cmake` | `saffron_compile_shaders`, the `slangc` flags |
 | Locating the compiler | `cmake/Slang.cmake` | `SAFFRON_SLANGC`, `SAFFRON_SLANG_VERSION` |
-| Wiring it to the build | `engine/CMakeLists.txt` | `saffron_compile_shaders(SaffronEngine ...)` |
+| Wiring it to the build | `engine/CMakeLists.txt` | `saffron_compile_shaders(SaffronAnima ...)` |
 | The shader sources | `engine/assets/shaders/` | `mesh.slang`, `light_cull.slang`, `taa.slang`, … |
 
 ## Related

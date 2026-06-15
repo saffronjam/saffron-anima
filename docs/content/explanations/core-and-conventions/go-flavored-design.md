@@ -9,7 +9,7 @@ Go-flavored design is a way of writing C++ that follows Go's structural choices:
 structs, free functions that transform them, errors returned as values, and no class hierarchies.
 When a design question arises, the answer is the one Go would give.
 
-SaffronEngine uses this style throughout, and the rendering code relies on it most. Knowing the
+Saffron Anima uses this style throughout, and the rendering code relies on it most. Knowing the
 style first makes the graphics pages easier to read.
 
 ## What the style uses
@@ -44,7 +44,7 @@ The prohibitions are as deliberate as the vocabulary:
 ## Why it holds up in a renderer
 
 Graphics code is where OOP engines usually grow the deepest hierarchies: a `Resource` base, a
-`RenderPass` base, a `Material` base. SaffronEngine has none of them. A render pass is a
+`RenderPass` base, a `Material` base. Saffron Anima has none of them. A render pass is a
 [`RgPass`](../../frame-and-render-graph/render-graph-overview/) struct with a closure inside it. A
 GPU buffer is a move-only struct passed around as a `Ref<T>`. A component is a plain struct the
 [registry](../../scene-and-ecs/component-registry/) knows how to serialize. The data is visible,

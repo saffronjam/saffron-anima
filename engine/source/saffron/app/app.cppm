@@ -5,7 +5,7 @@ import Saffron.Core;
 import Saffron.Window;
 import Saffron.Rendering;
 
-export namespace se
+export namespace sa
 {
     // A Layer is a set of lifecycle callbacks — the runtime "interface" expressed
     // as a struct of function values (a Go interface's itable), not a virtual base.

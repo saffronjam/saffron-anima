@@ -14,13 +14,13 @@ Add a `.slang` file, have CMake compile it to SPIR-V, and load it at runtime.
 2. Re-run CMake configure so the new file is globbed:
    ```sh
    toolbox run -c saffron-build bash -lc '
-     cd /var/home/saffronjam/repos/SaffronEngine && cmake --preset debug'
+     cd /var/home/saffronjam/repos/SaffronAnima && cmake --preset debug'
    ```
    `saffron_compile_shaders` GLOBs `*.slang` and emits `<name>.spv` under `bin/shaders/`, compiling each with `slangc ... -profile glsl_450 -target spirv -emit-spirv-directly -fvk-use-entrypoint-name -matrix-layout-column-major`.
-3. Build. The shaders are a dependency of `SaffronEngine`, so they compile alongside it:
+3. Build. The shaders are a dependency of `SaffronAnima`, so they compile alongside it:
    ```sh
    toolbox run -c saffron-build bash -lc '
-     cd /var/home/saffronjam/repos/SaffronEngine && cmake --build build/debug -j1'
+     cd /var/home/saffronjam/repos/SaffronAnima && cmake --build build/debug -j1'
    ```
 4. Reference the `.spv` by its runtime-relative path when building a pipeline. A `Material` names its shader (default `"shaders/mesh.spv"`); the renderer loads it via `loadShaderModule(...)` and caches the PSO with `requestMeshPipeline`.
 
@@ -28,14 +28,14 @@ Add a `.slang` file, have CMake compile it to SPIR-V, and load it at runtime.
 
 - After configure, the build log shows `slangc <name>.slang -> <name>.spv`.
 - The compiled module lands at `build/debug/bin/shaders/<name>.spv`.
-- A pipeline using it builds without a `loadShaderModule` error, and `se render-stats` reports the `pipelines` count growing as a new PSO is cached.
+- A pipeline using it builds without a `loadShaderModule` error, and `sa render-stats` reports the `pipelines` count growing as a new PSO is cached.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
 | The GLOB + slangc invocation | `CompileShaders.cmake` | `saffron_compile_shaders`, `${SAFFRON_SLANGC}` |
-| Where the host wires it | `engine/CMakeLists.txt` | `saffron_compile_shaders(SaffronEngine ...)` |
+| Where the host wires it | `engine/CMakeLists.txt` | `saffron_compile_shaders(SaffronAnima ...)` |
 | Reference shader | `mesh.slang` | `[shader(...)]` entry points, set/binding layout |
 | Load + cache the PSO | `renderer_pipelines.cpp` | `loadShaderModule`, `requestMeshPipeline` |
 | Material → shader path | `renderer_types.cppm` | `Material::shader` (`"shaders/mesh.spv"`) |

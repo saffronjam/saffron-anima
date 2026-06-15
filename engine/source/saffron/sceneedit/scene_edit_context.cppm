@@ -20,7 +20,7 @@ import Saffron.Core;
 import Saffron.Signal;
 import Saffron.Scene;
 
-export namespace se
+export namespace sa
 {
     // The viewport's own fly-camera (the scene-view eye, distinct from any ECS
     // CameraComponent / game camera). Hold RMB over the viewport to look + WASD to move,
@@ -169,7 +169,7 @@ export namespace se
 
     inline constexpr std::size_t ScriptErrorRingCap = 256;
 
-    // One `se.log(...)` line, kept in a bounded ring on the context and drained over a normal scene
+    // One `sa.log(...)` line, kept in a bounded ring on the context and drained over a normal scene
     // command (the same path as ScriptError; Control never imports the Lua runtime). entityUuid is the
     // logging entity, or 0 when logged outside an entity handler. epochMs is a wall-clock stamp for
     // display only — never serialized, never part of determinism.
@@ -283,7 +283,7 @@ export namespace se
     // Append to the bounded script-error ring, stamping seq + the current play tick.
     void pushScriptError(SceneEditContext& ctx, u64 entityUuid, std::string script, std::string message);
 
-    // Append a `se.log` line to the bounded script-log ring, stamping seq + a wall-clock ms + the tick.
+    // Append a `sa.log` line to the bounded script-log ring, stamping seq + a wall-clock ms + the tick.
     void pushScriptLog(SceneEditContext& ctx, u64 entityUuid, std::string message);
 
     // The scene every consumer addresses: the asset preview while it is the active view, the play

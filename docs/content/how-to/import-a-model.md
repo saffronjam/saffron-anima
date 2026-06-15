@@ -23,12 +23,12 @@ Any of these bakes one `.smodel` tile and nothing else:
 2. **File ▸ Import** — the editor menu.
 3. **From the CLI**:
    ```sh
-   se import-model /path/to/model.gltf
+   sa import-model /path/to/model.gltf
    ```
 
 To import a standalone texture (a loose texture asset, e.g. to assign to a material later):
 ```sh
-se import-texture /path/to/albedo.png
+sa import-texture /path/to/albedo.png
 ```
 
 ## Place it in the scene
@@ -39,7 +39,7 @@ The baked model is a catalog asset; instantiate it to add entities:
 2. **Right-click the tile ▸ Add to scene**.
 3. **From the CLI**:
    ```sh
-   se instantiate-model <model-id-or-name>
+   sa instantiate-model <model-id-or-name>
    ```
 
 Each instantiate expands the container's stored hierarchy into fresh entities (the mesh, its
@@ -47,20 +47,20 @@ materials, and — for a rig — its bones and a stopped `AnimationPlayer`), and
 
 ## Verify
 
-- List the catalog: `se list-assets` — the model appears as one `"type": "model"` row (its embedded
+- List the catalog: `sa list-assets` — the model appears as one `"type": "model"` row (its embedded
   mesh/material/texture sub-assets link back to it by `container`).
 - Check the project folder: one `.smodel` under `assets/models`; no loose mesh or texture files for it.
 - The **Assets** panel shows one tile, its thumbnail the textured model.
 - After `instantiate-model` the new entity is selected. Screenshot it:
   ```sh
-  se screenshot viewport /tmp/import.png
+  sa screenshot viewport /tmp/import.png
   ```
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| `se import-model` / `import-texture` / `instantiate-model` | `control_commands_asset.cpp` | `import-model`, `import-texture`, `instantiate-model` |
+| `sa import-model` / `import-texture` / `instantiate-model` | `control_commands_asset.cpp` | `import-model`, `import-texture`, `instantiate-model` |
 | Bake the `.smodel` | `assets.cppm` | `importModel`, `bakeModel`, `importTexture` |
 | Place it in the scene | `assets.cppm` | `instantiateModel`, `spawnModel`, `spawnSkinnedModel` |
 | Catalog listing | `control_commands_asset.cpp` | `list-assets` |

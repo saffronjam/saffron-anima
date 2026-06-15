@@ -56,7 +56,7 @@ getCamera(): Promise<EditorCamera> { return call("get-camera"); }
 setCamera(camera: Partial<EditorCamera>): Promise<EditorCamera> { return call("set-camera", camera); }
 ```
 
-`se focus` moves the eye through this path: it reads the target transform and pulls the camera back
+`sa focus` moves the eye through this path: it reads the target transform and pulls the camera back
 along its forward axis. The native input and the control commands stay consistent because both read
 and write the one engine-side camera.
 

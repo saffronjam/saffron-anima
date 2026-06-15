@@ -22,10 +22,10 @@ Every build, test, or run command goes through the toolbox:
 
 ```sh
 toolbox run -c saffron-build bash -lc '
-  cd /var/home/saffronjam/repos/SaffronEngine
+  cd /var/home/saffronjam/repos/SaffronAnima
   cmake --preset debug            # first time / after CMake changes
   cmake --build build/debug -j1   # -j1 on purpose, see below
-  ./build/debug/bin/SaffronEngine
+  ./build/debug/bin/SaffronAnima
 '
 ```
 
@@ -42,7 +42,7 @@ container.
 For headless or automated verification, bound the run so it exits on its own:
 
 ```sh
-SAFFRON_EXIT_AFTER_FRAMES=5 ./build/debug/bin/SaffronEngine
+SAFFRON_EXIT_AFTER_FRAMES=5 ./build/debug/bin/SaffronAnima
 ```
 
 ## Why -j1

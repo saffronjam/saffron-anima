@@ -9,7 +9,7 @@ Go-flavored C++ is a coding style that uses C++ as if it were Go: small data str
 functions over plain data, errors returned as values, and no class hierarchies. It trades the
 language's object-oriented machinery for the procedural model that Go enforces by design.
 
-SaffronEngine is written entirely in this style. The whole codebase follows `CONVENTIONS.md`, and
+Saffron Anima is written entirely in this style. The whole codebase follows `CONVENTIONS.md`, and
 those rules are not optional. The data stays visible, the control flow stays explicit, and a design
 question resolves to one test: how would Go do this.
 
@@ -39,7 +39,7 @@ question resolves to one test: how would Go do this.
   functions like `add(a, b)`. GLM's operators are fine; they belong to GLM.
 
 Naming is small and uniform: `PascalCase` types and constants, `camelCase` functions and
-variables, `snake_case` files, one `se` namespace. Value-returning functions use a trailing return
+variables, `snake_case` files, one `sa` namespace. Value-returning functions use a trailing return
 type so the name lands right after `auto` and signatures align in a column; void functions stay
 `void fn(...)`.
 
@@ -51,7 +51,7 @@ void destroyRenderer(Renderer& renderer);               // void stays plain
 ## Why it holds up in a renderer
 
 Graphics code is where object-oriented engines grow the deepest hierarchies: a `Resource` base, a
-`RenderPass` base, a `Material` base. SaffronEngine has none. A render pass is an
+`RenderPass` base, a `Material` base. Saffron Anima has none. A render pass is an
 [`RgPass`](../../frame-and-render-graph/render-graph-overview/) struct with a closure inside it. A
 GPU buffer is a move-only struct passed as a `Ref<T>` (a `std::shared_ptr` alias). A component is a
 plain struct the [registry](../../scene-and-ecs/component-registry/) knows how to serialize. No

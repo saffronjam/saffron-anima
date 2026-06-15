@@ -1,7 +1,7 @@
-# SaffronEngine
+# Saffron Anima
 
 A from-scratch **Vulkan** renderer / **C++26** game engine. The engine is a static library
-(`Saffron::Engine`) that also builds **`SaffronEngine`**, a *headless viewport host*: it renders the
+(`Saffron::Anima`) that also builds **`SaffronAnima`**, a *headless viewport host*: it renders the
 scene plus a native gizmo overlay offscreen, publishes frames into shared memory, and serves the
 control plane — **no UI panels of its own**. The **editor is the Tauri/React/TypeScript app in
 `editor/`**; it spawns the host, presents its frames on a Wayland subsurface below the transparent
@@ -65,7 +65,7 @@ everything DX11-specific and the heavy OOP.
   a single `ninja -jN` is safe (dyndep builds each module's BMI before its consumers), so the engine
   build runs parallel by default. If another agent is building, either wait it out or configure a
   private dir (`cmake --preset debug -B build/<name>`) and point builds, e2e
-  (`SAFFRON_ENGINE_BIN=build/<name>/bin/SaffronEngine`), and clang-tidy (`-p build/<name>`) at it.
+  (`SAFFRON_ANIMA_BIN=build/<name>/bin/SaffronAnima`), and clang-tidy (`-p build/<name>`) at it.
 
 ## Build — always in the `saffron-build` toolbox
 
@@ -77,7 +77,7 @@ directory is shared, so files edited outside are seen inside.
 toolbox run -c saffron-build bash -lc '
   cmake --preset debug             # first time / after CMake changes
   cmake --build build/debug -j8    # one ninja at any -jN is safe; the .pcm race needs TWO ninja procs
-  ./build/debug/bin/SaffronEngine  # the present-only viewport host
+  ./build/debug/bin/SaffronAnima  # the present-only viewport host
 '
 ```
 
@@ -98,7 +98,7 @@ toolbox run -c saffron-build bash -lc '
 
 ### Headless runs & the verification gate
 
-- `SAFFRON_EXIT_AFTER_FRAMES=N ./build/debug/bin/SaffronEngine` exits after N frames.
+- `SAFFRON_EXIT_AFTER_FRAMES=N ./build/debug/bin/SaffronAnima` exits after N frames.
 - **No display?** Run a headless compositor in the toolbox, then point SDL at it:
   `weston --backend=headless --width=1280 --height=720 --socket=wl-x --idle-time=0 &`, then
   `export WAYLAND_DISPLAY=wl-x SDL_VIDEODRIVER=wayland`. Use a unique `--socket` + `SAFFRON_CONTROL_SOCK`
@@ -128,13 +128,13 @@ cd editor && bun install && bun run check && bun run tauri dev
 ```
 
 `bun run check` regenerates `@saffron/protocol` from the control DTOs in `control_dto.cppm` and typechecks; `bun run format`
-(oxfmt) and `bun run lint` (oxlint) cover style. `tauri dev` spawns `build/debug/bin/SaffronEngine`
-(override with `SAFFRON_ENGINE_BIN`) and needs a Wayland session for the subsurface presenter.
+(oxfmt) and `bun run lint` (oxlint) cover style. `tauri dev` spawns `build/debug/bin/SaffronAnima`
+(override with `SAFFRON_ANIMA_BIN`) and needs a Wayland session for the subsurface presenter.
 
 ## Architecture
 
-- **Lifecycle:** a client fills `se::AppConfig` (window config + `onCreate`/`onExit`) and calls
-  `se::run(config)`, which owns the main loop: poll events → `onUpdate` → `beginFrame` → `onRender`
+- **Lifecycle:** a client fills `sa::AppConfig` (window config + `onCreate`/`onExit`) and calls
+  `sa::run(config)`, which owns the main loop: poll events → `onUpdate` → `beginFrame` → `onRender`
   (submit GPU work) → `beginFrameGraph` (cull + scene passes) → `onRenderGraph` (app passes) →
   `endFrame` (derive barriers, execute, present). `run` calls `waitGpuIdle` before any teardown.
 - **Layer = struct of optional closures** (`onAttach/onUpdate/onRender/onUi/onRenderGraph/onDetach`),
@@ -151,7 +151,7 @@ cd editor && bun install && bun run check && bun run tauri dev
   `Window` exposes typed signals (`onResize`, `onKeyPressed`, …).
 - **Errors:** fallible functions return `std::expected<T, std::string>`; no exceptions in engine code.
 
-## Modules (one namespace `se`, named `Saffron.<Area>`)
+## Modules (one namespace `sa`, named `Saffron.<Area>`)
 
 DAG, leaves first (real imports, not a chain):
 
@@ -170,7 +170,7 @@ Assets   → {Core, Json, Geometry, Rendering, Scene}
 SceneEdit→ {Core, Signal, Scene, Json}            partition :Context
 Control  → {Core, Json, Window, Rendering, Scene, SceneEdit, Assets, Physics}   partitions :Dto :Command
 App      → {Core, Window, Rendering}
-Host     → {Core, App, Window, Rendering, SceneEdit, Control, Scene, Animation, Physics, Script, Assets}   (the SaffronEngine exe)
+Host     → {Core, App, Window, Rendering, SceneEdit, Control, Scene, Animation, Physics, Script, Assets}   (the SaffronAnima exe)
 ```
 
 - `core`/`signal`/`app` use `import std`; `window` uses `import std` + the SDL3 **C** header (safe).
@@ -186,11 +186,11 @@ Host     → {Core, App, Window, Rendering, SceneEdit, Control, Scene, Animation
 
 ```
 engine/source/saffron/  one dir per module above (core, rendering, host, sceneedit, …)
-engine/source/main.cpp  the SaffronEngine host stub: int main(){ return se::runHost(...); }
+engine/source/main.cpp  the SaffronAnima host stub: int main(){ return sa::runHost(...); }
 engine/assets/          shaders (*.slang → SPIR-V in CMake), models, fonts, icons (copied next to the exe)
 editor/                 Tauri/React/TS editor — src/ (React + Zustand + typed control client), src-tauri/ (Rust bridge)
 schemas/control/        DTO-first wire contract → @saffron/protocol: hand-authored envelope.schema.json + generated openrpc/command-manifest JSON (from control_dto.cppm)
-tools/se/               the `se` control CLI (json over the unix socket; no engine dep)
+tools/sa/               the `sa` control CLI (json over the unix socket; no engine dep)
 tools/gen-control-dto/  gen.ts: control_dto.cppm → C++ serde + @saffron/protocol types + OpenRPC + manifest (the wire-contract generator)
 tools/ci/, tools/check-control-schema/, tools/check-projects/   the reproducible gate, the live-vs-schema contract test, the project-feature smoke
 tests/e2e/              end-to-end tests (bun) driving a headless engine over the control plane
@@ -224,7 +224,7 @@ plans/                  phased, dependency-ordered plans for future expansions
   note it, and move on. **Never** fix another agent's parallel work to make the gate pass. When unsure
   whether a failure is yours, gate your own changes in isolation via a private `build/<name>` dir, and
   it is fine to defer the shared-`build/debug` build until the tree settles.
-- **`se` CLI:** a feature that adds engine state worth driving/inspecting gets a matching control
+- **`sa` CLI:** a feature that adds engine state worth driving/inspecting gets a matching control
   command (one `registerCommand` in `Saffron.Control`), so the running editor stays scriptable and
   visually debuggable from a shell.
 - **`docs/`:** a change that adds/alters an engine concept updates the matching explanation page under
@@ -237,7 +237,7 @@ a git submodule.
 
 ```sh
 git submodule update --init --depth 1 docs/themes/hugo-book
-cd docs && hugo server   # preview at http://localhost:1313/saffron-engine/
+cd docs && hugo server   # preview at http://localhost:1313/saffron-anima/
 ```
 
 Page conventions: one concept per page; TOML front matter (start from an archetype); **title** is a
@@ -266,12 +266,12 @@ a feature — follow and update a matching plan rather than starting cold.
   behind `Saffron.Animation` (glTF clip import, an animation-player runtime with transitions/blending, a
   compute-skinning prepass feeding motion vectors + skinned-BLAS rebuild, foot IK, a native skeleton
   overlay, animation control commands, and the editor timeline panel); the control
-  plane + `se` CLI; the Tauri editor; per-entity Lua scripting (Lua 5.5 + LuaBridge3 behind
+  plane + `sa` CLI; the Tauri editor; per-entity Lua scripting (Lua 5.5 + LuaBridge3 behind
   `Saffron.Script`: ScriptComponent slots, script-declared fields + overrides, Inspector UI, project
   `src/` scaffold); physics behind `Saffron.Physics` (Jolt vendored, cross-platform-deterministic; a
   per-play world on the play edge; rigidbody/collider split components with five shapes + materials +
   auto-fit; object-layer matrix + sensors/triggers + a contact-event ring to scripts; kinematic
-  bone-following; a `CharacterVirtual` controller; raycast/shapecast queries + a Lua `se.raycast`; and a
+  bone-following; a `CharacterVirtual` controller; raycast/shapecast queries + a Lua `sa.raycast`; and a
   motor-driven ragdoll routed through the `PoseBuffer.override_`/`weight` blend layer — passive,
   active, and partial, with import auto-fit).
 - **Not yet:** transient render-graph resources (graph-created images + aliasing) + async compute;

@@ -1,5 +1,5 @@
-baseURL = 'https://saffronjam.github.io/saffron-engine/'
-title = 'saffron-engine'
+baseURL = 'https://saffronjam.github.io/saffron-anima/'
+title = 'saffron-anima'
 theme = 'hugo-book'
 
 enableGitInfo = false
@@ -10,7 +10,7 @@ disablePathToLower = true
   BookSection = '/'          # render every top-level section in the sidebar
   BookToC = true
   BookSearch = true
-  BookRepo = 'https://github.com/saffronjam/saffron-engine'
+  BookRepo = 'https://github.com/saffronjam/saffron-anima'
   BookEditLink = '{{ .Site.Params.BookRepo }}/edit/main/docs/content/{{ .File.Path }}'
 
 [markup]

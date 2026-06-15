@@ -1,8 +1,8 @@
 # Saffron.Control
 
-The control plane: a JSON-over-unix-socket server that lets the Tauri editor and the `se` CLI
+The control plane: a JSON-over-unix-socket server that lets the Tauri editor and the `sa` CLI
 drive and inspect the running host. Module `Saffron.Control`, partitions `:Command` and `:Dto`,
-namespace `se`. Uses classic `#include` in the global module fragment and does **not** `import std`.
+namespace `sa`. Uses classic `#include` in the global module fragment and does **not** `import std`.
 
 ## Files
 
@@ -49,7 +49,7 @@ registerCommand<MyParams, MyResult>(registry, "my-command", "one-line help",
 4. Run `bun run tools/gen-control-dto/gen.ts` and commit all five generated outputs: the control DTO
    serde (`control_dto_serde.generated.cpp`), the scene-component serde
    (`engine/source/saffron/scene/scene_component_serde.generated.cpp`), the TypeScript
-   (`editor/src/protocol/se-types.ts`), the OpenRPC (`schemas/control/openrpc.generated.json`), and the
+   (`editor/src/protocol/sa-types.ts`), the OpenRPC (`schemas/control/openrpc.generated.json`), and the
    manifest (`schemas/control/command-manifest.generated.json`).
 
 Conventions:
@@ -58,5 +58,5 @@ Conventions:
 - Use `EntitySelector` / `AssetSelector` for id-or-name inputs.
 - IDs are `WireUuid` at the DTO boundary and are emitted as decimal JSON strings. The contract test
   checks raw bytes so ids never regress to JSON numbers.
-- Keep the `se` CLI usable. A command that adds drivable or inspectable state should also be
-  reachable from `tools/se`.
+- Keep the `sa` CLI usable. A command that adds drivable or inspectable state should also be
+  reachable from `tools/sa`.

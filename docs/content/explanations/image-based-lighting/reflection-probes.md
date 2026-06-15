@@ -19,7 +19,7 @@ A `ReflectionProbeComponent` is a plain entt struct, positioned by the entity's 
 | `boxProjection` | parallax-correct the reflection ray against an influence box |
 | `boxExtent` | half-extents of that box (used when `boxProjection`) |
 
-A runtime-only `dirty` flag (not serialized) marks a probe for capture. It is set on add, on edit, on load, and by `se recapture-probes`. The component registers through `registerComponent`, so save/load, the inspector, and add/remove all come for free, with no scene-version bump.
+A runtime-only `dirty` flag (not serialized) marks a probe for capture. It is set on add, on edit, on load, and by `sa recapture-probes`. The component registers through `registerComponent`, so save/load, the inspector, and add/remove all come for free, with no scene-version bump.
 
 ## Capture is on demand
 
@@ -40,7 +40,7 @@ $$
 
 where $p$ is the world position, $R$ the reflection vector, $o$ the probe origin, and $t^{\pm}$ the slab intersections with $o \pm \text{extent}$.
 
-The probe count rides in the light UBO (`ambientColor.w`). When it is zero — no probes in the scene, or `se set-probes 0` — the specular term is byte-identical to the global IBL fallback, so a probe-free scene renders exactly as before.
+The probe count rides in the light UBO (`ambientColor.w`). When it is zero — no probes in the scene, or `sa set-probes 0` — the specular term is byte-identical to the global IBL fallback, so a probe-free scene renders exactly as before.
 
 ## Driving it
 
@@ -53,4 +53,4 @@ The probe count rides in the light UBO (`ambientColor.w`). When it is zero — n
 | Fragment blend | `mesh.slang` | set 8 · `boxProject` |
 | Control | `control_commands_scene.cpp` | `set-probes` · `recapture-probes` · `list-probes` |
 
-From a shell against a running host: `se set-probes {0\|1}` toggles probe sampling (the A/B identity gate), `se recapture-probes` re-arms every probe, and `se list-probes` reports each probe's origin, radius, intensity, and captured state.
+From a shell against a running host: `sa set-probes {0\|1}` toggles probe sampling (the A/B identity gate), `sa recapture-probes` re-arms every probe, and `sa list-probes` reports each probe's origin, radius, intensity, and captured state.

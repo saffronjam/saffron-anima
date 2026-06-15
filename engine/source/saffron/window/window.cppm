@@ -8,7 +8,7 @@ import std;
 import Saffron.Core;
 import Saffron.Signal;
 
-export namespace se
+export namespace sa
 {
     struct WindowConfig
     {

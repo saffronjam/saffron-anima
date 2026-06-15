@@ -1,4 +1,4 @@
-// se.log capture: a script's se.log(...) lands in the drain-script-logs ring tagged with the logging
+// sa.log capture: a script's sa.log(...) lands in the drain-script-logs ring tagged with the logging
 // entity, drains via a seq cursor (like drain-script-errors), and — unlike an error — never pauses play.
 // The line is authored into the auto project's src/ on the fly.
 
@@ -37,7 +37,7 @@ beforeAll(async () => {
     join(srcDir, "logger.lua"),
     `local Logger = {}
 function Logger:on_create()
-  se.log("hello from " .. self.entity:name())
+  sa.log("hello from " .. self.entity:name())
 end
 function Logger:on_update(dt) end
 return Logger
@@ -48,7 +48,7 @@ afterAll(async () => {
   await engine?.shutdown();
 });
 
-test("se.log lands in drain-script-logs tagged with the logging entity, and does not pause play", async () => {
+test("sa.log lands in drain-script-logs tagged with the logging entity, and does not pause play", async () => {
   const robot = await engine.call<Ref>("create-entity", { name: "Robot" });
   await engine.call("add-component", { entity: robot.id, component: "Script" });
   await engine.call("set-component", {

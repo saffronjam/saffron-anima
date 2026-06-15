@@ -1,14 +1,14 @@
 // GENERATED - do not edit.
 // Produced by tools/gen-control-dto/gen.ts (emitScriptComponentDefs) from the component wire-shape
-// catalog. Appended to library/se.lua after SeLuaDefs so :get_component(name) returns a typed table.
+// catalog. Appended to library/sa.lua after SaLuaDefs so :get_component(name) returns a typed table.
 #pragma once
 
 #include <string_view>
 
-inline constexpr std::string_view SeComponentDefs = R"LUA(
+inline constexpr std::string_view SaComponentDefs = R"LUA(
 -- Typed component snapshots. get_component(name) returns the component as a read-only table in
 -- its serialized wire shape (vectors as {x,y,z} tables, ids as decimal strings); nil when absent.
----@class se.AnimationPlayer
+---@class sa.AnimationPlayer
 ---@field clip string
 ---@field time number
 ---@field speed number
@@ -17,17 +17,17 @@ inline constexpr std::string_view SeComponentDefs = R"LUA(
 ---@field transitionMode "crossfade"|"inertialize"
 ---@field loopBlend number
 
----@class se.BVec3
+---@class sa.BVec3
 ---@field x boolean
 ---@field y boolean
 ---@field z boolean
 
----@class se.Bone
+---@class sa.Bone
 
----@class se.BonePhysics
----@field bones se.BonePhysicsDto[]
+---@class sa.BonePhysics
+---@field bones sa.BonePhysicsDto[]
 
----@class se.BonePhysicsDto
+---@class sa.BonePhysicsDto
 ---@field shapeHalfExtents { x: number, y: number, z: number }
 ---@field mass number
 ---@field joint string
@@ -36,7 +36,7 @@ inline constexpr std::string_view SeComponentDefs = R"LUA(
 ---@field driveDamping number
 ---@field driveMaxForce number
 
----@class se.Camera
+---@class sa.Camera
 ---@field fov number
 ---@field near number
 ---@field far number
@@ -45,42 +45,42 @@ inline constexpr std::string_view SeComponentDefs = R"LUA(
 ---@field showFrustum boolean
 ---@field frustumMaxDistance number
 
----@class se.CharacterController
+---@class sa.CharacterController
 ---@field maxSpeed number
 ---@field maxSlopeAngle number
 ---@field maxStepHeight number
 ---@field gravityFactor number
 
----@class se.Collider
+---@class sa.Collider
 ---@field shape "box"|"sphere"|"capsule"|"convexhull"|"mesh"
 ---@field halfExtents { x: number, y: number, z: number }
 ---@field sourceMesh string
 ---@field offset { x: number, y: number, z: number }
----@field material se.PhysicsMaterial
+---@field material sa.PhysicsMaterial
 ---@field isSensor boolean
 
----@class se.DirectionalLight
+---@class sa.DirectionalLight
 ---@field direction { x: number, y: number, z: number }
 ---@field color { x: number, y: number, z: number }
 ---@field intensity number
 ---@field ambient number
 
----@class se.FootChainDto
+---@class sa.FootChainDto
 ---@field upper number
 ---@field mid number
 ---@field end number
 ---@field poleVector { x: number, y: number, z: number }
 
----@class se.FootIk
+---@class sa.FootIk
 ---@field enabled boolean
 ---@field groundHeight number
----@field chains se.FootChainDto[]
+---@field chains sa.FootChainDto[]
 
----@class se.KinematicBones
+---@class sa.KinematicBones
 ---@field enabled boolean
 ---@field driven number[]
 
----@class se.Material
+---@class sa.Material
 ---@field baseColor { x: number, y: number, z: number, w: number }
 ---@field albedoTexture string
 ---@field metallicRoughnessTexture string
@@ -98,63 +98,63 @@ inline constexpr std::string_view SeComponentDefs = R"LUA(
 ---@field alphaClip boolean
 ---@field alphaCutoff number
 
----@class se.MaterialAsset
+---@class sa.MaterialAsset
 ---@field material string
 
----@class se.MaterialSet
----@field slots se.Material[]
+---@class sa.MaterialSet
+---@field slots sa.Material[]
 
----@class se.Mesh
+---@class sa.Mesh
 ---@field mesh string
 
----@class se.ModelInstance
+---@class sa.ModelInstance
 ---@field modelId string
 
----@class se.Name
+---@class sa.Name
 ---@field name string
 
----@class se.PhysicsMaterial
+---@class sa.PhysicsMaterial
 ---@field friction number
 ---@field restitution number
 
----@class se.PointLight
+---@class sa.PointLight
 ---@field color { x: number, y: number, z: number }
 ---@field intensity number
 ---@field range number
 
----@class se.ReflectionProbe
+---@class sa.ReflectionProbe
 ---@field influenceRadius number
 ---@field intensity number
 ---@field boxProjection boolean
 ---@field boxExtent { x: number, y: number, z: number }
 
----@class se.Relationship
+---@class sa.Relationship
 ---@field parent string
 
----@class se.Rigidbody
+---@class sa.Rigidbody
 ---@field motion "static"|"kinematic"|"dynamic"
 ---@field mass number
 ---@field linearDamping number
 ---@field angularDamping number
 ---@field gravityFactor number
----@field lockPosition se.BVec3
----@field lockRotation se.BVec3
+---@field lockPosition sa.BVec3
+---@field lockRotation sa.BVec3
 ---@field collisionLayer number
 
----@class se.Script
----@field scripts se.ScriptSlot[]
+---@class sa.Script
+---@field scripts sa.ScriptSlot[]
 
----@class se.ScriptSlot
+---@class sa.ScriptSlot
 ---@field scriptPath string
 ---@field overrides table<string, any>
 
----@class se.SkinnedMesh
+---@class sa.SkinnedMesh
 ---@field mesh string
 ---@field rootBone string
 ---@field bones string[]
 ---@field inverseBind number[][]
 
----@class se.SpotLight
+---@class sa.SpotLight
 ---@field direction { x: number, y: number, z: number }
 ---@field color { x: number, y: number, z: number }
 ---@field intensity number
@@ -162,33 +162,33 @@ inline constexpr std::string_view SeComponentDefs = R"LUA(
 ---@field innerAngle number
 ---@field outerAngle number
 
----@class se.Transform
+---@class sa.Transform
 ---@field translation { x: number, y: number, z: number }
 ---@field scale { x: number, y: number, z: number }
 ---@field rotation { x: number, y: number, z: number }
 
----@overload fun(self: se.Entity, name: "AnimationPlayer"): se.AnimationPlayer?
----@overload fun(self: se.Entity, name: "Bone"): se.Bone?
----@overload fun(self: se.Entity, name: "BonePhysics"): se.BonePhysics?
----@overload fun(self: se.Entity, name: "Camera"): se.Camera?
----@overload fun(self: se.Entity, name: "CharacterController"): se.CharacterController?
----@overload fun(self: se.Entity, name: "Collider"): se.Collider?
----@overload fun(self: se.Entity, name: "DirectionalLight"): se.DirectionalLight?
----@overload fun(self: se.Entity, name: "FootIk"): se.FootIk?
----@overload fun(self: se.Entity, name: "KinematicBones"): se.KinematicBones?
----@overload fun(self: se.Entity, name: "Material"): se.Material?
----@overload fun(self: se.Entity, name: "MaterialAsset"): se.MaterialAsset?
----@overload fun(self: se.Entity, name: "MaterialSet"): se.MaterialSet?
----@overload fun(self: se.Entity, name: "Mesh"): se.Mesh?
----@overload fun(self: se.Entity, name: "ModelInstance"): se.ModelInstance?
----@overload fun(self: se.Entity, name: "Name"): se.Name?
----@overload fun(self: se.Entity, name: "PointLight"): se.PointLight?
----@overload fun(self: se.Entity, name: "ReflectionProbe"): se.ReflectionProbe?
----@overload fun(self: se.Entity, name: "Relationship"): se.Relationship?
----@overload fun(self: se.Entity, name: "Rigidbody"): se.Rigidbody?
----@overload fun(self: se.Entity, name: "Script"): se.Script?
----@overload fun(self: se.Entity, name: "SkinnedMesh"): se.SkinnedMesh?
----@overload fun(self: se.Entity, name: "SpotLight"): se.SpotLight?
----@overload fun(self: se.Entity, name: "Transform"): se.Transform?
-function Entity:get_component(name) end  ---@param name se.ComponentName @return table?
+---@overload fun(self: sa.Entity, name: "AnimationPlayer"): sa.AnimationPlayer?
+---@overload fun(self: sa.Entity, name: "Bone"): sa.Bone?
+---@overload fun(self: sa.Entity, name: "BonePhysics"): sa.BonePhysics?
+---@overload fun(self: sa.Entity, name: "Camera"): sa.Camera?
+---@overload fun(self: sa.Entity, name: "CharacterController"): sa.CharacterController?
+---@overload fun(self: sa.Entity, name: "Collider"): sa.Collider?
+---@overload fun(self: sa.Entity, name: "DirectionalLight"): sa.DirectionalLight?
+---@overload fun(self: sa.Entity, name: "FootIk"): sa.FootIk?
+---@overload fun(self: sa.Entity, name: "KinematicBones"): sa.KinematicBones?
+---@overload fun(self: sa.Entity, name: "Material"): sa.Material?
+---@overload fun(self: sa.Entity, name: "MaterialAsset"): sa.MaterialAsset?
+---@overload fun(self: sa.Entity, name: "MaterialSet"): sa.MaterialSet?
+---@overload fun(self: sa.Entity, name: "Mesh"): sa.Mesh?
+---@overload fun(self: sa.Entity, name: "ModelInstance"): sa.ModelInstance?
+---@overload fun(self: sa.Entity, name: "Name"): sa.Name?
+---@overload fun(self: sa.Entity, name: "PointLight"): sa.PointLight?
+---@overload fun(self: sa.Entity, name: "ReflectionProbe"): sa.ReflectionProbe?
+---@overload fun(self: sa.Entity, name: "Relationship"): sa.Relationship?
+---@overload fun(self: sa.Entity, name: "Rigidbody"): sa.Rigidbody?
+---@overload fun(self: sa.Entity, name: "Script"): sa.Script?
+---@overload fun(self: sa.Entity, name: "SkinnedMesh"): sa.SkinnedMesh?
+---@overload fun(self: sa.Entity, name: "SpotLight"): sa.SpotLight?
+---@overload fun(self: sa.Entity, name: "Transform"): sa.Transform?
+function Entity:get_component(name) end  ---@param name sa.ComponentName @return table?
 )LUA";

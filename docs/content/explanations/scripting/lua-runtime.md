@@ -25,7 +25,7 @@ a broken script is a logged, inspectable failure, never a crash.
 
 Lua 5.5 and LuaBridge3 are vendored through CMake (CMake's bundled `FindLua` predates 5.5). The
 Lua core and stdlib compile into one static C library; LuaBridge3 is a header-only C++ layer over
-the C API used to register engine functions, starting with a `se.log` that routes into the engine
+the C API used to register engine functions, starting with a `sa.log` that routes into the engine
 log.
 
 > [!NOTE]

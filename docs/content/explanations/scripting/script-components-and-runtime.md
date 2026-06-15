@@ -53,56 +53,56 @@ flowchart LR
 
 ## Value types
 
-`se.vec3(x, y, z)` builds an `se.Vec3` — a real userdata value, not a `{x,y,z}` table. It carries
+`sa.vec3(x, y, z)` builds an `sa.Vec3` — a real userdata value, not a `{x,y,z}` table. It carries
 `.x`/`.y`/`.z`, the operators `+`, `-`, unary `-`, and `*` by a scalar (either order), and the
 methods `:length()`, `:normalized()`, `:dot(o)`, `:cross(o)`, `:lerp(o, t)`. Every vector the API
-returns (positions, velocities, mouse deltas) is an `se.Vec3`, and every vector it accepts wants
+returns (positions, velocities, mouse deltas) is an `sa.Vec3`, and every vector it accepts wants
 one. This is the only vector form scripts use — a plain 3-number table is no longer accepted as a
 `properties` default and is skipped as uninferable.
 
 ## API reference
 
-Module functions, available as `se.*` inside every script.
+Module functions, available as `sa.*` inside every script.
 
 **Logging and vectors**
 
 | Function | Returns | Notes |
 |---|---|---|
-| `se.log(message)` | — | writes to the engine log under the `script` subsystem AND into the editor's [Script Logs panel](../../ui-and-editor/script-logs-panel/) (drained over `drain-script-logs`, tagged with the logging entity) |
-| `se.vec3(x, y, z)` | `se.Vec3` | construct a vector value |
-| `se.lerp(a, b, t)` | `se.Vec3` | linear blend of two vectors |
-| `se.look_at(eye, target, up)` | `se.Vec3` | Euler XYZ radians aiming `eye` at `target` (default up `+Y`); feed straight to `:set_rotation` |
+| `sa.log(message)` | — | writes to the engine log under the `script` subsystem AND into the editor's [Script Logs panel](../../ui-and-editor/script-logs-panel/) (drained over `drain-script-logs`, tagged with the logging entity) |
+| `sa.vec3(x, y, z)` | `sa.Vec3` | construct a vector value |
+| `sa.lerp(a, b, t)` | `sa.Vec3` | linear blend of two vectors |
+| `sa.look_at(eye, target, up)` | `sa.Vec3` | Euler XYZ radians aiming `eye` at `target` (default up `+Y`); feed straight to `:set_rotation` |
 
 **Input** (edges are derived per tick from the editor-reported held set)
 
 | Function | Returns | Notes |
 |---|---|---|
-| `se.is_key_down(key)` | boolean | **held** — true every tick the normalized key is down, such as `"w"`, `"space"`, `"arrowup"` (the UE `IsKeyDown` sense) |
-| `se.is_key_pressed(key)` | boolean | **press edge** — true the one tick the key goes down, then false until it is released and pressed again (fire-once, for "on press") |
-| `se.is_key_up(key)` | boolean | **release edge** — true the one tick the key goes up |
-| `se.mouse_position()` | `se.Vec3` | cursor in viewport pixels in `x`,`y` (`z` is 0) |
-| `se.mouse_delta()` | `se.Vec3` | cursor movement since last tick in `x`,`y` |
-| `se.is_mouse_down(button)` | boolean | **held** — true while mouse `"left"`/`"right"`/`"middle"` is down |
-| `se.is_mouse_pressed(button)` | boolean | **press edge** — true the one tick the button goes down (a click) |
-| `se.is_mouse_up(button)` | boolean | **release edge** — true the one tick the button goes up |
-| `se.mouse_scroll()` | number | wheel delta this tick |
+| `sa.is_key_down(key)` | boolean | **held** — true every tick the normalized key is down, such as `"w"`, `"space"`, `"arrowup"` (the UE `IsKeyDown` sense) |
+| `sa.is_key_pressed(key)` | boolean | **press edge** — true the one tick the key goes down, then false until it is released and pressed again (fire-once, for "on press") |
+| `sa.is_key_up(key)` | boolean | **release edge** — true the one tick the key goes up |
+| `sa.mouse_position()` | `sa.Vec3` | cursor in viewport pixels in `x`,`y` (`z` is 0) |
+| `sa.mouse_delta()` | `sa.Vec3` | cursor movement since last tick in `x`,`y` |
+| `sa.is_mouse_down(button)` | boolean | **held** — true while mouse `"left"`/`"right"`/`"middle"` is down |
+| `sa.is_mouse_pressed(button)` | boolean | **press edge** — true the one tick the button goes down (a click) |
+| `sa.is_mouse_up(button)` | boolean | **release edge** — true the one tick the button goes up |
+| `sa.mouse_scroll()` | number | wheel delta this tick |
 
 **Scene queries and spawning**
 
 | Function | Returns | Notes |
 |---|---|---|
-| `se.get_entity_by_name(name)` | entity | first match in iteration order — names are not unique; invalid when absent, so check `:valid()` |
-| `se.find_all_by_name(name)` | entity array | every match (1-indexed); the multi-match `get_entity_by_name` cannot give |
-| `se.find_by_uuid(uuid)` | entity | resolve a decimal-string uuid (matching `:uuid()`); invalid when absent |
-| `se.primary_camera()` | entity | the first primary `CameraComponent` entity; moving its transform is "move camera". Invalid when the scene has none (the viewport falls back to the fly-cam) |
-| `se.spawn(name)` | entity | create a new entity (a clean root with a `RelationshipComponent`); takes effect immediately |
+| `sa.get_entity_by_name(name)` | entity | first match in iteration order — names are not unique; invalid when absent, so check `:valid()` |
+| `sa.find_all_by_name(name)` | entity array | every match (1-indexed); the multi-match `get_entity_by_name` cannot give |
+| `sa.find_by_uuid(uuid)` | entity | resolve a decimal-string uuid (matching `:uuid()`); invalid when absent |
+| `sa.primary_camera()` | entity | the first primary `CameraComponent` entity; moving its transform is "move camera". Invalid when the scene has none (the viewport falls back to the fly-cam) |
+| `sa.spawn(name)` | entity | create a new entity (a clean root with a `RelationshipComponent`); takes effect immediately |
 
 **Physics queries** (no-ops returning a miss when no play-time physics world exists)
 
 | Function | Returns | Notes |
 |---|---|---|
-| `se.raycast(ox, oy, oz, dx, dy, dz, maxDist)` | `se.RayHit` | closest ray hit: `.hit`, `.distance`, `.point`, `.normal`, `.entity` |
-| `se.spherecast(ox, oy, oz, dx, dy, dz, radius, maxDist)` | `se.RayHit` | swept-sphere variant of the above |
+| `sa.raycast(ox, oy, oz, dx, dy, dz, maxDist)` | `sa.RayHit` | closest ray hit: `.hit`, `.distance`, `.point`, `.normal`, `.entity` |
+| `sa.spherecast(ox, oy, oz, dx, dy, dz, radius, maxDist)` | `sa.RayHit` | swept-sphere variant of the above |
 
 **Messaging and timers** — see [messaging](#messaging) and [timers](#timers-and-coroutines).
 
@@ -115,22 +115,22 @@ Entity handle methods (`self.entity` and anything the queries above return):
 | `:valid()` | boolean | false for a missed lookup or a destroyed entity |
 | `:name()` | string | the `NameComponent`; `""` when absent |
 | `:uuid()` | string | the stable `IdComponent` id as a decimal string |
-| `:get_component(name)` | table or nil | a read-only snapshot of any registered component in its serialized wire shape (vectors as `{x, y, z}` tables — **not** `se.Vec3` — ids as decimal strings); nil when absent or the name is unknown. Mutating the returned table writes nothing back — use `:set_component` |
+| `:get_component(name)` | table or nil | a read-only snapshot of any registered component in its serialized wire shape (vectors as `{x, y, z}` tables — **not** `sa.Vec3` — ids as decimal strings); nil when absent or the name is unknown. Mutating the returned table writes nothing back — use `:set_component` |
 | `:set_component(name, table)` | boolean | write any registered component from a wire-shape table; true on success. Refused for structural components (transform-graph, mesh/skinning, physics-body) — those have dedicated methods or are editor-only |
 | `:add_component(name)` | boolean | add a default-constructed component; same structural gate |
 | `:remove_component(name)` | boolean | remove a component; same structural gate |
 | `:has_component(name)` | boolean | whether the component is present |
 
 `name` is a registered component name — `"Transform"`, `"Camera"`, `"DirectionalLight"`,
-`"AnimationPlayer"`, `"Script"`, and so on. In `library/se.lua` it is typed as the string-literal union
-`se.ComponentName`, so the editor autocompletes and validates the spelling; the runtime resolves it by
+`"AnimationPlayer"`, `"Script"`, and so on. In `library/sa.lua` it is typed as the string-literal union
+`sa.ComponentName`, so the editor autocompletes and validates the spelling; the runtime resolves it by
 string and a typo is a logged miss (`nil` / `false`). `get_component`/`has_component` accept every
 registered name; `set_component`/`add_component`/`remove_component` reject the structural ones.
 
 `get_component` is further typed **per component** via a `---@overload` per name, so the editor knows the
-*shape* of what comes back: `get_component("DirectionalLight")` is an `se.DirectionalLight` with
+*shape* of what comes back: `get_component("DirectionalLight")` is an `sa.DirectionalLight` with
 `.color`/`.intensity`/`.ambient`, and `local m = get_component("Mesh"); m.` autocompletes the Mesh
-fields. These `se.<Component>` classes are **generated** from the same component wire-shape catalog the
+fields. These `sa.<Component>` classes are **generated** from the same component wire-shape catalog the
 TypeScript protocol uses (`emitScriptComponentDefs` in `gen.ts`), so they never drift from the serde, and
 the tripwire fails the build if a registered component is missing a type.
 
@@ -138,12 +138,12 @@ the tripwire fails the build if a registered component is missing a type.
 
 | Method | Returns | Notes |
 |---|---|---|
-| `:get_position()` | `se.Vec3` | local `TransformComponent.translation` |
-| `:get_rotation()` | `se.Vec3` | local Euler XYZ, radians |
-| `:get_scale()` | `se.Vec3` | local scale |
-| `:get_world_position()` | `se.Vec3` | translation of the composed world matrix |
-| `:get_world_rotation()` | `se.Vec3` | Euler XYZ radians of the world matrix |
-| `:set_position(v)` | — | write the local translation from an `se.Vec3` |
+| `:get_position()` | `sa.Vec3` | local `TransformComponent.translation` |
+| `:get_rotation()` | `sa.Vec3` | local Euler XYZ, radians |
+| `:get_scale()` | `sa.Vec3` | local scale |
+| `:get_world_position()` | `sa.Vec3` | translation of the composed world matrix |
+| `:get_world_rotation()` | `sa.Vec3` | Euler XYZ radians of the world matrix |
+| `:set_position(v)` | — | write the local translation from an `sa.Vec3` |
 | `:set_rotation(v)` | — | write local Euler XYZ radians |
 | `:set_scale(v)` | — | write the local scale |
 
@@ -167,7 +167,7 @@ or any access outside a script callback — is a logged no-op, never a crash.
 | `:apply_impulse(v)` | — | add an instantaneous impulse to a Dynamic rigidbody |
 | `:add_force(v)` | — | accumulate a force on a Dynamic rigidbody for the step |
 | `:set_velocity(v)` | — | set the linear velocity of a Dynamic rigidbody |
-| `:get_velocity()` | `se.Vec3` | the linear velocity (zero off a body) |
+| `:get_velocity()` | `sa.Vec3` | the linear velocity (zero off a body) |
 | `:move_character(velocity, jump)` | — | request movement on a character controller; `jump` is an optional boolean |
 | `:enable_ragdoll()` | boolean | start a motor-driven ragdoll blend on a skinned entity |
 | `:disable_ragdoll()` | — | end the ragdoll blend |
@@ -178,41 +178,41 @@ or any access outside a script callback — is a logged no-op, never a crash.
 
 ### Messaging
 
-`self.entity:send("on_hit", payload)` and `se.broadcast("on_hit", payload)` queue a message to one
+`self.entity:send("on_hit", payload)` and `sa.broadcast("on_hit", payload)` queue a message to one
 entity or to every scripted entity. Messages are **not** delivered inline — they are collected and
 dispatched after the tick's `on_update` pass, so a handler never reenters the loop mid-iteration.
 A delivered message invokes the named method on each matching instance as
 `handler(self, sender, payload)`: `sender` is the entity that sent it (invalid for a broadcast from
-outside a script), and `payload` is whatever value was passed (a table, a number, an `se.Vec3`).
+outside a script), and `payload` is whatever value was passed (a table, a number, an `sa.Vec3`).
 The handler name is the script's own — a class opts in simply by defining a method of that name.
 
 ### Timers and coroutines
 
 The runtime installs a small coroutine scheduler so scripts can suspend across ticks:
 
-- `se.wait(seconds)` — yield the current coroutine for a duration, then resume. Outside a coroutine
+- `sa.wait(seconds)` — yield the current coroutine for a duration, then resume. Outside a coroutine
   it logs and returns rather than erroring.
-- `se.delay(seconds, fn)` — run `fn` once after a delay.
-- `se.spawn_task(fn, ...)` — start a coroutine that can itself `se.wait`.
+- `sa.delay(seconds, fn)` — run `fn` once after a delay.
+- `sa.spawn_task(fn, ...)` — start a coroutine that can itself `sa.wait`.
 
 Scheduled work advances each tick after `on_update`, on the same fixed-step dt, and is discarded
 with the VM on Stop.
 
 ### Editor autocomplete
 
-Every project is scaffolded with `library/se.lua` (a LuaLS `---@meta` description of the whole
+Every project is scaffolded with `library/sa.lua` (a LuaLS `---@meta` description of the whole
 surface above) and a `.luarc.json` pointing the language server at it and disabling the sandboxed-out
 libraries. Open the project in VS Code with the Lua (sumneko) extension and `self.entity:` completes
-to the method set, vectors type as `se.Vec3`, component names autocomplete from the `se.ComponentName`
-union, and a wrong-arity call is flagged before play. `se.lua` is an engine-owned generated artifact —
+to the method set, vectors type as `sa.Vec3`, component names autocomplete from the `sa.ComponentName`
+union, and a wrong-arity call is flagged before play. `sa.lua` is an engine-owned generated artifact —
 it is **rewritten on every project open** so the definitions track the engine's API and never go stale
 (do not hand-edit it). `.luarc.json` holds your editable LuaLS settings, so it is written only when
 absent and never clobbered. A `check.sh` tripwire fails the build if a live binding or a registered
-component is ever missing from `se.lua`.
+component is ever missing from `sa.lua`.
 
-To get the same completion on a script's own state, annotate the class: `---@class Foo : se.ScriptSelf`
+To get the same completion on a script's own state, annotate the class: `---@class Foo : sa.ScriptSelf`
 types `self.entity`, and one `---@field <name> <type>` per `properties` entry or runtime field (with
-`se.Vec3` for vectors) types `self.<name>`. LuaLS cannot infer the engine-injected `properties` fields
+`sa.Vec3` for vectors) types `self.<name>`. LuaLS cannot infer the engine-injected `properties` fields
 on its own, so those annotations are what light them up.
 
 ## In the code
@@ -221,7 +221,7 @@ on its own, so those annotations are what light them up.
 |---|---|---|
 | The data-only component | `scene.cppm` | `ScriptComponent`, `ScriptSlot` |
 | The per-entity runtime | `script_runtime.cpp` | `startScripts`, `tickScripts`, `stopScripts`, `ScriptHost` |
-| The entity facade + value types | `script_runtime.cpp` | `ScriptEntity`, `registerScriptValueTypes` (`se.Vec3`) |
+| The entity facade + value types | `script_runtime.cpp` | `ScriptEntity`, `registerScriptValueTypes` (`sa.Vec3`) |
 | Deferred structural ops + messaging + scheduler | `script_runtime.cpp` | `flushStructuralOps`, `dispatchMessages`, `advanceScheduler`, `SchedulerPrelude` |
 | Input edges + the cross-module bridges | `scene.cppm`; `script.cppm` | `ScriptInputState`, `deriveScriptInputEdges`; `ScriptHost::sphereCast`/`applyImpulse`/`setRagdollEnabled` |
 | The bridge wiring (Host imports Physics + Script) | `host.cppm` | the `state->script.*` lambdas over `Saffron.Physics` |
@@ -229,8 +229,8 @@ on its own, so those annotations are what light them up.
 | Status, input, and error drain commands | `control_commands_scene.cpp` | `get-script-status`, `script-input`, `drain-script-errors` |
 | The Inspector slot UI | `ScriptSlots.tsx` | `ScriptSlots` |
 | The src/ scaffold + starter script | `assets.cppm` | `ensureScriptSrc`, `StarterScript` |
-| The `library/se.lua` + `.luarc.json` scaffold | `assets.cppm` | `ensureScriptLibrary`, `SeLuaDefs`, `LuarcJson` |
-| Generated per-component Lua types | `script_component_defs.generated.hpp`; `gen.ts` | `SeComponentDefs`, `emitScriptComponentDefs` |
+| The `library/sa.lua` + `.luarc.json` scaffold | `assets.cppm` | `ensureScriptLibrary`, `SaLuaDefs`, `LuarcJson` |
+| Generated per-component Lua types | `script_component_defs.generated.hpp`; `gen.ts` | `SaComponentDefs`, `emitScriptComponentDefs` |
 | The def-drift tripwire | `tools/check-script-defs/check.ts` | live-binding + component-alias coverage gate |
 | New-script boilerplate (`create-script`) | `assets.cppm`; `control_commands_asset.cpp` | `createProjectScript` |
 | Error toasts during play | `scriptErrorToasts.ts` | `routeScriptErrorToasts` |

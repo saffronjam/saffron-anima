@@ -47,7 +47,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Detail;
 
-namespace se
+namespace sa
 {
     // Host-mapped vertex buffer for the editor overlay (grown per frame by the overlay pass).
     auto makeMappedVertexBuffer(Renderer& renderer, vk::DeviceSize bytes) -> Result<Ref<Buffer>>;
@@ -134,7 +134,7 @@ namespace se
 
         vkb::InstanceBuilder instanceBuilder;
         instanceBuilder.set_app_name("Saffron Editor")
-            .set_engine_name("Saffron Engine")
+            .set_engine_name("Saffron Anima")
             .require_api_version(1, 4, 0)
             .request_validation_layers(true)
             .set_debug_callback(onVulkanMessage);

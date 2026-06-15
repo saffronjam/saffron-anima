@@ -33,12 +33,12 @@ The stable name is the JSON key, the Inspector header, and the CLI token. Keep i
 
 ## Verify
 
-- The type shows up: `se list-components`.
+- The type shows up: `sa list-components`.
 - Set it on an entity and read it back:
   ```sh
-  se add-component MyEntity Health
-  se set-component MyEntity Health --json '{"hp":42}'
-  se inspect MyEntity
+  sa add-component MyEntity Health
+  sa set-component MyEntity Health --json '{"hp":42}'
+  sa inspect MyEntity
   ```
 - The Inspector shows it (with fields derived from the DTO catalog) under **Add Component**, and saving the scene serializes it under `"Health"`.
 

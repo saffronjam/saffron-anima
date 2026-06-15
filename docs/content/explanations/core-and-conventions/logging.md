@@ -11,7 +11,7 @@ to stdout: no logger object, no sinks, and one filter (the Vulkan messenger's no
 below).
 
 This is enough for an engine that does most of its real diagnosis elsewhere — through Vulkan
-validation layers and the [`se` control plane](../../tooling-and-control/control-plane-architecture/).
+validation layers and the [`sa` control plane](../../tooling-and-control/control-plane-architecture/).
 
 ## How it works
 

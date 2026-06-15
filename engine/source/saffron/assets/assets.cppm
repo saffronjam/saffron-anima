@@ -44,7 +44,7 @@ import Saffron.Geometry;
 import Saffron.Rendering;
 import Saffron.Scene;
 
-export namespace se
+export namespace sa
 {
     struct SystemMeshVisual
     {
@@ -1031,7 +1031,7 @@ export namespace se
     inline constexpr std::string_view StarterScript =
         R"(-- example.lua: attach to an entity's Script component, then press Play.
 -- Orbits the entity in the x/y plane around where it was authored.
----@class Example : se.ScriptSelf
+---@class Example : sa.ScriptSelf
 local Example = {}
 
 Example.properties = {
@@ -1041,14 +1041,14 @@ Example.properties = {
 
 function Example:on_create()
   -- Center one radius left of the authored spot, so the orbit starts on the entity.
-  self.center = self.entity:get_position() - se.vec3(self.radius, 0, 0)
+  self.center = self.entity:get_position() - sa.vec3(self.radius, 0, 0)
   self.angle = 0
 end
 
 function Example:on_update(dt)
   self.angle = self.angle + self.speed * dt
   local r = self.radius
-  self.entity:set_position(self.center + se.vec3(math.cos(self.angle) * r, math.sin(self.angle) * r, 0))
+  self.entity:set_position(self.center + sa.vec3(math.cos(self.angle) * r, math.sin(self.angle) * r, 0))
 end
 
 return Example
@@ -1071,38 +1071,38 @@ return Example
         }
     }
 
-    // The LuaLS (lua-language-server) definition file for the whole `se` API, written into every project
+    // The LuaLS (lua-language-server) definition file for the whole `sa` API, written into every project
     // so VS Code gives autocomplete + type-checking. ---@meta means it is never executed; the real
     // bindings are the C++ .addFunction calls. A check.sh tripwire fails if the live surface drifts from
     // this file. If you add/rename a binding, update this file (and the tripwire keeps you honest).
-    inline constexpr std::string_view SeLuaDefs =
+    inline constexpr std::string_view SaLuaDefs =
         R"(---@meta
--- SaffronEngine Lua API. LuaLS targets 5.4 (it has no 5.5 option); the runtime VM is Lua 5.5. Types only.
+-- Saffron Anima Lua API. LuaLS targets 5.4 (it has no 5.5 option); the runtime VM is Lua 5.5. Types only.
 -- Generated and engine-owned: rewritten on every project open to track the API. Do not edit by hand.
 
----@class se.Vec3
+---@class sa.Vec3
 ---@field x number
 ---@field y number
 ---@field z number
----@operator add(se.Vec3): se.Vec3
----@operator sub(se.Vec3): se.Vec3
----@operator mul(number): se.Vec3
----@operator unm: se.Vec3
+---@operator add(sa.Vec3): sa.Vec3
+---@operator sub(sa.Vec3): sa.Vec3
+---@operator mul(number): sa.Vec3
+---@operator unm: sa.Vec3
 local Vec3 = {}
 function Vec3:length() end       ---@return number
-function Vec3:normalized() end   ---@return se.Vec3
-function Vec3:dot(o) end         ---@param o se.Vec3 @return number
-function Vec3:cross(o) end       ---@param o se.Vec3 @return se.Vec3
-function Vec3:lerp(o, t) end     ---@param o se.Vec3 @param t number @return se.Vec3
+function Vec3:normalized() end   ---@return sa.Vec3
+function Vec3:dot(o) end         ---@param o sa.Vec3 @return number
+function Vec3:cross(o) end       ---@param o sa.Vec3 @return sa.Vec3
+function Vec3:lerp(o, t) end     ---@param o sa.Vec3 @param t number @return sa.Vec3
 
----@class se.RayHit
+---@class sa.RayHit
 ---@field hit boolean
 ---@field distance number
----@field point se.Vec3
----@field normal se.Vec3
----@field entity se.Entity?
+---@field point sa.Vec3
+---@field normal sa.Vec3
+---@field entity sa.Entity?
 
----@class se.RagdollState
+---@class sa.RagdollState
 ---@field present boolean
 ---@field active boolean
 ---@field bodyWeight number
@@ -1112,90 +1112,90 @@ function Vec3:lerp(o, t) end     ---@param o se.Vec3 @param t number @return se.
 -- add_component / remove_component reject the structural ones (Relationship, SkinnedMesh, Bone, FootIk,
 -- BonePhysics, Collider, Rigidbody, KinematicBones) at runtime with a logged warning — edit those through
 -- the dedicated methods (set_parent, the physics bindings) or the editor, not as raw component writes.
----@alias se.ComponentName "Name"|"Transform"|"Mesh"|"Camera"|"Material"|"MaterialSet"|"MaterialAsset"|"ModelInstance"|"Script"|"AnimationPlayer"|"DirectionalLight"|"PointLight"|"SpotLight"|"ReflectionProbe"|"Relationship"|"SkinnedMesh"|"Bone"|"FootIk"|"BonePhysics"|"Rigidbody"|"Collider"|"KinematicBones"|"CharacterController"
+---@alias sa.ComponentName "Name"|"Transform"|"Mesh"|"Camera"|"Material"|"MaterialSet"|"MaterialAsset"|"ModelInstance"|"Script"|"AnimationPlayer"|"DirectionalLight"|"PointLight"|"SpotLight"|"ReflectionProbe"|"Relationship"|"SkinnedMesh"|"Bone"|"FootIk"|"BonePhysics"|"Rigidbody"|"Collider"|"KinematicBones"|"CharacterController"
 
----@class se.Entity
+---@class sa.Entity
 local Entity = {}
 function Entity:valid() end                  ---@return boolean
 function Entity:name() end                   ---@return string
 function Entity:uuid() end                   ---@return string
 -- get_component is declared in the generated component-defs tail (with a typed overload per component).
-function Entity:set_component(name, value) end ---@param name se.ComponentName @param value table @return boolean
-function Entity:add_component(name) end       ---@param name se.ComponentName @return boolean
-function Entity:remove_component(name) end    ---@param name se.ComponentName @return boolean
-function Entity:has_component(name) end       ---@param name se.ComponentName @return boolean
-function Entity:get_position() end           ---@return se.Vec3
-function Entity:get_rotation() end           ---@return se.Vec3
-function Entity:get_scale() end              ---@return se.Vec3
-function Entity:get_world_position() end     ---@return se.Vec3
-function Entity:get_world_rotation() end     ---@return se.Vec3
-function Entity:set_position(v) end          ---@param v se.Vec3
-function Entity:set_rotation(v) end          ---@param v se.Vec3
-function Entity:set_scale(v) end             ---@param v se.Vec3
+function Entity:set_component(name, value) end ---@param name sa.ComponentName @param value table @return boolean
+function Entity:add_component(name) end       ---@param name sa.ComponentName @return boolean
+function Entity:remove_component(name) end    ---@param name sa.ComponentName @return boolean
+function Entity:has_component(name) end       ---@param name sa.ComponentName @return boolean
+function Entity:get_position() end           ---@return sa.Vec3
+function Entity:get_rotation() end           ---@return sa.Vec3
+function Entity:get_scale() end              ---@return sa.Vec3
+function Entity:get_world_position() end     ---@return sa.Vec3
+function Entity:get_world_rotation() end     ---@return sa.Vec3
+function Entity:set_position(v) end          ---@param v sa.Vec3
+function Entity:set_rotation(v) end          ---@param v sa.Vec3
+function Entity:set_scale(v) end             ---@param v sa.Vec3
 function Entity:destroy() end
-function Entity:set_parent(other) end        ---@param other se.Entity @return boolean
-function Entity:parent() end                 ---@return se.Entity
-function Entity:children() end               ---@return se.Entity[]
+function Entity:set_parent(other) end        ---@param other sa.Entity @return boolean
+function Entity:parent() end                 ---@return sa.Entity
+function Entity:children() end               ---@return sa.Entity[]
 function Entity:send(handler, payload) end   ---@param handler string @param payload any
-function Entity:move_character(velocity, jump) end ---@param velocity se.Vec3 @param jump boolean
-function Entity:apply_impulse(v) end         ---@param v se.Vec3
-function Entity:add_force(v) end             ---@param v se.Vec3
-function Entity:set_velocity(v) end          ---@param v se.Vec3
-function Entity:get_velocity() end           ---@return se.Vec3
+function Entity:move_character(velocity, jump) end ---@param velocity sa.Vec3 @param jump boolean
+function Entity:apply_impulse(v) end         ---@param v sa.Vec3
+function Entity:add_force(v) end             ---@param v sa.Vec3
+function Entity:set_velocity(v) end          ---@param v sa.Vec3
+function Entity:get_velocity() end           ---@return sa.Vec3
 function Entity:enable_ragdoll() end         ---@return boolean
 function Entity:disable_ragdoll() end
 function Entity:set_ragdoll_blend(active, weight) end ---@param active boolean @param weight number
-function Entity:ragdoll_state() end          ---@return se.RagdollState
+function Entity:ragdoll_state() end          ---@return sa.RagdollState
 
----@class se.ScriptSelf
----@field entity se.Entity
+---@class sa.ScriptSelf
+---@field entity sa.Entity
 local ScriptSelf = {}
 function ScriptSelf:on_create() end
 function ScriptSelf:on_update(dt) end                  ---@param dt number
 function ScriptSelf:on_destroy() end
-function ScriptSelf:on_trigger_enter(other) end        ---@param other se.Entity
-function ScriptSelf:on_trigger_exit(other) end         ---@param other se.Entity
-function ScriptSelf:on_contact(other, point, normal) end ---@param other se.Entity @param point se.Vec3 @param normal se.Vec3
+function ScriptSelf:on_trigger_enter(other) end        ---@param other sa.Entity
+function ScriptSelf:on_trigger_exit(other) end         ---@param other sa.Entity
+function ScriptSelf:on_contact(other, point, normal) end ---@param other sa.Entity @param point sa.Vec3 @param normal sa.Vec3
 
-se = {}
-function se.log(message) end                 ---@param message string
-function se.is_key_down(key) end             ---@param key string @return boolean held this tick
-function se.is_key_pressed(key) end          ---@param key string @return boolean went down this tick (edge)
-function se.is_key_up(key) end               ---@param key string @return boolean went up this tick (edge)
-function se.mouse_position() end             ---@return se.Vec3
-function se.mouse_delta() end                ---@return se.Vec3
-function se.is_mouse_down(button) end        ---@param button string @return boolean held this tick
-function se.is_mouse_pressed(button) end     ---@param button string @return boolean went down this tick (edge)
-function se.is_mouse_up(button) end          ---@param button string @return boolean went up this tick (edge)
-function se.mouse_scroll() end               ---@return number
-function se.get_entity_by_name(name) end     ---@param name string @return se.Entity
-function se.find_all_by_name(name) end       ---@param name string @return se.Entity[]
-function se.find_by_uuid(uuid) end           ---@param uuid string @return se.Entity
-function se.primary_camera() end             ---@return se.Entity
-function se.spawn(name) end                  ---@param name string @return se.Entity
-function se.vec3(x, y, z) end                ---@param x number @param y number @param z number @return se.Vec3
-function se.look_at(eye, target, up) end     ---@param eye se.Vec3 @param target se.Vec3 @param up se.Vec3 @return se.Vec3
-function se.lerp(a, b, t) end                ---@param a se.Vec3 @param b se.Vec3 @param t number @return se.Vec3
-function se.raycast(ox, oy, oz, dx, dy, dz, maxDist) end                  ---@return se.RayHit
-function se.spherecast(ox, oy, oz, dx, dy, dz, radius, maxDist) end       ---@return se.RayHit
-function se.broadcast(handler, payload) end  ---@param handler string @param payload any
-function se.wait(seconds) end                ---@param seconds number
-function se.delay(seconds, fn) end           ---@param seconds number @param fn function
-function se.spawn_task(fn, ...) end          ---@param fn function
+sa = {}
+function sa.log(message) end                 ---@param message string
+function sa.is_key_down(key) end             ---@param key string @return boolean held this tick
+function sa.is_key_pressed(key) end          ---@param key string @return boolean went down this tick (edge)
+function sa.is_key_up(key) end               ---@param key string @return boolean went up this tick (edge)
+function sa.mouse_position() end             ---@return sa.Vec3
+function sa.mouse_delta() end                ---@return sa.Vec3
+function sa.is_mouse_down(button) end        ---@param button string @return boolean held this tick
+function sa.is_mouse_pressed(button) end     ---@param button string @return boolean went down this tick (edge)
+function sa.is_mouse_up(button) end          ---@param button string @return boolean went up this tick (edge)
+function sa.mouse_scroll() end               ---@return number
+function sa.get_entity_by_name(name) end     ---@param name string @return sa.Entity
+function sa.find_all_by_name(name) end       ---@param name string @return sa.Entity[]
+function sa.find_by_uuid(uuid) end           ---@param uuid string @return sa.Entity
+function sa.primary_camera() end             ---@return sa.Entity
+function sa.spawn(name) end                  ---@param name string @return sa.Entity
+function sa.vec3(x, y, z) end                ---@param x number @param y number @param z number @return sa.Vec3
+function sa.look_at(eye, target, up) end     ---@param eye sa.Vec3 @param target sa.Vec3 @param up sa.Vec3 @return sa.Vec3
+function sa.lerp(a, b, t) end                ---@param a sa.Vec3 @param b sa.Vec3 @param t number @return sa.Vec3
+function sa.raycast(ox, oy, oz, dx, dy, dz, maxDist) end                  ---@return sa.RayHit
+function sa.spherecast(ox, oy, oz, dx, dy, dz, radius, maxDist) end       ---@return sa.RayHit
+function sa.broadcast(handler, payload) end  ---@param handler string @param payload any
+function sa.wait(seconds) end                ---@param seconds number
+function sa.delay(seconds, fn) end           ---@param seconds number @param fn function
+function sa.spawn_task(fn, ...) end          ---@param fn function
 )";
 
-    // The project .luarc.json pointing LuaLS at library/se.lua, declaring `se` global, and disabling the
+    // The project .luarc.json pointing LuaLS at library/sa.lua, declaring `sa` global, and disabling the
     // sandboxed-out libs so autocomplete never suggests io/os/debug/package (matches the runtime VM).
     inline constexpr std::string_view LuarcJson =
         R"({
   "runtime.version": "Lua 5.4",
   "workspace.library": ["library"],
-  "diagnostics.globals": ["se"],
+  "diagnostics.globals": ["sa"],
   "runtime.builtin": { "io": "disable", "os": "disable", "debug": "disable", "package": "disable" }
 }
 )";
 
-    // Write <root>/library/se.lua + <root>/.luarc.json, ensured on project create AND open. se.lua is an
+    // Write <root>/library/sa.lua + <root>/.luarc.json, ensured on project create AND open. sa.lua is an
     // engine-owned generated artifact describing the live API, so it is rewritten every time to track the
     // engine version (a stale def file would make autocomplete lie). .luarc.json holds editable LuaLS
     // settings, so it is written only-when-absent and a user copy is never clobbered.
@@ -1208,7 +1208,7 @@ function se.spawn_task(fn, ...) end          ---@param fn function
             logWarn(std::format("project library/ not created: {}", ec.message()));
             return;
         }
-        std::ofstream(root / "library" / "se.lua") << SeLuaDefs << SeComponentDefs;
+        std::ofstream(root / "library" / "sa.lua") << SaLuaDefs << SaComponentDefs;
         const std::filesystem::path luarc = root / ".luarc.json";
         if (!std::filesystem::exists(luarc))
         {

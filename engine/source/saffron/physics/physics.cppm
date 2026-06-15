@@ -18,7 +18,7 @@ import Saffron.Geometry;
 import Saffron.Scene;
 import Saffron.Animation;
 
-export namespace se
+export namespace sa
 {
     struct PhysicsWorldImpl;  // defined in physics.cpp; owns the Jolt objects
 

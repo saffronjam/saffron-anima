@@ -122,7 +122,7 @@ export function useGizmoShortcuts(): void {
           if (matchesBinding(event, id, overrides)) {
             event.preventDefault();
             // Optimistic local update + the command; the reconcile poll's get-gizmo
-            // read keeps it in sync with any external mutation (e.g. `se set-gizmo`).
+            // read keeps it in sync with any external mutation (e.g. `sa set-gizmo`).
             store.setGizmo({ op });
             void client.setGizmo({ op }).catch((err: unknown) => logRejected("set-gizmo", err));
             return;

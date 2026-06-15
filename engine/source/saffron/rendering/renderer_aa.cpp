@@ -35,7 +35,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Detail;
 
-namespace se
+namespace sa
 {
     // The largest sample count not exceeding `requested` that the MSAA color+depth formats
     // accept (e1 if none) — a count valid as a framebuffer limit can still be unsupported for

@@ -6,7 +6,7 @@ The highest value-to-effort phase. `get_component` is read-only today; the regis
 inverse, so a generic **write** is a pure binding with zero per-type code. Plus the missing transform
 getters (symmetry + world space), which already have backing functions in `Saffron.Scene`.
 
-This phase ships table-based vectors (`{x,y,z}`); Phase 2 cuts every vector to `se.Vec3` in one no-legacy
+This phase ships table-based vectors (`{x,y,z}`); Phase 2 cuts every vector to `sa.Vec3` in one no-legacy
 change. Land the **write** API here (stable wire shape), and fold the new world getters' Vec3 form into
 Phase 2 so they are born as `Vec3` (Phase 1 → Phase 2 is the locked order, §8 of the README).
 
@@ -18,7 +18,7 @@ Phase 2 so they are born as `Vec3` (Phase 1 → Phase 2 is the locked order, §8
 `addDefault` / `remove`. Every registered component is reachable with the same type-erased generic code that
 backs the read snapshot — **no new C++ in `Saffron.Scene`.**
 
-## New `se.Entity` methods (all in the `beginClass<ScriptEntity>` block, `script_runtime.cpp:431`)
+## New `sa.Entity` methods (all in the `beginClass<ScriptEntity>` block, `script_runtime.cpp:431`)
 
 | Method | Signature | Backing |
 |---|---|---|
@@ -30,7 +30,7 @@ backs the read snapshot — **no new C++ in `Saffron.Scene`.**
 `set_component` needs a **Lua-table → JSON** converter — the inverse of the existing `jsonToLua`
 (`script_runtime.cpp:43`). Add `luaToJson(lua_State*, int index) -> nlohmann::json` in the anonymous
 namespace: tables with 1-based integer keys → JSON array, string-keyed tables → object, number/bool/string
-scalars 1:1, `nil` → null. In **Phase 2** add an `se.Vec3` userdata branch (→ a 3-number array). **Reuse for
+scalars 1:1, `nil` → null. In **Phase 2** add an `sa.Vec3` userdata branch (→ a 3-number array). **Reuse for
 `set_component`, the Phase 2 Vec3 marshalling, and the Phase 5 bridges' arg marshalling.** Partial patches
 work for free: `deserialize` merges onto the existing component (the same path the control-plane
 `set-component` command uses, `control_commands_scene.cpp` — mirror its partial-JSON-patch behavior).
@@ -81,7 +81,7 @@ are missing but fully backed in `Saffron.Scene`:
 | `get_world_rotation()` | `worldRotation(scene, entity)` (`:897`) + `quatToEulerZYX` (`:977`) | quat → Euler radians (matches `set_rotation`) |
 
 These return **`{x,y,z}` tables in Phase 1** (parity with today's `get_position`); **Phase 2's no-legacy
-cutover replaces the new and the old vector returns in one stroke** with `se.Vec3`. `get_world_matrix`
+cutover replaces the new and the old vector returns in one stroke** with `sa.Vec3`. `get_world_matrix`
 (`worldMatrix`, `:882`) is deferred unless a script needs the full mat4. `look_at` is a Phase 2 math binding
 (needs the quat→euler decomposition).
 

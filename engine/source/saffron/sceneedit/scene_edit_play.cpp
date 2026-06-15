@@ -16,7 +16,7 @@ import Saffron.Core;
 import Saffron.Signal;
 import Saffron.Scene;
 
-namespace se
+namespace sa
 {
     namespace
     {
@@ -94,7 +94,7 @@ namespace se
         dropSmoothing(ctx);
         ctx.playTick = 0;
         ctx.scriptErrors.clear();  // each session drains fresh; seq stays monotonic for cursors
-        ctx.scriptLogs.clear();    // ditto for se.log output
+        ctx.scriptLogs.clear();    // ditto for sa.log output
         ctx.playScene.emplace(std::move(play));
         publishTransition(ctx, PlayState::Playing);
         // Re-resolve the selection into the duplicate by uuid: the old handle indexes the

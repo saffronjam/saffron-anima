@@ -20,7 +20,7 @@ texture is identified by its position in that array. The slot travels in the per
 the shader can look up the right texture for each instance from a single bound array.
 
 Because the slot is just an integer, a `DrawBatch` keys only on `(pipeline, mesh)`. Two textures on
-the same mesh become one instanced `drawIndexed`. `se render-stats` reports batches, so two
+the same mesh become one instanced `drawIndexed`. `sa render-stats` reports batches, so two
 differently textured instances are visible as a single batch.
 
 ## One array, set 0
@@ -94,7 +94,7 @@ held (as a `Ref`) by every `GpuTexture`; when a texture is destroyed its slot re
 next upload reuses a freed slot before growing `nextBindlessIndex`. This keeps a hot-reloaded or churny
 scene bounded instead of marching the high-water mark to the limit. Reclaim is frame-safe because the draw
 path holds live texture `Ref`s for the frame — textures die at cache-clear/teardown, never mid-frame — and
-the free-list outlives both the descriptors and the textures. `se render-stats` reports `bindlessTextures`
+the free-list outlives both the descriptors and the textures. `sa render-stats` reports `bindlessTextures`
 (high-water) and `bindlessFree` (reclaimed).
 
 Uploads generate a full **mip chain** (`vkCmdBlitImage` down the levels, linear filter) and the bindless

@@ -69,9 +69,9 @@ live and how many bodies it holds (zero until bodies are authored). It returns a
 in Edit rather than an error, so the editor can poll it unconditionally:
 
 ```sh
-se physics-state          # physics=inactive  bodies=0  dynamic=0   (in Edit)
-se play
-se physics-state          # physics=active    bodies=0  dynamic=0   (while playing)
+sa physics-state          # physics=inactive  bodies=0  dynamic=0   (in Edit)
+sa play
+sa physics-state          # physics=active    bodies=0  dynamic=0   (while playing)
 ```
 
 ## What | File | Symbols

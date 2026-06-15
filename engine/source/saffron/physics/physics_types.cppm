@@ -8,7 +8,7 @@ export module Saffron.Physics:Types;
 
 import Saffron.Core;
 
-export namespace se
+export namespace sa
 {
     /// How a body participates in the simulation. Mirrors Jolt EMotionType 1:1.
     /// A ColliderComponent without a RigidbodyComponent is an implicit Static body;

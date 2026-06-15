@@ -36,7 +36,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Detail;
 
-namespace se
+namespace sa
 {
     // The image read back after rendering: the resolve target under MSAA, else the color image.
     static auto resolveTarget(Image& resolve, Image& color, bool msaa) -> Image&

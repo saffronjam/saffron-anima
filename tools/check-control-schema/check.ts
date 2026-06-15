@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Contract tripwire: launches a headless SaffronEngine, compares live `help`
+// Contract tripwire: launches a headless Saffron Anima, compares live `help`
 // with the generated DTO manifest, and validates live command results against
 // the generated OpenRPC schemas.
 
@@ -14,7 +14,7 @@ const REPO = join(HERE, "..", "..");
 const SCHEMA_DIR = join(REPO, "schemas", "control");
 const OPENRPC = join(SCHEMA_DIR, "openrpc.generated.json");
 const MANIFEST = join(SCHEMA_DIR, "command-manifest.generated.json");
-const ENGINE = process.env.SAFFRON_ENGINE_BIN ?? join(REPO, "build", "debug", "bin", "SaffronEngine");
+const ENGINE = process.env.SAFFRON_ANIMA_BIN ?? join(REPO, "build", "debug", "bin", "SaffronAnima");
 const SOCK = process.env.SAFFRON_CONTROL_SOCK ?? `/tmp/saffron-contract-${process.pid}.sock`;
 const APPDATA =
   process.env.SAFFRON_APPDATA_DIR ?? mkdtempSync(join(tmpdir(), "saffron-contract-appdata."));

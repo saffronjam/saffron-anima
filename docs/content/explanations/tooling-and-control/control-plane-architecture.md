@@ -9,7 +9,7 @@ A control plane is an out-of-band channel for driving a running program: an exte
 named requests over a socket, the program runs them against its live state, and replies. It turns an
 otherwise opaque process into something scriptable and inspectable from outside.
 
-In Saffron the control plane makes the host scriptable from the [`se` CLI](../se-cli-protocol/) and
+In Saffron the control plane makes the host scriptable from the [`sa` CLI](../sa-cli-protocol/) and
 from tests. The host listens on a unix socket, and each request mutates or inspects the scene, the
 asset catalog, or the renderer.
 
@@ -112,9 +112,9 @@ protocol is trivial to speak from a tiny client with no engine dependency.
 
 ## Id encoding on the wire
 
-Entity and asset ids are `u64`. The host emits every id as a **decimal JSON string** — `"id": "12884901889"`, never the bare number `12884901889`. A u64 id spans the full 64-bit range, past the `2^53` a JavaScript number holds exactly, so a bare number would be silently rounded the moment a JS client ran the reply through `JSON.parse`. A decimal string survives every JSON parser intact, so the editor and the `se` CLI both read the exact id back.
+Entity and asset ids are `u64`. The host emits every id as a **decimal JSON string** — `"id": "12884901889"`, never the bare number `12884901889`. A u64 id spans the full 64-bit range, past the `2^53` a JavaScript number holds exactly, so a bare number would be silently rounded the moment a JS client ran the reply through `JSON.parse`. A decimal string survives every JSON parser intact, so the editor and the `sa` CLI both read the exact id back.
 
-The contract is symmetric and forgiving on input. An entity selector — the `entity` param on `select`, `inspect`, `set-transform`, and the rest — resolves through one helper that accepts a **string id**, a **number id**, or an **exact entity name**; it tries the id first because it is stable across reloads. Asset selectors take `id` or `name` the same way. So a script may pass `se select 42` (a bare number the CLI types as an integer) or `se select "42"` and both resolve, while the reply that comes back always carries the id as a string.
+The contract is symmetric and forgiving on input. An entity selector — the `entity` param on `select`, `inspect`, `set-transform`, and the rest — resolves through one helper that accepts a **string id**, a **number id**, or an **exact entity name**; it tries the id first because it is stable across reloads. Asset selectors take `id` or `name` the same way. So a script may pass `sa select 42` (a bare number the CLI types as an integer) or `sa select "42"` and both resolve, while the reply that comes back always carries the id as a string.
 
 | What | File | Symbols |
 |---|---|---|
@@ -156,7 +156,7 @@ and unlinks the socket file.
 > A handler runs synchronously inside the frame and shares the engine's single-threaded state, so it must never block or sleep. Long work belongs to a render-graph pass or a background import that the handler kicks off, not the handler body.
 
 ## Related
-- [se CLI](../se-cli-protocol/) — the client that speaks this wire shape
+- [sa CLI](../sa-cli-protocol/) — the client that speaks this wire shape
 - [Scene commands](../scene-commands/) · [Render commands](../render-commands/) · [Asset commands](../asset-commands/) — the built-in command set
 - [Main loop](../../app-lifecycle-and-window/main-loop-and-run/) — where the drain is called
 - [Error handling](../../core-and-conventions/error-handling/) — the `Result<T>` carried out to the reply

@@ -51,7 +51,7 @@ place these C entry points are held, and the rest of the renderer calls through 
 - `buildBlas` is called from mesh upload only when RT is supported, so `GpuMesh::blas` stays null
   otherwise.
 
-The feature toggles therefore wire into the UI and the `se` control plane unconditionally: on a
+The feature toggles therefore wire into the UI and the `sa` control plane unconditionally: on a
 non-RT device they are inert rather than fatal.
 
 ## What stays compiled regardless

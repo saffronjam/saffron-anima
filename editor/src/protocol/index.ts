@@ -9,7 +9,7 @@ import type {
   ThumbnailResult,
   Vec3,
   WireUuid,
-} from "./se-types";
+} from "./sa-types";
 
 export type {
   ActiveAlarmDto,
@@ -162,7 +162,7 @@ export type {
   Vec4,
   ViewportNativeInfoResult,
   WireUuid,
-} from "./se-types";
+} from "./sa-types";
 
 export type Uuid = WireUuid;
 export type AssetEntry = AssetEntryDto;

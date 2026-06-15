@@ -6,7 +6,7 @@ weight = 100
 
 # {{ replace .File.ContentBaseName "-" " " | title }}
 
-One line: what this concept is and the problem it solves in SaffronEngine.
+One line: what this concept is and the problem it solves in SaffronAnima.
 
 ## How it works
 

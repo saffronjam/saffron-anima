@@ -18,4 +18,4 @@ Reference pages catalogue the engine's exact surface: type signatures, data shap
 | `renderer-api` | `newRenderer`, `beginFrame`/`endFrame`, `submit`, `requestMeshPipeline` |
 | `components` | every built-in component and its fields |
 | `shader-descriptor-sets` | sets 0–4: bindless, lighting, instances, IBL, screen-space |
-| `control-commands` | every registered `se` command, its params and output |
+| `control-commands` | every registered `sa` command, its params and output |

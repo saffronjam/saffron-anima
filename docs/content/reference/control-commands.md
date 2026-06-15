@@ -6,7 +6,7 @@ math = false
 
 # Control commands
 
-Every command registered in `Saffron.Control` and driven by the `se` CLI over the unix socket. Commands are grouped by registering file. Params are positional unless named, and `?` marks an optional param. Each command returns a JSON result.
+Every command registered in `Saffron.Control` and driven by the `sa` CLI over the unix socket. Commands are grouped by registering file. Params are positional unless named, and `?` marks an optional param. Each command returns a JSON result.
 
 Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [the id-encoding contract](../../explanations/tooling-and-control/control-plane-architecture/#id-encoding-on-the-wire)). Entity selectors resolve a string id, a number, or an exact name. Every scene-mutating command bumps `sceneVersion`; selection changes bump `selectionVersion` — both are read back by `get-selection`, which also carries `playState`/`playVersion`.
 
@@ -49,7 +49,7 @@ During play (see `play`/`pause`/`stop`/`step`), scene commands address the *runn
 | `set-gizmo` | `{op?:translate\|rotate\|scale, space?:world\|local}` | set the gizmo op/space |
 | `gizmo-pointer` | `{phase:hover\|begin\|drag\|end, x, y}` | drive the native overlay gizmo from NDC `x,y∈[-1,1]`; returns `{hovered, dragging}` |
 | `fly-input` | `{active, lookDx, lookDy, forward, back, left, right, up, down}` | stream editor fly-cam input; look deltas (pixels) accumulate until the engine drains them each frame |
-| `script-input` | `{keys:[...]}` | set the normalized key names visible to Lua through `se.is_key_down(key)` (and the derived `se.is_key_pressed`/`se.is_key_up` edges) |
+| `script-input` | `{keys:[...]}` | set the normalized key names visible to Lua through `sa.is_key_down(key)` (and the derived `sa.is_key_pressed`/`sa.is_key_up` edges) |
 
 ## Animation commands
 

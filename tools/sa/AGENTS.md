@@ -1,20 +1,20 @@
-# tools/se — SaffronEngine control CLI
+# tools/sa — Saffron Anima control CLI
 
 A minimal C++20 binary (`source/main.cpp` plus the vendored header-only `args.hxx`)
-that speaks JSON over the unix socket exposed by the running `SaffronEngine`. No
+that speaks JSON over the unix socket exposed by the running `SaffronAnima`. No
 engine dependency — it only links `nlohmann_json` (`args.hxx` is header-only).
 
 ## Usage
 
 ```
-se <command> [positional...] [-o text|json] [--flag value|--flag=value]
+sa <command> [positional...] [-o text|json] [--flag value|--flag=value]
 ```
 
-`cmd/se` in the repo root is a thin Python wrapper that runs the host-built binary
-directly (`os.execv` of `build/debug/bin/se`) — no toolbox involved, since the host
+`cmd/sa` in the repo root is a thin Python wrapper that runs the host-built binary
+directly (`os.execv` of `build/debug/bin/sa`) — no toolbox involved, since the host
 reaches the control socket directly. Only its wrapper-only `start` subcommand uses
-`toolbox run -c saffron-build`, and that launches the *engine* (`SaffronEngine`, and
-optionally `cmake --build` it), never the `se` binary.
+`toolbox run -c saffron-build`, and that launches the *engine* (`SaffronAnima`, and
+optionally `cmake --build` it), never the `sa` binary.
 
 ## Output modes (`-o` / `--output`)
 
@@ -49,7 +49,7 @@ argument is the parsed JSON payload from the engine. Fall through to the UTF-8
 
 ```sh
 toolbox run -c saffron-build bash -lc \
-  'cd /var/home/saffronjam/repos/SaffronEngine && cmake --build build/debug --target se'
+  'cd <repo> && cmake --build build/debug --target sa'
 ```
 
-C++20 (not C++26 modules — `se` has no `import std` and no engine headers).
+C++20 (not C++26 modules — `sa` has no `import std` and no engine headers).

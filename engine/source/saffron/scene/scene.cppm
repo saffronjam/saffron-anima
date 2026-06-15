@@ -27,7 +27,7 @@ export module Saffron.Scene;
 import Saffron.Core;
 import Saffron.Json;
 
-export namespace se
+export namespace sa
 {
     struct NameComponent
     {

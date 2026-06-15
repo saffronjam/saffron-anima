@@ -75,7 +75,7 @@ ragdoll on first call (so a hit "just works" with no separate `enable-ragdoll`),
 `active`, sets a uniform target with `bodyWeight`, or targets one limb with `bone`+`weight`. A hit
 reaction is `set-ragdoll {bone, weight: 1}` on the struck limb, left to ease back down to its region's
 authored target. `get-ragdoll {entity}` reports presence, the active flag, the mean weight, and the
-bone count. Both are scriptable from `se` and bump `animationVersion` so the editor reconciles.
+bone count. Both are scriptable from `sa` and bump `animationVersion` so the editor reconciles.
 
 ## What | File | Symbols
 

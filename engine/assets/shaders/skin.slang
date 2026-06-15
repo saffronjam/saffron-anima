@@ -3,7 +3,7 @@
 // — no skinned vertex-shader permutation. One thread per vertex.
 //
 // The vertex + skin streams are read/written as raw byte buffers at the engine's tightly-packed
-// strides: se::Vertex is 32 B (position@0, normal@12, uv0@24) and se::VertexSkin is 24 B (joints@0,
+// strides: sa::Vertex is 32 B (position@0, normal@12, uv0@24) and sa::VertexSkin is 24 B (joints@0,
 // weights@8). A typed StructuredBuffer<Vertex> would impose std430 padding — float3 takes 16-byte
 // alignment, giving a 48 B Vertex stride and weights at offset 16 — which does NOT match the engine
 // layout and shatters the mesh. ByteAddressBuffer.Load/Store use scalar packing, so the strides match
@@ -17,11 +17,11 @@
 [[vk::binding(2, 0)]] StructuredBuffer<float4x4> jointMatrices;  // the frame's joint palette (64 B, matches glm)
 [[vk::binding(3, 0)]] RWByteAddressBuffer outVertices;          // deformed output, this frame (32 B stride)
 
-static const uint VertexStride = 32u;      // sizeof(se::Vertex)
-static const uint SkinStride = 24u;        // sizeof(se::VertexSkin)
-static const uint NormalOffset = 12u;      // se::Vertex.normal
-static const uint UvOffset = 24u;          // se::Vertex.uv0
-static const uint WeightsOffset = 8u;      // se::VertexSkin.weights (after u16x4 joints)
+static const uint VertexStride = 32u;      // sizeof(sa::Vertex)
+static const uint SkinStride = 24u;        // sizeof(sa::VertexSkin)
+static const uint NormalOffset = 12u;      // sa::Vertex.normal
+static const uint UvOffset = 24u;          // sa::Vertex.uv0
+static const uint WeightsOffset = 8u;      // sa::VertexSkin.weights (after u16x4 joints)
 
 struct Push
 {

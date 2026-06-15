@@ -15,7 +15,7 @@ import Saffron.Signal;
 import Saffron.Scene;
 import Saffron.Json;
 
-namespace se
+namespace sa
 {
     void setSelection(SceneEditContext& ctx, Entity entity)
     {

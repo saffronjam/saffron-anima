@@ -35,7 +35,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Detail;
 
-namespace se
+namespace sa
 {
     auto newMeshPipeline(Renderer& renderer, std::string_view shaderName, bool unlit, bool skinned, bool wireframe)
         -> Result<Ref<Pipeline>>

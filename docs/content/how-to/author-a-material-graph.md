@@ -28,20 +28,20 @@ that renders on the preview *and* on any entity the material is assigned to.
 
 ## From the CLI
 
-The same operations are scriptable over the [`se` CLI](../drive-the-editor-from-the-cli/):
+The same operations are scriptable over the [`sa` CLI](../drive-the-editor-from-the-cli/):
 
 ```sh
-se material-create --name Rock
-se material-set-graph --material Rock \
+sa material-create --name Rock
+sa material-set-graph --material Rock \
   --graph '{"nodes":[{"id":"c","type":"constant","props":{"value":[0.6,0.3,0.1,1]}},
                      {"id":"t","type":"textureSlot","props":{"slot":"albedo"}},
                      {"id":"m","type":"multiply"},{"id":"out","type":"materialOutput"}],
             "edges":[{"from":["c","rgba"],"to":["m","a"]},
                      {"from":["t","rgba"],"to":["m","b"]},
                      {"from":["m","rgba"],"to":["out","baseColor"]}]}'
-se material-compile-graph --material Rock   # force codegen; { ok: true }
-se material-assign --entity 12345 --material Rock
-se material-cook                            # bake every codegen variant to disk
+sa material-compile-graph --material Rock   # force codegen; { ok: true }
+sa material-assign --entity 12345 --material Rock
+sa material-cook                            # bake every codegen variant to disk
 ```
 
 `material-set-graph` reports `foldable` (whether it avoided codegen). `material-cook` precompiles every
@@ -51,4 +51,4 @@ codegen material's übershader variant — run it after editing `mesh.slang` or 
 
 - [Node-graph codegen](../../explanations/materials-and-pipelines/node-graph-codegen/) — fold vs codegen, the emitter, slangc
 - [Native materials](../../explanations/materials-and-pipelines/native-materials/) — the `.smat` asset the graph lives on
-- [Drive the editor from the CLI](../drive-the-editor-from-the-cli/) — the `se` command basics
+- [Drive the editor from the CLI](../drive-the-editor-from-the-cli/) — the `sa` command basics

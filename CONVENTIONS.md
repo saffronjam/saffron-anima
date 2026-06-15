@@ -12,7 +12,7 @@ functional, with very limited OOP. When in doubt, ask: *"how would Go do this?"*
 | Constants & enum values | `PascalCase` | `MaxFramesInFlight`, `ImageFormat::Rgba16f` |
 | Files | `snake_case` | `render_graph.cppm`, `vulkan_context.cppm` |
 | Directories | `lowercase` | `engine/source/saffron/rendering/` |
-| Namespace | `se` (one package-like namespace) | `se::createApp()` |
+| Namespace | `sa` (one package-like namespace) | `sa::createApp()` |
 | Modules | `Saffron.<Area>` | `Saffron.Rendering` |
 
 (CMake files under `cmake/` keep CMake's own `PascalCase.cmake` convention — they
@@ -53,7 +53,7 @@ are not our source.)
   free functions that transform them.
 - A "constructor" is a free function `newThing(...) -> Thing` (or `-> Result<Thing>`).
 - Prefer composition over any form of subtyping.
-- One namespace, `se`. Modules provide the real boundaries.
+- One namespace, `sa`. Modules provide the real boundaries.
 
 ## Return types
 - **Trailing return type for value-returning functions:** `auto functionName(ParamType param) -> ReturnType`.

@@ -80,7 +80,7 @@ iterates, never how a light is shaded; both this loop and the
 [brute-force loop](../brute-force-fallback/) call the same `punctual`/`brdf` functions. A light
 is added to a cluster only when its `range` sphere overlaps the froxel, and that same `range`
 makes its contribution zero everywhere else, so a fragment never misses a light that would have
-lit it. The two paths are therefore pixel-identical, and `se set-clustered 0` is a verified A/B.
+lit it. The two paths are therefore pixel-identical, and `sa set-clustered 0` is a verified A/B.
 
 ## In the code
 

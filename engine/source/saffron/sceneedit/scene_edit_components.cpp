@@ -13,7 +13,7 @@ import Saffron.Core;
 import Saffron.Scene;
 import Saffron.Json;
 
-namespace se
+namespace sa
 {
     void registerBuiltinComponents(ComponentRegistry& reg)
     {

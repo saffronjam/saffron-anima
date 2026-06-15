@@ -1,9 +1,9 @@
-# SaffronEngine convenience targets.
+# SaffronAnima convenience targets.
 #
 # These targets are THIN WRAPPERS around the existing scripts/tools. The toolbox-bound
 # ones (everything except help/run-docs) AUTO-ENTER the `saffron-build` toolbox when run
 # from the host, so `make lint` works the same from a host shell or from inside the
-# toolbox. SaffronEngine only builds there (immutable host OS, clang 21 + libc++
+# toolbox. SaffronAnima only builds there (immutable host OS, clang 21 + libc++
 # `import std`, Vulkan/SDL3/slang); see AGENTS.md and tools/ci/README.md.
 #
 # Run from the host:   make lint        (re-enters the toolbox for you)
@@ -18,7 +18,7 @@
 
 REPO := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 BUILD_DIR := $(REPO)build/debug
-ENGINE_BIN := $(BUILD_DIR)/bin/SaffronEngine
+ENGINE_BIN := $(BUILD_DIR)/bin/SaffronAnima
 EDITOR := $(REPO)editor
 DOCS := $(REPO)docs
 TOOLBOX := saffron-build
@@ -50,7 +50,7 @@ MK := $(MAKE)
 
 # Tracked C++ sources we own; excludes the cmake third-party impl TUs, vendored code, and
 # generated serde (gen-control-dto owns its style — formatting it just fights the generator).
-CPP_LS := git -C "$(REPO)" ls-files '*.cppm' '*.cpp' | grep -vE '^(cmake/|third_party/)|\.generated\.cpp$$'
+CPP_LS := git -C "$(REPO)" ls-files '*.cppm' '*.cpp' | grep -vE '^(cmake/|third_party/)|\.generated\.cpp$$' | while IFS= read -r f; do test -f "$$f" && printf '%s\n' "$$f"; done
 
 # clang-tidy parallelism. The default (one per core) re-parses the heavy module/Vulkan
 # headers in every process at a few GB each, which OOMs a 32 GB machine at -j24.
@@ -73,14 +73,14 @@ TOOLBOX_TARGETS := check engine editor schema e2e run run-debug run-engine run-s
 
 ## help: list the available targets (default; runs on the host, no toolbox)
 help:
-	@echo 'SaffronEngine convenience targets. Toolbox-bound targets auto-enter the'
+	@echo 'SaffronAnima convenience targets. Toolbox-bound targets auto-enter the'
 	@echo 'saffron-build toolbox; run them from the host or from inside it.'
 	@echo
 	@echo 'Build & verify:'
 	@echo '  make check              - full reproducible gate (tools/ci/check.sh)'
 	@echo '  make engine             - cmake configure + build the engine binary (-j$(ENGINE_JOBS); override ENGINE_JOBS)'
 	@echo '  make editor             - build the TypeScript/Tauri frontend (bun run build)'
-	@echo '  make schema             - control-schema contract test (live se vs schemas/control)'
+	@echo '  make schema             - control-schema contract test (live sa vs schemas/control)'
 	@echo '  make e2e                - end-to-end control-plane/rendering tests (bun test, headless)'
 	@echo
 	@echo 'Run:'
@@ -88,7 +88,7 @@ help:
 	@echo '  make run-debug          - start the editor with in-editor developer mode pre-enabled'
 	@echo '  make run-engine         - start only the engine host (present-only, for debugging)'
 	@echo '  make run-software       - run the editor forcing the llvmpipe software GPU (control case)'
-	@echo '  make run-docs           - serve the Hugo docs site locally (http://localhost:1313/saffron-engine/)'
+	@echo '  make run-docs           - serve the Hugo docs site locally (http://localhost:1313/saffron-anima/)'
 	@echo
 	@echo 'run / run-engine use the real NVIDIA GPU when its Vulkan ICD is found; run-software forces llvmpipe.'
 	@echo
@@ -117,7 +117,7 @@ else
 check:
 	"$(REPO)tools/ci/check.sh"
 
-## engine: configure + build the C++26 engine binary SaffronEngine (parallel; override with ENGINE_JOBS=1)
+## engine: configure + build the C++26 engine binary SaffronAnima (parallel; override with ENGINE_JOBS=1)
 # A flock serializes concurrent `make engine` on the same BUILD_DIR. Parallel compilation
 # WITHIN one ninja is safe; what corrupts the module .pcm files (Bus error + a trashed
 # .ninja_log) is TWO ninja processes writing one dir at once. The lock makes a second build
@@ -132,7 +132,7 @@ engine:
 editor:
 	cd "$(EDITOR)" && bun run build
 
-## schema: contract test — live `se` control output vs schemas/control
+## schema: contract test — live `sa` control output vs schemas/control
 schema:
 	cd "$(REPO)tools/check-control-schema" && bun run check.ts
 
@@ -140,7 +140,7 @@ schema:
 e2e:
 	cd "$(REPO)tests/e2e" && bun test
 
-## run: start the Tauri editor, which spawns build/debug/bin/SaffronEngine as a native child
+## run: start the Tauri editor, which spawns build/debug/bin/SaffronAnima as a native child
 run:
 	cd "$(EDITOR)" && $(GPU_ENV) $(WEBVIEW_ENV) bun run tauri dev
 
@@ -179,7 +179,7 @@ format:
 lint:
 	@test -f "$(BUILD_DIR)/compile_commands.json" || { echo "build/debug not configured — run 'make engine' first (clang-tidy needs compile_commands.json)"; exit 1; }
 	cd "$(REPO)" && $(CPP_LS) | xargs -r clang-format --dry-run -Werror
-	run-clang-tidy -p "$(BUILD_DIR)" -quiet -j $(TIDY_JOBS) engine/source tools/se/source
+	run-clang-tidy -p "$(BUILD_DIR)" -quiet -j $(TIDY_JOBS) engine/source tools/sa/source
 	cd "$(EDITOR)" && bun run lint
 
 ## prepare-for-commit: format everything, then run the linters

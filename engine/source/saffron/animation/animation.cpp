@@ -23,7 +23,7 @@ module Saffron.Animation;
 import Saffron.Core;
 import Saffron.Geometry;
 
-namespace se
+namespace sa
 {
     namespace
     {

@@ -18,7 +18,7 @@ module Saffron.Control;
 import Saffron.Core;
 import Saffron.Rendering;
 
-namespace se
+namespace sa
 {
     auto aaModeDto(const std::string& mode) -> AaModeDto
     {
@@ -237,16 +237,16 @@ namespace se
         const int gpuTid = 2;
         json events = json::array();
         events.push_back({ { "ph", "M" },
-                           { "pid", "SaffronEngine" },
+                           { "pid", "SaffronAnima" },
                            { "name", "process_name" },
-                           { "args", { { "name", "SaffronEngine" } } } });
+                           { "args", { { "name", "SaffronAnima" } } } });
         events.push_back({ { "ph", "M" },
-                           { "pid", "SaffronEngine" },
+                           { "pid", "SaffronAnima" },
                            { "tid", cpuTid },
                            { "name", "thread_name" },
                            { "args", { { "name", "CPU render thread" } } } });
         events.push_back({ { "ph", "M" },
-                           { "pid", "SaffronEngine" },
+                           { "pid", "SaffronAnima" },
                            { "tid", gpuTid },
                            { "name", "thread_name" },
                            { "args", { { "name", "GPU queue" } } } });
@@ -275,7 +275,7 @@ namespace se
                 laneTid = gpuTid;
             }
             events.push_back({ { "ph", "X" },
-                               { "pid", "SaffronEngine" },
+                               { "pid", "SaffronAnima" },
                                { "tid", laneTid },
                                { "name", s.name },
                                { "ts", tsUs },

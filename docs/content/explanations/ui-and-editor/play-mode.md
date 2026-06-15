@@ -37,7 +37,7 @@ Two things lock during play. The gizmo is hidden (its overlay is editor chrome, 
 
 ## Driving it
 
-The toolbar's playback group is a context-sensitive Play/Pause button, Stop, and Step. The same commands drive the engine over the control plane (`play`, `pause`, `stop`, `step`, `get-play-state`), so a shell `se play` flips the toolbar within a poll cycle, exactly like the gizmo buttons. The keyboard family is Unity's: Ctrl+P play/stop, Ctrl+Shift+P pause/resume, Ctrl+Alt+P step.
+The toolbar's playback group is a context-sensitive Play/Pause button, Stop, and Step. The same commands drive the engine over the control plane (`play`, `pause`, `stop`, `step`, `get-play-state`), so a shell `sa play` flips the toolbar within a poll cycle, exactly like the gizmo buttons. The keyboard family is Unity's: Ctrl+P play/stop, Ctrl+Shift+P pause/resume, Ctrl+Alt+P step.
 
 The editor learns the engine's play state through its existing reconcile poll — `get-selection` now carries `playState`/`playVersion`, so propagation costs no extra round-trip. A click writes the store optimistically and fires the command; the poll repairs it on failure and reflects any external change.
 

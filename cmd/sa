@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wrapper for the se control CLI. Handles 'start'; delegates everything else to the binary."""
+"""Wrapper for the sa control CLI. Handles 'start'; delegates everything else to the binary."""
 
 import os
 import subprocess
@@ -8,8 +8,8 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ENGINE_BIN = REPO_ROOT / "build/debug/bin/SaffronEngine"
-SE_BIN = REPO_ROOT / "build/debug/bin/se"
+ENGINE_BIN = REPO_ROOT / "build/debug/bin/SaffronAnima"
+SA_BIN = REPO_ROOT / "build/debug/bin/sa"
 
 
 def socket_path() -> str:
@@ -35,7 +35,7 @@ def is_engine_running(path: str) -> bool:
 
 
 def cmd_build() -> int:
-    print("se: building...")
+    print("sa: building...")
     result = subprocess.run(
         ["toolbox", "run", "-c", "saffron-build", "cmake", "--build",
          str(REPO_ROOT / "build/debug")],
@@ -50,11 +50,11 @@ def cmd_start(attach: bool, build: bool) -> int:
             return rc
     path = socket_path()
     if is_engine_running(path):
-        print("se: engine already running")
+        print("sa: engine already running")
         return 0
     if not ENGINE_BIN.exists():
-        print(f"se: engine binary not found: {ENGINE_BIN}", file=sys.stderr)
-        print("se: hint: se start --build", file=sys.stderr)
+        print(f"sa: engine binary not found: {ENGINE_BIN}", file=sys.stderr)
+        print("sa: hint: sa start --build", file=sys.stderr)
         return 1
     toolbox_cmd = ["toolbox", "run", "-c", "saffron-build", str(ENGINE_BIN)]
     if attach:
@@ -68,31 +68,31 @@ def cmd_start(attach: bool, build: bool) -> int:
     for _ in range(20):
         time.sleep(0.25)
         if os.path.exists(path):
-            print("se: engine started")
+            print("sa: engine started")
             return 0
-    print("se: engine launched but socket not yet ready — it may still be initialising", file=sys.stderr)
+    print("sa: engine launched but socket not yet ready — it may still be initialising", file=sys.stderr)
     return 0
 
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: se <command> [positional...] [-o text|json] [--flag value]", file=sys.stderr)
+        print("usage: sa <command> [positional...] [-o text|json] [--flag value]", file=sys.stderr)
         return 2
 
     if sys.argv[1] == "start":
         unknown = [a for a in sys.argv[2:] if a not in ("--attach", "--build")]
         if unknown:
-            print(f"se start: unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
-            print("se start: usage: se start [--attach] [--build]", file=sys.stderr)
+            print(f"sa start: unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
+            print("sa start: usage: sa start [--attach] [--build]", file=sys.stderr)
             return 1
         return cmd_start("--attach" in sys.argv, "--build" in sys.argv)
 
-    if not SE_BIN.exists():
-        print(f"se: binary not found: {SE_BIN}", file=sys.stderr)
-        print("se: run: cmake --build build/debug --target se", file=sys.stderr)
+    if not SA_BIN.exists():
+        print(f"sa: binary not found: {SA_BIN}", file=sys.stderr)
+        print("sa: run: cmake --build build/debug --target sa", file=sys.stderr)
         return 1
 
-    os.execv(str(SE_BIN), [str(SE_BIN)] + sys.argv[1:])
+    os.execv(str(SA_BIN), [str(SA_BIN)] + sys.argv[1:])
 
 
 sys.exit(main())

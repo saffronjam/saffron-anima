@@ -14,7 +14,7 @@ A full run prints a frightening tally; almost all of it is duplication, not dist
 | Number | Meaning |
 |---|---|
 | **294911** | clang-tidy's raw internal count — every warning across all ~50 translation units *before* filtering, dominated by GLM / EnTT / nlohmann template headers re-instantiated in every TU |
-| **11462** | what prints after `HeaderFilterRegex: '(engine/source\|tools/se)'` drops third-party headers |
+| **11462** | what prints after `HeaderFilterRegex: '(engine/source\|tools/sa)'` drops third-party headers |
 | **1037** | **distinct** warnings (unique file + line + message) in our own code — the real work list |
 
 Two multipliers: **C++20 modules** (every TU that `import`s a module re-analyzes its interface, so one

@@ -1,6 +1,6 @@
 /// A thumbnail combo for a `Uuid` component field. It lists `(none)` + every catalog
 /// asset of `assetType`; selecting one calls `onChange(id)`, `(none)` calls
-/// `onChange("0")`. It is ALSO an HTML5 drop TARGET accepting `application/x-se-asset`,
+/// `onChange("0")`. It is ALSO an HTML5 drop TARGET accepting `application/x-sa-asset`,
 /// but only when the dragged asset's type matches `assetType`.
 ///
 /// The caller (the inspector's fieldRenderer) owns the write: mesh/albedo go through
@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { Box, Check, ChevronsUpDown, File, Image as ImageIcon, Loader2 } from "lucide-react";
 import { getCachedThumbnailUrl, getThumbnailUrl, useEditorStore } from "../state/store";
-import { readAssetPayload } from "./AssetTile";
+import { ASSET_DND_MIME, readAssetPayload } from "./AssetTile";
 import type { AssetEntry } from "../protocol";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -127,7 +127,7 @@ export function AssetPicker({ value, assetType, onChange }: AssetPickerProps) {
     }
   };
   const onDragOver = (event: React.DragEvent<HTMLDivElement>): void => {
-    if (event.dataTransfer.types.includes("application/x-se-asset")) {
+    if (event.dataTransfer.types.includes(ASSET_DND_MIME)) {
       // Allow the drop and signal a copy.
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";

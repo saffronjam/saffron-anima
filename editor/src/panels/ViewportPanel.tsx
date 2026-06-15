@@ -546,7 +546,7 @@ export function ViewportPanel() {
       // Dropping a model asset from the catalog onto the viewport instantiates it into the scene.
       // The webview composites over the subsurface, so this transparent region is a valid HTML5
       // drop target even though the rendered pixels live below it. Asset drags carry
-      // `application/x-se-asset`; other drags fall through.
+      // `application/x-sa-asset`; other drags fall through.
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes(ASSET_DND_MIME)) {
           e.preventDefault();

@@ -10,14 +10,14 @@ topic; follow the links for the full account.
 
 ## Shape of a program
 
-A client — the editor or a standalone app — fills an `AppConfig` and calls `se::run`,
+A client — the editor or a standalone app — fills an `AppConfig` and calls `sa::run`,
 which owns the window, renderer, UI, and main loop. Clients extend it by attaching
 **layers**. A `Layer` is a struct of optional callbacks, the Go-interface pattern rather
 than a virtual base class.
 
 ```cpp
-auto config = se::AppConfig{ /* window */, .onCreate = ..., .onExit = ... };
-return se::run(config);
+auto config = sa::AppConfig{ /* window */, .onCreate = ..., .onExit = ... };
+return sa::run(config);
 ```
 
 See [the main loop](../explanations/app-lifecycle-and-window/main-loop-and-run/).
@@ -58,7 +58,7 @@ swapchain are all declared passes over imported images. Start at the
 
 ## Modules
 
-The engine is a DAG of C++26 named modules in one namespace, `se`: leaves at the bottom,
+The engine is a DAG of C++26 named modules in one namespace, `sa`: leaves at the bottom,
 the app at the top.
 
 ```mermaid
@@ -112,6 +112,6 @@ mechanics and the build.
 | Global illumination & ray tracing | DDGI probes, voxel trace, BLAS/TLAS, ray-query shadows, ReSTIR | [link](../explanations/global-illumination-and-raytracing/) |
 | Anti-aliasing | MSAA, FXAA, mode switching | [link](../explanations/anti-aliasing/) |
 | UI & editor | the Tauri/React editor, the in-webview canvas + shm frame transport, the gizmo, the inspector, thumbnails | [link](../explanations/ui-and-editor/) |
-| Tooling & control | the unix-socket control plane and the `se` CLI | [link](../explanations/tooling-and-control/) |
+| Tooling & control | the unix-socket control plane and the `sa` CLI | [link](../explanations/tooling-and-control/) |
 | Scripting | the embedded Lua 5.5 VM, sandboxing, script errors as values | [link](../explanations/scripting/) |
 | Architecture | the module DAG, the build, the coding conventions | [link](../explanations/architecture-and-conventions/) |

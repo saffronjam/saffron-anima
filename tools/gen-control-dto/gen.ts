@@ -42,7 +42,7 @@ const sceneSerdeOut = join(
   repoRoot,
   "engine/source/saffron/scene/scene_component_serde.generated.cpp",
 );
-const tsOut = join(repoRoot, "editor/src/protocol/se-types.ts");
+const tsOut = join(repoRoot, "editor/src/protocol/sa-types.ts");
 const openRpcOut = join(repoRoot, "schemas/control/openrpc.generated.json");
 const manifestOut = join(repoRoot, "schemas/control/command-manifest.generated.json");
 const componentDefsOut = join(
@@ -582,7 +582,7 @@ const commands: CommandDef[] = [
     name: "drain-script-logs",
     params: "DrainScriptLogsParams",
     result: "DrainScriptLogsResult",
-    summary: "drain se.log lines (seq cursor)",
+    summary: "drain sa.log lines (seq cursor)",
   },
   {
     name: "get-script-schema",
@@ -1451,7 +1451,7 @@ module Saffron.Control;
 import Saffron.Core;
 import Saffron.Json;
 
-namespace se
+namespace sa
 {
     namespace
     {
@@ -2531,7 +2531,7 @@ function emitOpenRpc(structs: Map<string, StructDef>): string {
   const schemaNames = [...new Set([...structs.keys()].filter((name) => name !== "DtoTag"))].sort();
   const doc = {
     openrpc: "1.3.2",
-    info: { title: "Saffron control DTOs", version: "0.2.0" },
+    info: { title: "Saffron Anima control DTOs", version: "0.2.0" },
     methods: commands.map((command) => ({
       name: command.name,
       summary: command.summary,
@@ -2602,7 +2602,7 @@ module Saffron.Scene;
 import Saffron.Core;
 import Saffron.Json;
 
-namespace se
+namespace sa
 {
     namespace
     {
@@ -3314,8 +3314,8 @@ namespace se
 `;
 }
 
-// Emit a generated C++ header holding the Lua `---@class se.<Component>` definitions + the per-name
-// `get_component` overloads, appended to library/se.lua after SeLuaDefs. Component wire shapes are read
+// Emit a generated C++ header holding the Lua `---@class sa.<Component>` definitions + the per-name
+// `get_component` overloads, appended to library/sa.lua after SaLuaDefs. Component wire shapes are read
 // from the generated TS interfaces (the `componentInterfaces` catalog) so there is a single source; the
 // registered name set is read from scene_edit_components.cpp; the two components with no TS catalog entry
 // (AnimationPlayer, MaterialAsset) are supplemented here from their serde shape.
@@ -3359,7 +3359,7 @@ function emitScriptComponentDefs(tsText: string, componentsText: string): string
     if (t.endsWith("[][]")) return `${tsToLua(t.slice(0, -4))}[][]`;
     if (t.endsWith("[]")) return `${tsToLua(t.slice(0, -2))}[]`;
     if (t.includes("|")) return t.replace(/\s+/g, ""); // string-literal union, e.g. "box"|"sphere"
-    return `se.${t}`; // a nested interface (BVec3, PhysicsMaterial, Material, …)
+    return `sa.${t}`; // a nested interface (BVec3, PhysicsMaterial, Material, …)
   };
 
   // The interface a field type references (null for primitives / vectors / unions), so the class set can
@@ -3390,12 +3390,12 @@ function emitScriptComponentDefs(tsText: string, componentsText: string): string
     const body = fields
       .map((f) => `---@field ${f.name} ${tsToLua(f.type)}${f.optional ? "?" : ""}`)
       .join("\n");
-    return `---@class se.${name}\n${body}`.trimEnd();
+    return `---@class sa.${name}\n${body}`.trimEnd();
   });
   const overloads = [...registered]
     .sort()
     .filter((n) => reach.has(n))
-    .map((n) => `---@overload fun(self: se.Entity, name: "${n}"): se.${n}?`)
+    .map((n) => `---@overload fun(self: sa.Entity, name: "${n}"): sa.${n}?`)
     .join("\n");
 
   const lua = `-- Typed component snapshots. get_component(name) returns the component as a read-only table in
@@ -3403,16 +3403,16 @@ function emitScriptComponentDefs(tsText: string, componentsText: string): string
 ${classes.join("\n\n")}
 
 ${overloads}
-function Entity:get_component(name) end  ---@param name se.ComponentName @return table?`;
+function Entity:get_component(name) end  ---@param name sa.ComponentName @return table?`;
 
   return `// GENERATED - do not edit.
 // Produced by tools/gen-control-dto/gen.ts (emitScriptComponentDefs) from the component wire-shape
-// catalog. Appended to library/se.lua after SeLuaDefs so :get_component(name) returns a typed table.
+// catalog. Appended to library/sa.lua after SaLuaDefs so :get_component(name) returns a typed table.
 #pragma once
 
 #include <string_view>
 
-inline constexpr std::string_view SeComponentDefs = R"LUA(
+inline constexpr std::string_view SaComponentDefs = R"LUA(
 ${lua}
 )LUA";
 `;

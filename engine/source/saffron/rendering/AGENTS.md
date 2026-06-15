@@ -1,7 +1,7 @@
 # Saffron.Rendering
 
 The Vulkan renderer: swapchain, the render graph, the deferred submit seam, and every
-GPU resource wrapper. Module `Saffron.Rendering`, namespace `se`. This module uses
+GPU resource wrapper. Module `Saffron.Rendering`, namespace `sa`. This module uses
 classic `#include` in the global module fragment (Vulkan-Hpp, VMA, vk-bootstrap, glm,
 stb, nanosvg) and **does NOT `import std`** — mixing the std module with these headers
 breaks the TU. Consumers still import it normally; the BMI carries the std types.

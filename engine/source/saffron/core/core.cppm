@@ -2,7 +2,7 @@ export module Saffron.Core;
 
 import std;
 
-namespace se
+namespace sa
 {
     // Maps a caller's source path to its module directory under source/saffron/
     // ("rendering", "scene", …) — the default subsystem tag for the log functions.
@@ -25,7 +25,7 @@ namespace se
     }
 }
 
-export namespace se
+export namespace sa
 {
     // Fixed-width aliases — short, Go-like spellings.
     using u8 = std::uint8_t;
@@ -55,7 +55,7 @@ export namespace se
         return std::unexpected<std::string>(std::move(message));
     }
 
-    inline constexpr std::string_view EngineName = "Saffron Engine";
+    inline constexpr std::string_view EngineName = "Saffron Anima";
     inline constexpr std::string_view EngineVersion = "0.1.0-vulkan";
 
     // A span of time, in seconds. Plain data; transform with free functions.

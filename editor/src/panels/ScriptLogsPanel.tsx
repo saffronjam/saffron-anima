@@ -1,4 +1,4 @@
-/// The Script Logs diagnostics panel: se.log output drained from the open-AND-playing poll in store.ts,
+/// The Script Logs diagnostics panel: sa.log output drained from the open-AND-playing poll in store.ts,
 /// shown as `<time> [<entity>] <message>` rows. Search is a VS Code-style find widget: hidden until Ctrl+F
 /// (while the panel is active) reveals it as a top-right overlay, Esc or its X closes it. The bar is
 /// AnimaSearchbar with an `Entity:` chip (typed-verb autocomplete over the scene's entities) plus free-text

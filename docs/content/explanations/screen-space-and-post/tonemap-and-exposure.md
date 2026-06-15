@@ -11,7 +11,7 @@ is rendered in linear high dynamic range, so a bright light can push a pixel wel
 anything a display reproduces. The tonemap stage compresses that range, encodes the result for the
 display, and produces the final viewable image.
 
-In SaffronEngine it runs on the `rgba16f` offscreen — where the [BRDF](../../lighting-and-brdf/cook-torrance-brdf/)
+In Saffron Anima it runs on the `rgba16f` offscreen — where the [BRDF](../../lighting-and-brdf/cook-torrance-brdf/)
 accumulates radiance with no ceiling — before the present blit samples it. It is a single compute pass, one
 invocation per pixel, that applies exposure, tonemaps, gamma-corrects, and writes the result back in
 place.

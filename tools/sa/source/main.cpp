@@ -242,7 +242,7 @@ namespace
         }
         if (cmd == "profiler.capture-start")
         {
-            std::printf("armed capture id=%llu  (stop with: se profiler.capture-stop)\n",
+            std::printf("armed capture id=%llu  (stop with: sa profiler.capture-stop)\n",
                         static_cast<unsigned long long>(result.value("captureId", 0ULL)));
             return;
         }
@@ -250,7 +250,7 @@ namespace
         {
             if (!result.value("ready", false))
             {
-                std::printf("no capture ready (arm one with: se profiler.capture-start)\n");
+                std::printf("no capture ready (arm one with: sa profiler.capture-start)\n");
                 return;
             }
             const auto meta = result.value("capture", json::object()).value("metadata", json::object());
@@ -488,12 +488,12 @@ namespace
         std::printf("%s\n", result.dump(2, ' ', false).c_str());
     }
 
-    // Split argv into se-level flags, the command, and engine args.
-    // Se-level flags are known at compile time and stripped before forwarding to the engine.
-    // Adding a new se flag: add extraction here + a matching declaration in the args parser below.
+    // Split argv into CLI-level flags, the command, and engine args.
+    // CLI-level flags are known at compile time and stripped before forwarding to the engine.
+    // Adding a new sa flag: add extraction here + a matching declaration in the args parser below.
     struct SplitArgs
     {
-        std::vector<std::string> seFlags;  // tokens for the args parser
+        std::vector<std::string> saFlags;  // tokens for the args parser
         std::string cmd;
         std::vector<std::string> engArgs;
     };
@@ -506,13 +506,13 @@ namespace
             std::string arg = argv[i];
             if ((arg == "-o" || arg == "--output") && i + 1 < argc)
             {
-                r.seFlags.push_back(arg);
-                r.seFlags.push_back(argv[++i]);
+                r.saFlags.push_back(arg);
+                r.saFlags.push_back(argv[++i]);
                 i++;
             }
             else if (arg.rfind("--output=", 0) == 0 || arg == "-h" || arg == "--help")
             {
-                r.seFlags.push_back(arg);
+                r.saFlags.push_back(arg);
                 i++;
             }
             else if (r.cmd.empty() && (arg.empty() || arg[0] != '-'))
@@ -532,8 +532,8 @@ namespace
 
 int main(int argc, char** argv)
 {
-    args::ArgumentParser parser("se — SaffronEngine control CLI");
-    parser.Prog("se");
+    args::ArgumentParser parser("sa — Saffron Anima control CLI");
+    parser.Prog("sa");
     args::HelpFlag help(parser, "help", "show this help", { 'h', "help" });
     args::MapFlag<std::string, OutputMode> output(parser, "output", "output format", { 'o', "output" },
                                                   { { "text", OutputMode::Text }, { "json", OutputMode::Json } },
@@ -543,7 +543,7 @@ int main(int argc, char** argv)
 
     try
     {
-        parser.ParseArgs(split.seFlags);
+        parser.ParseArgs(split.saFlags);
     }
     catch (const args::Help&)
     {
@@ -552,7 +552,7 @@ int main(int argc, char** argv)
     }
     catch (const args::ParseError& e)
     {
-        std::fprintf(stderr, "se: %s\n", e.what());
+        std::fprintf(stderr, "sa: %s\n", e.what());
         std::fprintf(stderr, "%s", parser.Help().c_str());
         return 1;
     }
@@ -565,7 +565,7 @@ int main(int argc, char** argv)
 
     if (split.cmd.empty())
     {
-        std::fprintf(stderr, "se: missing command\n%s", parser.Help().c_str());
+        std::fprintf(stderr, "sa: missing command\n%s", parser.Help().c_str());
         return 2;
     }
 
@@ -581,7 +581,7 @@ int main(int argc, char** argv)
     const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0)
     {
-        std::perror("se: socket");
+        std::perror("sa: socket");
         return 1;
     }
 
@@ -590,7 +590,7 @@ int main(int argc, char** argv)
     std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
     if (::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0)
     {
-        std::fprintf(stderr, "se: cannot connect to %s: %s\n", path.c_str(), std::strerror(errno));
+        std::fprintf(stderr, "sa: cannot connect to %s: %s\n", path.c_str(), std::strerror(errno));
         ::close(fd);
         return 1;
     }
@@ -615,7 +615,7 @@ int main(int argc, char** argv)
     json response = json::parse(reply, nullptr, false);
     if (response.is_discarded())
     {
-        std::fprintf(stderr, "se: malformed reply\n");
+        std::fprintf(stderr, "sa: malformed reply\n");
         return 1;
     }
     if (response.value("ok", false))
@@ -623,6 +623,6 @@ int main(int argc, char** argv)
         printResult(cmd, response.value("result", json::object()), mode);
         return 0;
     }
-    std::fprintf(stderr, "se: %s\n", response.value("error", std::string{ "error" }).c_str());
+    std::fprintf(stderr, "sa: %s\n", response.value("error", std::string{ "error" }).c_str());
     return 1;
 }

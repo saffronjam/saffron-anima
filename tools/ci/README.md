@@ -5,10 +5,10 @@ It runs four steps and fails if any one fails:
 
 1. **engine build** — `cmake --preset debug` + `cmake --build build/debug -j1`
    (`-j1` avoids an intermittent clang module-BMI ICE).
-2. **present-only host smoke** — launches `SaffronEngine` bounded to 5 frames
+2. **present-only host smoke** — launches `SaffronAnima` bounded to 5 frames
    (`SAFFRON_EXIT_AFTER_FRAMES=5`); opens a real Vulkan swapchain.
 3. **control schema contract test** — `tools/check-control-schema/check.ts`
-   diffs live `se` control output against `schemas/control`.
+   diffs live `sa` control output against `schemas/control`.
 4. **frontend build** — `editor/` `bun run build` (gen `@saffron/protocol` →
    `tsc` → `vite build`).
 
@@ -41,7 +41,7 @@ environment is already prepared (toolbox, bun, display); they do not set it up.
 ## Honest CI story
 
 There is **no GitHub-hosted pipeline**, on purpose. A stock hosted runner
-(`ubuntu-latest`) cannot build SaffronEngine: the toolchain lives in an
+(`ubuntu-latest`) cannot build Saffron Anima: the toolchain lives in an
 immutable-OS toolbox (clang 21 + libc++ `import std` C++26 modules), it needs the
 Vulkan SDK + SDL3 + slang, and the smoke/schema steps need a headless GPU display.
 Reproducing that with `apt install` is not feasible, and faking a green hosted run

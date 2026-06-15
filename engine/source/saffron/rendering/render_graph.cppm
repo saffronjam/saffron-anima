@@ -18,7 +18,7 @@ export module Saffron.Rendering:RenderGraph;
 
 import Saffron.Core;
 
-export namespace se
+export namespace sa
 {
     /// What a pass does with a resource. The single source of truth for barrier and
     /// layout-transition derivation — a pass declares usage, never writes a barrier.
@@ -268,7 +268,7 @@ export namespace se
                             const RgDebugLabels* labels = nullptr, const CpuRecorder* cpu = nullptr);
 }
 
-namespace se
+namespace sa
 {
     struct RgUsageInfo
     {

@@ -21,7 +21,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Detail;
 
-namespace se
+namespace sa
 {
     // Writes one probe slot's prefiltered + irradiance cube into the IBL set (binding 3 =
     // prefiltered array, binding 4 = irradiance array). Falls back to the global IBL cubes when

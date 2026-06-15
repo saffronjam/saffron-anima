@@ -36,7 +36,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Detail;
 
-namespace se
+namespace sa
 {
     // Issues one instanced drawIndexed per submesh of a batch. The frame's instance
     // buffer is laid out submesh-major (see submitDrawList), so submesh s reads its rows

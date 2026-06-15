@@ -18,7 +18,7 @@ import Saffron.Core;
 import Saffron.Geometry;
 import Saffron.Scene;
 
-export namespace se
+export namespace sa
 {
     /// A single joint's local transform, decomposed — the form clips sample into and
     /// the blend layer operates on. Rotation is a unit quaternion (w, x, y, z).

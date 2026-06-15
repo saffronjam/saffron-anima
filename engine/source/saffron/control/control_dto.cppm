@@ -11,7 +11,7 @@ export module Saffron.Control:Dto;
 import Saffron.Core;
 import Saffron.Json;
 
-export namespace se
+export namespace sa
 {
     template <typename T>
     struct DtoTag
@@ -616,7 +616,7 @@ export namespace se
     {
         i64 seq;
         WireUuid entity;      // the logging entity, or 0 when logged outside an entity handler
-        std::string message;  // the se.log(...) text
+        std::string message;  // the sa.log(...) text
         i64 epochMs;          // wall-clock ms when logged (display only)
         i64 tick;             // the play tick the line was logged on
     };

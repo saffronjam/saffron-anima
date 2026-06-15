@@ -30,7 +30,7 @@ export module Saffron.Script;
 import Saffron.Core;
 import Saffron.Scene;
 
-export namespace se
+export namespace sa
 {
     /// Owns one Lua VM. Move-only; closes the lua_State in the destructor.
     struct ScriptVm
@@ -46,7 +46,7 @@ export namespace se
     };
 
     /// Create a VM with a minimal, sandboxed library set (base/coroutine/string/
-    /// math/table/utf8 — no io/os/debug/package) and the `se` namespace bound.
+    /// math/table/utf8 — no io/os/debug/package) and the `sa` namespace bound.
     auto newScriptVm() -> Result<ScriptVm>;
 
     /// Load + run a Lua source string under the given chunk name.
@@ -128,7 +128,7 @@ export namespace se
         std::vector<u64> pendingDestroy;
         bool hierarchyDirty = false;
         // Inter-script messages queued during a tick, dispatched after the instance loop. currentSenderUuid
-        // is the instance whose handler is running (the sender of an entity:send / se.broadcast).
+        // is the instance whose handler is running (the sender of an entity:send / sa.broadcast).
         std::vector<ScriptMessage> messages;
         u64 currentSenderUuid = 0;
         // Physics bridges: the Host binds each to a Saffron.Physics call so Lua reaches the live world
@@ -142,9 +142,9 @@ export namespace se
         std::function<bool(u64, bool)> setRagdollEnabled;     // (rig uuid, enable) -> ok
         std::function<void(u64, bool, f32)> setRagdollBlend;  // (rig uuid, motors active, body weight)
         std::function<ScriptRagdollState(u64)> ragdollState;
-        // se.log sink: the Host binds this to push the line into the edit context's script-log ring so the
+        // sa.log sink: the Host binds this to push the line into the edit context's script-log ring so the
         // editor can drain it, without Saffron.Script importing Saffron.SceneEdit (POD signature only).
-        // Unset = se.log still writes the engine log, just not the ring.
+        // Unset = sa.log still writes the engine log, just not the ring.
         std::function<void(u64 senderUuid, const char* message)> logSink;
     };
 
@@ -201,7 +201,7 @@ export namespace se
     auto readScriptSchema(std::string_view path) -> Result<std::vector<ScriptField>>;
 }
 
-namespace se
+namespace sa
 {
     ScriptVm::ScriptVm(ScriptVm&& other) noexcept : state(std::exchange(other.state, nullptr)) {}
 
@@ -268,8 +268,8 @@ namespace se
         }
     }
 
-    // Defined in script_runtime.cpp (module-internal): the pure se.Vec3 value type + math helpers,
-    // bound into both this schema VM and the runtime VM so a properties default of se.vec3(...) resolves.
+    // Defined in script_runtime.cpp (module-internal): the pure sa.Vec3 value type + math helpers,
+    // bound into both this schema VM and the runtime VM so a properties default of sa.vec3(...) resolves.
     void registerScriptValueTypes(lua_State* L);
 
     auto newScriptVm() -> Result<ScriptVm>
@@ -281,7 +281,7 @@ namespace se
         }
         luaL_openselectedlibs(L, LUA_GLIBK | LUA_COLIBK | LUA_STRLIBK | LUA_MATHLIBK | LUA_TABLIBK | LUA_UTF8LIBK, 0);
         luabridge::getGlobalNamespace(L)
-            .beginNamespace("se")
+            .beginNamespace("sa")
             .addFunction(
                 "log", +[](const char* message) { logInfo(message); })
             .endNamespace();
@@ -307,7 +307,7 @@ namespace se
         {
             return Err(std::format("script self-test: VM creation failed: {}", vm.error()));
         }
-        auto good = runString(*vm, "se.log('script self-test: binding ok'); assert(1 + 1 == 2)", "selftest");
+        auto good = runString(*vm, "sa.log('script self-test: binding ok'); assert(1 + 1 == 2)", "selftest");
         if (!good)
         {
             return Err(std::format("script self-test: good chunk failed: {}", good.error()));

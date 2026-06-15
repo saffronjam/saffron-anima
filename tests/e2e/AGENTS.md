@@ -1,7 +1,7 @@
 # tests/e2e — end-to-end engine tests
 
-Black-box tests that boot a real `SaffronEngine` and drive it over the JSON-over-unix-socket
-control plane — the same wire the editor and `se` CLI use. The driver is plain TypeScript on
+Black-box tests that boot a real `SaffronAnima` and drive it over the JSON-over-unix-socket
+control plane — the same wire the editor and `sa` CLI use. The driver is plain TypeScript on
 `bun test`; nothing here is C++. The wire contract is consumed through the generated
 `@saffron/protocol` types (from `schemas/control/`), so assertions stay in sync with the schema.
 

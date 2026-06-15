@@ -39,7 +39,7 @@ around this spine.
 | [Global illumination & ray tracing](global-illumination-and-raytracing/) | DDGI probes, voxel trace, BLAS/TLAS, ray-query shadows, ReSTIR |
 | [Anti-aliasing](anti-aliasing/) | MSAA, FXAA, mode switching |
 | [UI & editor](ui-and-editor/) | the Tauri/React editor, viewport compositing, gizmo, inspector, thumbnails |
-| [Tooling & control](tooling-and-control/) | control plane and the `se` CLI |
+| [Tooling & control](tooling-and-control/) | control plane and the `sa` CLI |
 | [Scripting](scripting/) | the embedded Lua 5.5 VM, sandboxing, script errors as values |
 | [Animation](animation/) | skeletal clips, the decomposed pose + blend layer, clip sampling |
 | [Physics](physics/) | the Jolt-backed simulation: per-play world lifecycle, rigid bodies, the ragdoll |

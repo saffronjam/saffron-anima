@@ -70,7 +70,7 @@ flowchart TD
     CV --> T
 ```
 
-The control plane has its own live `se screenshot` command for grabbing the viewport or
+The control plane has its own live `sa screenshot` command for grabbing the viewport or
 window while the editor runs. `SAFFRON_CAPTURE` is the no-socket path: a single end-of-run
 write driven entirely by the environment, used by the headless pixel checks.
 

@@ -150,7 +150,7 @@ describe("captureToChromeTrace", () => {
 
     const meta = parsed.traceEvents.slice(0, 3);
     expect(meta.map((e: { ph: string }) => e.ph)).toEqual(["M", "M", "M"]);
-    expect(meta[0]).toMatchObject({ name: "process_name", pid: "SaffronEngine" });
+    expect(meta[0]).toMatchObject({ name: "process_name", pid: "SaffronAnima" });
     expect(meta[1]).toMatchObject({ tid: 1, name: "thread_name" });
     expect(meta[2]).toMatchObject({ tid: 2, name: "thread_name" });
 
@@ -163,7 +163,7 @@ describe("captureToChromeTrace", () => {
     expect(cpuEvent.ts).toBeCloseTo(1); // 1000 / 1000
     expect(cpuEvent.dur).toBeCloseTo(2); // (3000 - 1000) / 1000
     expect(cpuEvent.args).toEqual({ depth: 0 });
-    expect(cpuEvent.pid).toBe("SaffronEngine");
+    expect(cpuEvent.pid).toBe("SaffronAnima");
 
     const gpuEvent = events.find((e: { name: string }) => e.name === "gpu-pass");
     expect(gpuEvent.tid).toBe(2); // gpu -> 2

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reproducible verification gates for the SaffronEngine + Tauri editor.
+# Reproducible verification gates for the Saffron Anima + Tauri editor.
 #
 # Run inside the saffron-build toolbox with the host bun on PATH, under a display
 # (the engine smoke + schema contract test open a Vulkan swapchain → need one):
@@ -25,7 +25,7 @@ step "engine build (toolbox, -j1)"
     engine/source/saffron/control/control_dto_serde.generated.cpp \
     engine/source/saffron/scene/scene_component_serde.generated.cpp \
     engine/source/saffron/assets/script_component_defs.generated.hpp \
-    editor/src/protocol/se-types.ts \
+    editor/src/protocol/sa-types.ts \
     schemas/control/openrpc.generated.json \
     schemas/control/command-manifest.generated.json
 ) || fail=1
@@ -35,13 +35,13 @@ step "engine present-only smoke (bounded, headless)"
 (
   export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   cd /tmp && rm -f project.json
-  SAFFRON_EXIT_AFTER_FRAMES=5 SAFFRON_CONTROL_SOCK=/tmp/se-ci.sock "$REPO/build/debug/bin/SaffronEngine"
+  SAFFRON_EXIT_AFTER_FRAMES=5 SAFFRON_CONTROL_SOCK=/tmp/sa-ci.sock "$REPO/build/debug/bin/SaffronAnima"
 ) || fail=1
 
 step "control DTO contract test (live help/results vs generated manifest/OpenRPC)"
 ( cd "$REPO/tools/check-control-schema" && bun run check.ts ) || fail=1
 
-step "script-API def drift (live Lua bindings vs library/se.lua)"
+step "script-API def drift (live Lua bindings vs library/sa.lua)"
 ( bun "$REPO/tools/check-script-defs/check.ts" ) || fail=1
 
 step "project startup and asset layout smoke"

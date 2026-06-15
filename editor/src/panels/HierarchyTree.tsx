@@ -121,7 +121,7 @@ export function HierarchyTree({ actions }: { actions: TreeActions }) {
     [entities, hideBones],
   );
 
-  // Reveal an externally selected row (viewport pick, `se select`): expand every
+  // Reveal an externally selected row (viewport pick, `sa select`): expand every
   // ancestor so the selection is never hidden inside a collapsed branch.
   const lastRevealed = useRef<string | null>(null);
   useEffect(() => {
@@ -208,7 +208,7 @@ export function HierarchyTree({ actions }: { actions: TreeActions }) {
           role="tree"
           aria-label="Scene entities"
           // Dropping a model asset from the catalog instantiates it into the scene. Asset drags carry
-          // `application/x-se-asset`; entity-reparent drags (`application/x-saffron-entity`) are ignored
+          // `application/x-sa-asset`; entity-reparent drags (`application/x-saffron-entity`) are ignored
           // here and handled by the per-row / unparent drop zones.
           onDragOver={(e) => {
             if (e.dataTransfer.types.includes(ASSET_DND_MIME)) {

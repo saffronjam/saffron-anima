@@ -5,9 +5,9 @@ weight = 9
 
 # Script logs panel
 
-The Script Logs panel is the play-mode window into `se.log` output from gameplay scripts. It sits in the diagnostics group beside the [Physics panel](../physics-panel/) and [Stats and the Profiler](../metrics-dashboard/) (open it from the Tools → Diagnostics menu) and docks by default in the bottom **Assets and Timeline** group. While the scene is Playing it streams each script's log lines as `<time> [<entity>] <message>` rows; in Edit it shows an empty state and polls nothing — a closed panel or a panel in Edit makes zero control round-trips.
+The Script Logs panel is the play-mode window into `sa.log` output from gameplay scripts. It sits in the diagnostics group beside the [Physics panel](../physics-panel/) and [Stats and the Profiler](../metrics-dashboard/) (open it from the Tools → Diagnostics menu) and docks by default in the bottom **Assets and Timeline** group. While the scene is Playing it streams each script's log lines as `<time> [<entity>] <message>` rows; in Edit it shows an empty state and polls nothing — a closed panel or a panel in Edit makes zero control round-trips.
 
-`se.log(message)` from a script is captured on the engine side into a bounded ring on the edit context, tagged with the entity whose handler is running (`ScriptHost::currentSenderUuid`) and a wall-clock timestamp. The line is *also* written to the engine log, but the panel is how you see it inside the editor. Because the bridge is a host-bound `std::function` (`ScriptHost::logSink`, wired in `host.cppm`), `Saffron.Script` never imports `Saffron.SceneEdit` — the same POD-bridge pattern the physics bindings use.
+`sa.log(message)` from a script is captured on the engine side into a bounded ring on the edit context, tagged with the entity whose handler is running (`ScriptHost::currentSenderUuid`) and a wall-clock timestamp. The line is *also* written to the engine log, but the panel is how you see it inside the editor. Because the bridge is a host-bound `std::function` (`ScriptHost::logSink`, wired in `host.cppm`), `Saffron.Script` never imports `Saffron.SceneEdit` — the same POD-bridge pattern the physics bindings use.
 
 ## Telemetry, gated to matter
 
@@ -41,4 +41,4 @@ This collapses the "is this free text or a filter?" ambiguity into one bar. `Ctr
 | Registration | `editor/src/components/dock/panelRegistry.tsx` · `editor/src/state/dockLayout.ts` | the `scriptLogs` registry entry, `SCENE_PANEL_IDS`, `DEFAULT_LEAF` (`leaf:assets`) |
 | Store state + poll | `editor/src/state/store.ts` | `scriptLogs`, `appendScriptLogs`, the open-AND-playing poll block + `scriptLogsSince` |
 | Typed wrapper | `editor/src/control/client.ts` | `drainScriptLogs` |
-| Engine capture + command | `sceneedit/scene_edit_context.cppm` · `scene_edit_play.cpp` · `script/script_runtime.cpp` · `host/host.cppm` · `control/control_commands_scene.cpp` | `ScriptLog` ring + `pushScriptLog`, the `se.log` rebind, `ScriptHost::logSink`, `drain-script-logs` |
+| Engine capture + command | `sceneedit/scene_edit_context.cppm` · `scene_edit_play.cpp` · `script/script_runtime.cpp` · `host/host.cppm` · `control/control_commands_scene.cpp` | `ScriptLog` ring + `pushScriptLog`, the `sa.log` rebind, `ScriptHost::logSink`, `drain-script-logs` |

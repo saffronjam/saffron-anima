@@ -25,7 +25,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :RenderGraph;
 
-export namespace se
+export namespace sa
 {
     // The graphics queue is externally synchronized in Vulkan. The frame loop and the thumbnail
     // worker thread both submit/present on it, so every `submit2`/`presentKHR` takes this lock —
@@ -1160,7 +1160,7 @@ export namespace se
         bool clusterDispatchPending = false;
         // Directional shadow: the light-space transform written into the light UBO + the
         // shadow pass push constant. shadowPending arms the depth pass for the frame.
-        bool useShadows = true;      // master toggle (se set-shadows)
+        bool useShadows = true;      // master toggle (sa set-shadows)
         bool shadowPending = false;  // a shadow-casting directional light is present this frame
         glm::mat4 shadowViewProj{ 1.0f };
         // Spot shadow: the first shadow-casting spot light gets a dedicated depth map. Its

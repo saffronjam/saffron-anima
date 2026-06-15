@@ -53,7 +53,7 @@ A press that does not move is a click, and [ray-picks](../selection/) instead of
 
 ## Mode and space
 
-The operation (T/R/S), the world/local space, and the preserve-children flag are **one** shared gizmo state on the engine, read and written through `get-gizmo`/`set-gizmo`. A single source of truth keeps the Topbar buttons, the keyboard shortcuts, and an external `se set-gizmo` in agreement.
+The operation (T/R/S), the world/local space, and the preserve-children flag are **one** shared gizmo state on the engine, read and written through `get-gizmo`/`set-gizmo`. A single source of truth keeps the Topbar buttons, the keyboard shortcuts, and an external `sa set-gizmo` in agreement.
 
 - The **Topbar** has a T/R/S button group, a World/Local toggle, and an anchor-icon preserve-children toggle. A click updates `store.gizmo` optimistically and fires `set-gizmo`.
 - **W/E/R** are the *default* translate/rotate/scale shortcuts, bound on the webview (gated off while a text field is focused so typing a value never retargets the gizmo). They are rebindable in [Editor Settings](../editor-settings/); the Topbar tooltips show whatever key is currently bound.

@@ -1,7 +1,7 @@
-add_library(SaffronEngineLib STATIC)
+add_library(SaffronAnimaLib STATIC)
 
 # Engine code is authored as C++ named modules.
-target_sources(SaffronEngineLib
+target_sources(SaffronAnimaLib
     PUBLIC
         FILE_SET CXX_MODULES
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/source
@@ -31,7 +31,7 @@ target_sources(SaffronEngineLib
 
 # Implementation units (module Saffron.Rendering;) are regular sources, not module
 # interface units, so they live outside the CXX_MODULES file set.
-target_sources(SaffronEngineLib PRIVATE
+target_sources(SaffronAnimaLib PRIVATE
     source/saffron/rendering/renderer_capture.cpp
     source/saffron/rendering/renderer_pipelines.cpp
     source/saffron/rendering/renderer_drawlist.cpp
@@ -59,10 +59,10 @@ target_sources(SaffronEngineLib PRIVATE
     source/saffron/control/control_server.cpp
     source/saffron/assets/assets_thumbnail.cpp)
 
-target_compile_features(SaffronEngineLib PUBLIC cxx_std_26)
-set_target_properties(SaffronEngineLib PROPERTIES CXX_MODULE_STD ON)
+target_compile_features(SaffronAnimaLib PUBLIC cxx_std_26)
+set_target_properties(SaffronAnimaLib PROPERTIES CXX_MODULE_STD ON)
 
-target_link_libraries(SaffronEngineLib PUBLIC saffron_third_party)
+target_link_libraries(SaffronAnimaLib PUBLIC saffron_third_party)
 
 # physics.cpp is the only TU that includes <Jolt/...>; it alone needs Jolt's arch +
 # thread flags (captured in Dependencies.cmake and kept off every other TU so the
@@ -71,24 +71,24 @@ target_link_libraries(SaffronEngineLib PUBLIC saffron_third_party)
 set_source_files_properties(source/saffron/physics/physics.cpp
     PROPERTIES COMPILE_OPTIONS "${SAFFRON_JOLT_COMPILE_OPTIONS}")
 
-add_library(Saffron::Engine ALIAS SaffronEngineLib)
+add_library(Saffron::Anima ALIAS SaffronAnimaLib)
 
-add_executable(SaffronEngine)
+add_executable(SaffronAnima)
 
-target_sources(SaffronEngine PRIVATE source/main.cpp)
+target_sources(SaffronAnima PRIVATE source/main.cpp)
 
-target_compile_features(SaffronEngine PRIVATE cxx_std_26)
-set_target_properties(SaffronEngine PROPERTIES CXX_MODULE_STD ON)
+target_compile_features(SaffronAnima PRIVATE cxx_std_26)
+set_target_properties(SaffronAnima PROPERTIES CXX_MODULE_STD ON)
 
-target_link_libraries(SaffronEngine PRIVATE Saffron::Engine)
+target_link_libraries(SaffronAnima PRIVATE Saffron::Anima)
 
 # Compile engine shaders (*.slang -> bin/shaders/*.spv) alongside the executable.
-saffron_compile_shaders(SaffronEngine
+saffron_compile_shaders(SaffronAnima
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
     ${SAFFRON_RUNTIME_DIR}/shaders)
 
 # Copy model + font assets next to the executable so assetPath(...) resolves.
-add_custom_command(TARGET SaffronEngine POST_BUILD
+add_custom_command(TARGET SaffronAnima POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/models
             ${SAFFRON_RUNTIME_DIR}/models

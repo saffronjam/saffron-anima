@@ -30,7 +30,7 @@ export module Saffron.Geometry;
 
 import Saffron.Core;
 
-export namespace se
+export namespace sa
 {
     // One interleaved vertex stream. 32 bytes; tangents are deferred to material time.
     struct Vertex
@@ -374,7 +374,7 @@ export namespace se
     void runGeometrySelfTest(const std::string& modelsDir);
 }
 
-namespace se
+namespace sa
 {
     static_assert(sizeof(Vertex) == 32, "Vertex must stay 32 bytes (the .smesh on-disk stride)");
     static_assert(sizeof(Submesh) == 16, "Submesh must stay 16 bytes (baked directly into .smesh)");

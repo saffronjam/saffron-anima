@@ -1,6 +1,6 @@
 /// One asset catalog tile: a lazy thumbnail (mesh = its 3D render, texture = its
 /// image, else a lucide type icon), an in-place rename input, and an HTML5 drag
-/// SOURCE carrying `application/x-se-asset`. Double-click opens the View modal; the
+/// SOURCE carrying `application/x-sa-asset`. Double-click opens the View modal; the
 /// Delete key on a focused tile starts the same delete flow as the grid's shared
 /// context menu (the panel owns that menu — a tile renders no Radix root of its own).
 import { memo, useEffect, useRef, useState } from "react";
@@ -14,9 +14,9 @@ import { useOutsideCommit } from "../lib/useOutsideCommit";
 import { logRender } from "../lib/renderLog";
 import { Input } from "@/components/ui/input";
 
-/// The DnD payload written to `application/x-se-asset` (distinct from an OS file
+/// The DnD payload written to `application/x-sa-asset` (distinct from an OS file
 /// drop). `type` lets a drop target type-gate the accept.
-export const ASSET_DND_MIME = "application/x-se-asset";
+export const ASSET_DND_MIME = "application/x-sa-asset";
 
 export interface AssetDragPayload {
   id?: string;
@@ -58,7 +58,7 @@ export function assetIdsFromPayload(payload: AssetDragPayload | null): string[] 
 /// The DnD payload for dragging catalog FOLDERS (their full paths) — distinct from
 /// the asset payload so drop targets can route a folder move vs an asset move. A
 /// drag may carry both mimes at once (a mixed folder + asset multi-selection).
-export const FOLDER_DND_MIME = "application/x-se-folder";
+export const FOLDER_DND_MIME = "application/x-sa-folder";
 
 /// The folder paths carried by a drag payload (empty if it is not a folder drag).
 export function readFolderPayload(dt: DataTransfer): string[] {
@@ -191,7 +191,7 @@ export const AssetTile = memo(function AssetTile({
   }, [entry.id]);
 
   // Keep the rename draft in sync when the catalog name changes externally
-  // (e.g. an `se rename-asset` reflected by the poll), but not while renaming.
+  // (e.g. an `sa rename-asset` reflected by the poll), but not while renaming.
   useEffect(() => {
     if (!renaming) {
       setDraft(entry.name);

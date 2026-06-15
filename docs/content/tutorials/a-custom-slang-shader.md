@@ -16,7 +16,7 @@ The build globs every `*.slang` under `engine/assets/shaders/` and compiles each
 `bin/shaders/<name>.spv` with `slangc`, wired in `engine/CMakeLists.txt`:
 
 ```cmake
-saffron_compile_shaders(SaffronEngine
+saffron_compile_shaders(SaffronAnima
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
     ${SAFFRON_RUNTIME_DIR}/shaders)
 ```
@@ -112,7 +112,7 @@ fixed.
 Rebuild so the new `.slang` compiles, then confirm the SPIR-V landed:
 
 ```sh
-./cmd/se start --build      # CONFIGURE_DEPENDS sees flat.slang, builds it
+./cmd/sa start --build      # CONFIGURE_DEPENDS sees flat.slang, builds it
 ls build/debug/bin/shaders/flat.spv
 ```
 
@@ -135,11 +135,11 @@ The PSO cache builds `flat.spv` on first use and reuses it after. Check the pipe
 once a mesh draws with it:
 
 ```sh
-./cmd/se render-stats       # "pipelines" increments when flat.spv's PSO is built
+./cmd/sa render-stats       # "pipelines" increments when flat.spv's PSO is built
 ```
 
 > [!NOTE]
-> `Material.shader` is selected in engine code, not over the CLI — there's no `se
+> `Material.shader` is selected in engine code, not over the CLI — there's no `sa
 > set-shader`. To see your shader live: assign the `Material` in the layer that builds the
 > scene draw list, or edit the engine's `mesh.slang` in place so every mesh redraws with
 > your changes on the next build. See

@@ -35,7 +35,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Types;
 
-export namespace se
+export namespace sa
 {
     // Converts a Vulkan-Hpp ResultValue to Result, checked at the call site.
     template <typename T>

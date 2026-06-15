@@ -19,7 +19,7 @@ import Saffron.Core;
 // UTF-8, or a typed read (`get<T>()`/`value<>`/`at()`) on the wrong type all crash the
 // process. These wrappers convert every such failure into the engine's error-as-value
 // style (`Result` / a checked default) so json input never aborts.
-export namespace se
+export namespace sa
 {
     using Json = nlohmann::json;
 
@@ -52,7 +52,7 @@ export namespace se
     auto jsonBoolOr(const Json& object, std::string_view key, bool fallback) -> bool;
 }
 
-namespace se
+namespace sa
 {
     auto parseJson(std::string_view text) -> Result<Json>
     {

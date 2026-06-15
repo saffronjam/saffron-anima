@@ -49,7 +49,7 @@ This is what lets an imported Poly-Haven-style texture set — diffuse + normal 
 
 ## Authoring
 
-`importMaterialFolder` suffix-detects roles (`_diff`, `_nor`, `_rough`, `_disp`, …) and bakes a `.smat` plus catalog entries from a folder of textures. The **material panel** picks a material, shows it on a studio-lit preview sphere (`preview-render`), and edits factors live (coalesced `material-update` → re-render). Every operation has a control command, so the `se` CLI and the editor drive the same surface.
+`importMaterialFolder` suffix-detects roles (`_diff`, `_nor`, `_rough`, `_disp`, …) and bakes a `.smat` plus catalog entries from a folder of textures. The **material panel** picks a material, shows it on a studio-lit preview sphere (`preview-render`), and edits factors live (coalesced `material-update` → re-render). Every operation has a control command, so the `sa` CLI and the editor drive the same surface.
 
 ## In the code
 

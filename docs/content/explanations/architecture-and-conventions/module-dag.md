@@ -101,7 +101,7 @@ imports `Saffron.Host` and calls `runHost`.
 | Root module | `core.cppm` | `export module Saffron.Core;` |
 | Re-exported partitions | `renderer.cppm` | `export import :RenderGraph;`, `export import :Types;` |
 | Top-of-graph glue | `host.cppm` | `export module Saffron.Host;`, `runHost` |
-| Thin entry point | `engine/source/main.cpp` | `import Saffron.Host;`, `se::runHost` |
+| Thin entry point | `engine/source/main.cpp` | `import Saffron.Host;`, `sa::runHost` |
 
 ## Related
 - [Module partitions](../module-partitions/) — how `Saffron.Rendering` is split internally

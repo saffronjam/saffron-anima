@@ -1,6 +1,6 @@
 # editor — Tauri/React editor
 
-The editor is a **Tauri 2 / React 19 / TypeScript** app. It spawns the `SaffronEngine`
+The editor is a **Tauri 2 / React 19 / TypeScript** app. It spawns the `SaffronAnima`
 host headless, presents the host's shared-memory frames on a Wayland subsurface below its
 transparent window (the viewport panel is a hole the render shows through), and drives
 every operation over the JSON-over-unix-socket control plane. The engine renders; this
@@ -20,7 +20,7 @@ src/
   protocol/    GENERATED TypeScript types — do not edit by hand
   lib/         utilities
   assets/      static assets (fonts)
-scripts/gen-protocol.ts   re-runs tools/gen-control-dto → src/protocol/se-types.ts
+scripts/gen-protocol.ts   re-runs tools/gen-control-dto → src/protocol/sa-types.ts
 src-tauri/     Rust bridge (lib.rs + wayland_viewport.rs): engine spawn, control passthrough, subsurface presenter
 ```
 
@@ -39,7 +39,7 @@ bun run build    # gen:protocol + tsc + vite build
 bun run tauri:dev  # launches the app; needs a Wayland session for the subsurface presenter
 ```
 
-`bun run gen:protocol` regenerates `src/protocol/se-types.ts` from `control_dto.cppm` (and also emits the
+`bun run gen:protocol` regenerates `src/protocol/sa-types.ts` from `control_dto.cppm` (and also emits the
 OpenRPC + command-manifest JSON under `schemas/control/`). `index.ts` is the hand-kept re-export shim.
 
 ## Debugging runtime/GUI bugs you can't see (log, then ask)
@@ -68,7 +68,7 @@ user confirms it against real output — say "this should fix it, please verify 
 
 ## Rules that are easy to break
 
-- **`src/protocol/se-types.ts` is generated.** Never edit it. Edit the DTOs in
+- **`src/protocol/sa-types.ts` is generated.** Never edit it. Edit the DTOs in
   `control_dto.cppm` + `tools/gen-control-dto/gen.ts`, run `bun run gen:protocol`, and
   commit the result. `src/protocol/index.ts` is the hand-kept re-export shim (compat
   overrides live there), and `client.ts` layers the typed wrappers on top.
@@ -175,8 +175,8 @@ user confirms it against real output — say "this should fix it, please verify 
   on each 0↔1 selection crossing).
 
 The Rust bridge sets a per-PID socket under `$XDG_RUNTIME_DIR` and a per-PID, per-view shm
-segment for each viewport (scene + asset preview), spawns `$SAFFRON_ENGINE_BIN` (default
-`build/debug/bin/SaffronEngine`) with `SAFFRON_VIEWPORT_SHM_SCENE` +
+segment for each viewport (scene + asset preview), spawns `$SAFFRON_ANIMA_BIN` (default
+`build/debug/bin/SaffronAnima`) with `SAFFRON_VIEWPORT_SHM_SCENE` +
 `SAFFRON_VIEWPORT_SHM_ASSET` + `SAFFRON_MAX_FPS` (and the NVIDIA `VK_ICD_FILENAMES` guard),
 and presents via `wayland_viewport.rs` — one subsurface per view, each glued to its pane,
 plus a shared opaque backdrop below both. A watchdog flips the UI to an error overlay if the

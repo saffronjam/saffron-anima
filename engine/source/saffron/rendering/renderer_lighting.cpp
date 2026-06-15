@@ -38,7 +38,7 @@ import Saffron.Window;
 import Saffron.Geometry;
 import :Detail;
 
-namespace se
+namespace sa
 {
     // Packs a bool into the 1u/0u flag words the lighting/cluster UBOs carry.
     static auto boolFlag(bool b) -> u32

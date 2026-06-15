@@ -8,7 +8,7 @@ bookCollapseSection = true
 
 Anti-aliasing smooths the jagged edges that arise when continuous geometry is sampled onto a
 discrete grid of pixels. Saffron offers three techniques, each trading quality for cost and
-switchable at runtime with `se set-aa`:
+switchable at runtime with `sa set-aa`:
 
 - **MSAA** cleans geometry edges by multisampling.
 - **FXAA** blurs luma edges in a cheap post-process.

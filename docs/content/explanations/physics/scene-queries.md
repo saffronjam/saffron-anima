@@ -44,12 +44,12 @@ from a contact callback (that fires *during* the step).
 - **`raycast` / `shapecast` control commands** read the world through the non-owning `EngineContext`
   handle the Host installs. The world exists only while Playing/Paused, so — unlike `pick`, which
   works in Edit — these refuse in Edit with a stable `"no physics world — enter play first"` error.
-- **`se raycast` / `se shapecast`** print the structured hit from the shell.
-- **`se.raycast` Lua binding** — gameplay scripts call it inside `on_update`:
-  `local hit = se.raycast(px,py,pz, 0,-1,0, 2); if hit.hit and hit.entity then … end`. Because the
+- **`sa raycast` / `sa shapecast`** print the structured hit from the shell.
+- **`sa.raycast` Lua binding** — gameplay scripts call it inside `on_update`:
+  `local hit = sa.raycast(px,py,pz, 0,-1,0, 2); if hit.hit and hit.entity then … end`. Because the
   DAG forbids `Saffron.Script` importing `Saffron.Physics`, the Host bridges it: it binds a callback
   on the `ScriptHost` that calls `raycastWorld`, and the Lua binding (in `Saffron.Script`) only ever
-  sees a plain hit struct + a resolved `se.Entity`.
+  sees a plain hit struct + a resolved `sa.Entity`.
 
 v1 returns the single closest hit; an all-hits collector, query-time layer masks, and overlap/point
 queries extend this same entry point later.
@@ -60,4 +60,4 @@ queries extend this same entry point later.
 |---|---|---|
 | The query entry points | `engine/source/saffron/physics/physics.cpp` | `raycastWorld`, `sphereCastWorld`, `PhysicsRayHit` |
 | Control commands | `engine/source/saffron/control/control_commands_physics.cpp` | `raycast`, `shapecast` |
-| Lua binding + bridge | `engine/source/saffron/script/script_runtime.cpp`, `host.cppm` | `se.raycast`, `ScriptHost::raycast` |
+| Lua binding + bridge | `engine/source/saffron/script/script_runtime.cpp`, `host.cppm` | `sa.raycast`, `ScriptHost::raycast` |

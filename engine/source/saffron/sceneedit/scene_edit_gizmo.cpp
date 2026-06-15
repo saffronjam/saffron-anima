@@ -18,7 +18,7 @@ module Saffron.SceneEdit;
 import Saffron.Core;
 import Saffron.Scene;
 
-namespace se
+namespace sa
 {
     void syncNativeGizmo(SceneEditContext& ctx)
     {

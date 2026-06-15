@@ -41,7 +41,7 @@ re-renders for it.
 The panel never polls on its own. It reads the selected rig's player off the store slice the
 shared reconcile poll fills. The poll runs `get-selection` at ~6 Hz and gates refreshes on version
 stamps; alongside the existing play-state gate it carries an **`animationVersion`** stamp. When that
-stamp bumps — a play, seek, pause, or loop change, whether from this panel or the `se` CLI — or when
+stamp bumps — a play, seek, pause, or loop change, whether from this panel or the `sa` CLI — or when
 the selection changes to a different entity, the poll refetches `get-animation-state` and
 `list-clips` for the selected entity and stores them. The returned `time` drives the playhead.
 

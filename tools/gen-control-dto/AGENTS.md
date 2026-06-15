@@ -11,15 +11,15 @@ and then `git diff --exit-code` on the outputs, so a stale generated file fails 
 |---|---|---|
 | C++ DTO serde | `engine/source/saffron/control/control_dto_serde.generated.cpp` | `emitCpp` |
 | Scene-component serde | `engine/source/saffron/scene/scene_component_serde.generated.cpp` | `emitSceneSerde` |
-| TS protocol types | `editor/src/protocol/se-types.ts` | `emitTs` |
+| TS protocol types | `editor/src/protocol/sa-types.ts` | `emitTs` |
 | OpenRPC schema | `schemas/control/openrpc.generated.json` | `emitOpenRpc` |
 | Contract manifest | `schemas/control/command-manifest.generated.json` | `emitManifest` |
 | Lua component types | `engine/source/saffron/assets/script_component_defs.generated.hpp` | `emitScriptComponentDefs` |
 
 `emitScriptComponentDefs` parses the component wire shapes from `emitTs`'s output (the
 `componentInterfaces` catalog) and the registered names from `scene_edit_components.cpp`, then emits the
-`---@class se.<Component>` Lua types + the per-name `get_component` overloads as a C++ header `#include`d
-into `Saffron.Assets` (`assets.cppm`) and appended to `library/se.lua`. Components with no catalog entry
+`---@class sa.<Component>` Lua types + the per-name `get_component` overloads as a C++ header `#include`d
+into `Saffron.Assets` (`assets.cppm`) and appended to `library/sa.lua`. Components with no catalog entry
 (`AnimationPlayer`, `MaterialAsset`) are supplemented inline from their serde shape.
 
 Regenerate + commit all five with `bun run tools/gen-control-dto/gen.ts`. `make format` deliberately
@@ -53,4 +53,4 @@ skips `*.generated.cpp` (the generator owns their style); never hand-edit a gene
   number; the contract test checks the raw bytes so this never regresses.
 
 See `engine/source/saffron/control/AGENTS.md` for the per-command authoring workflow and the root
-`AGENTS.md` for the keep-the-`se`-CLI-current rule.
+`AGENTS.md` for the keep-the-`sa`-CLI-current rule.

@@ -54,7 +54,7 @@ ambient = diffuseIBL + prefiltered * (F0 * ab.x + ab.y);
 
 ## When it replaces flat ambient
 
-IBL is the default. It runs whenever `globals.counts.z != 0`, which is `useIbl && ibl.ready`. Disabling it (`se set-ibl 0`) falls back to a flat scalar — `albedo * (1 - metallic) * ambient` — that the directional-light setup carries. The flat version has no directionality and no specular reflection, the two qualities IBL adds.
+IBL is the default. It runs whenever `globals.counts.z != 0`, which is `useIbl && ibl.ready`. Disabling it (`sa set-ibl 0`) falls back to a flat scalar — `albedo * (1 - metallic) * ambient` — that the directional-light setup carries. The flat version has no directionality and no specular reflection, the two qualities IBL adds.
 
 ## In the code
 

@@ -13,7 +13,7 @@ first). Depends on Phase 2 (Vec3 args/returns) and Phase 1 (`set_component` for 
 1. Add a `std::function<…>` field to `ScriptHost` (`script.cppm`, next to `raycast` at `:107`),
    taking/returning PODs only (no Jolt; glm only as far as the existing `ScriptRayHit` does) — mirror
    `raycast`'s shape.
-2. Bind an `se`/`se.Entity` function that calls the closure (the `raycast` binding in `startScripts` is the
+2. Bind an `se`/`sa.Entity` function that calls the closure (the `raycast` binding in `startScripts` is the
    exact shape — guard on the closure being set; an unset closure = a safe default / logged-miss no-op).
 3. Wire it in `host.cppm` next to `state->script.raycast = [state](…){ … }` (`:1199`), capturing the live
    `PhysicsWorld` and translating to/from the POD. `host.cppm` already imports both `Physics` (`:41`) and
@@ -23,7 +23,7 @@ first). Depends on Phase 2 (Vec3 args/returns) and Phase 1 (`set_component` for 
 
 | Lua API | C++ backing | Tag |
 |---|---|---|
-| `se.spherecast(origin, dir, radius, maxDist) -> RayHit` | `sphereCastWorld` (`physics.cppm:139`) | **bridge** — `ScriptHost::sphereCast`, reuses `ScriptRayHit` POD verbatim (twin of raycast) |
+| `sa.spherecast(origin, dir, radius, maxDist) -> RayHit` | `sphereCastWorld` (`physics.cppm:139`) | **bridge** — `ScriptHost::sphereCast`, reuses `ScriptRayHit` POD verbatim (twin of raycast) |
 | `entity:move_character(velocity, jump?)` | writes `CharacterControllerComponent.desiredVelocity` / `verticalVelocity` (the `move-character` command body, `control_commands_physics.cpp:224`/`:227`) | **REQUIRED bridge** (see below) |
 | `entity:enable_ragdoll()` / `entity:disable_ragdoll()` | `enableRagdoll`/`disableRagdoll` (`physics.cppm:145`/`:148`) | **bridge** — rig uuid is the entity's id |
 | `entity:set_ragdoll_blend(active?, bodyWeight?, …)` | `setRagdollBlend` (`physics.cppm:181`) | **bridge** |
@@ -62,9 +62,9 @@ none, `BodyInterface` is internal-only, and the only `SetLinearVelocity` is on t
    `1189`), so an `on_update` write lands **between** steps (applied before the next `stepPhysics`) — fine.
    It is **not** callable mid-solve from a contact handler.
 2. **A control command** (`apply-impulse` / `set-velocity`) in `Saffron.Control` so the capability is
-   drivable/inspectable from the `se` CLI (the drivable-state rule) + an e2e case.
+   drivable/inspectable from the `sa` CLI (the drivable-state rule) + an e2e case.
 3. **Host bridges** `ScriptHost::applyImpulse` / `setVelocity` / `getVelocity` (`std::function` over
-   glm/POD) + the `se.Entity` bindings.
+   glm/POD) + the `sa.Entity` bindings.
 
 This is the only sub-item touching three layers (Physics C++ → control command → bridge → binding); budget it
 as the largest piece of Phase 5. Everything else physics-side is a pure bridge.
@@ -87,13 +87,13 @@ entity:set_component("AnimationPlayer", { clip = clip_uuid, playing = true })
 
 ## Camera (no new C++)
 
-The follow-camera recipe ships in **Phase 3** (it needs only world getters + `se.look_at` + `se.lerp` +
+The follow-camera recipe ships in **Phase 3** (it needs only world getters + `sa.look_at` + `sa.lerp` +
 `set_parent`). Per-camera params (fov/near/far) ride `set_component("Camera", …)`. No physics/camera bridge
 here.
 
 ## Tests (`tests/e2e/script.test.ts`)
 
-- `se.spherecast` hits a body a thin ray misses (mirror the raycast test setup).
+- `sa.spherecast` hits a body a thin ray misses (mirror the raycast test setup).
 - `move_character`: a `CharacterController` entity; a script sets a desired velocity → over ticks it moves;
   `jump = true` raises it (the fixed impulse).
 - `apply_impulse` (after the new C++ lands): a dynamic rigidbody gains velocity; `get_velocity` reads it

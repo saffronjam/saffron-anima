@@ -42,7 +42,7 @@ module Saffron.Rendering;
 import Saffron.Core;
 import :Detail;
 
-namespace se
+namespace sa
 {
     auto captureViewport(Renderer& renderer, const std::string& path) -> Result<void>
     {

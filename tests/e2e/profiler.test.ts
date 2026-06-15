@@ -121,7 +121,7 @@ test("a frames:N capture writes a file and still returns inline spans", async ()
   expect(frames.ready).toBe(true);
   expect(frames.mode).toBe("frames");
   expect(frames.frameCount).toBeGreaterThan(1);
-  expect(frames.path.length).toBeGreaterThan(0); // written to a file for the viewer / se
+  expect(frames.path.length).toBeGreaterThan(0); // written to a file for the viewer / sa
   expect(frames.capture.spans.length).toBeGreaterThan(result.capture.spans.length);
 });
 

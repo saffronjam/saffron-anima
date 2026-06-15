@@ -23,7 +23,7 @@ export module Saffron.Core;
 
 import std;
 
-export namespace se
+export namespace sa
 {
     template <typename T>
     using Ref = std::shared_ptr<T>;

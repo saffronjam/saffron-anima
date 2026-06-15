@@ -72,7 +72,7 @@ import type {
 const ALARM_LOG_LIMIT = 200;
 /// Cap on the retained physics contact/trigger feed (newest-N, like the alarm log).
 const CONTACT_LOG_LIMIT = 200;
-/// Cap on the retained se.log feed; the engine ring is bounded too, the editor keeps a deeper window.
+/// Cap on the retained sa.log feed; the engine ring is bounded too, the editor keeps a deeper window.
 const SCRIPT_LOG_LIMIT = 2000;
 /// Frames requested from the engine per metrics poll — its full ring, so no frames are
 /// missed between polls (the client dedups the overlap by frame index).
@@ -165,7 +165,7 @@ export interface EditorState {
   physicsBodies: PhysicsBodyDto[];
   contactLog: ContactEventDto[];
   contactsOverflowed: boolean;
-  /// se.log output (Script Logs panel), filled by the open+playing poll; cleared on each fresh play.
+  /// sa.log output (Script Logs panel), filled by the open+playing poll; cleared on each fresh play.
   scriptLogs: ScriptLogDto[];
   scriptLogsOverflowed: boolean;
   /// Viewport debug-overlay toggles (set-debug-overlays); filled by the render-panel-gated poll.
@@ -1871,7 +1871,7 @@ export function startReconcile(client: Client): () => void {
       }
 
       // The Render panel owns the debug-overlay toggles; poll them only while it is open so
-      // an external `se set-debug-overlays` reflects in the panel.
+      // an external `sa set-debug-overlays` reflects in the panel.
       if (isPanelOpen(useEditorStore.getState(), "render")) {
         const overlays = await client.getDebugOverlays();
         if (stopped) {
@@ -1910,7 +1910,7 @@ export function startReconcile(client: Client): () => void {
       }
       lastPlayStateForPhysics = physicsPlayState;
 
-      // The Script Logs panel: se.log output. Polled ONLY while the panel is open AND play is active
+      // The Script Logs panel: sa.log output. Polled ONLY while the panel is open AND play is active
       // (scripts run only in play); the cursor + buffer reset on each fresh play, retained after Stop.
       const scriptLogsPlayState = useEditorStore.getState().playState;
       if (isPanelOpen(useEditorStore.getState(), "scriptLogs") && scriptLogsPlayState !== "edit") {
@@ -1994,11 +1994,11 @@ export function startReconcile(client: Client): () => void {
       }
 
       live.setRenderStats(stats);
-      // Reflect the engine's gizmo state (so an external `se set-gizmo` shows up
+      // Reflect the engine's gizmo state (so an external `sa set-gizmo` shows up
       // in the Topbar); Topbar clicks set this optimistically, the poll confirms.
       live.setGizmo(gizmo);
 
-      // Mirror play state from the engine on a version change (a shell `se play`
+      // Mirror play state from the engine on a version change (a shell `sa play`
       // shows up here too); Topbar clicks set it optimistically, the poll confirms.
       // The stop-driven sceneVersion bump rides the refreshHeavyState path below,
       // snapping the tree/inspector back to the authored scene.
@@ -2032,7 +2032,7 @@ export function startReconcile(client: Client): () => void {
 
       // Animation gate, parallel to the playVersion gate: refetch the selected rig's
       // playhead/clips when the engine bumps animationVersion (a play/seek/pause, here
-      // or via the `se` CLI) or when the selection changes to a different entity. The
+      // or via the `sa` CLI) or when the selection changes to a different entity. The
       // returned `time` drives the TimelinePanel playhead (canvas, never React state).
       if (selection.animationVersion !== knownAnimationVersion || selectionChanged) {
         refreshAnimation(nextSelectedId);

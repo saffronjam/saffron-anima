@@ -1,6 +1,6 @@
 # Phase 6 — Editor (Tauri / React / Rust)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 The retained-Saffron model keeps almost all editor-internal "saffron" tokens. This phase changes only
 the **user-visible product name**, the bundle id (it contains "engine"), and the `sa-types` import.
@@ -17,7 +17,7 @@ The product the user launches is **Saffron Anima**. Rename the editor's visible 
 - `editor/index.html`: `<title>Saffron Editor</title>` → `<title>Saffron Anima</title>`.
 - `editor/src-tauri/src/lib.rs`: the runtime `window.set_title("Saffron Editor")` → `"Saffron Anima"`;
   the `.expect("failed to build Saffron editor")` message → `"Saffron Anima"`.
-- `editor/src-tauri/Cargo.toml`: `description = "SaffronEngine TypeScript editor shell"` →
+- `editor/src-tauri/Cargo.toml`: `description = "SaffronAnima TypeScript editor shell"` →
   `"Saffron Anima TypeScript editor shell"` (description prose only).
 
 > Decision made here (flag for review): the editor window is titled **"Saffron Anima"**, not
@@ -37,9 +37,11 @@ The product the user launches is **Saffron Anima**. Rename the editor's visible 
 
 ## Re-confirm (already changed earlier)
 
-- `editor/src/protocol/index.ts` imports `./sa-types` (phase 2); no `se-types.ts` remains.
+- `editor/src/protocol/index.ts` imports `./sa-types` (phase 2); no `sa-types.ts` remains.
 - `editor/src/lib/chromeTrace.ts` pid is `"SaffronAnima"` and `profilerTransforms.test.ts` matches (phase 1).
 - The engine default path is `build/debug/bin/SaffronAnima` and the env var is `SAFFRON_ANIMA_BIN` (phase 1).
+- Editor-only asset drag/drop MIME channels use `application/x-sa-asset` / `application/x-sa-folder`;
+  the shared constants keep panel drop targets and tests on the same names.
 
 ## Verify
 

@@ -36,7 +36,7 @@ clean.
 2. **The GLM fix-overlap exit.** `run-clang-tidy -p build/debug -quiet …` exits non-zero from
    `Fix conflicts with existing fix! … glm/detail/type_vec4.hpp` — overlapping FixIt ranges in a shared
    third-party header analyzed by many TUs. Options, in order of preference:
-   - Confirm `HeaderFilterRegex: '(engine/source|tools/se)'` also suppresses *fix computation* for
+   - Confirm `HeaderFilterRegex: '(engine/source|tools/sa)'` also suppresses *fix computation* for
      third-party headers (it governs diagnostics; verify it also drops their FixIts). If not, add a
      `.clang-tidy` `ExcludeHeaderFilterRegex` (clang-tidy ≥ 19) for `_deps/`.
    - Pin the lint invocation so it never aggregates fixes (it should not with no `--fix`; investigate why

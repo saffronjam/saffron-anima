@@ -13,14 +13,14 @@ the live render while the webview owns all chrome — including chrome blended o
 scene itself.
 
 Every editor operation that touches the scene rides the same JSON-over-unix-socket
-[control protocol](../../tooling-and-control/control-plane-architecture/) the `se` CLI
-speaks. The engine project builds the `SaffronEngine` host executable — a headless host
+[control protocol](../../tooling-and-control/control-plane-architecture/) the `sa` CLI
+speaks. The engine project builds the `SaffronAnima` host executable — a headless host
 that boots the engine, publishes frames, and drains the control socket, with no panels of
 its own.
 
 ## Two processes, one socket
 
-The Rust backend spawns `SaffronEngine` with `SAFFRON_EDITOR_NATIVE_VIEWPORT=1` (hidden
+The Rust backend spawns `SaffronAnima` with `SAFFRON_EDITOR_NATIVE_VIEWPORT=1` (hidden
 window), a per-instance `SAFFRON_CONTROL_SOCK` (pid-scoped, so two editor windows do not
 collide), **two** shared-memory segment names — `SAFFRON_VIEWPORT_SHM_SCENE` and
 `SAFFRON_VIEWPORT_SHM_ASSET`, one ring per [view](../viewport-compositing/) so each pane's
@@ -30,7 +30,7 @@ renderer and the webview is the UI, talking only over that socket.
 The TypeScript side is a typed client over one generic Rust passthrough. Every scene,
 asset, and render command is `invoke('control', { cmd, params })`; the Rust layer forwards
 it verbatim, turns an engine `ok:false` into a rejected promise, and otherwise resolves
-the result JSON. Adding a new `se` command needs no Rust change — the typed wrapper in
+the result JSON. Adding a new `sa` command needs no Rust change — the typed wrapper in
 `client.ts` and a DTO entry are all that move.
 
 ```ts

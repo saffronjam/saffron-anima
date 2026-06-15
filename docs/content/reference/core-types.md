@@ -53,7 +53,7 @@ math = false
 ## Constants
 | Symbol | Value |
 |---|---|
-| `EngineName` | `"Saffron Engine"` |
+| `EngineName` | `"Saffron Anima"` |
 | `EngineVersion` | `"0.1.0-vulkan"` |
 
 ## Related

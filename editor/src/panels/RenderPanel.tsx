@@ -153,7 +153,7 @@ export function RenderPanel() {
   };
 
   // Debug overlays persist with the project but are not undoable (view state, not scene content).
-  // Fetch once on mount; the render-panel-gated poll keeps them live (and reflects external `se`).
+  // Fetch once on mount; the render-panel-gated poll keeps them live (and reflects external `sa`).
   useEffect(() => {
     if (ready && debugOverlays === null) {
       void client

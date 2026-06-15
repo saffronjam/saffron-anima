@@ -20,7 +20,7 @@ import Saffron.Scene;
 import Saffron.SceneEdit;
 import Saffron.Assets;
 
-namespace se
+namespace sa
 {
     namespace
     {

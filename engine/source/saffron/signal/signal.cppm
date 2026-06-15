@@ -3,7 +3,7 @@ export module Saffron.Signal;
 import std;
 import Saffron.Core;
 
-export namespace se
+export namespace sa
 {
     // Token returned by subscribe(); pass to unsubscribe().
     struct SubscriptionId

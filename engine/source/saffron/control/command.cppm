@@ -21,7 +21,7 @@ import Saffron.SceneEdit;
 import Saffron.Assets;
 import Saffron.Physics;
 
-export namespace se
+export namespace sa
 {
     using json = nlohmann::json;
 

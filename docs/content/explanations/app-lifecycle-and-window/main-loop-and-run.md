@@ -7,7 +7,7 @@ weight = 1
 
 The main loop is the single function that owns a program's window and renderer, and runs
 one fixed sequence of work every frame until the window closes. In Saffron that function is
-`se::run`. A client supplies an `AppConfig` and calls `run`; `run` drives everything and calls
+`sa::run`. A client supplies an `AppConfig` and calls `run`; `run` drives everything and calls
 back into the client's layers at fixed points.
 
 The shape is a config and a call, not a base class. There is no application to subclass and no

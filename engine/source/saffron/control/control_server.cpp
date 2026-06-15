@@ -29,7 +29,7 @@ import Saffron.SceneEdit;
 import Saffron.Assets;
 import Saffron.Physics;
 
-namespace se
+namespace sa
 {
     void registerCommand(CommandRegistry& reg, std::string name, std::string help,
                          std::function<Result<json>(EngineContext&, const json&)> run)

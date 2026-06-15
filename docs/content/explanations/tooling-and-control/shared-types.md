@@ -14,7 +14,7 @@ engine/source/saffron/control/control_dto.cppm   (DTO source of truth)
         |
         `-- tools/gen-control-dto/gen.ts
               |-- control_dto_serde.generated.cpp
-              |-- editor/src/protocol/se-types.ts
+              |-- editor/src/protocol/sa-types.ts
               |-- schemas/control/openrpc.generated.json
               `-- schemas/control/command-manifest.generated.json
 ```
@@ -43,11 +43,11 @@ Component bodies and the scene environment use generated scene serde as well. `i
 | Typed command registration | `engine/source/saffron/control/command.cppm` | `registerCommand<Params, Result>` |
 | Generated C++ serde | `engine/source/saffron/control/control_dto_serde.generated.cpp`, `engine/source/saffron/scene/scene_component_serde.generated.cpp` | `parseDto`, `dtoToJson`, component serde functions |
 | Generator | `tools/gen-control-dto/gen.ts` | DTO parser, TS/OpenRPC/manifest emitters |
-| Editor protocol types | `editor/src/protocol/se-types.ts`, `editor/src/protocol/index.ts` | `CommandParamsMap`, `CommandResultMap` |
+| Editor protocol types | `editor/src/protocol/sa-types.ts`, `editor/src/protocol/index.ts` | `CommandParamsMap`, `CommandResultMap` |
 | Live contract test | `tools/check-control-schema/check.ts` | manifest completeness, OpenRPC validation, raw u64 check |
 
 ## Related
-- [se CLI](../se-cli-protocol/) — the request/response shape and token coercion these types describe
+- [sa CLI](../sa-cli-protocol/) — the request/response shape and token coercion these types describe
 - [Scene commands](../scene-commands/) — component editing and selection counters
 - [Asset commands](../asset-commands/) — project, catalog, and thumbnail commands
 - [Control plane](../control-plane-architecture/) — how typed handlers are registered and dispatched

@@ -1,9 +1,9 @@
-// End-to-end harness for SaffronEngine: boots a real engine headlessly and drives it over
-// the JSON-over-unix-socket control plane — the same wire the editor and `se` CLI use. No
+// End-to-end harness for SaffronAnima: boots a real engine headlessly and drives it over
+// the JSON-over-unix-socket control plane — the same wire the editor and `sa` CLI use. No
 // C++ is involved beyond the engine binary; tests are plain TypeScript on `bun test`.
 //
 // Each Engine spawns its own headless weston so runs are isolated and never open a window,
-// then launches build/debug/bin/SaffronEngine pointed at a per-run control socket. Engine
+// then launches build/debug/bin/SaffronAnima pointed at a per-run control socket. Engine
 // stdout+stderr (incl. Vulkan validation messages) is captured into `.log` for assertions.
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO = join(HERE, "..", "..");
 export const ENGINE_BIN =
-  process.env.SAFFRON_ENGINE_BIN ?? join(REPO, "build", "debug", "bin", "SaffronEngine");
+  process.env.SAFFRON_ANIMA_BIN ?? join(REPO, "build", "debug", "bin", "SaffronAnima");
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 

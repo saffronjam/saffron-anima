@@ -1,7 +1,7 @@
 [package]
 name = "saffron-editor"
 version = "0.1.0"
-description = "SaffronEngine TypeScript editor shell"
+description = "Saffron Anima TypeScript editor shell"
 edition = "2024"
 rust-version = "1.85"
 

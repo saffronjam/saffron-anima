@@ -1,11 +1,11 @@
 +++
-title = 'SaffronEngine'
-description = 'How the SaffronEngine renderer works, concept by concept, with links into the code that implements it.'
+title = 'Saffron Anima'
+description = 'How the Saffron Anima renderer works, concept by concept, with links into the code that implements it.'
 +++
 
-# SaffronEngine
+# Saffron Anima
 
-SaffronEngine is a from-scratch **Vulkan** renderer and **C++26** game engine with a
+Saffron Anima is a from-scratch **Vulkan** renderer and **C++26** game engine with a
 Tauri/React editor. These docs explain how it renders, concept by concept, and link
 each explanation to the code behind it.
 
@@ -17,7 +17,7 @@ before the deeper graphics pages.
 
 - **Overview:** the [Overview](overview/) is a one-screen tour from window to pixel.
 - **Subsystems:** [Explanations](explanations/) covers each part in its own page — render graph, lighting, shadows, post-processing, the editor.
-- **Tasks:** [How-to](how-to/) has recipes (build and run, import a model, drive the `se` CLI).
+- **Tasks:** [How-to](how-to/) has recipes (build and run, import a model, drive the `sa` CLI).
 - **Signatures and commands:** [Reference](reference/) is the flat catalog.
 - **Guided builds:** [Tutorials](tutorials/) walk through complete tasks end to end.
 

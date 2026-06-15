@@ -2,7 +2,7 @@
 /// preserve-children toggle (transform a parent without moving its children), wired to
 /// the engine's single gizmo state (`set-gizmo`/`get-gizmo`). Clicks set `store.gizmo`
 /// optimistically and fire `set-gizmo`; the reconcile poll's `get-gizmo` read keeps it
-/// in sync with external mutations (e.g. `se set-gizmo`).
+/// in sync with external mutations (e.g. `sa set-gizmo`).
 import { Fragment } from "react";
 import {
   Anchor,
@@ -104,7 +104,7 @@ export function Topbar() {
   };
 
   // Playback: optimistic store write + fire the command; the reconcile poll repairs
-  // the state on failure (and reflects an external `se play`). The viewport cuts to
+  // the state on failure (and reflects an external `sa play`). The viewport cuts to
   // the scene camera and the chrome tints while not in edit (see Layout).
   const onPlayPause = (): void => {
     if (playState === "playing") {

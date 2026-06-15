@@ -38,12 +38,12 @@ as they move.
 
 One grouped command toggles any subset; omitted fields stay unchanged (the
 [`set-skeleton-overlay`](../asset-editor/) shape). The Render panel's **Debug** section mirrors the
-state through a render-panel-gated poll, so an external `se` toggle shows up there too.
+state through a render-panel-gated poll, so an external `sa` toggle shows up there too.
 
 ```sh
-se set-debug-overlays --bounds true --lightVolumes true
-se set-debug-overlays --bounds false      # the others stay as they were
-se get-debug-overlays
+sa set-debug-overlays --bounds true --lightVolumes true
+sa set-debug-overlays --bounds false      # the others stay as they were
+sa get-debug-overlays
 ```
 
 ## View modes
@@ -72,9 +72,9 @@ Overdraw, Light Complexity — are not implemented yet; they are a fullscreen-bl
 their producer (the G-buffer / TAA / SSAO targets exist only when those features are on).
 
 ```sh
-se set-view-mode --mode wireframe
-se set-view-mode --mode normal
-se render-stats -o json | jq .viewMode    # "normal"
+sa set-view-mode --mode wireframe
+sa set-view-mode --mode normal
+sa render-stats -o json | jq .viewMode    # "normal"
 ```
 
 ## Code

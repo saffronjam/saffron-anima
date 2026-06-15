@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.31)
 # Enable CMake's experimental `import std;` support (UUID is specific to CMake 3.31.x).
 set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "d0edc3af-4c50-42ea-a356-e2862fe7a444")
 
-project(SaffronEngine
+project(SaffronAnima
     VERSION 0.1.0
     DESCRIPTION "A from-scratch Vulkan renderer / C++26 game engine"
     LANGUAGES CXX)
@@ -29,4 +29,4 @@ include(Slang)
 include(CompileShaders)
 
 add_subdirectory(engine)
-add_subdirectory(tools/se)
+add_subdirectory(tools/sa)

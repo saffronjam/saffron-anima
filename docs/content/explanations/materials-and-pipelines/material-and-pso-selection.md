@@ -52,7 +52,7 @@ Two materials that name the same shader and variant get the *same* `Ref<Pipeline
 
 Because the sample count is baked in, the cache rebuilds when the AA mode changes targets.
 
-`pipelineCount` returns the live cache size, reported by `se render-stats`. It is a direct check that übershader reuse is happening, and the number should stay small.
+`pipelineCount` returns the live cache size, reported by `sa render-stats`. It is a direct check that übershader reuse is happening, and the number should stay small.
 
 ## In the code
 

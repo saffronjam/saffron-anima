@@ -23,7 +23,7 @@ import Saffron.Scene;
 import Saffron.SceneEdit;
 import Saffron.Assets;
 
-namespace se
+namespace sa
 {
     auto selectorParams(const EntitySelector& selector) -> json
     {
@@ -1302,7 +1302,7 @@ namespace se
             });
 
         registerCommand<DrainScriptLogsParams, DrainScriptLogsResult>(
-            reg, "drain-script-logs", "drain-script-logs {since} — se.log lines with seq > since (non-blocking)",
+            reg, "drain-script-logs", "drain-script-logs {since} — sa.log lines with seq > since (non-blocking)",
             [](EngineContext& ctx, const DrainScriptLogsParams& params) -> Result<DrainScriptLogsResult>
             {
                 const i64 since = params.since.value_or(0);

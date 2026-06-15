@@ -8,7 +8,7 @@ weight = 7
 The brute-force fallback is a shading path that loops over every light in the scene for each
 fragment, rather than only the lights assigned to that fragment's froxel. It is the reference
 implementation: simpler, slower, and the ground truth the [clustered](../clustered-forward/)
-path is validated against. `se set-clustered 0` selects it at runtime.
+path is validated against. `sa set-clustered 0` selects it at runtime.
 
 ## One flag, two loops
 
@@ -40,7 +40,7 @@ way. A light is added to a froxel only when its `range` sphere overlaps, and pun
 
 Summing a set of lights where the omitted terms are all zero equals summing the full set.
 Float summation order can differ, but every dropped term is a hard zero and cannot perturb the
-result. Toggling `se set-clustered` between 1 and 0 reproduces the same frame.
+result. Toggling `sa set-clustered` between 1 and 0 reproduces the same frame.
 
 ## What it is for
 

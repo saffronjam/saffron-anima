@@ -46,14 +46,14 @@ Replace the bare `inputKeys` set with a `ScriptInputState` POD the host owns:
 
 | Lua API | Reads | Tag |
 |---|---|---|
-| `se.is_key_pressed(key)` (held) | `inputState.held` | exists; keep |
-| `se.just_pressed(key)` / `se.just_released(key)` | `inputState.pressed` / `.released` | edges |
-| `se.mouse_position() -> se.Vec3` (z=0) | `inputState.mouse.{x,y}` | uses Phase 2 `Vec3` |
-| `se.mouse_delta() -> se.Vec3` (z=0) | `inputState.mouse.{dx,dy}` | |
-| `se.mouse_button(n) -> bool` | `inputState.mouseButtons.contains(n)` | `n` ∈ `left`/`right`/`middle` |
-| `se.mouse_scroll() -> number` | `inputState.scroll` | |
+| `sa.is_key_pressed(key)` (held) | `inputState.held` | exists; keep |
+| `sa.just_pressed(key)` / `sa.just_released(key)` | `inputState.pressed` / `.released` | edges |
+| `sa.mouse_position() -> sa.Vec3` (z=0) | `inputState.mouse.{x,y}` | uses Phase 2 `Vec3` |
+| `sa.mouse_delta() -> sa.Vec3` (z=0) | `inputState.mouse.{dx,dy}` | |
+| `sa.mouse_button(n) -> bool` | `inputState.mouseButtons.contains(n)` | `n` ∈ `left`/`right`/`middle` |
+| `sa.mouse_scroll() -> number` | `inputState.scroll` | |
 
-All the same `contains`/field-read shape as today's `is_key_pressed`. Returning `se.Vec3` is why this phase
+All the same `contains`/field-read shape as today's `is_key_pressed`. Returning `sa.Vec3` is why this phase
 depends on Phase 2.
 
 ## Gamepad — deferred (LOCKED, not annotated)
@@ -61,7 +61,7 @@ depends on Phase 2.
 There is **no gamepad anywhere in the tree** (no `SDL_Gamepad` use, no gamepad signal in `window.cppm`, no
 control-plane gamepad field). Exposing it is a full new path: SDL gamepad init + event handling, a
 control-plane gamepad-state field, the host snapshot + binding. **Deferred to a follow-up;** do **not**
-bind or annotate any `se.gamepad_*` in `se.lua` until the path exists (a binding with no backing C++ is
+bind or annotate any `sa.gamepad_*` in `sa.lua` until the path exists (a binding with no backing C++ is
 forbidden).
 
 ## Control command (the one genuinely-new wire surface)
@@ -76,8 +76,8 @@ debugging.
 
 - Send a key via `script-input`, then clear it; a script counter that only increments on `just_pressed`
   increments exactly once, then stays put while held → `just_pressed` true for one tick then false.
-- Send mouse position/buttons via the extended command; a script reads `se.mouse_position()` /
-  `se.mouse_button("left")` and writes a derived transform; `inspect` confirms.
+- Send mouse position/buttons via the extended command; a script reads `sa.mouse_position()` /
+  `sa.mouse_button("left")` and writes a derived transform; `inspect` confirms.
 
 ## Docs
 

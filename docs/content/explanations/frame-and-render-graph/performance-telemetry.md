@@ -131,15 +131,15 @@ the device cannot drive.
 
 ## Driving it
 
-The data is on the control plane, so it is scriptable from the `se` CLI:
+The data is on the control plane, so it is scriptable from the `sa` CLI:
 
 ```sh
 se profiler.set-mode timestamps   # mode=timestamps  timestamps=yes  pipeline-stats=no
-se render-stats                   # cpu=…ms  gpu=…ms  wait=…ms  fps=…  draws=…  tris=…  binds=…
+sa render-stats                   # cpu=…ms  gpu=…ms  wait=…ms  fps=…  draws=…  tris=…  binds=…
 se pass-timings                   # per-pass GPU ms + the total span
 se frame-history                  # p50/p95/p99/p99.9 + max, stddev, stutters, budget
-se get-perf-config                # targetFps + derived budget + green/amber/red thresholds
-se set-perf-config --targetFps 90 # retarget the budget (VR-style)
+sa get-perf-config                # targetFps + derived budget + green/amber/red thresholds
+sa set-perf-config --targetFps 90 # retarget the budget (VR-style)
 se profiler.set-mode off          # back to baseline
 ```
 

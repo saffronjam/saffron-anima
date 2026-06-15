@@ -2,7 +2,7 @@
 
 The asset layer: the catalog + uuid-keyed GPU resource caches, the unified `project.json` format, the
 native `.smat` material system (factors, textures, instances, node graphs), and `renderScene` — the
-scene-to-renderer draw driver. Single-file module `Saffron.Assets` (`assets.cppm`), namespace `se`,
+scene-to-renderer draw driver. Single-file module `Saffron.Assets` (`assets.cppm`), namespace `sa`,
 classic `#include` in the global module fragment, does **not** `import std`. `AssetCatalog`/`AssetEntry`/
 `AssetType` themselves live in `Saffron.Scene`; this module owns the `AssetServer` that wraps them with
 GPU caches. Imported by `Saffron.Control` (the asset/scene/animation command files) and `Saffron.Host`.

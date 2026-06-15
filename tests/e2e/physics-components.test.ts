@@ -1,5 +1,5 @@
 // physics-ui plan, phase 1: the physics components are addable + their wire shapes are stable.
-// The editor's generic inspector types Rigidbody/Collider/etc from se-types.ts (hand-written TS
+// The editor's generic inspector types Rigidbody/Collider/etc from sa-types.ts (hand-written TS
 // interfaces in gen.ts), so a drift between those interfaces and the C++ serde would silently
 // mis-type the editor with no compiler catch. This pins the exact wire shapes the interfaces claim:
 // the motion/shape enums as lowercase strings, lockPosition/lockRotation as {x,y,z} booleans, and

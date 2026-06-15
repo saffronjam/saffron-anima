@@ -13,7 +13,7 @@ import Saffron.Core;
 import Saffron.Scene;
 import Saffron.Json;
 
-namespace se
+namespace sa
 {
     auto sceneEditCameraForward(const SceneEditCamera& camera) -> glm::vec3
     {

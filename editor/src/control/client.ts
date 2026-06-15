@@ -373,7 +373,7 @@ export const client = {
   drainScriptErrors(since: number): Promise<DrainScriptErrorsResult> {
     return call("drain-script-errors", { since });
   },
-  /// Drain se.log lines with seq > since (same seq-cursor protocol as drain-script-errors).
+  /// Drain sa.log lines with seq > since (same seq-cursor protocol as drain-script-errors).
   drainScriptLogs(since: number): Promise<DrainScriptLogsResult> {
     return call("drain-script-logs", { since });
   },

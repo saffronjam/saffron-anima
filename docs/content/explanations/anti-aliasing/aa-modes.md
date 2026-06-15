@@ -35,7 +35,7 @@ them into one active mode. MSAA wins if a sample count above 1 is requested; oth
 TAA. The count maps to a `vk::SampleCountFlagBits` and clamps to the device's `maxSampleCount`, so
 asking for `msaa8` on hardware that tops out at 4× yields 4×.
 
-The `se set-aa` command parses a mode string into those three arguments:
+The `sa set-aa` command parses a mode string into those three arguments:
 
 | String | `msaaSamples` | `fxaa` | `taa` |
 |---|---|---|---|
@@ -54,7 +54,7 @@ depth-prepass pipeline, because the mesh and prepass PSOs bake the sample count.
 
 ## Reading back the active mode
 
-`aaMode(renderer)` reports the current mode as a string, and `se render-stats` exposes it as the
+`aaMode(renderer)` reports the current mode as a string, and `sa render-stats` exposes it as the
 `aa` field. FXAA and TAA report by their flag; otherwise the sample count decides — `"off"` at 1,
 `"msaaN"` above.
 

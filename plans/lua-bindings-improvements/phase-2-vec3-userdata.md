@@ -1,4 +1,4 @@
-# Phase 2 — a real `se.Vec3` userdata (operators + math)
+# Phase 2 — a real `sa.Vec3` userdata (operators + math)
 
 **Status:** COMPLETED
 
@@ -48,8 +48,8 @@ the vendored LuaBridge3:
   .endClass()
 ```
 
-Plus free `se` helpers: `se.vec3(x,y,z)` (alias for `Vec3.new`), `se.lerp(a, b, t)`, and
-`se.look_at(eye, target, up?) -> se.Vec3 (euler radians)` — builds a look rotation (`glm::quatLookAt`) then
+Plus free `se` helpers: `sa.vec3(x,y,z)` (alias for `Vec3.new`), `sa.lerp(a, b, t)`, and
+`sa.look_at(eye, target, up?) -> sa.Vec3 (euler radians)` — builds a look rotation (`glm::quatLookAt`) then
 decomposes via `quatToEulerZYX` (`scene.cppm:977`) so it feeds the euler `set_rotation`. This is the helper
 the camera-follow recipe needs (Phase 3).
 
@@ -67,41 +67,41 @@ flip is caught.
 cheaper than the current 3-field table, GC-batched. Do **not** return references into components (lifetime
 hazard).
 
-## Rotation stays Euler — `se.Quat` deferred (LOCKED)
+## Rotation stays Euler — `sa.Quat` deferred (LOCKED)
 
 `get_world_rotation` is a quat in `Saffron.Scene` (`scene.cppm:897`); decompose it to Euler radians at the
-boundary so `se.Vec3` carries all rotations, matching the existing euler `set_rotation`. **`se.Quat` is
+boundary so `sa.Vec3` carries all rotations, matching the existing euler `set_rotation`. **`sa.Quat` is
 deferred** (README v1/deferred matrix) — add it only when gimbal-free composition is a real need.
 
 ## Dual-VM registration (LOCKED — both TUs)
 
-`se.Vec3` + `se.vec3` must be registered in **two** places:
+`sa.Vec3` + `sa.vec3` must be registered in **two** places:
 
 - `startScripts` (`script_runtime.cpp:429`) — the runtime VM where handlers run.
-- `newScriptVm` (`script.cppm:230`–`246`, today only `se.log`) — because `readScriptSchema`
+- `newScriptVm` (`script.cppm:230`–`246`, today only `sa.log`) — because `readScriptSchema`
   (`script_runtime.cpp:745`) runs the class chunk in a throwaway `newScriptVm`, so a `properties` default of
-  `se.vec3(0,1,0)` must resolve there. `Vec3` is pure (no host closure), so it binds cleanly in `newScriptVm`
+  `sa.vec3(0,1,0)` must resolve there. `Vec3` is pure (no host closure), so it binds cleanly in `newScriptVm`
   (unlike the host-closure bindings that force the runtime-only split).
 
 ## Threading Vec3 through the existing API (the no-legacy replacements)
 
-Every place that builds or accepts a `{x,y,z}` table switches to `se.Vec3`, in this change:
+Every place that builds or accepts a `{x,y,z}` table switches to `sa.Vec3`, in this change:
 
 - **Returns:** `get_position`, `get_world_position`, and the Phase-1 `get_rotation`/`get_scale`/
-  `get_world_rotation` return `se.Vec3` (push the `glm::vec3` directly — LuaBridge converts via the
+  `get_world_rotation` return `sa.Vec3` (push the `glm::vec3` directly — LuaBridge converts via the
   registered class). Replace `getPosition`'s hand-built table (`script_runtime.cpp:116`).
-- **`raycast` result:** `point`/`normal` become `se.Vec3` (replace the hand-built tables in the raycast
+- **`raycast` result:** `point`/`normal` become `sa.Vec3` (replace the hand-built tables in the raycast
   binding).
-- **Contact handler args:** `on_contact(self, other, point, normal)` — `point`/`normal` become `se.Vec3`
+- **Contact handler args:** `on_contact(self, other, point, normal)` — `point`/`normal` become `sa.Vec3`
   (replace `pushVec3Table`, `script_runtime.cpp:255`, called at `:287`–`:288`).
 - **Setters take a single `Vec3`:** `set_position(v)`, `set_rotation(v)`, `set_scale(v)`. The three-float
   overloads are **retired** — this setter-signature change forces every e2e `set_position(x, y, z)` call
   (`script.test.ts:51`–`52`, `:62`–`63`, `:73`, `:82`–`83`, `:109`, `:123`–`124`, `:136`, `:159`–`160`) to
-  become `set_position(se.vec3(...))` / `set_position(p + …)`, and the scaffold orbit math + its
+  become `set_position(sa.vec3(...))` / `set_position(p + …)`, and the scaffold orbit math + its
   `Math.hypot` assertion (`:416`) to rebuild `self.center` from `Vec3` — all in this change.
-- **Declared `vec3` fields:** `Class.properties = { offset = se.vec3(0,1,0) }`. `inferField`
+- **Declared `vec3` fields:** `Class.properties = { offset = sa.vec3(0,1,0) }`. `inferField`
   (`script_runtime.cpp:699`) currently keys on `LUA_TTABLE && lua_rawlen == 3` (`:720`). Two edits:
-  - **Detection:** also recognize an `se.Vec3` **userdata** default (a metatable/class check), emitting the
+  - **Detection:** also recognize an `sa.Vec3` **userdata** default (a metatable/class check), emitting the
     same `Vec3` `ScriptFieldType`.
   - **Extraction:** build the 3-number JSON array from the userdata's `x`/`y`/`z` (LuaBridge getters or a
     direct cast), **not** `lua_rawgeti` — otherwise the array silently emits zeros. The wire shape stays the
@@ -114,25 +114,25 @@ Every place that builds or accepts a `{x,y,z}` table switches to `se.Vec3`, in t
 
 ## Watch-out: `luaToJson` Vec3 branch
 
-`luaToJson` (Phase 1) must serialize an `se.Vec3` userdata to a 3-number array (the `[x,y,z]` shape the
+`luaToJson` (Phase 1) must serialize an `sa.Vec3` userdata to a 3-number array (the `[x,y,z]` shape the
 vec3 serde reads) so `set_component("Transform", { translation = pos })` works with a `Vec3` value. Add the
 userdata branch in this phase.
 
 ## Tests (`tests/e2e/script.test.ts`)
 
-- `local v = se.vec3(1,2,3) + se.vec3(0,1,0); self.entity:set_position(v)` → inspect shows `(1,3,3)`. Assert
-  `(se.vec3(3,0,0)):length()` ≈ 3, `dot`, `cross`, `normalized`, and **`2 * se.vec3(1,1,1)`** (scalar\*vec
-  path) equals `se.vec3(2,2,2)`.
+- `local v = sa.vec3(1,2,3) + sa.vec3(0,1,0); self.entity:set_position(v)` → inspect shows `(1,3,3)`. Assert
+  `(sa.vec3(3,0,0)):length()` ≈ 3, `dot`, `cross`, `normalized`, and **`2 * sa.vec3(1,1,1)`** (scalar\*vec
+  path) equals `sa.vec3(2,2,2)`.
 - `get_position()` returns userdata (`p.x`/`p.y`/`p.z` read back **and** `p.x = 9` writes through);
   `tostring(p)` is `Vec3(...)`.
-- A declared `offset` field of `se.vec3(0,1,0)` still surfaces as a `vec3` schema field and injects as a
+- A declared `offset` field of `sa.vec3(0,1,0)` still surfaces as a `vec3` schema field and injects as a
   `Vec3` (`self.offset.y == 1`). Update any existing declared-field test from `self.offset[2]` to
   `self.offset.y`.
 
 ## Docs
 
-Rewrite the vector parts of `script-components-and-runtime.md` (positions are now `se.Vec3`, not tables) and
-add an `se.Vec3` reference (operators + math helpers + the read-write fields). Flag the scaffold `example.lua`
+Rewrite the vector parts of `script-components-and-runtime.md` (positions are now `sa.Vec3`, not tables) and
+add an `sa.Vec3` reference (operators + math helpers + the read-write fields). Flag the scaffold `example.lua`
 Vec3 usage here so Phase 7 (which owns the scaffold rewrite) stays consistent. Update `_index.md` if scope
 shifts.
 

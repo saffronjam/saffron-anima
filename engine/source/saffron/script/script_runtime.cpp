@@ -36,7 +36,7 @@ module Saffron.Script;
 import Saffron.Core;
 import Saffron.Scene;
 
-namespace se
+namespace sa
 {
     namespace
     {
@@ -86,7 +86,7 @@ namespace se
             return { L };
         }
 
-        // The inverse of jsonToLua, for set_component: a Lua value at `index` -> JSON. An se.Vec3
+        // The inverse of jsonToLua, for set_component: a Lua value at `index` -> JSON. An sa.Vec3
         // userdata becomes an { x, y, z } object (the shape vec3FromJson reads, scene.cppm:1121); a
         // string-keyed table -> object; a 1-based sequence -> array; scalars 1:1; everything else -> null.
         auto luaToJson(lua_State* L, int index) -> nlohmann::json
@@ -106,7 +106,7 @@ namespace se
                 return std::string{ lua_tostring(L, idx) };
             case LUA_TUSERDATA:
             {
-                // An se.Vec3 exposes x/y/z; read them as a { x, y, z } object. Any other userdata
+                // An sa.Vec3 exposes x/y/z; read them as a { x, y, z } object. Any other userdata
                 // (no numeric x/y/z) is dropped to null rather than guessed at.
                 nlohmann::json object = nlohmann::json::object();
                 for (const char* field : { "x", "y", "z" })
@@ -184,8 +184,8 @@ namespace se
                     logWarn(std::format("script: {} outside a script callback is ignored", op));
                     return nullptr;
                 }
-                if (!se::valid(*host->currentScene, entity) ||
-                    !se::hasComponent<TransformComponent>(*host->currentScene, entity))
+                if (!sa::valid(*host->currentScene, entity) ||
+                    !sa::hasComponent<TransformComponent>(*host->currentScene, entity))
                 {
                     logWarn(std::format("script: {} on a missing entity/transform is ignored", op));
                     return nullptr;
@@ -195,10 +195,10 @@ namespace se
 
             auto isValid() const -> bool
             {
-                return host != nullptr && host->currentScene != nullptr && se::valid(*host->currentScene, entity);
+                return host != nullptr && host->currentScene != nullptr && sa::valid(*host->currentScene, entity);
             }
 
-            // Transforms cross the boundary as se.Vec3 (a glm::vec3 userdata); rotation is euler radians.
+            // Transforms cross the boundary as sa.Vec3 (a glm::vec3 userdata); rotation is euler radians.
             auto getPosition() const -> glm::vec3
             {
                 Scene* scene = transformScene("get_position");
@@ -262,8 +262,8 @@ namespace se
                 {
                     return {};
                 }
-                if (!se::valid(*host->currentScene, entity) ||
-                    !se::hasComponent<NameComponent>(*host->currentScene, entity))
+                if (!sa::valid(*host->currentScene, entity) ||
+                    !sa::hasComponent<NameComponent>(*host->currentScene, entity))
                 {
                     return {};
                 }
@@ -272,8 +272,8 @@ namespace se
 
             auto uuid() const -> std::string
             {
-                if (host == nullptr || host->currentScene == nullptr || !se::valid(*host->currentScene, entity) ||
-                    !se::hasComponent<IdComponent>(*host->currentScene, entity))
+                if (host == nullptr || host->currentScene == nullptr || !sa::valid(*host->currentScene, entity) ||
+                    !sa::hasComponent<IdComponent>(*host->currentScene, entity))
                 {
                     return "0";
                 }
@@ -289,7 +289,7 @@ namespace se
                     logWarn(std::format("script: {} outside a script callback is ignored", op));
                     return nullptr;
                 }
-                if (!se::valid(*host->currentScene, entity))
+                if (!sa::valid(*host->currentScene, entity))
                 {
                     logWarn(std::format("script: {} on a dead entity is ignored", op));
                     return nullptr;
@@ -314,7 +314,7 @@ namespace se
                 return jsonToLua(L, traits->serialize(*scene, entity));
             }
 
-            // The write mirror of get_component: a Lua table (or se.Vec3) -> the registry's deserialize.
+            // The write mirror of get_component: a Lua table (or sa.Vec3) -> the registry's deserialize.
             // Refuses cache-backed structural components (the gate); an unknown name or a deserialize
             // failure is a logged false. deserialize merges onto the live component (partial patches work).
             auto setComponent(const char* componentName, luabridge::LuaRef value) const -> bool
@@ -400,8 +400,8 @@ namespace se
             // stays valid for the rest of the current handler. :valid() flips false once the flush runs.
             void destroy() const
             {
-                if (host == nullptr || host->currentScene == nullptr || !se::valid(*host->currentScene, entity) ||
-                    !se::hasComponent<IdComponent>(*host->currentScene, entity))
+                if (host == nullptr || host->currentScene == nullptr || !sa::valid(*host->currentScene, entity) ||
+                    !sa::hasComponent<IdComponent>(*host->currentScene, entity))
                 {
                     logWarn("script: destroy outside a callback / on a dead entity is ignored");
                     return;
@@ -414,12 +414,12 @@ namespace se
             // mid-tick (setParent touches components + entt views, not the instance vector being iterated).
             auto setParent(const ScriptEntity& other) const -> bool
             {
-                if (host == nullptr || host->currentScene == nullptr || !se::valid(*host->currentScene, entity))
+                if (host == nullptr || host->currentScene == nullptr || !sa::valid(*host->currentScene, entity))
                 {
                     logWarn("script: set_parent outside a callback / on a dead entity is ignored");
                     return false;
                 }
-                auto reparented = se::setParent(*host->currentScene, entity, other.entity);
+                auto reparented = sa::setParent(*host->currentScene, entity, other.entity);
                 if (!reparented)
                 {
                     logWarn(std::format("script: set_parent: {}", reparented.error()));
@@ -432,8 +432,8 @@ namespace se
             auto parent() const -> ScriptEntity
             {
                 ScriptEntity none{ .entity = Entity{}, .host = host };
-                if (host == nullptr || host->currentScene == nullptr || !se::valid(*host->currentScene, entity) ||
-                    !se::hasComponent<RelationshipComponent>(*host->currentScene, entity))
+                if (host == nullptr || host->currentScene == nullptr || !sa::valid(*host->currentScene, entity) ||
+                    !sa::hasComponent<RelationshipComponent>(*host->currentScene, entity))
                 {
                     return none;
                 }
@@ -448,8 +448,8 @@ namespace se
             auto children() const -> luabridge::LuaRef
             {
                 luabridge::LuaRef array = luabridge::newTable(host != nullptr ? host->vm.state : nullptr);
-                if (host == nullptr || host->currentScene == nullptr || !se::valid(*host->currentScene, entity) ||
-                    !se::hasComponent<RelationshipComponent>(*host->currentScene, entity))
+                if (host == nullptr || host->currentScene == nullptr || !sa::valid(*host->currentScene, entity) ||
+                    !sa::hasComponent<RelationshipComponent>(*host->currentScene, entity))
                 {
                     return array;
                 }
@@ -468,8 +468,8 @@ namespace se
             void send(const char* handler, luabridge::LuaRef payload) const
             {
                 if (host == nullptr || host->currentScene == nullptr || handler == nullptr ||
-                    !se::valid(*host->currentScene, entity) ||
-                    !se::hasComponent<IdComponent>(*host->currentScene, entity))
+                    !sa::valid(*host->currentScene, entity) ||
+                    !sa::hasComponent<IdComponent>(*host->currentScene, entity))
                 {
                     logWarn("script: send outside a callback / on a dead entity is ignored");
                     return;
@@ -491,8 +491,8 @@ namespace se
             // every physics bridge passes — the live world maps it back to the Jolt body.
             auto idValue() const -> u64
             {
-                if (host == nullptr || host->currentScene == nullptr || !se::valid(*host->currentScene, entity) ||
-                    !se::hasComponent<IdComponent>(*host->currentScene, entity))
+                if (host == nullptr || host->currentScene == nullptr || !sa::valid(*host->currentScene, entity) ||
+                    !sa::hasComponent<IdComponent>(*host->currentScene, entity))
                 {
                     return 0;
                 }
@@ -504,8 +504,8 @@ namespace se
             // component lives in Saffron.Scene, so no physics bridge is needed.
             void moveCharacter(const glm::vec3& velocity, bool jump) const
             {
-                if (host == nullptr || host->currentScene == nullptr || !se::valid(*host->currentScene, entity) ||
-                    !se::hasComponent<CharacterControllerComponent>(*host->currentScene, entity))
+                if (host == nullptr || host->currentScene == nullptr || !sa::valid(*host->currentScene, entity) ||
+                    !sa::hasComponent<CharacterControllerComponent>(*host->currentScene, entity))
                 {
                     logWarn("script: move_character on an entity without a CharacterController is ignored");
                     return;
@@ -587,7 +587,7 @@ namespace se
             for (const u64 uuid : host.pendingDestroy)
             {
                 const Entity entity = findEntityByUuid(scene, uuid);
-                if (se::valid(scene, entity))
+                if (sa::valid(scene, entity))
                 {
                     destroyEntity(scene, entity);
                 }
@@ -736,7 +736,7 @@ namespace se
 
         // Shallow-copies the table at `index` so a table default (vec3) is never
         // shared between instances — mutating self.offset must not bleed across.
-        // True when the value at `index` is an se.Vec3 userdata (has numeric x/y/z).
+        // True when the value at `index` is an sa.Vec3 userdata (has numeric x/y/z).
         auto isVec3Userdata(lua_State* L, int index) -> bool
         {
             if (lua_type(L, index) != LUA_TUSERDATA)
@@ -754,7 +754,7 @@ namespace se
             return ok;
         }
 
-        // Read a glm::vec3 off a value with numeric x/y/z (an se.Vec3 userdata) at `index`.
+        // Read a glm::vec3 off a value with numeric x/y/z (an sa.Vec3 userdata) at `index`.
         auto readVec3Userdata(lua_State* L, int index) -> glm::vec3
         {
             const int idx = lua_absindex(L, index);
@@ -802,7 +802,7 @@ namespace se
                     if (lua_type(L, -2) == LUA_TSTRING)
                     {
                         const char* name = lua_tostring(L, -2);
-                        // A vec3 field (an se.Vec3 default) injects a fresh per-instance Vec3 — from the
+                        // A vec3 field (an sa.Vec3 default) injects a fresh per-instance Vec3 — from the
                         // override's 3-number array when present, else a value-copy of the default (so a
                         // mutated self.offset never aliases across instances). Tables copy; scalars push.
                         const bool vec3Field = isVec3Userdata(L, -1);
@@ -862,31 +862,31 @@ namespace se
             return luaL_ref(L, LUA_REGISTRYINDEX);
         }
 
-        // The Roblox-task-style coroutine scheduler, pure Lua over the enabled coroutine lib. se.wait
+        // The Roblox-task-style coroutine scheduler, pure Lua over the enabled coroutine lib. sa.wait
         // yields the running coroutine (a no-op outside one, never a tick error); the host resumes ready
-        // ones each tick via _se_advance(dt), timed off accumulated dt (deterministic, never os.clock).
-        // `se` is a LuaBridge namespace table with a read-only __newindex, so the scheduler functions are
-        // installed with rawset (a plain `se.wait = …` would error). _se_advance is an ordinary global.
+        // ones each tick via _sa_advance(dt), timed off accumulated dt (deterministic, never os.clock).
+        // `sa` is a LuaBridge namespace table with a read-only __newindex, so the scheduler functions are
+        // installed with rawset (a plain `sa.wait = …` would error). _sa_advance is an ordinary global.
         constexpr std::string_view SchedulerPrelude = R"(
 local _tasks, _accum = {}, 0
-rawset(se, "spawn_task", function(fn, ...)
+rawset(sa, "spawn_task", function(fn, ...)
   local co = coroutine.create(fn)
   local ok, waitFor = coroutine.resume(co, ...)
-  if not ok then se.log("se: task error: " .. tostring(waitFor))
+  if not ok then sa.log("sa: task error: " .. tostring(waitFor))
   elseif coroutine.status(co) ~= "dead" then
     _tasks[#_tasks + 1] = { co = co, wake = _accum + (type(waitFor) == "number" and waitFor or 0) }
   end
   return co
 end)
-rawset(se, "wait", function(seconds)
+rawset(sa, "wait", function(seconds)
   local _, ismain = coroutine.running()
-  if ismain then se.log("se.wait called outside a coroutine is ignored") return end
+  if ismain then sa.log("sa.wait called outside a coroutine is ignored") return end
   return coroutine.yield(seconds or 0)
 end)
-rawset(se, "delay", function(seconds, fn)
-  return se.spawn_task(function() se.wait(seconds) fn() end)
+rawset(sa, "delay", function(seconds, fn)
+  return sa.spawn_task(function() sa.wait(seconds) fn() end)
 end)
-function _se_advance(dt)
+function _sa_advance(dt)
   _accum = _accum + dt
   local ready, keep = {}, {}
   for _, t in ipairs(_tasks) do
@@ -895,7 +895,7 @@ function _se_advance(dt)
   _tasks = keep
   for _, t in ipairs(ready) do
     local ok, waitFor = coroutine.resume(t.co)
-    if not ok then se.log("se: coroutine error: " .. tostring(waitFor))
+    if not ok then sa.log("sa: coroutine error: " .. tostring(waitFor))
     elseif coroutine.status(t.co) ~= "dead" then
       _tasks[#_tasks + 1] = { co = t.co, wake = _accum + (type(waitFor) == "number" and waitFor or 0) }
     end
@@ -910,7 +910,7 @@ end
             lua_State* L = host.vm.state;
             lua_pushcfunction(L, tracebackHandler);
             const int msghIndex = lua_gettop(L);
-            lua_getglobal(L, "_se_advance");
+            lua_getglobal(L, "_sa_advance");
             if (lua_isfunction(L, -1) == 0)
             {
                 lua_pop(L, 2);  // non-function, msgh
@@ -919,7 +919,7 @@ end
             lua_pushnumber(L, static_cast<lua_Number>(dt));
             if (lua_pcall(L, 1, 0, msghIndex) != LUA_OK)
             {
-                logWarn(std::format("se: scheduler: {}", popError(L, 1)));  // pops the error
+                logWarn(std::format("sa: scheduler: {}", popError(L, 1)));  // pops the error
             }
             lua_pop(L, 1);  // msgh
         }
@@ -950,13 +950,13 @@ end
             }
             if (lua_pcall(L, 3, 0, msghIndex) != LUA_OK)
             {
-                logWarn(std::format("se: message '{}': {}", name, popError(L, 3)));  // error, self, msgh
+                logWarn(std::format("sa: message '{}': {}", name, popError(L, 3)));  // error, self, msgh
                 return;
             }
             lua_pop(L, 2);  // self, msgh
         }
 
-        // Drain queued messages after the instance loop (entity:send / se.broadcast), dispatching to each
+        // Drain queued messages after the instance loop (entity:send / sa.broadcast), dispatching to each
         // matching instance, then release each payload ref. Never runs mid-loop (the instance vector is
         // iterated by reference).
         void dispatchMessages(ScriptHost& host, Scene& scene)
@@ -987,13 +987,13 @@ end
     }
 
     // The pure value types + math helpers, bound into BOTH the runtime VM (startScripts) and the
-    // throwaway schema VM (newScriptVm) — a `properties` default of se.vec3(0,1,0) must resolve at edit
+    // throwaway schema VM (newScriptVm) — a `properties` default of sa.vec3(0,1,0) must resolve at edit
     // time too. No host closure, so it binds cleanly in either VM.
     void registerScriptValueTypes(lua_State* L)
     {
         luabridge::getGlobalNamespace(L)
-            .beginNamespace("se")
-            // se.Vec3 is a glm::vec3-backed value userdata. addPropertyReadWrite (not the read-only
+            .beginNamespace("sa")
+            // sa.Vec3 is a glm::vec3-backed value userdata. addPropertyReadWrite (not the read-only
             // single-arg addProperty) so `v.x = 5` writes through; the __mul overload set registers both
             // operand orders (Lua dispatches scalar*vec on the right operand). &glm::vec3::x relies on GLM's
             // named-member layout (no GLM_FORCE_SWIZZLE in cmake/Dependencies.cmake).
@@ -1072,7 +1072,7 @@ end
         lua_State* L = host.vm.state;
         registerScriptValueTypes(L);
         luabridge::getGlobalNamespace(L)
-            .beginNamespace("se")
+            .beginNamespace("sa")
             .beginClass<ScriptEntity>("Entity")
             .addFunction("valid", &ScriptEntity::isValid)
             .addFunction("name", &ScriptEntity::name)
@@ -1283,8 +1283,8 @@ end
                                  host.logSink(host.currentSenderUuid, message);
                              }
                          })
-            // Cast a ray against the live physics world: se.raycast(ox,oy,oz, dx,dy,dz, maxDist)
-            // returns { hit, distance, point=se.Vec3, normal=se.Vec3, entity=<se.Entity or nil> }.
+            // Cast a ray against the live physics world: sa.raycast(ox,oy,oz, dx,dy,dz, maxDist)
+            // returns { hit, distance, point=sa.Vec3, normal=sa.Vec3, entity=<sa.Entity or nil> }.
             .addFunction(
                 "raycast",
                 [&host](float ox, float oy, float oz, float dx, float dy, float dz, float maxDist) -> luabridge::LuaRef
@@ -1333,8 +1333,8 @@ end
                          })
             .endNamespace();
 
-        // Install the coroutine scheduler (se.wait/spawn_task/delay) onto the now-bound `se` table.
-        if (auto installed = runString(host.vm, SchedulerPrelude, "se:scheduler"); !installed)
+        // Install the coroutine scheduler (sa.wait/spawn_task/delay) onto the now-bound `sa` table.
+        if (auto installed = runString(host.vm, SchedulerPrelude, "sa:scheduler"); !installed)
         {
             logError(std::format("script: scheduler prelude failed: {}", installed.error()));
         }
@@ -1528,7 +1528,7 @@ end
     namespace
     {
         // Infers a field from the declared default at the top of the stack:
-        // number/bool/string map 1:1, an se.Vec3 userdata is a vec3 (captured as a 3-number JSON
+        // number/bool/string map 1:1, an sa.Vec3 userdata is a vec3 (captured as a 3-number JSON
         // array, the shape the Inspector + override storage use), anything else is not a field.
         auto inferField(lua_State* L, std::string name) -> std::optional<ScriptField>
         {

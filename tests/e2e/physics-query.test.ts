@@ -1,7 +1,7 @@
 // Phase 7 of the physics plan: scene queries. raycast / shapecast hit the physics shapes at their
 // simulated transforms (not the render AABBs the editor `pick` uses), mapping the hit body back to
 // its entity. A shape-sweep tolerates an edge a thin ray misses. Queries refuse in Edit (the world
-// exists only in play). The same entry point backs the control commands and the Lua se.raycast.
+// exists only in play). The same entry point backs the control commands and the Lua sa.raycast.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -49,9 +49,9 @@ beforeAll(async () => {
     `local Prober = {}
 function Prober:on_update(dt)
   local p = self.entity:get_position()
-  local hit = se.raycast(p.x, p.y, p.z, 0, -1, 0, 20)
+  local hit = sa.raycast(p.x, p.y, p.z, 0, -1, 0, 20)
   if hit.hit and hit.entity ~= nil then
-    self.entity:set_position(se.vec3(99, hit.point.y, p.z))
+    self.entity:set_position(sa.vec3(99, hit.point.y, p.z))
   end
 end
 return Prober
@@ -128,7 +128,7 @@ test("a sphere-cast grazes the box edge where a thin ray misses it", async () =>
   await engine.settle();
 });
 
-test("a Lua script can query the world via se.raycast", async () => {
+test("a Lua script can query the world via sa.raycast", async () => {
   // Prober above clear floor (x=3); its on_update casts down and flags itself on a hit.
   const prober = (await engine.call<{ id: string }>("create-entity", { name: "Prober" })).id;
   await engine.call("set-transform", { entity: prober, translation: { x: 3, y: 5, z: 0 } });
@@ -142,7 +142,7 @@ test("a Lua script can query the world via se.raycast", async () => {
   await engine.call("play");
   await engine.settle(500);
   const t = await engine.call<{ translation: Vec3 }>("get-world-transform", { entity: prober });
-  expect(t.translation.x).toBeCloseTo(99, 1); // the script's hit flag — se.raycast reached the world
+  expect(t.translation.x).toBeCloseTo(99, 1); // the script's hit flag — sa.raycast reached the world
   expect(t.translation.y).toBeCloseTo(0.1, 1); // snapped to the floor-top hit point
   await engine.call("stop");
   await engine.settle();

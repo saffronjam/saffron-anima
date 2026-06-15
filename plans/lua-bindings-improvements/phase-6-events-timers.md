@@ -15,7 +15,7 @@ Pick **exactly one** mechanism (no UnityEvent-style registry beside it — that 
 no-legacy rule forbids):
 
 - `entity:send(handler_name, ...)` — queue `{ target_uuid, handler_name, args }` during the tick.
-- `se.broadcast(handler_name, ...)` — the global variant over every instance.
+- `sa.broadcast(handler_name, ...)` — the global variant over every instance.
 - **Flush after the instance loop** (the same reentrancy discipline as spawn/destroy, Phase 3 —
   `tickScripts` iterates the live `host.instances` by reference at `:583`, so dispatch cannot run
   mid-loop): drain the message queue, and for each message invoke each matching instance's
@@ -41,12 +41,12 @@ direction gated on a registry change-hook.
 The `coroutine` lib is already open (`script.cppm:237`, `LUA_COLIBK`). Build a Roblox-`task`-style scheduler
 entirely in the runtime, injected as a Lua prelude at VM creation, driven by the existing tick:
 
-- `se.wait(seconds)` — yields the current coroutine; resumed by the scheduler once `seconds` of accumulated
-  `dt` have passed. **Only valid inside a coroutine** (a `se.spawn_task`'d function), never in a bare
+- `sa.wait(seconds)` — yields the current coroutine; resumed by the scheduler once `seconds` of accumulated
+  `dt` have passed. **Only valid inside a coroutine** (a `sa.spawn_task`'d function), never in a bare
   `on_update` (which can't yield across the C boundary cleanly) — a `wait` outside a coroutine is a logged
   error (matching Roblox), not a crash.
-- `se.spawn_task(fn, ...)` — wrap `fn` in a coroutine, resume it immediately (Roblox `task.spawn`).
-- `se.delay(seconds, fn)` — schedule `fn` after a delay (Roblox `task.delay`).
+- `sa.spawn_task(fn, ...)` — wrap `fn` in a coroutine, resume it immediately (Roblox `task.spawn`).
+- `sa.delay(seconds, fn)` — schedule `fn` after a delay (Roblox `task.delay`).
 
 ### Implementation — a host-owned ready/sleep queue
 
@@ -64,7 +64,7 @@ ops silent no-ops):
 It composes with `on_update` (which still runs every tick); coroutines are an additional, optional
 concurrency primitive. The scheduler is cleared in `stopScripts`.
 
-**Sandbox note:** `se.wait` is coroutine-yield-based, never `os.clock`/busy-wait (`os` is withheld anyway).
+**Sandbox note:** `sa.wait` is coroutine-yield-based, never `os.clock`/busy-wait (`os` is withheld anyway).
 Timing comes from accumulated `dt`, deterministic with the play loop.
 
 ## Control command
@@ -75,12 +75,12 @@ nice-to-have, not required.)
 
 ## Tests (`tests/e2e/script.test.ts`)
 
-- `se.spawn_task` a coroutine that `se.wait(0.2)` then sets a position; assert the position changes only
+- `sa.spawn_task` a coroutine that `sa.wait(0.2)` then sets a position; assert the position changes only
   after ~0.2s of accumulated dt, not immediately.
 - Messaging: script A defines a handler that moves its entity; script B `entity:send`s A (or
-  `se.broadcast`s); after the flush, A's entity moved. A handler that `error`s is contained (play stays
+  `sa.broadcast`s); after the flush, A's entity moved. A handler that `error`s is contained (play stays
   `playing`, the error lands in the ring) and the **other** handlers still run.
-- `se.wait` called from a bare `on_update` is a logged error, not a crash (play stays `playing`).
+- `sa.wait` called from a bare `on_update` is a logged error, not a crash (play stays `playing`).
 
 ## Docs
 

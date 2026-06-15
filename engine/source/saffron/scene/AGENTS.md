@@ -1,7 +1,7 @@
 # Saffron.Scene
 
 The entt-backed scene model and the registry-driven JSON serialization that the whole editor/control/
-script/animation stack reads. Module `Saffron.Scene`, namespace `se`, classic `#include`, no `import std`.
+script/animation stack reads. Module `Saffron.Scene`, namespace `sa`, classic `#include`, no `import std`.
 An `Entity` is a bare entt handle; the `Scene` is always passed explicitly (Go-style free functions, not
 methods). Imported by ~16 TUs across control, sceneedit, script, animation, assets, and host.
 
@@ -23,7 +23,7 @@ methods). Imported by ~16 TUs across control, sceneedit, script, animation, asse
 Miss step 3 and the component silently never serializes and never reaches the editor. The
 `registerComponent` calls inside `scene.cppm` are **self-tests only**, not the real registration site.
 The editor inspector is generic (protocol-driven `fieldRenderer`, no per-component code), so it follows
-from the regenerated `se-types.ts`.
+from the regenerated `sa-types.ts`.
 
 ## Rules that are easy to break
 
