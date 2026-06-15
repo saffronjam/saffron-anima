@@ -2362,6 +2362,22 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<DrainScriptLogsParams>) -> Result<DrainScriptLogsParams>
+    {
+        DrainScriptLogsParams out;
+
+        {
+            auto value = optionalField(params, "since", 0, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readI64(*value, "since");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.since = std::move(*parsed);
+            }
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<GetScriptSchemaParams>) -> Result<GetScriptSchemaParams>
     {
         GetScriptSchemaParams out;
@@ -4371,6 +4387,27 @@ namespace se
         out["entity"] = dtoToJson(value.entity);
         out["script"] = value.script;
         out["message"] = value.message;
+        out["tick"] = value.tick;
+        return out;
+    }
+
+    auto dtoToJson(const DrainScriptLogsResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["events"] = dtoVectorToJson(value.events);
+        out["highWaterSeq"] = value.highWaterSeq;
+        out["oldestSeq"] = value.oldestSeq;
+        out["overflowed"] = value.overflowed;
+        return out;
+    }
+
+    auto dtoToJson(const ScriptLogDto& value) -> Json
+    {
+        Json out = Json::object();
+        out["seq"] = value.seq;
+        out["entity"] = dtoToJson(value.entity);
+        out["message"] = value.message;
+        out["epochMs"] = value.epochMs;
         out["tick"] = value.tick;
         return out;
     }

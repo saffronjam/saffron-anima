@@ -583,6 +583,13 @@
       "fixture": "alarms-since-0"
     },
     {
+      "name": "drain-script-logs",
+      "params": "DrainScriptLogsParams",
+      "result": "DrainScriptLogsResult",
+      "status": "typed",
+      "fixture": "alarms-since-0"
+    },
+    {
       "name": "get-script-schema",
       "params": "GetScriptSchemaParams",
       "result": "GetScriptSchemaResult",

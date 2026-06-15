@@ -612,6 +612,28 @@ export namespace se
         bool overflowed;
     };
 
+    struct ScriptLogDto
+    {
+        i64 seq;
+        WireUuid entity;      // the logging entity, or 0 when logged outside an entity handler
+        std::string message;  // the se.log(...) text
+        i64 epochMs;          // wall-clock ms when logged (display only)
+        i64 tick;             // the play tick the line was logged on
+    };
+
+    struct DrainScriptLogsParams
+    {
+        std::optional<i64> since;
+    };
+
+    struct DrainScriptLogsResult
+    {
+        std::vector<ScriptLogDto> events;
+        i64 highWaterSeq;
+        i64 oldestSeq;
+        bool overflowed;
+    };
+
     struct GetScriptSchemaParams
     {
         std::string path;  // relative to the project src/, e.g. "turret.lua"
@@ -1855,6 +1877,8 @@ export namespace se
     auto dtoToJson(const RagdollResult& value) -> Json;
     auto dtoToJson(const ScriptErrorDto& value) -> Json;
     auto dtoToJson(const DrainScriptErrorsResult& value) -> Json;
+    auto dtoToJson(const ScriptLogDto& value) -> Json;
+    auto dtoToJson(const DrainScriptLogsResult& value) -> Json;
     auto dtoToJson(const ScriptFieldDto& value) -> Json;
     auto dtoToJson(const GetScriptSchemaResult& value) -> Json;
     auto dtoToJson(const SetScriptOverrideResult& value) -> Json;
@@ -1962,6 +1986,7 @@ export namespace se
     auto parseDto(const Json& params, DtoTag<SetPerfConfigParams>) -> Result<SetPerfConfigParams>;
     auto parseDto(const Json& params, DtoTag<DrainAlarmsParams>) -> Result<DrainAlarmsParams>;
     auto parseDto(const Json& params, DtoTag<DrainScriptErrorsParams>) -> Result<DrainScriptErrorsParams>;
+    auto parseDto(const Json& params, DtoTag<DrainScriptLogsParams>) -> Result<DrainScriptLogsParams>;
     auto parseDto(const Json& params, DtoTag<GetScriptSchemaParams>) -> Result<GetScriptSchemaParams>;
     auto parseDto(const Json& params, DtoTag<SetScriptOverrideParams>) -> Result<SetScriptOverrideParams>;
     auto parseDto(const Json& params, DtoTag<CreateScriptParams>) -> Result<CreateScriptParams>;

@@ -1301,6 +1301,31 @@ namespace se
                 return out;
             });
 
+        registerCommand<DrainScriptLogsParams, DrainScriptLogsResult>(
+            reg, "drain-script-logs", "drain-script-logs {since} — se.log lines with seq > since (non-blocking)",
+            [](EngineContext& ctx, const DrainScriptLogsParams& params) -> Result<DrainScriptLogsResult>
+            {
+                const i64 since = params.since.value_or(0);
+                DrainScriptLogsResult out;
+                out.highWaterSeq = ctx.sceneEdit.scriptLogSeq;
+                out.oldestSeq = 0;
+                if (!ctx.sceneEdit.scriptLogs.empty())
+                {
+                    out.oldestSeq = ctx.sceneEdit.scriptLogs.front().seq;
+                }
+                out.overflowed = out.oldestSeq > 0 && since + 1 < out.oldestSeq;
+                for (const ScriptLog& event : ctx.sceneEdit.scriptLogs)
+                {
+                    if (event.seq <= since)
+                    {
+                        continue;
+                    }
+                    out.events.push_back(ScriptLogDto{ event.seq, WireUuid{ event.entityUuid }, event.message,
+                                                       event.epochMs, event.tick });
+                }
+                return out;
+            });
+
         registerCommand<AddEntityParams, EntityRef>(
             reg, "add-entity",
             "add-entity {preset=empty|cube|model|point-light|spot-light|directional-light|camera|reflection-probe}",

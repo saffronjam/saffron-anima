@@ -579,6 +579,12 @@ const commands: CommandDef[] = [
     summary: "drain script errors (seq cursor)",
   },
   {
+    name: "drain-script-logs",
+    params: "DrainScriptLogsParams",
+    result: "DrainScriptLogsResult",
+    summary: "drain se.log lines (seq cursor)",
+  },
+  {
     name: "get-script-schema",
     params: "GetScriptSchemaParams",
     result: "GetScriptSchemaResult",
@@ -1022,6 +1028,7 @@ const commandFixtures = new Map<string, string>([
   ["physics-bodies", "empty"],
   ["drain-contacts", "alarms-since-0"],
   ["drain-script-errors", "alarms-since-0"],
+  ["drain-script-logs", "alarms-since-0"],
   ["get-script-schema", "script-schema-file"],
   ["set-script-override", "script-override-slot"],
   ["add-entity", "cube-preset"],

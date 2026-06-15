@@ -1500,6 +1500,24 @@
       }
     },
     {
+      "name": "drain-script-logs",
+      "summary": "drain se.log lines (seq cursor)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DrainScriptLogsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DrainScriptLogsResult"
+        }
+      }
+    },
+    {
       "name": "get-script-schema",
       "summary": "a project script's declared fields",
       "params": [
@@ -4090,6 +4108,43 @@
           "overflowed"
         ]
       },
+      "DrainScriptLogsParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "type": "integer"
+          }
+        },
+        "required": []
+      },
+      "DrainScriptLogsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScriptLogDto"
+            }
+          },
+          "highWaterSeq": {
+            "type": "integer"
+          },
+          "oldestSeq": {
+            "type": "integer"
+          },
+          "overflowed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "highWaterSeq",
+          "oldestSeq",
+          "overflowed"
+        ]
+      },
       "EditorCamera": {
         "type": "object",
         "additionalProperties": false,
@@ -6567,6 +6622,34 @@
         },
         "required": [
           "keys"
+        ]
+      },
+      "ScriptLogDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "entity": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "epochMs": {
+            "type": "integer"
+          },
+          "tick": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "entity",
+          "message",
+          "epochMs",
+          "tick"
         ]
       },
       "ScriptStatusResult": {
