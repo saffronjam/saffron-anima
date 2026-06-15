@@ -49,7 +49,7 @@ During play (see `play`/`pause`/`stop`/`step`), scene commands address the *runn
 | `set-gizmo` | `{op?:translate\|rotate\|scale, space?:world\|local}` | set the gizmo op/space |
 | `gizmo-pointer` | `{phase:hover\|begin\|drag\|end, x, y}` | drive the native overlay gizmo from NDC `x,y∈[-1,1]`; returns `{hovered, dragging}` |
 | `fly-input` | `{active, lookDx, lookDy, forward, back, left, right, up, down}` | stream editor fly-cam input; look deltas (pixels) accumulate until the engine drains them each frame |
-| `script-input` | `{keys:[...]}` | set the normalized key names visible to Lua through `se.is_key_pressed(key)` |
+| `script-input` | `{keys:[...]}` | set the normalized key names visible to Lua through `se.is_key_down(key)` (and the derived `se.is_key_pressed`/`se.is_key_up` edges) |
 
 ## Animation commands
 
