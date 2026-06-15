@@ -71,33 +71,17 @@ const TOGGLES: {
   { label: "ReSTIR", field: "restir", set: (on) => client.setRestir(on), rtGated: true },
 ];
 
-/// Transient debug-visualization overlays (set-debug-overlays). Not persisted, not undoable —
+/// Debug-visualization overlays (set-debug-overlays). Persisted with the project but not undoable —
 /// distinct from the feature toggles above, which are project render config.
 const DEBUG_OVERLAYS: {
   label: string;
-  field: "bounds" | "sceneAabb" | "lightVolumes" | "grid";
-  tooltip?: string;
+  field: "bounds" | "sceneAabb" | "lightVolumes" | "grid" | "colliders";
 }[] = [
-  {
-    label: "Bounding Boxes",
-    field: "bounds",
-    tooltip: "The AABB mouse picking tests — static draw box, skinned joint-union box",
-  },
-  {
-    label: "Scene AABB",
-    field: "sceneAabb",
-    tooltip: "The whole-scene box the shadow/GI fit uses",
-  },
-  {
-    label: "Light Volumes",
-    field: "lightVolumes",
-    tooltip: "Point-light range spheres + spot cones",
-  },
-  {
-    label: "Grid",
-    field: "grid",
-    tooltip: "Infinite ground-plane reference grid",
-  },
+  { label: "Bounding Boxes", field: "bounds" },
+  { label: "Scene AABB", field: "sceneAabb" },
+  { label: "Light Volumes", field: "lightVolumes" },
+  { label: "Grid", field: "grid" },
+  { label: "Colliders", field: "colliders" },
 ];
 
 function ToggleRow({
@@ -168,7 +152,7 @@ export function RenderPanel() {
     }
   };
 
-  // Debug overlays are transient editor state (not project config): no undo, no persistence.
+  // Debug overlays persist with the project but are not undoable (view state, not scene content).
   // Fetch once on mount; the render-panel-gated poll keeps them live (and reflects external `se`).
   useEffect(() => {
     if (ready && debugOverlays === null) {
@@ -400,7 +384,6 @@ export function RenderPanel() {
               label={d.label}
               checked={debugOverlays ? debugOverlays[d.field] : false}
               disabled={!ready}
-              tooltip={d.tooltip}
               onCheckedChange={(next) => onDebugToggle(d.field, next)}
             />
           ))}
