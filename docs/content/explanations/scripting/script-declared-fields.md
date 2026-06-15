@@ -11,19 +11,21 @@ changed. The `.lua` file owns the fields and their defaults — the scene never 
 editing a default in the script updates every instance that has no override.
 
 ```lua
+---@class Turret : se.ScriptSelf
+---@field speed number
 local Turret = {}
 
 Turret.properties = {
-  speed   = 5.0,           -- number  -> float
-  target  = "Player",      -- string  -> text
-  enabled = true,          -- bool    -> checkbox
-  offset  = { 0, 1, 0 },   -- 3 numbers -> vec3
+  speed   = 5.0,                -- number   -> float
+  target  = "Player",          -- string   -> text
+  enabled = true,              -- bool     -> checkbox
+  offset  = se.vec3(0, 1, 0),  -- se.Vec3  -> vec3
 }
 
-function Turret.on_update(self, dt)
+function Turret:on_update(dt)
   if self.enabled then
     local p = self.entity:get_position()
-    self.entity:set_position(p.x, p.y + self.speed * dt, p.z)
+    self.entity:set_position(p + se.vec3(0, self.speed * dt, 0))
   end
 end
 
@@ -32,10 +34,12 @@ return Turret
 
 ## How it works
 
-Each field's type is inferred from its default's Lua type: number, boolean, string, or a table of
-exactly 3 numbers (a vec3). Anything else — an empty table, a 2-number list — is skipped with a
-logged note rather than an error; a richer descriptor form (`{ default = 5, min = 0 }`) is a
-deferred extension.
+Each field's type is inferred from its default's Lua type: number, boolean, string, or an `se.Vec3`
+(built with `se.vec3(x, y, z)`). Anything else — an arbitrary table, a bare 3-number list — is
+skipped with a logged note rather than an error; a richer descriptor form
+(`{ default = 5, min = 0 }`) is a deferred extension. The `---@class` annotation is optional but
+lets the LuaLS server (see [the scaffolded `library/se.lua`](../script-components-and-runtime/#editor-autocomplete))
+type `self` and autocomplete the field and method set.
 
 The schema is read in a throwaway VM with the same minimal library set as the play runtime
 (no io/os/debug/package): the chunk runs just far enough to return its class table, so property
