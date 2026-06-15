@@ -77,12 +77,14 @@ Module functions, available as `se.*` inside every script.
 
 | Function | Returns | Notes |
 |---|---|---|
-| `se.is_key_pressed(key)` | boolean | true while the normalized key is held, such as `"w"`, `"space"`, `"arrowup"` |
-| `se.just_pressed(key)` | boolean | true the one tick after the key transitions to held |
-| `se.just_released(key)` | boolean | true the one tick after the key transitions to released |
+| `se.is_key_down(key)` | boolean | **held** — true every tick the normalized key is down, such as `"w"`, `"space"`, `"arrowup"` (the UE `IsKeyDown` sense) |
+| `se.is_key_pressed(key)` | boolean | **press edge** — true the one tick the key goes down, then false until it is released and pressed again (fire-once, for "on press") |
+| `se.is_key_up(key)` | boolean | **release edge** — true the one tick the key goes up |
 | `se.mouse_position()` | `se.Vec3` | cursor in viewport pixels in `x`,`y` (`z` is 0) |
 | `se.mouse_delta()` | `se.Vec3` | cursor movement since last tick in `x`,`y` |
-| `se.mouse_button(n)` | boolean | true while mouse button `"left"`/`"right"`/`"middle"` is held |
+| `se.is_mouse_down(button)` | boolean | **held** — true while mouse `"left"`/`"right"`/`"middle"` is down |
+| `se.is_mouse_pressed(button)` | boolean | **press edge** — true the one tick the button goes down (a click) |
+| `se.is_mouse_up(button)` | boolean | **release edge** — true the one tick the button goes up |
 | `se.mouse_scroll()` | number | wheel delta this tick |
 
 **Scene queries and spawning**
