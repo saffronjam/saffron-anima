@@ -63,7 +63,7 @@ wrap, speed, animationVersion}`.
 | `list-clips` | `{entity}` | the animation clips in the project catalog `{id, name, duration}` |
 | `get-animation-state` | `{entity}` | the rig's playhead, clip, wrap, and speed (errors if no player) |
 | `play-animation` | `{entity, clip, speed=1, loop=true, blend=0}` | play a clip (previews in Edit); `blend>0` cross-fades/inertializes from the current clip |
-| `pause-animation` | `{entity}` | stop advancing time, keep the pose shown |
+| `set-animation-playing` | `{entity, playing}` | resume (`true`) or pause (`false`) without moving the playhead |
 | `seek-animation` | `{entity, time}` | set the playhead (previews in Edit; works in Play, Paused, and Edit) |
 | `set-animation-loop` | `{entity, wrap}` | set the wrap mode (`once` \| `loop` \| `pingpong`) |
 | `stop-preview` | `{entity}` | clear the Edit preview and stop, reverting the rig to its rest pose |

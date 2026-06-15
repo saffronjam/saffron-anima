@@ -56,9 +56,10 @@ unrigged mesh.
 
 The transport drives **Edit-mode preview** of the selected entity, decoupled from the game's global
 play state — the same model as UE5 Sequencer and Unity's Timeline window. Play and pause call
-`play-animation` / `pause-animation`, which set `previewInEdit` so the clip previews in the viewport
-without entering Play; the Loop toggle calls `set-animation-loop`; jump-to-start/end seek to `0` and
-`duration`; step nudges the time by one sample interval. During global Play the same panel reflects
+`set-animation-playing` (resume/pause without moving the playhead); picking a clip calls
+`play-animation`, which loads it at frame 0 and sets `previewInEdit` so the clip previews in the
+viewport without entering Play; the Loop toggle calls `set-animation-loop`; jump-to-start/end seek to
+`0` and `duration`; step nudges the time by one sample interval. During global Play the same panel reflects
 the rig as the simulation drives it. The preview is non-destructive — the pose lands in the runtime
 pose buffer, never the authored bone transforms — so deselecting or `stop-preview` reverts the rig
 to rest.
