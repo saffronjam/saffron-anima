@@ -58,7 +58,7 @@ return Mover
     join(srcDir, "player.lua"),
     `local Player = {}
 function Player.on_update(self, dt)
-  if se.is_key_pressed("w") then
+  if se.is_key_down("w") then
     local p = self.entity:get_position()
     self.entity:set_position(p + se.vec3(dt, 0, 0))
   end
@@ -279,13 +279,13 @@ function Sender.on_update(self, dt) end
 return Sender
 `,
   );
-  // Key edges: count only on just_pressed, so a held key increments exactly once.
+  // Key edges: count only on the press edge, so a held key increments exactly once.
   writeFileSync(
     join(srcDir, "edges.lua"),
     `local Edges = {}
 function Edges.on_create(self) self.count = 0 end
 function Edges.on_update(self, dt)
-  if se.just_pressed("e") then
+  if se.is_key_pressed("e") then
     self.count = self.count + 1
     self.entity:set_position(se.vec3(self.count, 0, 0))
   end
@@ -293,13 +293,13 @@ end
 return Edges
 `,
   );
-  // Mouse: position + left button drive a derived transform.
+  // Mouse: position + held left button drive a derived transform.
   writeFileSync(
     join(srcDir, "mouse.lua"),
     `local Mouse = {}
 function Mouse.on_update(self, dt)
   local p = se.mouse_position()
-  self.entity:set_position(se.vec3(p.x, p.y, se.mouse_button("left") and 1 or 0))
+  self.entity:set_position(se.vec3(p.x, p.y, se.is_mouse_down("left") and 1 or 0))
 end
 return Mouse
 `,
@@ -565,7 +565,7 @@ test("broadcast reaches a handler; a faulting message handler is contained, othe
   await engine.call("destroy-entity", { entity: sender.id });
 });
 
-test("key edges (just_pressed) fire once per press; mouse position + buttons reach Lua", async () => {
+test("key edges (is_key_pressed) fire once per press; mouse position + buttons reach Lua", async () => {
   const cube = await engine.call<Ref>("add-entity", { args: ["cube"] });
   await attachScripts(cube.id, ["edges.lua"]);
 
@@ -576,7 +576,7 @@ test("key edges (just_pressed) fire once per press; mouse position + buttons rea
   await engine.settle(200);
   expect((await engine.call<Inspect>("inspect", { entity: cube.id })).components.Transform.translation.x).toBeCloseTo(
     1,
-  ); // just_pressed fired once, then false while held
+  ); // is_key_pressed fired once, then false while held
   await engine.call("script-input", { keys: [] }); // release
   await engine.settle(80);
   await engine.call("script-input", { keys: ["e"] }); // press again

@@ -1105,20 +1105,22 @@ end
             .addFunction("set_ragdoll_blend", &ScriptEntity::setRagdollBlend)
             .addFunction("ragdoll_state", &ScriptEntity::ragdollState)
             .endClass()
-            .addFunction("is_key_pressed",
+            // Held state: true every tick the key is down (the UE "IsKeyDown" sense).
+            .addFunction("is_key_down",
                          [&host](const char* key) -> bool
                          {
                              return host.input != nullptr && key != nullptr &&
                                     host.input->held.contains(normalizeInputKey(key));
                          })
-            // Key edges (derived per tick): just_pressed is true the one tick after the key appears.
-            .addFunction("just_pressed",
+            // Press edge (derived per tick): true the one tick the key goes down, then false until released.
+            .addFunction("is_key_pressed",
                          [&host](const char* key) -> bool
                          {
                              return host.input != nullptr && key != nullptr &&
                                     host.input->pressed.contains(normalizeInputKey(key));
                          })
-            .addFunction("just_released",
+            // Release edge: true the one tick the key goes up.
+            .addFunction("is_key_up",
                          [&host](const char* key) -> bool
                          {
                              return host.input != nullptr && key != nullptr &&
@@ -1136,11 +1138,24 @@ end
                              return host.input != nullptr ? glm::vec3{ host.input->mouseDX, host.input->mouseDY, 0.0f }
                                                           : glm::vec3{ 0.0f };
                          })
-            .addFunction("mouse_button",
+            // Mouse buttons mirror the key trio: down = held, pressed/up = the one-tick edges.
+            .addFunction("is_mouse_down",
                          [&host](const char* button) -> bool
                          {
                              return host.input != nullptr && button != nullptr &&
                                     host.input->mouseButtons.contains(normalizeInputKey(button));
+                         })
+            .addFunction("is_mouse_pressed",
+                         [&host](const char* button) -> bool
+                         {
+                             return host.input != nullptr && button != nullptr &&
+                                    host.input->mousePressed.contains(normalizeInputKey(button));
+                         })
+            .addFunction("is_mouse_up",
+                         [&host](const char* button) -> bool
+                         {
+                             return host.input != nullptr && button != nullptr &&
+                                    host.input->mouseReleased.contains(normalizeInputKey(button));
                          })
             .addFunction("mouse_scroll", [&host]() -> f32 { return host.input != nullptr ? host.input->scroll : 0.0f; })
             // First match by name (names are not unique — a deliberate MVP choice);
