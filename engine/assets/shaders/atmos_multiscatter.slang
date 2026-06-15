@@ -120,11 +120,14 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
                 // Uniform (isotropic) phase for the multi-scatter pass.
                 float3 inScatter = scatter * sunT * (1.0 / (4.0 * PI));
 
-                float3 sInt = (inScatter - inScatter * stepT) / max(ext * 1e-3, float3(1e-6, 1e-6, 1e-6));
+                // Divide by the raw ext (not ext*1e-3): inScatter/ext is a unit-independent
+                // albedo; the km<->Mm conversion already lives in stepT's optical depth. An
+                // extra 1e-3 here over-brightens 1000x and makes fms diverge.
+                float3 sInt = (inScatter - inScatter * stepT) / max(ext, float3(1e-6, 1e-6, 1e-6));
                 lum += transmittance * sInt;
                 // fms accumulates the scattered fraction (uniform-lit) for the geometric series.
                 float3 fInt = (scatter * (1.0 / (4.0 * PI)) - scatter * (1.0 / (4.0 * PI)) * stepT) /
-                              max(ext * 1e-3, float3(1e-6, 1e-6, 1e-6));
+                              max(ext, float3(1e-6, 1e-6, 1e-6));
                 fms += transmittance * fInt;
                 transmittance *= stepT;
             }

@@ -144,7 +144,11 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
         float3 inScatterMulti = (rayleighS + mieS) * ms;
         float3 inScatter = (inScatterSingle + inScatterMulti) * sunColor;
 
-        float3 sInt = (inScatter - inScatter * stepT) / max(ext * 1e-3, float3(1e-6, 1e-6, 1e-6));
+        // Analytic step integral ∫ inScatter·T dt = inScatter·(1 - stepT)/ext. The
+        // inScatter/ext ratio is a unit-independent scattering albedo; the km<->Mm
+        // conversion already lives in stepT's optical depth, so divide by the raw ext.
+        // An extra 1e-3 here over-brightens the sky 1000x (saturates the scene white).
+        float3 sInt = (inScatter - inScatter * stepT) / max(ext, float3(1e-6, 1e-6, 1e-6));
         radiance += transmittance * sInt;
         transmittance *= stepT;
     }
