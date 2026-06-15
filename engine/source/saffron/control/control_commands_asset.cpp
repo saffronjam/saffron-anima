@@ -635,7 +635,7 @@ namespace se
                 }
                 applyProjectInfo(ctx, project);
                 ctx.sceneEdit.sceneVersion += 1;
-                ctx.sceneEdit.scriptInputKeys.clear();
+                ctx.sceneEdit.scriptInput = ScriptInputState{};
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
             });
@@ -685,7 +685,7 @@ namespace se
                 sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
                 debugOverlaysFromJson(ctx.sceneEdit.debugOverlays, debugOverlays);
                 ctx.sceneEdit.sceneVersion += 1;
-                ctx.sceneEdit.scriptInputKeys.clear();
+                ctx.sceneEdit.scriptInput = ScriptInputState{};
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
             });
@@ -2251,7 +2251,7 @@ namespace se
                 sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
                 debugOverlaysFromJson(ctx.sceneEdit.debugOverlays, debugOverlays);
                 ctx.sceneEdit.sceneVersion += 1;
-                ctx.sceneEdit.scriptInputKeys.clear();
+                ctx.sceneEdit.scriptInput = ScriptInputState{};
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
             });
@@ -2288,7 +2288,7 @@ namespace se
                 sceneEditCameraFromJson(ctx.sceneEdit.camera, editorCamera);
                 debugOverlaysFromJson(ctx.sceneEdit.debugOverlays, debugOverlays);
                 ctx.sceneEdit.sceneVersion += 1;
-                ctx.sceneEdit.scriptInputKeys.clear();
+                ctx.sceneEdit.scriptInput = ScriptInputState{};
                 setSelection(ctx.sceneEdit, Entity{ entt::null });
                 return projectDto(project);
             });

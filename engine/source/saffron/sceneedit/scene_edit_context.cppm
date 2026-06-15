@@ -234,11 +234,11 @@ export namespace se
         // The simulation seam: tickPlay invokes this with the active (play) scene and
         // the clamped dt. The Host points it at the script runtime; std-only here.
         std::function<void(Scene&, f32)> simTick;
-        i64 playTick = 0;                                 // ticks run since enterPlay (error timestamps)
-        i32 scriptInstanceCount = 0;                      // live script instances; set by the Host wiring
-        std::vector<ScriptError> scriptErrors;            // bounded ring, oldest dropped at ScriptErrorRingCap
-        i64 scriptErrorSeq = 0;                           // last assigned ScriptError.seq (drain high-water)
-        std::unordered_set<std::string> scriptInputKeys;  // normalized key names held for Lua gameplay input
+        i64 playTick = 0;                       // ticks run since enterPlay (error timestamps)
+        i32 scriptInstanceCount = 0;            // live script instances; set by the Host wiring
+        std::vector<ScriptError> scriptErrors;  // bounded ring, oldest dropped at ScriptErrorRingCap
+        i64 scriptErrorSeq = 0;                 // last assigned ScriptError.seq (drain high-water)
+        ScriptInputState scriptInput;  // raw gameplay input for Lua (held keys + mouse); edges derived per tick
 
         // The asset preview (the asset editor): an isolated scene holding only the previewed model + its
         // furnishing, entered/left over the control plane. Routed through activeScene exactly like the
