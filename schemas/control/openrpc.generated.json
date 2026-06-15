@@ -1320,6 +1320,24 @@
       }
     },
     {
+      "name": "apply-impulse",
+      "summary": "push a Dynamic rigidbody (returns its new velocity)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ApplyImpulseParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ApplyImpulseResult"
+        }
+      }
+    },
+    {
       "name": "drain-contacts",
       "summary": "drain contact/trigger events (seq cursor)",
       "params": [
@@ -2942,6 +2960,41 @@
           "wrap",
           "speed",
           "animationVersion"
+        ]
+      },
+      "ApplyImpulseParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "impulse": {
+            "$ref": "#/components/schemas/Vec3"
+          }
+        },
+        "required": [
+          "entity",
+          "impulse"
+        ]
+      },
+      "ApplyImpulseResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "velocity": {
+            "$ref": "#/components/schemas/Vec3"
+          }
+        },
+        "required": [
+          "velocity"
         ]
       },
       "AssetCapabilitiesDto": {
@@ -6480,6 +6533,21 @@
             "items": {
               "type": "string"
             }
+          },
+          "mouseButtons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mouseX": {
+            "type": "number"
+          },
+          "mouseY": {
+            "type": "number"
+          },
+          "scroll": {
+            "type": "number"
           }
         },
         "required": [

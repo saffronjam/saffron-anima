@@ -912,6 +912,15 @@ export interface FitColliderResult {
   offset: Vec3;
 }
 
+export interface ApplyImpulseParams {
+  entity: WireUuid | string | number;
+  impulse: Vec3;
+}
+
+export interface ApplyImpulseResult {
+  velocity: Vec3;
+}
+
 export interface DrainContactsParams {
   since?: number;
 }
@@ -1131,6 +1140,10 @@ export interface FlyInputResult {
 
 export interface ScriptInputParams {
   keys: string[];
+  mouseButtons?: string[];
+  mouseX?: number;
+  mouseY?: number;
+  scroll?: number;
 }
 
 export interface ScriptInputResult {
@@ -1699,6 +1712,7 @@ export interface CommandParamsMap {
   "physics-state": EmptyParams;
   "physics-bodies": EmptyParams;
   "fit-collider": FitColliderParams;
+  "apply-impulse": ApplyImpulseParams;
   "drain-contacts": DrainContactsParams;
   "set-kinematic-bones": SetKinematicBonesParams;
   "move-character": MoveCharacterParams;
@@ -1852,6 +1866,7 @@ export interface CommandResultMap {
   "physics-state": PhysicsStateResult;
   "physics-bodies": PhysicsBodiesResult;
   "fit-collider": FitColliderResult;
+  "apply-impulse": ApplyImpulseResult;
   "drain-contacts": DrainContactsResult;
   "set-kinematic-bones": KinematicBonesResult;
   "move-character": MoveCharacterResult;

@@ -2088,6 +2088,28 @@ namespace se
         return out;
     }
 
+    auto parseDto(const Json& params, DtoTag<ApplyImpulseParams>) -> Result<ApplyImpulseParams>
+    {
+        ApplyImpulseParams out;
+
+        {
+            auto value = requiredField(params, "entity", 0, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = readEntitySelector(**value, "entity");
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.entity = std::move(*parsed);
+        }
+
+        {
+            auto value = requiredField(params, "impulse", 1, true);
+            if (!value) { return Err(std::move(value.error())); }
+            auto parsed = parseDto(**value, DtoTag<Vec3>{});
+            if (!parsed) { return Err(std::move(parsed.error())); }
+            out.impulse = std::move(*parsed);
+        }
+        return out;
+    }
+
     auto parseDto(const Json& params, DtoTag<DrainContactsParams>) -> Result<DrainContactsParams>
     {
         DrainContactsParams out;
@@ -2742,6 +2764,46 @@ namespace se
             auto parsed = readVector<std::string>(**value, "keys");
             if (!parsed) { return Err(std::move(parsed.error())); }
             out.keys = std::move(*parsed);
+        }
+
+        {
+            auto value = optionalField(params, "mouseButtons", 1, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readVector<std::string>(*value, "mouseButtons");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.mouseButtons = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "mouseX", 2, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "mouseX");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.mouseX = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "mouseY", 3, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "mouseY");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.mouseY = std::move(*parsed);
+            }
+        }
+
+        {
+            auto value = optionalField(params, "scroll", 4, true);
+            if (value && !value->is_null())
+            {
+                auto parsed = readF32(*value, "scroll");
+                if (!parsed) { return Err(std::move(parsed.error())); }
+                out.scroll = std::move(*parsed);
+            }
         }
         return out;
     }
@@ -4220,6 +4282,13 @@ namespace se
         out["shape"] = value.shape;
         out["halfExtents"] = dtoToJson(value.halfExtents);
         out["offset"] = dtoToJson(value.offset);
+        return out;
+    }
+
+    auto dtoToJson(const ApplyImpulseResult& value) -> Json
+    {
+        Json out = Json::object();
+        out["velocity"] = dtoToJson(value.velocity);
         return out;
     }
 

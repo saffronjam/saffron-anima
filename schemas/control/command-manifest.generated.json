@@ -513,6 +513,13 @@
       "skip": "needs an entity with a Collider + a resolvable mesh — covered in make e2e"
     },
     {
+      "name": "apply-impulse",
+      "params": "ApplyImpulseParams",
+      "result": "ApplyImpulseResult",
+      "status": "typed",
+      "skip": "needs a live physics world (play) — covered in make e2e"
+    },
+    {
       "name": "drain-contacts",
       "params": "DrainContactsParams",
       "result": "DrainContactsResult",
