@@ -76,6 +76,15 @@ test("while Playing, physics-state reports the live world and contacts drain", a
   expect(bodies.bodies.every((b) => typeof b.position.y === "number")).toBe(true);
 });
 
+test("apply-impulse pushes a Dynamic body and returns its new velocity", async () => {
+  // The box is still dynamic + active in the world (we are mid-play from the prior test).
+  const result = await engine.call<{ velocity: { x: number; y: number; z: number } }>("apply-impulse", {
+    entity: box,
+    impulse: { x: 0, y: 0, z: 5 },
+  });
+  expect(result.velocity.z).toBeGreaterThan(0); // the impulse imparted +Z velocity
+});
+
 test("stopping returns physics-state to inactive", async () => {
   await engine.call("stop");
   await engine.settle();
