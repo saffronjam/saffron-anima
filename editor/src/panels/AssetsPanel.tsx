@@ -755,7 +755,7 @@ export function AssetsPanel() {
           onMoveFolders={moveFolders}
         />
         <div className="ml-auto flex flex-none items-center gap-2">
-          <Button type="button" size="sm" variant="outline" className="gap-1" onClick={onNewFolder}>
+          <Button type="button" size="sm" variant="ghost" className="gap-1" onClick={onNewFolder}>
             <FolderPlus />
             New Folder
           </Button>
@@ -764,7 +764,7 @@ export function AssetsPanel() {
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
+                variant="ghost"
                 className="gap-1"
                 onClick={() => void onImportClick()}
                 disabled={nativeDialogOpen}
