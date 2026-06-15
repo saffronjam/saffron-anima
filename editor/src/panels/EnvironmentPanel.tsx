@@ -21,6 +21,7 @@ import { useEditorStore } from "../state/store";
 import { makeCoalescer, type Coalescer } from "../control/coalesce";
 import { NumberDrag } from "../components/NumberDrag";
 import { ColorField } from "../components/ColorField";
+import { VectorEditor } from "../components/VectorEditor";
 import { AssetPicker } from "../components/AssetPicker";
 import type { Environment, Vec3 } from "../protocol";
 import { DEG_TO_RAD, RAD_TO_DEG } from "@/lib/utils";
@@ -134,6 +135,13 @@ export function EnvironmentPanel() {
     [],
   );
 
+  // Undo capture: a gesture touches exactly one field, captured on its first tick and
+  // recorded as one entry at drag end; a discrete edit records inline. The shared drag
+  // bracket needs no per-field binding because `patch`/`patchAtmos` carry the field.
+  // Declared before the early return so the hook count never changes between renders.
+  const gesturing = useRef(false);
+  const envGesture = useRef<{ atmos: boolean; field: string; prior: unknown } | null>(null);
+
   if (!environment) {
     return (
       <div className="flex h-full min-h-0 flex-col">
@@ -145,12 +153,6 @@ export function EnvironmentPanel() {
   }
 
   const env = environment;
-
-  // Undo capture: a gesture touches exactly one field, captured on its first tick and
-  // recorded as one entry at drag end; a discrete edit records inline. The shared drag
-  // bracket needs no per-field binding because `patch`/`patchAtmos` carry the field.
-  const gesturing = useRef(false);
-  const envGesture = useRef<{ atmos: boolean; field: string; prior: unknown } | null>(null);
 
   // Record one scene-tab undo entry for an environment / atmosphere field (scene-global,
   // no selection); a no-op is dropped. Replay re-sends the same merge command.
@@ -308,17 +310,19 @@ export function EnvironmentPanel() {
             />
           </Row>
 
-          <Row label="Rotation (°)">
-            <NumberDrag
-              value={env.skyRotation * RAD_TO_DEG}
-              min={-360}
-              max={360}
-              step={0.5}
-              onChange={(deg) => patch("skyRotation", deg * DEG_TO_RAD)}
-              onDragStart={onDragStart}
-              onDragEnd={onDragEnd}
-            />
-          </Row>
+          {env.skyMode !== "color" ? (
+            <Row label="Rotation (°)">
+              <NumberDrag
+                value={env.skyRotation * RAD_TO_DEG}
+                min={-360}
+                max={360}
+                step={0.5}
+                onChange={(deg) => patch("skyRotation", deg * DEG_TO_RAD)}
+                onDragStart={onDragStart}
+                onDragEnd={onDragEnd}
+              />
+            </Row>
+          ) : null}
 
           <Row label="Visible">
             <Switch
@@ -370,9 +374,11 @@ export function EnvironmentPanel() {
           {atmos.enabled ? (
             <>
               <Row label="Rayleigh">
-                <ColorField
-                  kind="color3"
+                <VectorEditor
+                  axes={["x", "y", "z"]}
+                  labels={["R", "G", "B"]}
                   value={atmos.rayleighScattering as unknown as Record<string, number>}
+                  step={0.1}
                   onChange={onAtmosVec("rayleighScattering")}
                   onDragStart={onDragStart}
                   onDragEnd={onDragEnd}
@@ -428,9 +434,11 @@ export function EnvironmentPanel() {
               </Row>
 
               <Row label="Ozone">
-                <ColorField
-                  kind="color3"
+                <VectorEditor
+                  axes={["x", "y", "z"]}
+                  labels={["R", "G", "B"]}
                   value={atmos.ozoneAbsorption as unknown as Record<string, number>}
+                  step={0.01}
                   onChange={onAtmosVec("ozoneAbsorption")}
                   onDragStart={onDragStart}
                   onDragEnd={onDragEnd}
