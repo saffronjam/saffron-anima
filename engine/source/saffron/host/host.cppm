@@ -1069,7 +1069,7 @@ export namespace se
                         const std::filesystem::path src = std::filesystem::path(state->editor->projectRoot) / "src";
                         auto started =
                             se::startScripts(state->script, se::activeScene(*state->editor), state->editor->registry,
-                                             src.string(), state->editor->scriptInputKeys);
+                                             src.string(), state->editor->scriptInput);
                         if (!started)
                         {
                             se::logError(std::format("script start failed: {}", started.error()));
@@ -1186,6 +1186,7 @@ export namespace se
                 {
                     return;
                 }
+                se::deriveScriptInputEdges(state->editor->scriptInput);
                 if (auto failure = se::tickScripts(state->script, scene, dt))
                 {
                     se::logError(std::format("script error in '{}': {}", failure->script, failure->message));
@@ -1214,6 +1215,93 @@ export namespace se
                                          .ny = hit.normal.y,
                                          .nz = hit.normal.z,
                                          .distance = hit.distance };
+            };
+            state->script.sphereCast = [state](se::f32 ox, se::f32 oy, se::f32 oz, se::f32 dx, se::f32 dy, se::f32 dz,
+                                               se::f32 radius, se::f32 maxDist) -> se::ScriptRayHit
+            {
+                if (!state->physics.has_value())
+                {
+                    return {};
+                }
+                const se::PhysicsRayHit hit =
+                    se::sphereCastWorld(*state->physics, glm::vec3(ox, oy, oz), glm::vec3(dx, dy, dz), radius, maxDist);
+                return se::ScriptRayHit{ .hit = hit.hit,
+                                         .entity = hit.entity,
+                                         .px = hit.point.x,
+                                         .py = hit.point.y,
+                                         .pz = hit.point.z,
+                                         .nx = hit.normal.x,
+                                         .ny = hit.normal.y,
+                                         .nz = hit.normal.z,
+                                         .distance = hit.distance };
+            };
+            state->script.applyImpulse = [state](se::u64 entity, glm::vec3 v)
+            {
+                if (state->physics.has_value())
+                {
+                    se::applyBodyImpulse(*state->physics, entity, v);
+                }
+            };
+            state->script.addForce = [state](se::u64 entity, glm::vec3 v)
+            {
+                if (state->physics.has_value())
+                {
+                    se::addBodyForce(*state->physics, entity, v);
+                }
+            };
+            state->script.setVelocity = [state](se::u64 entity, glm::vec3 v)
+            {
+                if (state->physics.has_value())
+                {
+                    se::setBodyLinearVelocity(*state->physics, entity, v);
+                }
+            };
+            state->script.getVelocity = [state](se::u64 entity) -> glm::vec3
+            {
+                return state->physics.has_value() ? se::bodyLinearVelocity(*state->physics, entity) : glm::vec3{ 0.0f };
+            };
+            state->script.setRagdollEnabled = [state](se::u64 rig, bool enable) -> bool
+            {
+                if (!state->physics.has_value())
+                {
+                    return false;
+                }
+                if (!enable)
+                {
+                    se::disableRagdoll(*state->physics, rig);
+                    return true;
+                }
+                se::Scene& scene = se::activeScene(*state->editor);
+                const se::Entity entity = se::findEntityByUuid(scene, rig);
+                if (!se::valid(scene, entity))
+                {
+                    return false;
+                }
+                if (auto enabled = se::enableRagdoll(*state->physics, scene, entity); !enabled)
+                {
+                    se::logWarn(std::format("script: enable_ragdoll: {}", enabled.error()));
+                    return false;
+                }
+                return true;
+            };
+            state->script.setRagdollBlend = [state](se::u64 rig, bool active, se::f32 weight)
+            {
+                if (state->physics.has_value())
+                {
+                    static_cast<void>(
+                        se::setRagdollBlend(*state->physics, rig, active, weight, std::nullopt, std::nullopt));
+                }
+            };
+            state->script.ragdollState = [state](se::u64 rig) -> se::ScriptRagdollState
+            {
+                if (!state->physics.has_value())
+                {
+                    return {};
+                }
+                const se::RagdollState s = se::ragdollState(*state->physics, rig);
+                return se::ScriptRagdollState{
+                    .present = s.present, .active = s.active, .bodyWeight = s.bodyWeight, .bones = s.bones
+                };
             };
 
             // Headless self-test entry point: pairs with SAFFRON_EXIT_AFTER_FRAMES for
