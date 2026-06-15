@@ -18,6 +18,7 @@ module;
 #include <iterator>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1219,6 +1220,53 @@ export namespace se
         std::unordered_map<entt::id_type, std::size_t> byId;
         std::unordered_map<std::string, std::size_t> byName;
     };
+
+    // The gameplay-input snapshot scripts read (held + derived key edges + mouse). Lives on
+    // SceneEditContext (the editor forwards raw input over the script-input command); the Host derives
+    // the edges/deltas each tick via deriveScriptInputEdges before tickScripts. Saffron.Script and
+    // Saffron.SceneEdit both import Saffron.Scene, so this shared POD avoids a cross-module edge.
+    struct ScriptInputState
+    {
+        std::unordered_set<std::string> held;          // keys down (raw, from script-input)
+        std::unordered_set<std::string> mouseButtons;  // "left"/"right"/"middle" (raw)
+        f32 mouseX = 0.0f;                             // viewport-relative pointer (raw)
+        f32 mouseY = 0.0f;
+        f32 scroll = 0.0f;
+        std::unordered_set<std::string> pressed;   // down this tick, up last (derived)
+        std::unordered_set<std::string> released;  // up this tick, down last (derived)
+        f32 mouseDX = 0.0f;                        // per-tick pointer delta (derived)
+        f32 mouseDY = 0.0f;
+        std::unordered_set<std::string> prevHeld;  // derivation memory
+        f32 prevMouseX = 0.0f;
+        f32 prevMouseY = 0.0f;
+    };
+
+    // Derive the key edges + mouse delta from this tick's raw held/mouse against the previous tick,
+    // then roll the memory forward. Called once per tick by the Host before tickScripts.
+    inline void deriveScriptInputEdges(ScriptInputState& input)
+    {
+        input.pressed.clear();
+        input.released.clear();
+        for (const std::string& key : input.held)
+        {
+            if (!input.prevHeld.contains(key))
+            {
+                input.pressed.insert(key);
+            }
+        }
+        for (const std::string& key : input.prevHeld)
+        {
+            if (!input.held.contains(key))
+            {
+                input.released.insert(key);
+            }
+        }
+        input.mouseDX = input.mouseX - input.prevMouseX;
+        input.mouseDY = input.mouseY - input.prevMouseY;
+        input.prevHeld = input.held;
+        input.prevMouseX = input.mouseX;
+        input.prevMouseY = input.mouseY;
+    }
 
     // Register a component ONCE. Synthesizes every closure from the existing
     // generic addComponent/getComponent/hasComponent/removeComponent. Adding a
