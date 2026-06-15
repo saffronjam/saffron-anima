@@ -6,8 +6,12 @@
 export const COMPONENT_ORDER = [
   "Name",
   "Transform",
+  "ModelInstance",
   "Mesh",
+  "SkinnedMesh",
+  "AnimationPlayer",
   "Camera",
+  "MaterialAsset",
   "Material",
   "MaterialSet",
   "Script",
@@ -15,6 +19,12 @@ export const COMPONENT_ORDER = [
   "PointLight",
   "SpotLight",
   "ReflectionProbe",
+  "Rigidbody",
+  "Collider",
+  "CharacterController",
+  "KinematicBones",
+  "BonePhysics",
+  "FootIk",
 ] as const;
 
 /// Components the Inspector/tree never render: Relationship carries the hierarchy's durable parent

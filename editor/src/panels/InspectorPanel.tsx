@@ -16,13 +16,13 @@ import { X } from "lucide-react";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
 import { makeCoalescer, type Coalescer } from "../control/coalesce";
-import { errorText, useFlash } from "../lib/flash";
+import { errorText, notifyError } from "../lib/flash";
 import { renderField, resolveHint } from "../components/fieldRenderer";
 import { ScriptSlots } from "../components/ScriptSlots";
 import type { Material, ScriptSlot, Transform } from "../protocol";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { humanizeFieldName } from "@/lib/humanize";
+import { humanizeComponentName, humanizeFieldName } from "@/lib/humanize";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -35,15 +35,37 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { COMPONENT_ORDER, orderedComponentNames } from "../lib/componentOrder";
 
-/// Components that cannot be removed (parity with the C++ `removable=false` flag on
-/// Name/Transform). Everything else shows a Remove control.
-const NON_REMOVABLE = new Set<string>(["Name", "Transform"]);
+/// Components that cannot be removed. Name/Transform are the entity baseline;
+/// ModelInstance/SkinnedMesh are import-managed identity (set when a model/rig is
+/// instantiated, not addable by hand), so removing them would strand a rig with no way
+/// back. Everything else shows a Remove control.
+const NON_REMOVABLE = new Set<string>(["Name", "Transform", "ModelInstance", "SkinnedMesh"]);
 
-/// The full registered component set (for the Add Component list). Derived from the
-/// known order; a regenerated schema with new components extends COMPONENT_ORDER.
-/// MaterialSet is excluded: its slots come from a multi-material import, and an empty
-/// one added by hand has nothing to edit.
-const ADDABLE_COMPONENTS = COMPONENT_ORDER.filter((c) => c !== "Name" && c !== "MaterialSet");
+/// Components NOT offered in the Add Component menu. MaterialSet's slots come from a
+/// multi-material import (an empty one has nothing to edit); ModelInstance/SkinnedMesh
+/// are written by model/rig import, never created on a bare entity.
+const NON_ADDABLE = new Set<string>(["Name", "MaterialSet", "ModelInstance", "SkinnedMesh"]);
+
+/// The Add Component list, in known order, minus the non-addable set.
+const ADDABLE_COMPONENTS = COMPONENT_ORDER.filter((c) => !NON_ADDABLE.has(c));
+
+/// Components only addable on a skinned entity: the rig sidecars index SkinnedMesh.bones,
+/// and the animation player / foot-IK have no meaning without a skeleton to drive.
+const RIG_ONLY = new Set<string>(["KinematicBones", "BonePhysics", "AnimationPlayer", "FootIk"]);
+
+/// A non-editable label/value row, matching the field grid's two-column layout. Used by the
+/// rig bodies (SkinnedMesh, FootIk, KinematicBones) for import-derived references shown by
+/// resolved name rather than as an editable raw-id box.
+function ReadonlyRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[78px_1fr] items-center gap-1.5">
+      <Label className="truncate text-[11px] font-normal text-muted-foreground">{label}</Label>
+      <span className="min-w-0 truncate rounded-sm bg-muted/40 px-1.5 py-1 font-mono text-[11px] text-foreground">
+        {value}
+      </span>
+    </div>
+  );
+}
 
 export function InspectorPanel() {
   logRender("InspectorPanel");
@@ -53,7 +75,10 @@ export function InspectorPanel() {
   const applyOptimisticComponent = useEditorStore((s) => s.applyOptimisticComponent);
   const focusComponent = useEditorStore((s) => s.focusComponent);
   const setFocusComponent = useEditorStore((s) => s.setFocusComponent);
-  const { message, flash } = useFlash();
+  // Catalog + entity list, used to resolve the read-only id references in the rig bodies
+  // (SkinnedMesh mesh/rootBone/joints, FootIk chains, KinematicBones driven) to names.
+  const assets = useEditorStore((s) => s.assets);
+  const entities = useEditorStore((s) => s.entities);
 
   // Per-(component,field) coalescers, rebuilt when the selection changes so a stale
   // closure never targets the wrong entity.
@@ -97,9 +122,16 @@ export function InspectorPanel() {
     () => (componentsObj ? orderedComponentNames(componentsObj) : []),
     [componentsObj],
   );
+  // The two rig sidecars are meaningless without a skeleton: only offer them to add when
+  // the entity carries a SkinnedMesh. (They keep their COMPONENT_ORDER slot so an
+  // already-present section still renders — this gates add-availability, not visibility.)
+  const hasSkin = !!componentsObj && "SkinnedMesh" in componentsObj;
   const missing = useMemo(
-    () => ADDABLE_COMPONENTS.filter((c) => !(componentsObj && c in componentsObj)),
-    [componentsObj],
+    () =>
+      ADDABLE_COMPONENTS.filter(
+        (c) => !(componentsObj && c in componentsObj) && (!RIG_ONLY.has(c) || hasSkin),
+      ),
+    [componentsObj, hasSkin],
   );
 
   if (!selectedId || !inspected || !componentsObj) {
@@ -108,11 +140,6 @@ export function InspectorPanel() {
         <div className="min-h-0 flex-1 p-3.5 text-center italic text-muted-foreground">
           No entity selected
         </div>
-        {message ? (
-          <p className="flex-none border-t border-destructive/40 bg-destructive/10 px-2.5 py-1 text-[11px] text-destructive">
-            {message}
-          </p>
-        ) : null}
       </div>
     );
   }
@@ -377,7 +404,7 @@ export function InspectorPanel() {
           "scene",
         );
       })
-      .catch((err: unknown) => flash(errorText(err)));
+      .catch((err: unknown) => notifyError(errorText(err)));
   };
   const onAdd = (component: string): void => {
     const id = selectedId;
@@ -394,12 +421,19 @@ export function InspectorPanel() {
           "scene",
         );
       })
-      .catch((err: unknown) => flash(errorText(err)));
+      .catch((err: unknown) => notifyError(errorText(err)));
+  };
+
+  // Re-fit the selected Collider to its mesh AABB. The engine bumps sceneVersion, so the
+  // reconcile poll re-reads the now-fitted halfExtents/offset/sourceMesh — no optimistic
+  // overlay needed. Not undoable (a derived geometry op, like the render-config toggles).
+  const onFitCollider = (): void => {
+    void client.fitCollider(selectedId).catch((err: unknown) => notifyError(errorText(err)));
   };
 
   // One section body per component, dispatched by name with early returns (not a
-  // JSX ternary chain). Script and MaterialSet have structured slot bodies; every
-  // other component is the generic field grid.
+  // JSX ternary chain). Script and MaterialSet have structured slot bodies; Collider and
+  // BonePhysics have minimal structured bodies; every other component is the generic grid.
   const componentBody = (component: string, dto: Record<string, unknown>): React.ReactElement => {
     if (component === "Script") {
       return (
@@ -444,29 +478,171 @@ export function InspectorPanel() {
         </>
       );
     }
-    return (
+    // The generic field grid, shared by the default body and the Collider body (which
+    // prepends an action row above it).
+    const fieldGrid = (comp: string, body: Record<string, unknown>): React.ReactElement => (
       <>
-        {Object.entries(dto).map(([field, value]) => (
+        {Object.entries(body).map(([field, value]) => (
           <div key={field} className="grid grid-cols-[78px_1fr] items-center gap-1.5">
             <Label className="truncate text-[11px] font-normal text-muted-foreground">
               {humanizeFieldName(field)}
             </Label>
             <div className="min-w-0">
-              {renderField(
-                component,
-                field,
-                value,
-                (next) => onFieldChange(component, field, next),
-                {
-                  onDragStart: () => onFieldDragStart(component, field),
-                  onDragEnd: () => onFieldDragEnd(component, field),
-                },
-              )}
+              {renderField(comp, field, value, (next) => onFieldChange(comp, field, next), {
+                onDragStart: () => onFieldDragStart(comp, field),
+                onDragEnd: () => onFieldDragEnd(comp, field),
+              })}
             </div>
           </div>
         ))}
       </>
     );
+
+    if (component === "Collider") {
+      // Auto-fit substitutes for the interactive resize handles Saffron has no gizmo for;
+      // a collider with no Rigidbody is a static body (the engine rule) — surface why.
+      const isStatic = !("Rigidbody" in componentsObj);
+      return (
+        <>
+          <div className="flex items-center justify-between gap-2 pb-0.5">
+            <Button type="button" size="xs" variant="outline" onClick={onFitCollider}>
+              Fit to mesh
+            </Button>
+            {isStatic ? (
+              <span className="truncate text-[10px] text-muted-foreground">
+                No Rigidbody — static body
+              </span>
+            ) : null}
+          </div>
+          {fieldGrid("Collider", dto)}
+        </>
+      );
+    }
+
+    if (component === "BonePhysics") {
+      // The bones[] vector is auto-fit on skinned import and edited via the ragdoll
+      // controls (Physics panel), not as a JSON field grid — show a read-only readout.
+      const count = Array.isArray(dto.bones) ? dto.bones.length : 0;
+      return (
+        <div className="flex flex-col gap-1 px-0.5 py-0.5">
+          <span className="text-[11px] text-foreground">
+            {count} bone {count === 1 ? "body" : "bodies"} (auto-fit on import)
+          </span>
+          <span className="text-[10px] text-muted-foreground">
+            Ragdoll blend is driven from the Physics panel.
+          </span>
+        </div>
+      );
+    }
+
+    // Resolve the read-only id references in the rig bodies to display names: mesh ids hit the
+    // asset catalog; rootBone/bone ids are scene entities (joints carry a Name); foot-IK and
+    // kinematic-bone arrays hold integer indices into the rig's SkinnedMesh.bones.
+    const assetName = (id: unknown): string => {
+      const s = String(id ?? "0");
+      if (s === "0" || s === "") {
+        return "(none)";
+      }
+      return assets.find((a) => a.id === s)?.name ?? s;
+    };
+    const entityName = (id: unknown): string => {
+      const s = String(id ?? "0");
+      if (s === "0" || s === "") {
+        return "(none)";
+      }
+      return entities.find((e) => e.id === s)?.name ?? s;
+    };
+    const rigBones = (): string[] => {
+      const skin = componentsObj["SkinnedMesh"] as { bones?: unknown } | undefined;
+      const bones = skin && Array.isArray(skin.bones) ? (skin.bones as unknown[]) : [];
+      return bones.map((b) => String(b));
+    };
+    const jointName = (idx: unknown): string => {
+      const bones = rigBones();
+      if (typeof idx !== "number" || idx < 0 || idx >= bones.length) {
+        return "(none)";
+      }
+      return entityName(bones[idx]);
+    };
+
+    if (component === "SkinnedMesh") {
+      // Import-derived rig data is read-only: the bone uuid array and the inverse-bind matrices
+      // are never hand-edited (and the matrices are a meaningless JSON blob), so show a resolved
+      // mesh / root-bone / joint-count summary instead of a field grid.
+      const joints = rigBones();
+      return (
+        <div className="flex flex-col gap-1.5">
+          <ReadonlyRow label="Mesh" value={assetName(dto.mesh)} />
+          <ReadonlyRow label="Root bone" value={entityName(dto.rootBone)} />
+          <ReadonlyRow
+            label="Joints"
+            value={`${joints.length} ${joints.length === 1 ? "joint" : "joints"} (import order)`}
+          />
+          <span className="px-0.5 text-[10px] text-muted-foreground">
+            Skeleton bindings are set on import and not editable here.
+          </span>
+        </div>
+      );
+    }
+
+    if (component === "FootIk") {
+      // enabled/groundHeight are the editable scalars; chains[] is a read-only per-chain joint
+      // summary (its joints are indices into SkinnedMesh.bones, set on import — no inspector
+      // authoring path for chains yet).
+      const chains = Array.isArray(dto.chains) ? (dto.chains as Record<string, unknown>[]) : [];
+      return (
+        <div className="flex flex-col gap-1.5">
+          {fieldGrid("FootIk", { enabled: dto.enabled, groundHeight: dto.groundHeight })}
+          <div className="flex flex-col gap-1 rounded-sm border border-border/60 bg-muted/20 px-2 py-1.5">
+            <span className="text-[11px] text-foreground">
+              {chains.length} IK {chains.length === 1 ? "chain" : "chains"}
+            </span>
+            {chains.map((c) => {
+              const upper = jointName(c.upper);
+              const mid = jointName(c.mid);
+              const end = jointName(c.end);
+              return (
+                <span
+                  key={`${upper}>${mid}>${end}`}
+                  className="truncate font-mono text-[10px] text-muted-foreground"
+                >
+                  {upper} → {mid} → {end}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    if (component === "KinematicBones") {
+      // enabled is the editable toggle; driven[] holds integer indices into SkinnedMesh.bones
+      // (empty = every joint) — shown read-only by resolved joint name.
+      const driven = Array.isArray(dto.driven) ? (dto.driven as unknown[]) : [];
+      const total = rigBones().length;
+      return (
+        <div className="flex flex-col gap-1.5">
+          {fieldGrid("KinematicBones", { enabled: dto.enabled })}
+          <div className="flex flex-col gap-1 rounded-sm border border-border/60 bg-muted/20 px-2 py-1.5">
+            <span className="text-[11px] text-foreground">
+              {driven.length === 0
+                ? `All ${total} ${total === 1 ? "joint" : "joints"} driven`
+                : `${driven.length} of ${total} joints driven`}
+            </span>
+            {driven.map((idx) => (
+              <span
+                key={String(idx)}
+                className="truncate font-mono text-[10px] text-muted-foreground"
+              >
+                {jointName(idx)}
+              </span>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    return fieldGrid(component, dto);
   };
 
   return (
@@ -490,7 +666,7 @@ export function InspectorPanel() {
               >
                 <header className="flex h-8 items-center justify-between border-b border-border bg-muted/50 pr-1 pl-2.5">
                   <span className="text-xs font-semibold tracking-wide text-foreground">
-                    {component}
+                    {humanizeComponentName(component)}
                   </span>
                   {removable ? (
                     <Tooltip>
@@ -533,18 +709,13 @@ export function InspectorPanel() {
             <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
               {missing.map((component) => (
                 <DropdownMenuItem key={component} onSelect={() => onAdd(component)}>
-                  {component}
+                  {humanizeComponentName(component)}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </ScrollArea>
-      {message ? (
-        <p className="flex-none border-t border-destructive/40 bg-destructive/10 px-2.5 py-1 text-[11px] text-destructive">
-          {message}
-        </p>
-      ) : null}
     </div>
   );
 }
