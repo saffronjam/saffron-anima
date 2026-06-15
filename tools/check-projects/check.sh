@@ -78,6 +78,12 @@ grep -q '"type": "model"' "$PROJECT"
 find "$APPDATA/userdata/asset-test/assets/models" -name '*.smodel' -print -quit | grep -q .
 find "$APPDATA/userdata/asset-test/assets/textures" -type f -print -quit | grep -q .
 
+# A fresh project is scaffolded for VS Code: the LuaLS def file + .luarc.json pointing at it.
+test -f "$APPDATA/userdata/asset-test/library/se.lua"
+grep -q '@class se.Entity' "$APPDATA/userdata/asset-test/library/se.lua"
+test -f "$APPDATA/userdata/asset-test/.luarc.json"
+grep -q '"library"' "$APPDATA/userdata/asset-test/.luarc.json"
+
 stop_engine
 
 # Restart: loadProject reads the saved project.json and the filesystem scan rediscovers the .smodel,
