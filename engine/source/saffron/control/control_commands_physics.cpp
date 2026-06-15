@@ -100,6 +100,28 @@ namespace se
                 return result;
             });
 
+        registerCommand<ApplyImpulseParams, ApplyImpulseResult>(
+            reg, "apply-impulse",
+            "apply-impulse {entity, impulse:{x,y,z}} — push a Dynamic rigidbody (returns its new velocity)",
+            [](EngineContext& ctx, const ApplyImpulseParams& params) -> Result<ApplyImpulseResult>
+            {
+                if (ctx.physics == nullptr)
+                {
+                    return Err(std::string{ "no physics world — enter play first" });
+                }
+                auto entity = resolveEntity(ctx, nlohmann::json{ { "entity", params.entity.value } });
+                if (!entity)
+                {
+                    return Err(entity.error());
+                }
+                Scene& scene = activeScene(ctx.sceneEdit);
+                const u64 uuid =
+                    hasComponent<IdComponent>(scene, *entity) ? getComponent<IdComponent>(scene, *entity).id.value : 0;
+                applyBodyImpulse(*ctx.physics, uuid, glm::vec3(params.impulse.x, params.impulse.y, params.impulse.z));
+                const glm::vec3 velocity = bodyLinearVelocity(*ctx.physics, uuid);
+                return ApplyImpulseResult{ .velocity = Vec3{ .x = velocity.x, .y = velocity.y, .z = velocity.z } };
+            });
+
         registerCommand<FitColliderParams, FitColliderResult>(
             reg, "fit-collider", "fit-collider {entity} — re-fit a Collider's shape to the entity's mesh AABB",
             [](EngineContext& ctx, const FitColliderParams& params) -> Result<FitColliderResult>
