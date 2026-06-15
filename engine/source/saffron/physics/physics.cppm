@@ -69,6 +69,15 @@ export namespace se
     /// BodyInterface getters — never perturbs the deterministic sim. Empty when the world is null.
     auto listPhysicsBodies(const PhysicsWorld& world) -> std::vector<PhysicsBodyInfo>;
 
+    /// Push a Dynamic body (by entity uuid): an instantaneous impulse, a continuous force (until the next
+    /// step), or an absolute linear velocity — activating the body. A non-Dynamic / unmapped body is a
+    /// no-op. These map uuid -> BodyID through the existing entity<->body map (the same raycastWorld uses)
+    /// and must run BETWEEN steps (a command or on_update), never from a contact handler mid-solve.
+    void applyBodyImpulse(PhysicsWorld& world, u64 entity, glm::vec3 impulse);
+    void addBodyForce(PhysicsWorld& world, u64 entity, glm::vec3 force);
+    void setBodyLinearVelocity(PhysicsWorld& world, u64 entity, glm::vec3 velocity);
+    auto bodyLinearVelocity(const PhysicsWorld& world, u64 entity) -> glm::vec3;
+
     /// Decodes a baked mesh to CPU vertices for convex-hull / mesh-shape cooking. The Host binds it
     /// to loadMeshCpuAsset, keeping <Jolt/...> out of Saffron.Assets and the asset reader out of the
     /// Jolt TU. Jolt-free `Mesh` (Saffron.Geometry) crosses the seam.

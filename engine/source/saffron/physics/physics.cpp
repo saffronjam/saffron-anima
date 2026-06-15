@@ -677,6 +677,92 @@ namespace se
         return out;
     }
 
+    namespace
+    {
+        // The Dynamic body owned by `uuid`, or an invalid id (impulses/velocity only apply to Dynamic
+        // bodies — a Static/Kinematic one would silently ignore them).
+        auto dynamicBodyId(const PhysicsWorldImpl& impl, u64 uuid) -> JPH::BodyID
+        {
+            for (const BodyEntry& entry : impl.bodies)
+            {
+                if (entry.uuid == uuid && entry.motion == MotionType::Dynamic)
+                {
+                    return entry.id;
+                }
+            }
+            return {};
+        }
+    }
+
+    void applyBodyImpulse(PhysicsWorld& world, u64 entity, glm::vec3 impulse)
+    {
+        PhysicsWorldImpl* impl = world.impl();
+        if (impl == nullptr)
+        {
+            return;
+        }
+        const JPH::BodyID id = dynamicBodyId(*impl, entity);
+        if (id.IsInvalid())
+        {
+            logWarn(std::format("physics: apply-impulse on a non-Dynamic / unmapped body ({})", entity));
+            return;
+        }
+        JPH::BodyInterface& bi = impl->system.GetBodyInterface();
+        bi.ActivateBody(id);
+        bi.AddImpulse(id, toJolt(impulse));
+    }
+
+    void addBodyForce(PhysicsWorld& world, u64 entity, glm::vec3 force)
+    {
+        PhysicsWorldImpl* impl = world.impl();
+        if (impl == nullptr)
+        {
+            return;
+        }
+        const JPH::BodyID id = dynamicBodyId(*impl, entity);
+        if (id.IsInvalid())
+        {
+            logWarn(std::format("physics: add-force on a non-Dynamic / unmapped body ({})", entity));
+            return;
+        }
+        JPH::BodyInterface& bi = impl->system.GetBodyInterface();
+        bi.ActivateBody(id);
+        bi.AddForce(id, toJolt(force));
+    }
+
+    void setBodyLinearVelocity(PhysicsWorld& world, u64 entity, glm::vec3 velocity)
+    {
+        PhysicsWorldImpl* impl = world.impl();
+        if (impl == nullptr)
+        {
+            return;
+        }
+        const JPH::BodyID id = dynamicBodyId(*impl, entity);
+        if (id.IsInvalid())
+        {
+            logWarn(std::format("physics: set-velocity on a non-Dynamic / unmapped body ({})", entity));
+            return;
+        }
+        JPH::BodyInterface& bi = impl->system.GetBodyInterface();
+        bi.ActivateBody(id);
+        bi.SetLinearVelocity(id, toJolt(velocity));
+    }
+
+    auto bodyLinearVelocity(const PhysicsWorld& world, u64 entity) -> glm::vec3
+    {
+        const PhysicsWorldImpl* impl = world.impl();
+        if (impl == nullptr)
+        {
+            return glm::vec3{ 0.0f };
+        }
+        const JPH::BodyID id = dynamicBodyId(*impl, entity);
+        if (id.IsInvalid())
+        {
+            return glm::vec3{ 0.0f };
+        }
+        return fromJolt(impl->system.GetBodyInterface().GetLinearVelocity(id));
+    }
+
     void populatePhysicsWorld(PhysicsWorld& world, Scene& scene, const MeshCookSource& cook)
     {
         PhysicsWorldImpl* impl = world.impl();
