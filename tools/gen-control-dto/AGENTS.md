@@ -14,6 +14,13 @@ and then `git diff --exit-code` on the outputs, so a stale generated file fails 
 | TS protocol types | `editor/src/protocol/se-types.ts` | `emitTs` |
 | OpenRPC schema | `schemas/control/openrpc.generated.json` | `emitOpenRpc` |
 | Contract manifest | `schemas/control/command-manifest.generated.json` | `emitManifest` |
+| Lua component types | `engine/source/saffron/assets/script_component_defs.generated.hpp` | `emitScriptComponentDefs` |
+
+`emitScriptComponentDefs` parses the component wire shapes from `emitTs`'s output (the
+`componentInterfaces` catalog) and the registered names from `scene_edit_components.cpp`, then emits the
+`---@class se.<Component>` Lua types + the per-name `get_component` overloads as a C++ header `#include`d
+into `Saffron.Assets` (`assets.cppm`) and appended to `library/se.lua`. Components with no catalog entry
+(`AnimationPlayer`, `MaterialAsset`) are supplemented inline from their serde shape.
 
 Regenerate + commit all five with `bun run tools/gen-control-dto/gen.ts`. `make format` deliberately
 skips `*.generated.cpp` (the generator owns their style); never hand-edit a generated file.

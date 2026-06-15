@@ -45,6 +45,14 @@ const sceneSerdeOut = join(
 const tsOut = join(repoRoot, "editor/src/protocol/se-types.ts");
 const openRpcOut = join(repoRoot, "schemas/control/openrpc.generated.json");
 const manifestOut = join(repoRoot, "schemas/control/command-manifest.generated.json");
+const componentDefsOut = join(
+  repoRoot,
+  "engine/source/saffron/assets/script_component_defs.generated.hpp",
+);
+const sceneEditComponentsFile = join(
+  repoRoot,
+  "engine/source/saffron/sceneedit/scene_edit_components.cpp",
+);
 
 const scalarTypes = new Set([
   "bool",
@@ -509,6 +517,12 @@ const commands: CommandDef[] = [
     params: "FitColliderParams",
     result: "FitColliderResult",
     summary: "re-fit a Collider's shape to the entity's mesh AABB",
+  },
+  {
+    name: "apply-impulse",
+    params: "ApplyImpulseParams",
+    result: "ApplyImpulseResult",
+    summary: "push a Dynamic rigidbody (returns its new velocity)",
   },
   {
     name: "drain-contacts",
@@ -1057,6 +1071,7 @@ const commandSkips = new Map<string, string>([
   ["move-character", "needs a character entity in play — covered in make e2e"],
   ["raycast", "needs a live physics world (play) — covered in make e2e"],
   ["shapecast", "needs a live physics world (play) — covered in make e2e"],
+  ["apply-impulse", "needs a live physics world (play) — covered in make e2e"],
   ["enable-ragdoll", "needs a rigged entity in play — covered in make e2e"],
   ["set-ragdoll", "needs a live ragdoll on a rig in play — covered in make e2e"],
   ["get-ragdoll", "needs a rigged entity in play — covered in make e2e"],
@@ -3292,6 +3307,110 @@ namespace se
 `;
 }
 
+// Emit a generated C++ header holding the Lua `---@class se.<Component>` definitions + the per-name
+// `get_component` overloads, appended to library/se.lua after SeLuaDefs. Component wire shapes are read
+// from the generated TS interfaces (the `componentInterfaces` catalog) so there is a single source; the
+// registered name set is read from scene_edit_components.cpp; the two components with no TS catalog entry
+// (AnimationPlayer, MaterialAsset) are supplemented here from their serde shape.
+function emitScriptComponentDefs(tsText: string, componentsText: string): string {
+  const registered: string[] = [];
+  for (const m of componentsText.matchAll(/registerComponent<[^>]+>\(\s*\n?\s*reg,\s*"([A-Za-z]+)"/g)) {
+    registered.push(m[1]);
+  }
+
+  type LuaField = { name: string; type: string; optional: boolean };
+  const interfaces = new Map<string, LuaField[]>();
+  for (const m of tsText.matchAll(/export interface (\w+) \{([^}]*)\}/g)) {
+    const fields: LuaField[] = [];
+    for (const line of m[2].split("\n")) {
+      const fm = line.match(/^\s*(\w+)(\??):\s*(.+?);?\s*$/);
+      if (fm) fields.push({ name: fm[1], optional: fm[2] === "?", type: fm[3].trim() });
+    }
+    interfaces.set(m[1], fields);
+  }
+  if (!interfaces.has("AnimationPlayer")) {
+    interfaces.set("AnimationPlayer", [
+      { name: "clip", type: "WireUuid", optional: false },
+      { name: "time", type: "number", optional: false },
+      { name: "speed", type: "number", optional: false },
+      { name: "wrap", type: '"once" | "loop" | "pingpong"', optional: false },
+      { name: "playing", type: "boolean", optional: false },
+      { name: "transitionMode", type: '"crossfade" | "inertialize"', optional: false },
+      { name: "loopBlend", type: "number", optional: false },
+    ]);
+  }
+  if (!interfaces.has("MaterialAsset")) {
+    interfaces.set("MaterialAsset", [{ name: "material", type: "WireUuid", optional: false }]);
+  }
+
+  const tsToLua = (t: string): string => {
+    if (t === "number" || t === "boolean" || t === "string") return t;
+    if (t === "WireUuid") return "string";
+    if (t === "Vec3") return "{ x: number, y: number, z: number }";
+    if (t === "Vec4") return "{ x: number, y: number, z: number, w: number }";
+    if (t === "Record<string, unknown>") return "table<string, any>";
+    if (t.endsWith("[][]")) return `${tsToLua(t.slice(0, -4))}[][]`;
+    if (t.endsWith("[]")) return `${tsToLua(t.slice(0, -2))}[]`;
+    if (t.includes("|")) return t.replace(/\s+/g, ""); // string-literal union, e.g. "box"|"sphere"
+    return `se.${t}`; // a nested interface (BVec3, PhysicsMaterial, Material, …)
+  };
+
+  // The interface a field type references (null for primitives / vectors / unions), so the class set can
+  // be grown transitively from the registered components — nested DTOs are emitted, unrelated ones are not.
+  const referenced = (type: string): string | null => {
+    const base = type.replace(/\[\]/g, "");
+    if (/^(number|boolean|string|WireUuid|Vec3|Vec4)$/.test(base)) return null;
+    if (base.includes("|") || base.includes("<")) return null;
+    return base;
+  };
+  const reach = new Set<string>();
+  const queue = [...registered];
+  while (queue.length > 0) {
+    const name = queue.pop();
+    if (name === undefined || reach.has(name) || !interfaces.has(name)) continue;
+    reach.add(name);
+    for (const f of interfaces.get(name) ?? []) {
+      const ref = referenced(f.type);
+      if (ref !== null && interfaces.has(ref) && !reach.has(ref)) queue.push(ref);
+    }
+  }
+  for (const name of registered) {
+    if (!reach.has(name)) console.warn(`emitScriptComponentDefs: no wire-shape for component "${name}"`);
+  }
+
+  const classes = [...reach].sort().map((name) => {
+    const fields = interfaces.get(name) ?? [];
+    const body = fields
+      .map((f) => `---@field ${f.name} ${tsToLua(f.type)}${f.optional ? "?" : ""}`)
+      .join("\n");
+    return `---@class se.${name}\n${body}`.trimEnd();
+  });
+  const overloads = [...registered]
+    .sort()
+    .filter((n) => reach.has(n))
+    .map((n) => `---@overload fun(self: se.Entity, name: "${n}"): se.${n}?`)
+    .join("\n");
+
+  const lua = `-- Typed component snapshots. get_component(name) returns the component as a read-only table in
+-- its serialized wire shape (vectors as {x,y,z} tables, ids as decimal strings); nil when absent.
+${classes.join("\n\n")}
+
+${overloads}
+function Entity:get_component(name) end  ---@param name se.ComponentName @return table?`;
+
+  return `// GENERATED - do not edit.
+// Produced by tools/gen-control-dto/gen.ts (emitScriptComponentDefs) from the component wire-shape
+// catalog. Appended to library/se.lua after SeLuaDefs so :get_component(name) returns a typed table.
+#pragma once
+
+#include <string_view>
+
+inline constexpr std::string_view SeComponentDefs = R"LUA(
+${lua}
+)LUA";
+`;
+}
+
 async function main(): Promise<void> {
   const text = await readFile(dtoFile, "utf8");
   const structs = parseStructs(text);
@@ -3314,16 +3433,20 @@ async function main(): Promise<void> {
   await mkdir(dirname(sceneSerdeOut), { recursive: true });
   await mkdir(dirname(tsOut), { recursive: true });
   await mkdir(dirname(openRpcOut), { recursive: true });
+  const tsText = emitTs(structs);
+  const componentsText = await readFile(sceneEditComponentsFile, "utf8");
   await writeFile(cppOut, emitCpp(structs, enums), "utf8");
   await writeFile(sceneSerdeOut, emitSceneSerde(), "utf8");
-  await writeFile(tsOut, emitTs(structs), "utf8");
+  await writeFile(tsOut, tsText, "utf8");
   await writeFile(openRpcOut, emitOpenRpc(structs), "utf8");
   await writeFile(manifestOut, emitManifest(), "utf8");
+  await writeFile(componentDefsOut, emitScriptComponentDefs(tsText, componentsText), "utf8");
   console.log(`wrote ${cppOut}`);
   console.log(`wrote ${sceneSerdeOut}`);
   console.log(`wrote ${tsOut}`);
   console.log(`wrote ${openRpcOut}`);
   console.log(`wrote ${manifestOut}`);
+  console.log(`wrote ${componentDefsOut}`);
 }
 
 main().catch((err) => {
