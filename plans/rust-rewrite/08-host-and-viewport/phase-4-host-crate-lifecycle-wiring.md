@@ -87,3 +87,54 @@ the control plane. The native overlay *geometry* is phase-5; this phase calls
   and tears down with `wait_gpu_idle` before any resource drop, the GPU `Ref` caches cleared before the
   renderer drops, and a validation-clean log. No startup self-test runs (grep the binary's log for the
   removed self-test names → absent).
+
+## The play-edge world build + sim_tick composition (WIRED)
+
+The play loop is wired. Entering Play builds the Jolt world from the play scene, starts the script VM,
+installs the bridge, and points the editor's `sim_tick` seam at the play-loop closure; the per-frame
+`update_session` ticks it and writes physics back into the play scene; leaving Play drops the world,
+stops the VM, and clears the seam in the `#98` teardown order. The e2e confirms it live:
+`physics-falling-box.test.ts` is green (`physics-state.active == true` during Play, the box falls from 5
+and settles, `stop` restores the authored y=5, validation-clean), as are the broader physics e2e
+(triggers/character/bone/query/ragdoll/world) and the non-coroutine script cases.
+
+The shape that closed it (the structural obstacle was that `sim_tick` is a `Box<dyn FnMut(&mut Scene,
+f32)>` stored *inside* `SceneEditContext`, invoked while the editor is borrowed by `tick_play`, so its
+closure cannot capture `&mut self`):
+
+- **The play-session mutable state the closure + bridge reach moved behind single-thread
+  `Rc<RefCell<…>>` cells** (conventions §3 bucket 4, the Rust shape of the C++ shared `HostState`):
+  `physics: SharedPhysics` (`Rc<RefCell<Option<World>>>`), `script: Rc<RefCell<ScriptHost>>`, the
+  `contact_cursor`/`script_error_pending` flags (`Rc<Cell<…>>`), the gameplay-input snapshot
+  (`Rc<RefCell<ScriptInputState>>`), and the per-frame ragdoll `pose_targets` snapshot
+  (`Rc<RefCell<Vec<PoseTarget>>>` filled from `AnimationRuntime::last_poses` after `tick_animation`).
+  `poll_control` lends `physics.borrow_mut().as_mut()` (a guard held across `control.poll`) into the
+  `EngineContext::physics: Option<&mut World>` borrow.
+- **`sa.log` and contained script errors route through sink cells, not the editor.** While a tick runs
+  the editor is borrowed by `tick_play`, so the C++ `pushScriptLog(*state->editor, …)` aliasing is
+  forbidden in Rust. `script_bridge.rs`'s `log_sink` appends to a `SharedScriptSink` buffer (replacing
+  the `SharedEditor` cell), and the `sim_tick` closure buffers errors into a `script_error_sink`; the
+  host drains both into the editor's rings after `tick_play` releases the editor borrow, then flips the
+  deferred pause.
+- **The Edit↔Playing build/teardown is host-side edge detection, not the published hooks.**
+  `publish_transition` is `&mut self` on the editor, so a subscribed closure would run while the editor
+  is borrowed and could not reach the play scene / project root / registry it must build with. The host
+  detects the edge itself in `reconcile_play_edge` (run from `update_session` right after `poll_control`
+  releases the editor borrow) and builds the world (`populate` + `build_bone_bodies` + `add_character`)
+  + starts the VM + installs `HostScriptBridge` there. The two `on_play_state_changed` subscriptions
+  stay as the lifecycle seam markers (the "play hooks are live" invariant), torn down on detach.
+- **The `sim_tick` closure runs the faithful sequence per fixed step:** `drive_ragdolls_to_pose →
+  advance_ragdoll_blend → step → write_ragdoll_poses → drain_contacts → dispatch_contact → derive input
+  edges → tick_scripts`, releasing the world borrow before any script runs (a handler may `sa.raycast`
+  back through the bridge).
+
+A unit test (`play_edge_builds_a_world_and_steps_the_box`, CPU-only) mirrors the falling-box e2e end to
+end without a renderer.
+
+Running `tick_scripts` for real surfaced one latent `saffron-script` scheduler bug (fixed in
+12-scripting): `sa.wait` in a bare `on_update` errored *"attempt to yield across a C-call boundary"*
+because mlua's Luau backend runs `Function::call` on an auxiliary thread, so the prelude's
+`coroutine.running()` `ismain` guard read false. `scheduler.rs` now tracks the scheduler coroutine it is
+resuming (`_sa_active`) and yields only from that coroutine, so a bare-`on_update` `sa.wait` is the
+documented ignored no-op. With that, the full `script.test.ts` (20 cases) and `script_logs.test.ts` pass
+live against the Rust host.
