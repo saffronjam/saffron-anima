@@ -1,6 +1,6 @@
 # Phase 8 — The self-test-removal ledger
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 **Depends on:** 13-testing-and-verification:phase-1-test-conventions-and-coverage-map
 
@@ -76,3 +76,26 @@ gate (the host run loop in `08-host-and-viewport` never branches on it).
 - Each row's owning phase, once landed, has its replacement test green (the ledger tracks completion as
   areas finish).
 - The Cargo workspace compiles; `cargo test --workspace` green.
+
+## Audit result (gate)
+
+- **Ledger complete and accurate.** All 18 distinct `run*SelfTest` symbols in `engine-old/`
+  (`runAnimationSelfTest`, `runBakeModelSelfTest`, `runCatalogLinkageSelfTest`, `runChunkLoaderSelfTest`,
+  `runContainerMetadataSelfTest`, `runContainerSelfTest`, `runExtractSelfTest`, `runGeometrySelfTest`,
+  `runInstantiateSelfTest`, `runPhysicsSelfTest`, `runPickMathSelfTest`, `runPlayModeSelfTest`,
+  `runReimportSelfTest`, `runSceneHierarchySelfTest`, `runSceneSerializationSelfTest`,
+  `runScriptSelfTest`, `runSignalSelfTest`, `runTranslateDeterminismSelfTest`) appear as a row with a
+  named Rust `#[test]`/e2e replacement and an owning phase; no orphan oracle. Each named e2e file
+  (`hierarchy`, `play`, `undo-redo`, `picking`, `catalog_cache`, `model_flow`, `model_asset`,
+  `asset-usages`, `assets`, `script`, `physics*`) exists in `tests/e2e/`, and each named inline replacement
+  exists (e.g. the four `SubscriberList` cases in `signal/src/lib.rs`, the IK/sampling/pose oracle in
+  `animation/src/{ik,lib,runtime}.rs`, the VM/sandbox cases in `script/src/vm.rs`, the determinism gate at
+  `physics/tests/determinism.rs`).
+- **Grep assertion passes.** `grep -rniE 'run[A-Za-z]+SelfTest|SAFFRON_SELFTEST|fn .*self_test'`
+  over `engine/**/*.rs` finds only doc/line comments that cross-reference the C++ oracle a test ports,
+  plus one match — `scene_hierarchy_self_test` in `scene/src/hierarchy.rs:606` — which is a `#[test]`
+  inside the `#[cfg(test)] mod tests` block at `:569`. No runtime self-test function survives and no
+  `SAFFRON_SELFTEST` env-gate exists anywhere in the Rust tree (the host reads no such var; the
+  `SAFFRON_SELFTEST` startup branch has no Rust analogue).
+- **Workspace green.** `cargo build --workspace` compiles; `cargo test --workspace` = 1276 passed, 0
+  failed across the workspace.
