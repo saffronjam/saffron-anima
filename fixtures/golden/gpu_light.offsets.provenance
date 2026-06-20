@@ -1,0 +1,8 @@
+fixture: gpu_light.offsets
+bytes: 328
+sha256: 2fbab6607ab452bc6240ed5e61c90a988dea8b0d579a9c3269219de3cb2b7cf2
+source: C++ engine-old renderer_types.cppm GpuLight (:2018)
+generator: fixtures/golden/gen/gen_golden.cpp
+commit: d8b4cea
+nlohmann_json: v3.12.0
+compiler: clang++ 21 -std=c++26 (saffron-build toolbox)
