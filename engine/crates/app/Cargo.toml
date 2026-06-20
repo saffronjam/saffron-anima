@@ -1,0 +1,16 @@
+[package]
+name = "saffron-app"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-core = { path = "../core" }
+saffron-window = { path = "../window" }
+saffron-rendering = { path = "../rendering" }
+thiserror.workspace = true

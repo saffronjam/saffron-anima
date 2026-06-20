@@ -1,0 +1,22 @@
+[package]
+name = "saffron-geometry"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-core = { path = "../core" }
+glam = { workspace = true, features = ["bytemuck"] }
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
+gltf = { workspace = true, features = ["KHR_materials_emissive_strength"] }
+tobj = { workspace = true }
+image = { workspace = true }
+
+[dev-dependencies]
+saffron-test-support = { path = "../test-support" }

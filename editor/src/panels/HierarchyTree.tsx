@@ -362,7 +362,10 @@ const TreeRow = memo(function TreeRow({
     s.selectedId === entity.id &&
     s.componentsBySelected &&
     s.componentsBySelected.id === entity.id
-      ? orderedComponentNames(s.componentsBySelected.components as Record<string, unknown>).length
+      ? orderedComponentNames(
+          s.componentsBySelected.components as Record<string, unknown>,
+          s.componentsBySelected.componentOrder,
+        ).length
       : 0,
   );
   const hasChildren = node.children.length > 0;
@@ -477,7 +480,10 @@ function ComponentSubrows({ entity, depth }: { entity: EntityListEntry; depth: n
   const components = useEditorStore((s) => s.componentsBySelected);
   const names =
     components && components.id === entity.id
-      ? orderedComponentNames(components.components as Record<string, unknown>)
+      ? orderedComponentNames(
+          components.components as Record<string, unknown>,
+          components.componentOrder,
+        )
       : [];
   return (
     <>

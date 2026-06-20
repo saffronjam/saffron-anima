@@ -1,0 +1,59 @@
+//! The `.smat` byte-exact golden snapshot (13-testing-and-verification phase 2; the
+//! 07-assets-and-materials phase-2 golden gate).
+//!
+//! `MaterialParamsData` (the GPU side) is hashed by raw bytes for per-frame dedup, and the
+//! `.smat` (the CPU side) is the editor's on-disk contract — both fail silently on a byte
+//! shift (a mis-deduped material; a `.smat` the editor parses wrong without erroring). The
+//! detector is a byte compare against a fixture generated once from the C++
+//! `materialAssetToJson(...).dump(2)` (`fixtures/golden/gen/`), which carries nlohmann's
+//! f64-promoted float formatting and `std::map` sorted keys — the exact bytes the Rust
+//! `material_asset_to_json` + `dump_json_sorted` must reproduce.
+//!
+//! This test rebuilds the same populated material the C++ generator used and matches the
+//! serialized bytes. A float-format or key-order drift surfaces as a hexdump mismatch.
+//! Reseed with `UPDATE_GOLDEN=1` only on an intentional format change.
+
+use saffron_assets::{MaterialAsset, material_asset_to_json};
+use saffron_core::Uuid;
+use saffron_geometry::glam::{Vec2, Vec3, Vec4};
+use saffron_test_support::assert_bytes_match_golden;
+
+/// The populated material the C++ generator's `populatedMaterial()` builds, field-for-field.
+/// `graph`/`overrides` are `Null` so `material_asset_to_json` emits `{}` (the C++
+/// `is_null() ? object()` path).
+fn populated_material() -> MaterialAsset {
+    MaterialAsset {
+        shader: "mesh".to_owned(),
+        blend: "masked".to_owned(),
+        unlit: false,
+        double_sided: true,
+        normal_convention: "gl".to_owned(),
+        base_color: Vec4::new(0.8, 0.4, 0.2, 1.0),
+        metallic: 0.25,
+        roughness: 0.7,
+        emissive: Vec3::new(0.1, 0.0, 0.0),
+        emissive_strength: 2.0,
+        normal_strength: 1.0,
+        alpha_cutoff: 0.5,
+        height_scale: 0.05,
+        uv_tiling: Vec2::new(2.0, 2.0),
+        uv_offset: Vec2::new(0.0, 0.0),
+        albedo_texture: Uuid(4242),
+        orm_texture: Uuid(0),
+        normal_texture: Uuid(4243),
+        emissive_texture: Uuid(0),
+        height_texture: Uuid(0),
+        features: 0,
+        graph: serde_json::Value::Null,
+        parent: Uuid(1024),
+        overrides: serde_json::Value::Null,
+    }
+}
+
+#[test]
+fn populated_smat_bytes_match_cpp_golden() {
+    // The `.smat` write path serializes with sorted keys + two-space indent — the exact
+    // `dump_json_sorted(..., 2)` `save_material_asset` writes to disk.
+    let text = saffron_json::dump_json_sorted(&material_asset_to_json(&populated_material()), 2);
+    assert_bytes_match_golden("material.smat", text.as_bytes());
+}

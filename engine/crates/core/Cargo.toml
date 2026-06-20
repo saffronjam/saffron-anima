@@ -1,0 +1,14 @@
+[package]
+name = "saffron-core"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+thiserror.workspace = true

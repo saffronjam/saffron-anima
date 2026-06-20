@@ -1,5 +1,5 @@
 {
-  "generatedBy": "tools/gen-control-dto/gen.ts",
+  "generatedBy": "cargo run -p xtask -- gen-protocol",
   "commands": [
     {
       "name": "ping",
@@ -245,6 +245,13 @@
       "result": "SetComponentResult",
       "status": "typed",
       "fixture": "cube-name-component"
+    },
+    {
+      "name": "set-component-order",
+      "params": "SetComponentOrderParams",
+      "result": "SetComponentOrderResult",
+      "status": "typed",
+      "fixture": "cube-component-order"
     },
     {
       "name": "set-transform",

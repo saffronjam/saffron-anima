@@ -1,0 +1,8 @@
+fixture: material.smat
+bytes: 782
+sha256: c0b30d3b9c5400e5773541ad05b33ecea98e3cb3cf0667ec595b9aea655c1d6c
+source: C++ engine-old assets.cppm materialAssetToJson + .dump(2) (:1488,:2137)
+generator: fixtures/golden/gen/gen_golden.cpp
+commit: d8b4cea
+nlohmann_json: v3.12.0
+compiler: clang++ 21 -std=c++26 (saffron-build toolbox)

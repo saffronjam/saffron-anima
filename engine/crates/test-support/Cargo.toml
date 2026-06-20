@@ -1,0 +1,16 @@
+[package]
+name = "saffron-test-support"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+# Dev-only: every consumer pulls this under [dev-dependencies], so it never enters a
+# release artifact. Not published.
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+glam.workspace = true

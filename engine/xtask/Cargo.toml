@@ -1,0 +1,22 @@
+[package]
+name = "xtask"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-protocol = { path = "../crates/protocol" }
+saffron-script = { path = "../crates/script" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

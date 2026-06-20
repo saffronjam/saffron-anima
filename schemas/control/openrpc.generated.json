@@ -636,6 +636,24 @@
       }
     },
     {
+      "name": "set-component-order",
+      "summary": "set-component-order {entity, components}",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetComponentOrderParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetComponentOrderResult"
+        }
+      }
+    },
+    {
       "name": "set-transform",
       "summary": "set-transform {entity, translation?, rotation?, scale?}",
       "params": [
@@ -4736,12 +4754,19 @@
           },
           "components": {
             "$ref": "#/components/schemas/Components"
+          },
+          "componentOrder": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
           "id",
           "name",
-          "components"
+          "components",
+          "componentOrder"
         ]
       },
       "InstantiateModelParams": {
@@ -6984,6 +7009,47 @@
         "required": [
           "set",
           "field"
+        ]
+      },
+      "SetComponentOrderParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "entity",
+          "components"
+        ]
+      },
+      "SetComponentOrderResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "components"
         ]
       },
       "SetComponentParams": {

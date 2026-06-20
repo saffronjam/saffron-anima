@@ -16,6 +16,7 @@ cd tests/e2e && bun test       # inside the toolbox (host bun on PATH)
 |---|---|
 | `harness.ts` | `Engine.boot()` spawns a headless weston + the engine on a per-run control socket, captures stdout/stderr into `.log`, and exposes `call(cmd, params)` + `validationErrors()`. Always `shutdown()`. |
 | `*.test.ts` | The suite (~46 files), grouped by area: control plane + rendering (`rendering`, `control`, `scene`, `camera`, `picking`, `play`, `perf`, `profiler`, `toggles`, `assets`, `hierarchy`, …), animation (`animation*`, `foot-ik`), skinning (`skinning`, `skinned-*`, `skeleton-overlay`), scripting (`script`), materials (`material*`), and pixel/golden render checks (`*_render`, `material_scene_codegen`). |
+| `parity/` + `parity.test.ts` | The **cross-engine parity rig** (cutover-only): drives the same three comparators (golden image, physics sim trace, serde round-trip) against BOTH the C++ `SaffronAnima` and the Rust `saffron-host`, and writes `appdata/parity-report.json` for the cutover sign-off. `parity/harness.ts` carries a `ParityEngine.boot(bin, env)` that takes the binary explicitly (the shared `harness.ts` freezes `SAFFRON_ANIMA_BIN` at import, so it cannot switch binaries in one process). The rig `describe.skip`s when the C++ binary is absent — it is deleted with `engine-old/` at cutover (NO LEGACY). |
 
 ## Conventions
 
@@ -31,3 +32,9 @@ cd tests/e2e && bun test       # inside the toolbox (host bun on PATH)
   files. Golden-image baselines are not wired up yet.
 - Type results via `@saffron/protocol` (`engine.call<RenderStats>("render-stats")`) so a schema
   change that breaks an assertion shows up at typecheck.
+- **Parity verdicts are recorded, never loosened.** The parity rig classifies each comparator as
+  `exact` (byte/bit-identical across both engines — asserted green), `tolerance` (a *measured*
+  difference with its number + reason, e.g. the project-JSON key-order or the llvmpipe preview
+  lighting delta — recorded for the sign-off, never silently passed), or `deferred` (a leg the
+  toolbox cannot run: real GPU, ARM, the live editor). A difference the rig cannot explain is a
+  cutover blocker, not a rounding footnote.

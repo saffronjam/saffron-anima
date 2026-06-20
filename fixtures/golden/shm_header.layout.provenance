@@ -1,0 +1,8 @@
+fixture: shm_header.layout
+bytes: 311
+sha256: 4c043ad3ffb5a3f14c3f7d05bc7922a07afd69625248a2710ed705ffdf97df49
+source: C++ engine-old renderer_capture.cpp recreateShmSegment header (:129)
+generator: fixtures/golden/gen/gen_golden.cpp
+commit: d8b4cea
+nlohmann_json: v3.12.0
+compiler: clang++ 21 -std=c++26 (saffron-build toolbox)

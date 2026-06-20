@@ -1,0 +1,313 @@
+//! The DTO-inventory tripwire: enumerate every DTO type the catalog
+//! (`09-control-plane/catalog.md` §"DTO inventory") names, so a dropped type fails the build,
+//! not silently. Each type is referenced by name with a `JsonSchema + TS + Serialize +
+//! DeserializeOwned` bound check; removing a type from `dto.rs` breaks compilation here.
+//!
+//! The C++ `DtoTag` template-dispatch tag is intentionally absent (PP-3: `P: Deserialize`
+//! resolves by type parameter), so the Rust inventory is the 236 C++ structs minus `DtoTag`
+//! plus the `Uuid` newtype — 236 wire types total.
+
+use schemars::JsonSchema;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use ts_rs::TS;
+
+/// Compile-time proof that `T` carries the full derive stack every DTO must have.
+fn assert_dto<T: Serialize + DeserializeOwned + JsonSchema + TS>() {}
+
+/// Counts each named type while asserting its derives. The body is one `assert_dto::<T>()`
+/// per type plus a `+ 1` to a counter, so the final count is checked against the catalog's
+/// inventory and a dropped type fails to compile (its line vanishes / errors).
+macro_rules! inventory {
+    ($($t:ty),+ $(,)?) => {{
+        let mut count = 0_usize;
+        $(
+            assert_dto::<$t>();
+            count += 1;
+        )+
+        count
+    }};
+}
+
+#[test]
+fn every_catalog_dto_exists_and_derives() {
+    use saffron_protocol::*;
+
+    let count = inventory![
+        // Wire-helpers + Vec3/Vec4 + EntityRef (the `Uuid` newtype replaces `WireUuid`;
+        // `EntitySelector`/`AssetSelector` are `serde_json::Value` aliases, counted below).
+        Uuid,
+        EntityRef,
+        Vec3,
+        Vec4,
+        // The 17 enums.
+        AddEntityPreset,
+        PickKind,
+        GizmoOpDto,
+        GizmoSpaceDto,
+        GizmoPointerPhase,
+        AaModeDto,
+        GiModeDto,
+        ViewModeDto,
+        AssetSlotDto,
+        ScreenshotTargetDto,
+        AssetTypeDto,
+        ProfilerModeDto,
+        ProfileLaneDto,
+        CaptureModeDto,
+        CaptureStateDto,
+        AlarmSeverityDto,
+        AlarmStateDto,
+        // The structs, in declaration order.
+        PingParams,
+        EmptyParams,
+        PingResult,
+        RenderStatsDto,
+        RenderPassTimingDto,
+        RenderPassTimingsDto,
+        ProfilerSetModeParams,
+        ProfilerModeResult,
+        PipelineStatsDto,
+        ProfileSpanDto,
+        ProfileCaptureMetadataDto,
+        ProfileCaptureDto,
+        CaptureStartParams,
+        CaptureStartResult,
+        CaptureStopResult,
+        CaptureStatusResult,
+        FrameSampleDto,
+        FrameHistoryParams,
+        FrameHistoryDto,
+        PerfConfigDto,
+        SetPerfConfigParams,
+        AlarmEventDto,
+        DrainAlarmsParams,
+        DrainAlarmsResult,
+        ScriptStatusResult,
+        PhysicsStateResult,
+        FitColliderParams,
+        FitColliderResult,
+        ContactEventDto,
+        DrainContactsParams,
+        DrainContactsResult,
+        PhysicsBodyDto,
+        PhysicsBodiesResult,
+        ApplyImpulseParams,
+        ApplyImpulseResult,
+        SetKinematicBonesParams,
+        KinematicBonesResult,
+        MoveCharacterParams,
+        MoveCharacterResult,
+        RaycastParams,
+        ShapecastParams,
+        RaycastResult,
+        EnableRagdollParams,
+        RagdollResult,
+        SetRagdollParams,
+        GetRagdollParams,
+        ScriptErrorDto,
+        DrainScriptErrorsParams,
+        DrainScriptErrorsResult,
+        ScriptLogDto,
+        DrainScriptLogsParams,
+        DrainScriptLogsResult,
+        GetScriptSchemaParams,
+        ScriptFieldDto,
+        GetScriptSchemaResult,
+        SetScriptOverrideParams,
+        SetScriptOverrideResult,
+        CreateScriptParams,
+        CreateScriptResult,
+        ActiveAlarmDto,
+        ActiveAlarmsDto,
+        SetAaParams,
+        SetAaResult,
+        SetViewModeParams,
+        SetViewModeResult,
+        ToggleParams,
+        SetClusteredResult,
+        SetIblResult,
+        SetSsaoResult,
+        SetContactShadowsResult,
+        SetSsgiResult,
+        SetRtShadowsResult,
+        SetRestirResult,
+        SetGiParams,
+        SetGiResult,
+        SetShadowsResult,
+        SetSkinningResult,
+        SetDepthPrepassResult,
+        ViewportNativeInfoResult,
+        SetViewportSizeParams,
+        SetViewportSizeResult,
+        SetActiveViewParams,
+        SetActiveViewResult,
+        ProjectInfoDto,
+        NewProjectParams,
+        PathParams,
+        OptionalPathParams,
+        ImportModelResult,
+        InstantiateModelParams,
+        ExtractSubAssetParams,
+        ClearExtractionParams,
+        ImportTextureResult,
+        AssetEntryDto,
+        AssetList,
+        ScanAssetsResult,
+        ReimportModelResult,
+        ReimportModelParams,
+        ModelInfoParams,
+        ModelSubAssetDto,
+        ModelInfoResult,
+        AssetReferencesParams,
+        AssetReferencesResult,
+        CleanCandidateDto,
+        CleanReport,
+        CleanAssetsParams,
+        DeleteUnusedParams,
+        DeleteUnusedResult,
+        RenameAssetParams,
+        AssetRef,
+        CreateAssetFolderParams,
+        RenameAssetFolderParams,
+        DeleteAssetFolderParams,
+        MoveAssetParams,
+        AssetUsagesParams,
+        AssetUsageDto,
+        AssetUsagesResult,
+        AssetMetadataParams,
+        AssetMetadataDto,
+        DeleteAssetParams,
+        DeleteAssetResult,
+        AssignAssetParams,
+        MaterialCreateParams,
+        MaterialCreateResult,
+        MaterialAssignParams,
+        MaterialAssignResult,
+        MaterialImportParams,
+        MaterialImportResultDto,
+        MaterialRefDto,
+        MaterialListResult,
+        MaterialGetParams,
+        MaterialGetResult,
+        MaterialUpdateParams,
+        MaterialUpdateResult,
+        PreviewRenderParams,
+        PreviewRenderResult,
+        MaterialSetGraphParams,
+        MaterialSetGraphResult,
+        MaterialCreateInstanceParams,
+        MaterialSetOverrideParams,
+        MaterialSetOverrideResult,
+        MaterialCompileParams,
+        MaterialCompileResult,
+        MaterialCookResult,
+        AssignAssetResult,
+        PathResult,
+        ScreenshotParams,
+        ScreenshotResult,
+        ThumbnailParams,
+        ThumbnailResult,
+        ThumbnailCacheParams,
+        ThumbnailCacheResult,
+        QuitResult,
+        CreateEntityParams,
+        EntityParams,
+        SetParentParams,
+        DestroyEntityResult,
+        EntityListEntry,
+        EntityList,
+        ComponentList,
+        ComponentParams,
+        AddComponentResult,
+        RemoveComponentResult,
+        SetComponentParams,
+        SetComponentResult,
+        SetComponentOrderParams,
+        SetComponentOrderResult,
+        SetTransformParams,
+        SetMaterialParams,
+        SetLightParams,
+        PickParams,
+        PickResult,
+        InspectResult,
+        EnvironmentDto,
+        SetEnvironmentParams,
+        SetAtmosphereParams,
+        SelectionResult,
+        PlayStateResult,
+        AnimationClipDto,
+        BoneDto,
+        AssetCapabilitiesDto,
+        GetAssetModelParams,
+        AssetModelResult,
+        EnterAssetPreviewParams,
+        BoneEntityDto,
+        AssetPreviewResult,
+        ListClipsParams,
+        ListClipsResult,
+        PlayAnimationParams,
+        SeekAnimationParams,
+        SetAnimationLoopParams,
+        SetAnimationPlayingParams,
+        AnimationStateParams,
+        AnimationStateResult,
+        SetSkeletonOverlayParams,
+        SkeletonOverlayResult,
+        DebugOverlaysParams,
+        DebugOverlaysResult,
+        SetSkeletonHighlightParams,
+        PickSkeletonJointParams,
+        PickSkeletonJointResult,
+        SetAssetPreviewOptionsParams,
+        AssetPreviewOptionsResult,
+        SetFootIkParams,
+        GetFootIkParams,
+        FootIkResult,
+        WorldTransformResult,
+        StepParams,
+        DeselectResult,
+        AddEntityParams,
+        RenameEntityParams,
+        SetComponentFieldParams,
+        SetComponentFieldResult,
+        EditorCamera,
+        SetCameraParams,
+        GizmoState,
+        SetGizmoParams,
+        GizmoPointerParams,
+        GizmoPointerResult,
+        FlyInputParams,
+        FlyInputResult,
+        ScriptInputParams,
+        ScriptInputResult,
+        SetProbesParams,
+        SetProbesResult,
+        RecaptureProbesResult,
+        ProbeRef,
+        ListProbesResult,
+        SetExposureParams,
+        SetExposureResult,
+    ];
+
+    // The catalog declares 236 C++ structs (incl. `DtoTag` + the 4 wire-helpers + Vec3/Vec4)
+    // and 17 enums. The Rust inventory drops `DtoTag` (no analogue), models `EntitySelector`
+    // and `AssetSelector` as `serde_json::Value` aliases (not standalone derive types), and
+    // replaces `WireUuid` with the `Uuid` newtype. So the standalone derive types are:
+    //   236 structs - DtoTag - EntitySelector - AssetSelector - WireUuid + Uuid = 233
+    //   + 17 enums = 250.
+    assert_eq!(count, 250, "DTO inventory count drifted from the catalog");
+}
+
+/// Every `EntitySelector`/`AssetSelector` field is an opaque `serde_json::Value` alias —
+/// they are not standalone derive types but they must still be the `Value` passthrough the
+/// catalog pins.
+#[test]
+fn selectors_are_opaque_json() {
+    use saffron_protocol::{AssetSelector, EntitySelector};
+
+    let entity: EntitySelector = serde_json::json!({ "name": "Player" });
+    let asset: AssetSelector = serde_json::json!("models/player.smodel");
+    assert!(entity.is_object());
+    assert!(asset.is_string());
+}

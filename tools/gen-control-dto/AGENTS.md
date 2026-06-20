@@ -1,7 +1,7 @@
 # tools/gen-control-dto
 
 The control-plane code generator. One Bun/TypeScript file, `gen.ts`, is the single source that fans the
-DTOs in `engine/source/saffron/control/control_dto.cppm` out to **five** generated artifacts. The editor
+DTOs in `engine-old/source/saffron/control/control_dto.cppm` out to **five** generated artifacts. The editor
 reaches it through `editor/scripts/gen-protocol.ts` (a spawn wrapper); CI (`tools/ci/check.sh`) runs it
 and then `git diff --exit-code` on the outputs, so a stale generated file fails the gate.
 
@@ -9,12 +9,12 @@ and then `git diff --exit-code` on the outputs, so a stale generated file fails 
 
 | What | File | Emitter |
 |---|---|---|
-| C++ DTO serde | `engine/source/saffron/control/control_dto_serde.generated.cpp` | `emitCpp` |
-| Scene-component serde | `engine/source/saffron/scene/scene_component_serde.generated.cpp` | `emitSceneSerde` |
+| C++ DTO serde | `engine-old/source/saffron/control/control_dto_serde.generated.cpp` | `emitCpp` |
+| Scene-component serde | `engine-old/source/saffron/scene/scene_component_serde.generated.cpp` | `emitSceneSerde` |
 | TS protocol types | `editor/src/protocol/sa-types.ts` | `emitTs` |
 | OpenRPC schema | `schemas/control/openrpc.generated.json` | `emitOpenRpc` |
 | Contract manifest | `schemas/control/command-manifest.generated.json` | `emitManifest` |
-| Lua component types | `engine/source/saffron/assets/script_component_defs.generated.hpp` | `emitScriptComponentDefs` |
+| Lua component types | `engine-old/source/saffron/assets/script_component_defs.generated.hpp` | `emitScriptComponentDefs` |
 
 `emitScriptComponentDefs` parses the component wire shapes from `emitTs`'s output (the
 `componentInterfaces` catalog) and the registered names from `scene_edit_components.cpp`, then emits the
@@ -52,5 +52,5 @@ skips `*.generated.cpp` (the generator owns their style); never hand-edit a gene
 - **IDs cross the wire as decimal strings.** `WireUuid` serializes via `std::to_string`, never a JSON
   number; the contract test checks the raw bytes so this never regresses.
 
-See `engine/source/saffron/control/AGENTS.md` for the per-command authoring workflow and the root
+See `engine-old/source/saffron/control/AGENTS.md` for the per-command authoring workflow and the root
 `AGENTS.md` for the keep-the-`sa`-CLI-current rule.

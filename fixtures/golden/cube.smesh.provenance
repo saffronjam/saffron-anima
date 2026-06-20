@@ -1,0 +1,8 @@
+fixture: cube.smesh
+bytes: 992
+sha256: dca7e11807945961393ba3bb3aa3cc524cc7c76b11cefea9a2c6fa46b1bea8db
+source: C++ engine-old geometry.cppm encodeMeshImage / SMeshHeader (:386,:1400)
+generator: fixtures/golden/gen/gen_golden.cpp
+commit: d8b4cea
+nlohmann_json: v3.12.0
+compiler: clang++ 21 -std=c++26 (saffron-build toolbox)

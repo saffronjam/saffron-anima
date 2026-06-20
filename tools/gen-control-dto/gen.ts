@@ -36,22 +36,22 @@ interface ManifestCommand {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = dirname(dirname(scriptDir));
-const dtoFile = join(repoRoot, "engine/source/saffron/control/control_dto.cppm");
-const cppOut = join(repoRoot, "engine/source/saffron/control/control_dto_serde.generated.cpp");
+const dtoFile = join(repoRoot, "engine-old/source/saffron/control/control_dto.cppm");
+const cppOut = join(repoRoot, "engine-old/source/saffron/control/control_dto_serde.generated.cpp");
 const sceneSerdeOut = join(
   repoRoot,
-  "engine/source/saffron/scene/scene_component_serde.generated.cpp",
+  "engine-old/source/saffron/scene/scene_component_serde.generated.cpp",
 );
 const tsOut = join(repoRoot, "editor/src/protocol/sa-types.ts");
 const openRpcOut = join(repoRoot, "schemas/control/openrpc.generated.json");
 const manifestOut = join(repoRoot, "schemas/control/command-manifest.generated.json");
 const componentDefsOut = join(
   repoRoot,
-  "engine/source/saffron/assets/script_component_defs.generated.hpp",
+  "engine-old/source/saffron/assets/script_component_defs.generated.hpp",
 );
 const sceneEditComponentsFile = join(
   repoRoot,
-  "engine/source/saffron/sceneedit/scene_edit_components.cpp",
+  "engine-old/source/saffron/sceneedit/scene_edit_components.cpp",
 );
 
 const scalarTypes = new Set([
@@ -103,9 +103,30 @@ const enumWireNames = new Map<string, Record<string, string>>([
       Emissive: "emissive",
     },
   ],
-  ["AssetSlotDto", { Mesh: "mesh", Albedo: "albedo", MetallicRoughness: "metallic-roughness", Normal: "normal", Occlusion: "occlusion", Emissive: "emissive", Height: "height" }],
+  [
+    "AssetSlotDto",
+    {
+      Mesh: "mesh",
+      Albedo: "albedo",
+      MetallicRoughness: "metallic-roughness",
+      Normal: "normal",
+      Occlusion: "occlusion",
+      Emissive: "emissive",
+      Height: "height",
+    },
+  ],
   ["ScreenshotTargetDto", { Viewport: "viewport", Window: "window" }],
-  ["AssetTypeDto", { Mesh: "mesh", Texture: "texture", Other: "other", Animation: "animation", Material: "material", Model: "model" }],
+  [
+    "AssetTypeDto",
+    {
+      Mesh: "mesh",
+      Texture: "texture",
+      Other: "other",
+      Animation: "animation",
+      Material: "material",
+      Model: "model",
+    },
+  ],
   ["ProfilerModeDto", { Off: "off", Timestamps: "timestamps", PipelineStats: "pipeline-stats" }],
   ["ProfileLaneDto", { Cpu: "cpu", Gpu: "gpu" }],
   ["CaptureModeDto", { Single: "single", Frames: "frames", Rolling: "rolling" }],
@@ -192,7 +213,8 @@ const commands: CommandDef[] = [
     name: "set-view-mode",
     params: "SetViewModeParams",
     result: "SetViewModeResult",
-    summary: "set the debug render-output mode {lit|wireframe|albedo|normal|roughness|metallic|emissive}",
+    summary:
+      "set the debug render-output mode {lit|wireframe|albedo|normal|roughness|metallic|emissive}",
   },
   {
     name: "set-clustered",
@@ -309,6 +331,12 @@ const commands: CommandDef[] = [
     params: "SetComponentParams",
     result: "SetComponentResult",
     summary: "set-component {entity, component, json}",
+  },
+  {
+    name: "set-component-order",
+    params: "SetComponentOrderParams",
+    result: "SetComponentOrderResult",
+    summary: "set-component-order {entity, components}",
   },
   {
     name: "set-transform",
@@ -462,7 +490,8 @@ const commands: CommandDef[] = [
     name: "set-debug-overlays",
     params: "DebugOverlaysParams",
     result: "DebugOverlaysResult",
-    summary: "toggle viewport debug overlays {bounds?, sceneAabb?, lightVolumes?, grid?, colliders?}",
+    summary:
+      "toggle viewport debug overlays {bounds?, sceneAabb?, lightVolumes?, grid?, colliders?}",
   },
   {
     name: "set-skeleton-highlight",
@@ -734,19 +763,22 @@ const commands: CommandDef[] = [
     name: "extract-subasset",
     params: "ExtractSubAssetParams",
     result: "AssetRef",
-    summary: "extract-subasset {asset, subAsset} [dest] — slice an embedded sub-asset to a standalone file",
+    summary:
+      "extract-subasset {asset, subAsset} [dest] — slice an embedded sub-asset to a standalone file",
   },
   {
     name: "clear-extraction",
     params: "ClearExtractionParams",
     result: "AssetRef",
-    summary: "clear-extraction {asset, subAsset} — revert an extracted sub-asset to the embedded chunk",
+    summary:
+      "clear-extraction {asset, subAsset} — revert an extracted sub-asset to the embedded chunk",
   },
   {
     name: "reimport-model",
     params: "ReimportModelParams",
     result: "ReimportModelResult",
-    summary: "reimport-model {asset} — re-bake from source (skip if unchanged), preserving extractions",
+    summary:
+      "reimport-model {asset} — re-bake from source (skip if unchanged), preserving extractions",
   },
   {
     name: "model-info",
@@ -764,7 +796,8 @@ const commands: CommandDef[] = [
     name: "get-asset-model",
     params: "GetAssetModelParams",
     result: "AssetModelResult",
-    summary: "get-asset-model {asset} — a model's capabilities + bone tree + clips, from its .smodel container",
+    summary:
+      "get-asset-model {asset} — a model's capabilities + bone tree + clips, from its .smodel container",
   },
   {
     name: "enter-asset-preview",
@@ -916,7 +949,12 @@ const commands: CommandDef[] = [
     result: "MaterialCompileResult",
     summary: "material-compile-graph {material}",
   },
-  { name: "material-cook", params: "EmptyParams", result: "MaterialCookResult", summary: "material-cook" },
+  {
+    name: "material-cook",
+    params: "EmptyParams",
+    result: "MaterialCookResult",
+    summary: "material-cook",
+  },
   { name: "save-scene", params: "PathParams", result: "PathResult", summary: "save-scene {path}" },
   { name: "load-scene", params: "PathParams", result: "PathResult", summary: "load-scene {path}" },
   {
@@ -999,6 +1037,7 @@ const commandFixtures = new Map<string, string>([
   ["add-component", "temp-camera-entity"],
   ["remove-component", "temp-camera-component"],
   ["set-component", "cube-name-component"],
+  ["set-component-order", "cube-component-order"],
   ["set-transform", "cube-transform"],
   ["set-material", "cube-material"],
   ["set-light", "temp-directional-light"],
@@ -3321,7 +3360,9 @@ namespace sa
 // (AnimationPlayer, MaterialAsset) are supplemented here from their serde shape.
 function emitScriptComponentDefs(tsText: string, componentsText: string): string {
   const registered: string[] = [];
-  for (const m of componentsText.matchAll(/registerComponent<[^>]+>\(\s*\n?\s*reg,\s*"([A-Za-z]+)"/g)) {
+  for (const m of componentsText.matchAll(
+    /registerComponent<[^>]+>\(\s*\n?\s*reg,\s*"([A-Za-z]+)"/g,
+  )) {
     registered.push(m[1]);
   }
 
@@ -3382,7 +3423,8 @@ function emitScriptComponentDefs(tsText: string, componentsText: string): string
     }
   }
   for (const name of registered) {
-    if (!reach.has(name)) console.warn(`emitScriptComponentDefs: no wire-shape for component "${name}"`);
+    if (!reach.has(name))
+      console.warn(`emitScriptComponentDefs: no wire-shape for component "${name}"`);
   }
 
   const classes = [...reach].sort().map((name) => {

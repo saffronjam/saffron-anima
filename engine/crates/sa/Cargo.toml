@@ -1,0 +1,21 @@
+[package]
+name = "sa"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "sa"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-protocol = { path = "../protocol" }
+saffron-control-client = { path = "../control-client" }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+serde_json = { workspace = true }

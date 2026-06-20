@@ -1,0 +1,30 @@
+[package]
+name = "saffron-control"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-core = { path = "../core" }
+saffron-geometry = { path = "../geometry" }
+saffron-json = { path = "../json" }
+saffron-window = { path = "../window" }
+saffron-rendering = { path = "../rendering" }
+saffron-scene = { path = "../scene" }
+saffron-sceneedit = { path = "../sceneedit" }
+saffron-assets = { path = "../assets" }
+saffron-physics = { path = "../physics" }
+saffron-protocol = { path = "../protocol" }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rustix = { workspace = true, features = ["net", "event", "fs"] }
+
+[dev-dependencies]
+rustix = { workspace = true, features = ["net", "event", "fs", "std"] }

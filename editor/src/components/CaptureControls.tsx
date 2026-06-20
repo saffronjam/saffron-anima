@@ -3,7 +3,7 @@
 /// (restored on stop), so a capture never silently leaves the baseline host instrumented — the
 /// panel surfaces that honestly. Progress is driven by polling the non-destructive
 /// `capture-status` while recording; draining (`capture-stop`) happens only once ready.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Download, ExternalLink, Flame } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -52,6 +52,31 @@ export function CaptureControls() {
 
   const recording = captureState === "recording" || captureState === "arming";
 
+  // Guards the destructive `capture-stop` to exactly one call per capture. The poll loop and a
+  // manual Stop both drain through `drainCapture`; whichever wins flips this, so a second poll
+  // tick (control round-trips can exceed the poll interval when frames are slow, so ticks
+  // overlap) cannot re-stop an already-drained recorder and clobber the result with an empty one.
+  const drainingRef = useRef(false);
+
+  // Single-flight drain: stop the capture once, keep the result only when the engine actually
+  // recorded frames. A redundant or empty stop never nulls a good capture.
+  const drainCapture = useCallback(async (): Promise<void> => {
+    if (drainingRef.current) {
+      return;
+    }
+    drainingRef.current = true;
+    try {
+      const result = await client.captureStop();
+      if (result.ready) {
+        setCapture(result.capture);
+      }
+    } catch (err) {
+      notifyError(`Capture failed: ${errorText(err)}`);
+    }
+    // Always leave recording, even if draining failed, so the controls never freeze.
+    setCaptureState("ready");
+  }, [setCapture, setCaptureState]);
+
   // Learn the pipeline-statistics capability once (capture-status is non-destructive), so the
   // stats toggle can be disabled when the device lacks pipelineStatisticsQuery.
   useEffect(() => {
@@ -85,21 +110,20 @@ export function CaptureControls() {
           return;
         }
         setCaptureProgress(status.capturedFrames, status.targetFrames);
-        if (status.state === "ready" || status.state === "idle") {
+        if (status.state === "ready") {
           clearInterval(id);
-          try {
-            const result = await client.captureStop();
-            setCapture(result.ready ? result.capture : null);
-          } catch (err) {
-            notifyError(`Capture failed: ${errorText(err)}`);
-          }
-          // Always leave recording, even if draining failed, so the controls never freeze.
+          await drainCapture();
+        } else if (status.state === "idle") {
+          // Already drained (a manual Stop or an earlier overlapping tick) — stop polling
+          // without a second capture-stop, which would return an empty capture and null the
+          // result. Leave recording so the controls settle.
+          clearInterval(id);
           setCaptureState("ready");
         }
       })();
     }, 150);
     return () => clearInterval(id);
-  }, [recording, setCaptureProgress, setCapture, setCaptureState]);
+  }, [recording, drainCapture, setCaptureProgress, setCaptureState]);
 
   // Keep the progress bar on screen for at least a second after a capture starts, even if it
   // finishes instantly (a single frame) — it animates to full, lingers, then clears, so a fast
@@ -119,6 +143,7 @@ export function CaptureControls() {
 
   const start = async (): Promise<void> => {
     captureStartedAtRef.current = Date.now();
+    drainingRef.current = false;
     setSelectedPass(null);
     setCapture(null);
     setCaptureProgress(0, captureWindowFrames);
@@ -137,13 +162,7 @@ export function CaptureControls() {
   };
 
   const stopNow = async (): Promise<void> => {
-    try {
-      const result = await client.captureStop();
-      setCapture(result.ready ? result.capture : null);
-    } catch (err) {
-      notifyError(`Capture stop failed: ${errorText(err)}`);
-    }
-    setCaptureState("ready");
+    await drainCapture();
   };
 
   const onToggle = (): void => {

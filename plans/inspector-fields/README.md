@@ -35,12 +35,20 @@ data-driven render side). Verified with `bun run check` (tsc) + `bun run lint` c
   on `DirectionalLight.ambient` and `ReflectionProbe.intensity`.
 - Docs updated: `docs/content/explanations/ui-and-editor/inspector.md`.
 
+## Done (editable rig arrays)
+
+The three rig arrays are now authorable, entirely editor-side (no engine change — they
+round-trip through the generic `set-component` and apply at the next Play). New widgets in
+`editor/src/components/`: `BoneSelect` (joint dropdown), `BoneMaskField` (joint-subset mask +
+"All joints"), `FootChainsEditor` (add/remove IK-limb cards), `BonePhysicsEditor` (fixed-length
+collapsible per-bone ragdoll cards, limits shown in degrees). Wired into the `FootIk` /
+`KinematicBones` / `BonePhysics` bodies in `InspectorPanel.tsx`, reusing `onFieldChange` /
+`onFieldDragStart` / `onFieldDragEnd` with the whole array as the field value (optimistic
+overlay + coalescing + undo for free). Joint names resolve client-side via the store entity
+list. Verified `bun run check` + `bun run lint` clean.
+
 ## Deferred (need engine work or larger widgets — documented below)
 
-- **Editable rig arrays** — adding/removing/reordering `FootIk.chains`, picking
-  `KinematicBones.driven`, tuning per-bone `BonePhysics.bones`. Authoring would ride the
-  generic `set-component` (round-trips today, consumed at play), but needs a struct-list /
-  bone-mask widget + a bone-picker; left read-only for now.
 - **Conditional `disabledWhen`/`visibleWhen`** greying (systemic #9) — needs `renderField` to
   receive the whole DTO.
 - **AnimationPlayer.time** as a read-only playhead chip, and `ModelInstance.modelId` as a

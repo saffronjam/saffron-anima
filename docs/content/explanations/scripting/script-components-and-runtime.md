@@ -131,8 +131,8 @@ registered name; `set_component`/`add_component`/`remove_component` reject the s
 *shape* of what comes back: `get_component("DirectionalLight")` is an `sa.DirectionalLight` with
 `.color`/`.intensity`/`.ambient`, and `local m = get_component("Mesh"); m.` autocompletes the Mesh
 fields. These `sa.<Component>` classes are **generated** from the same component wire-shape catalog the
-TypeScript protocol uses (`emitScriptComponentDefs` in `gen.ts`), so they never drift from the serde, and
-the tripwire fails the build if a registered component is missing a type.
+TypeScript protocol uses, so they never drift from the serde — the whole `sa` def file is one generated
+artifact, and the gate fails if re-running the generator changes it.
 
 **Transform**
 
@@ -207,8 +207,10 @@ to the method set, vectors type as `sa.Vec3`, component names autocomplete from 
 union, and a wrong-arity call is flagged before play. `sa.lua` is an engine-owned generated artifact —
 it is **rewritten on every project open** so the definitions track the engine's API and never go stale
 (do not hand-edit it). `.luarc.json` holds your editable LuaLS settings, so it is written only when
-absent and never clobbered. A `check.sh` tripwire fails the build if a live binding or a registered
-component is ever missing from `sa.lua`.
+absent and never clobbered. The whole def file — the `sa.*` API surface and the per-component types —
+is **generated from the one binding-descriptor table** the runtime registers from, so there is no second
+copy to drift: the gate re-runs the generator and fails on any diff (the old hand-synced def-drift
+tripwire is gone).
 
 To get the same completion on a script's own state, annotate the class: `---@class Foo : sa.ScriptSelf`
 types `self.entity`, and one `---@field <name> <type>` per `properties` entry or runtime field (with
@@ -230,8 +232,7 @@ on its own, so those annotations are what light them up.
 | The Inspector slot UI | `ScriptSlots.tsx` | `ScriptSlots` |
 | The src/ scaffold + starter script | `assets.cppm` | `ensureScriptSrc`, `StarterScript` |
 | The `library/sa.lua` + `.luarc.json` scaffold | `assets.cppm` | `ensureScriptLibrary`, `SaLuaDefs`, `LuarcJson` |
-| Generated per-component Lua types | `script_component_defs.generated.hpp`; `gen.ts` | `SaComponentDefs`, `emitScriptComponentDefs` |
-| The def-drift tripwire | `tools/check-script-defs/check.ts` | live-binding + component-alias coverage gate |
+| Generated `sa` Luau defs (API + per-component) | `xtask gen-protocol` → `schemas/control/sa.generated.luau` | `emit_api_defs`, `emit_component_defs`, `emit_defs` (from the `BINDINGS` table) |
 | New-script boilerplate (`create-script`) | `assets.cppm`; `control_commands_asset.cpp` | `createProjectScript` |
 | Error toasts during play | `scriptErrorToasts.ts` | `routeScriptErrorToasts` |
 | End-to-end coverage | `tests/e2e/script.test.ts` | component write / vectors / spawn-reparent-destroy / messaging / input edges / physics bindings |

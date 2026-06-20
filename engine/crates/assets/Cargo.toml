@@ -1,0 +1,26 @@
+[package]
+name = "saffron-assets"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-core = { path = "../core" }
+saffron-json = { path = "../json" }
+saffron-geometry = { path = "../geometry" }
+saffron-rendering = { path = "../rendering" }
+saffron-scene = { path = "../scene" }
+serde_json.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+ash.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+saffron-test-support = { path = "../test-support" }

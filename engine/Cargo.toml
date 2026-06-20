@@ -1,0 +1,111 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+version = "0.1.0"
+license = "MIT"
+authors = ["Saffron Anima"]
+
+# Third-party version pins live here once (the PP-2 dependency-adoption pin list).
+# Member crates pull each dep via `dep.workspace = true`, so versions never drift across
+# crates — the Cargo replacement for the C++ `FetchContent` single-place pin. Each pin is
+# discharged by the area phase that owns the subsystem; the stub crates of phase 1 consume
+# none of these yet (only the inter-crate edges are wired).
+[workspace.dependencies]
+# Vulkan (saffron-rendering) — pinned exactly to 0.38 per the version-churn risk register.
+ash = "=0.38"
+ash-window = "0.13"
+raw-window-handle = "0.6"
+vk-mem = "0.4"
+
+# Window (saffron-window).
+winit = "0.30"
+
+# ECS behind saffron-scene — the PP-4 default, locked by the 03-ecs-and-scene benchmark gate.
+# Wrapped, never named outside saffron-scene, so escalating to bevy_ecs stays a one-crate change.
+hecs = "0.11"
+
+# Math (saffron-geometry and most).
+glam = "0.30"
+
+# Scripting (saffron-script) — Luau VM, vendored.
+mlua = { version = "0.11", features = ["luau", "vendored"] }
+
+# Serde stack — JSON, wire, schema, errors.
+serde = { version = "1.0", features = ["derive"] }
+# `preserve_order` makes `serde_json::Map` insertion-ordered (the `nlohmann::ordered_json`
+# behavior the editor's typed client assumes): result objects emit keys in DTO field order,
+# and the OpenRPC `components.schemas` block emits in registration order, so the codegen
+# reproduces the committed `gen.ts` artifacts byte-for-byte.
+serde_json = { version = "1.0", features = ["preserve_order"] }
+# `schemars_1` so the serde_with adapters carry their `Schema` impls into the schemars 1
+# (draft 2020-12) the control DTOs declare; protocol's `Uuid` newtype pairs the
+# PickFirst<(DisplayFromStr,_)> adapter with a string schema.
+serde_with = { version = "3", features = ["schemars_1"] }
+schemars = "1"
+ts-rs = "10"
+
+# Physics FFI (saffron-physics-sys) — vendored Jolt 5.3.0 via cxx.
+cxx = "1.0"
+cxx-build = "1.0"
+
+# Importers & images (saffron-geometry, saffron-rendering).
+gltf = "1.4"
+tobj = "4.0"
+image = "0.25"
+resvg = "0.44"
+usvg = "0.44"
+tiny-skia = "0.11"
+
+# Syscalls & CLI.
+rustix = "0.38"
+clap = { version = "4", features = ["derive"] }
+# Shell-completion generation for the `sa` CLI, sourced from the same clap `Command`.
+clap_complete = "4"
+
+# Filesystem walk for the asset catalog scan (saffron-assets) — deterministic when sorted.
+walkdir = "2.5"
+
+# GPU struct casts.
+bytemuck = { version = "1", features = ["derive"] }
+
+# Control-protocol blobs.
+base64 = "0.22"
+
+# Error model.
+anyhow = "1"
+thiserror = "2"
+
+# Benchmark harness (dev-only; the ECS go/no-go gate in 03-ecs-and-scene phase 2).
+criterion = "0.7"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+
+# Profile knobs (PP-12 / 01-build-and-toolchain phase 2). These replace the two CMake
+# build types; the old compiler/stdlib/linker pins have no Cargo analogue (the toolchain
+# is the toolbox's rustc) and carry over as nothing — only genuine Cargo knobs remain.
+[profile.dev]
+opt-level = 0
+debug = true
+overflow-checks = true
+
+# Optimize dependencies even in a debug engine build — the idiomatic Rust expression of
+# CMake's implicit "third-party code (glam, Jolt via saffron-physics-sys, ash inlining)
+# is always optimized enough to run". Pinned to 3 so the debug build stays usable.
+[profile.dev.package."*"]
+opt-level = 3
+
+# panic = "unwind" (the default) is kept deliberately: the FFI/shm seams must unwind
+# cleanly across the Rust/C++ boundary and the test suite uses #[should_panic]; abort
+# would defeat both. Recorded so it is not silently flipped for a size win.
+[profile.release]
+opt-level = 3
+debug = true
+panic = "unwind"

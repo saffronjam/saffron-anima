@@ -1,0 +1,8 @@
+fixture: cube.sanim
+bytes: 179
+sha256: c6ac6bbcecca516c2d357732a1c8a54be120003ff16fba371e426bdf0786bc5a
+source: C++ engine-old geometry.cppm saveAnimationToBuffer / SANimHeader / SANimTrackRecord (:406,:1619)
+generator: fixtures/golden/gen/gen_golden.cpp
+commit: d8b4cea
+nlohmann_json: v3.12.0
+compiler: clang++ 21 -std=c++26 (saffron-build toolbox)

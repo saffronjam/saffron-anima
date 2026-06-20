@@ -1,0 +1,2724 @@
+//! The control-plane DTOs: 236 structs + 17 enums transcribed from `control_dto.cppm` in
+//! field declaration order (the positional-CLI-argument / OpenRPC-`required` order).
+//!
+//! Conventions, applied uniformly:
+//! - `#[serde(rename_all = "camelCase")]` on every struct — the C++ field names are already
+//!   camelCase, so the wire keys match verbatim; this only normalizes the Rust `snake_case`
+//!   fields back to the frozen wire spelling.
+//! - `Option<T>` fields carry `skip_serializing_if = "Option::is_none"` so an absent value is
+//!   a *missing key*, not `null` (the C++ `optionalField` behavior).
+//! - The 17 enums are kebab-case strings; an unknown value is a `Deserialize` error.
+//! - The wire-helpers `EntitySelector` / `AssetSelector` and every `Json`-typed field are
+//!   opaque `serde_json::Value` — their shape is owned by the scene component registry, not
+//!   here. `WireUuid` maps to the [`Uuid`](crate::Uuid) newtype.
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
+use ts_rs::TS;
+
+use crate::Uuid;
+
+/// Coercing readers for the wire-contract bool fields (the C++ `readBool`): a bool field on the
+/// wire accepts a JSON bool, a number (`!= 0`), or a string (everything but `"0"`/`"false"`/`"off"`
+/// is true). The `sa` CLI and the editor pass `1`/`0` and `"on"`/`"off"` for toggles, so an
+/// input bool param must accept those forms or the toggle silently no-ops. Applied via
+/// `#[serde(deserialize_with = ...)]` on every *params* bool field; result bools serialize as
+/// plain JSON bools and need no coercion.
+mod coerce {
+    use super::{Deserialize, Deserializer, Value};
+
+    /// Coerce one JSON value to a bool, matching the C++ `readBool`.
+    fn from_value<E: serde::de::Error>(value: &Value) -> Result<bool, E> {
+        match value {
+            Value::Bool(b) => Ok(*b),
+            Value::Number(n) => Ok(n.as_f64().is_some_and(|f| f != 0.0)),
+            Value::String(s) => Ok(!(s == "0" || s == "false" || s == "off")),
+            other => Err(serde::de::Error::custom(format!(
+                "expected a boolean, got {other}"
+            ))),
+        }
+    }
+
+    /// `#[serde(deserialize_with)]` for a required bool field.
+    pub fn boolean<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        from_value(&value)
+    }
+
+    /// `#[serde(deserialize_with, default)]` for an optional bool field.
+    pub fn opt_boolean<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<bool>, D::Error> {
+        match Option::<Value>::deserialize(deserializer)? {
+            Some(Value::Null) | None => Ok(None),
+            Some(value) => from_value(&value).map(Some),
+        }
+    }
+}
+
+/// An opaque entity selector blob (a uuid, a name, or `{}` for the current selection),
+/// resolved by the runtime — not a typed sub-DTO.
+pub type EntitySelector = Value;
+
+/// An opaque asset selector blob (a uuid or a path), resolved by the runtime.
+pub type AssetSelector = Value;
+
+// Wire-helper structs (`EntityRef`, `Vec3`, `Vec4`) and the 17 enums.
+
+/// A `{ x, y, z }` vector on the wire (a JSON object, not an array).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+/// A `{ x, y, z, w }` vector on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Vec4 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+
+/// A resolved entity reference (the selection echo).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EntityRef {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// The `add-entity` preset selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum AddEntityPreset {
+    Empty,
+    Cube,
+    Model,
+    PointLight,
+    SpotLight,
+    DirectionalLight,
+    Camera,
+    ReflectionProbe,
+}
+
+/// What a viewport pick resolved to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum PickKind {
+    Billboard,
+    Mesh,
+}
+
+/// The active gizmo operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum GizmoOpDto {
+    Translate,
+    Rotate,
+    Scale,
+}
+
+/// The gizmo reference frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum GizmoSpaceDto {
+    World,
+    Local,
+}
+
+/// A gizmo pointer-interaction phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum GizmoPointerPhase {
+    Hover,
+    Begin,
+    Drag,
+    End,
+}
+
+/// The anti-aliasing mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum AaModeDto {
+    Off,
+    Fxaa,
+    Taa,
+    Msaa2,
+    Msaa4,
+    Msaa8,
+}
+
+/// The global-illumination mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum GiModeDto {
+    Off,
+    Ddgi,
+}
+
+/// Debug render-output mode (read back via render-stats; transient, not persisted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum ViewModeDto {
+    Lit,
+    Wireframe,
+    Albedo,
+    Normal,
+    Roughness,
+    Metallic,
+    Emissive,
+}
+
+/// The asset slot an `assign-asset` targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum AssetSlotDto {
+    Mesh,
+    Albedo,
+    MetallicRoughness,
+    Normal,
+    Occlusion,
+    Emissive,
+    Height,
+}
+
+/// The surface a screenshot captures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum ScreenshotTargetDto {
+    Viewport,
+    Window,
+}
+
+/// The catalog asset kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum AssetTypeDto {
+    Mesh,
+    Texture,
+    Other,
+    Animation,
+    Material,
+    Model,
+}
+
+/// The profiler capture mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum ProfilerModeDto {
+    Off,
+    Timestamps,
+    PipelineStats,
+}
+
+/// A profile span's lane (CPU vs GPU).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum ProfileLaneDto {
+    Cpu,
+    Gpu,
+}
+
+/// The capture recorder mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum CaptureModeDto {
+    Single,
+    Frames,
+    Rolling,
+}
+
+/// The capture recorder state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum CaptureStateDto {
+    Idle,
+    Arming,
+    Recording,
+    Ready,
+}
+
+/// A performance-alarm severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum AlarmSeverityDto {
+    Info,
+    Warning,
+    Critical,
+}
+
+/// A performance-alarm lifecycle state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum AlarmStateDto {
+    Firing,
+    Resolved,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct PingParams {}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct EmptyParams {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PingResult {
+    pub pong: bool,
+    pub engine: String,
+    pub version: String,
+    pub pid: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RenderStatsDto {
+    pub draw_calls: i32,
+    pub batches: i32,
+    pub instances: i32,
+    pub frame_ms: f32,
+    pub fps: f32,
+    pub gpu_ms: f32,
+    pub cpu_frame_ms: f32,
+    pub gpu_frame_ms: f32,
+    pub cpu_wait_ms: f32,
+    pub triangles: i32,
+    pub descriptor_binds: i32,
+    pub command_buffers: i32,
+    pub queue_submits: i32,
+    pub pipelines_created: i32,
+    pub vram_usage_bytes: u64,
+    pub vram_budget_bytes: u64,
+    pub software_gpu: bool,
+    pub profiler_mode: ProfilerModeDto,
+    pub clustered: bool,
+    pub depth_prepass: bool,
+    pub shadows: bool,
+    pub ibl: bool,
+    pub ssao: bool,
+    pub contact_shadows: bool,
+    pub ssgi: bool,
+    pub ddgi: bool,
+    pub rt_supported: bool,
+    pub rt_shadows: bool,
+    pub restir: bool,
+    pub blas_count: i32,
+    pub pipelines: i32,
+    pub bindless_textures: i32,
+    pub bindless_free: i32,
+    pub hdr: bool,
+    pub exposure_ev: f32,
+    pub aa: AaModeDto,
+    pub view_mode: ViewModeDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RenderPassTimingDto {
+    pub name: String,
+    pub gpu_ms: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RenderPassTimingsDto {
+    pub passes: Vec<RenderPassTimingDto>,
+    pub gpu_total_ms: f32,
+    pub software_gpu: bool,
+    pub profiler_mode: ProfilerModeDto,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProfilerSetModeParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ProfilerModeDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProfilerModeResult {
+    pub mode: ProfilerModeDto,
+    pub timestamps_supported: bool,
+    pub pipeline_stats_supported: bool,
+    pub software_gpu: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PipelineStatsDto {
+    pub input_vertices: u64,
+    pub vertex_invocations: u64,
+    pub clipping_invocations: u64,
+    pub clipping_primitives: u64,
+    pub fragment_invocations: u64,
+    pub compute_invocations: u64,
+    pub pixels: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProfileSpanDto {
+    pub name: String,
+    pub lane: ProfileLaneDto,
+    pub start_ns: u64,
+    pub end_ns: u64,
+    pub parent_index: i32,
+    pub depth: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_stats: Option<PipelineStatsDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProfileCaptureMetadataDto {
+    pub software_gpu: bool,
+    pub correlated: bool,
+    pub device_name: String,
+    pub timestamp_period: f32,
+    pub target_fps: f32,
+    pub mode: ProfilerModeDto,
+    pub filter: String,
+    pub frame_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProfileCaptureDto {
+    pub spans: Vec<ProfileSpanDto>,
+    pub metadata: ProfileCaptureMetadataDto,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CaptureStartParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<CaptureModeDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frames: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub include_cpu: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub include_pipeline_stats: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CaptureStartResult {
+    pub capture_id: u32,
+    pub ack: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CaptureStopResult {
+    pub ready: bool,
+    pub mode: CaptureModeDto,
+    pub frame_count: u32,
+    pub inlined: bool,
+    pub capture: ProfileCaptureDto,
+    pub chrome_trace: String,
+    pub path: String,
+    pub pending: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CaptureStatusResult {
+    pub state: CaptureStateDto,
+    pub captured_frames: u32,
+    pub target_frames: u32,
+    pub mode: CaptureModeDto,
+    pub pipeline_stats_supported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FrameSampleDto {
+    pub frame_index: i64,
+    pub cpu_ms: f32,
+    pub gpu_ms: f32,
+    pub cpu_wait_ms: f32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FrameHistoryParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub samples: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FrameHistoryDto {
+    pub p50_ms: f32,
+    pub p95_ms: f32,
+    pub p99_ms: f32,
+    pub p999_ms: f32,
+    pub max_ms: f32,
+    pub mean_ms: f32,
+    pub stddev_ms: f32,
+    pub stutter_count: i64,
+    pub sample_count: i32,
+    pub budget_ms: f32,
+    pub samples: Vec<FrameSampleDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PerfConfigDto {
+    pub target_fps: f32,
+    pub budget_ms: f32,
+    pub green_budget_frac: f32,
+    pub green_median_mul: f32,
+    pub amber_median_mul: f32,
+    pub frozen_ms: f32,
+    pub vram_warn_frac: f32,
+    pub vram_crit_frac: f32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetPerfConfigParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_fps: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub green_budget_frac: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub green_median_mul: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amber_median_mul: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frozen_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vram_warn_frac: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vram_crit_frac: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AlarmEventDto {
+    pub seq: i64,
+    pub fingerprint: String,
+    pub metric: String,
+    pub pass: String,
+    pub severity: AlarmSeverityDto,
+    pub state: AlarmStateDto,
+    pub value: f32,
+    pub threshold: f32,
+    pub since_frame: i64,
+    pub count: i32,
+    pub duration_ms: f32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DrainAlarmsParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DrainAlarmsResult {
+    pub events: Vec<AlarmEventDto>,
+    pub high_water_seq: i64,
+    pub oldest_seq: i64,
+    pub overflowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScriptStatusResult {
+    pub state: String,
+    pub instances: i32,
+    pub error_high_water: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PhysicsStateResult {
+    pub active: bool,
+    pub body_count: i32,
+    pub dynamic_count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FitColliderParams {
+    pub entity: EntitySelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FitColliderResult {
+    pub entity: Uuid,
+    pub shape: String,
+    pub half_extents: Vec3,
+    pub offset: Vec3,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ContactEventDto {
+    pub seq: i64,
+    pub kind: String,
+    pub entity_a: Uuid,
+    pub entity_b: Uuid,
+    pub sensor: bool,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub tick: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DrainContactsParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DrainContactsResult {
+    pub events: Vec<ContactEventDto>,
+    pub high_water_seq: i64,
+    pub oldest_seq: i64,
+    pub overflowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PhysicsBodyDto {
+    pub entity: Uuid,
+    pub motion: String,
+    pub active: bool,
+    pub position: Vec3,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PhysicsBodiesResult {
+    pub bodies: Vec<PhysicsBodyDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ApplyImpulseParams {
+    pub entity: EntitySelector,
+    pub impulse: Vec3,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ApplyImpulseResult {
+    pub velocity: Vec3,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetKinematicBonesParams {
+    pub entity: EntitySelector,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct KinematicBonesResult {
+    pub entity: Uuid,
+    pub enabled: bool,
+    pub bone_count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MoveCharacterParams {
+    pub entity: EntitySelector,
+    pub velocity: Vec3,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub jump: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MoveCharacterResult {
+    pub position: Vec3,
+    pub on_ground: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RaycastParams {
+    pub origin: Vec3,
+    pub dir: Vec3,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_dist: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShapecastParams {
+    pub origin: Vec3,
+    pub dir: Vec3,
+    pub radius: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_dist: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RaycastResult {
+    pub hit: bool,
+    pub entity: Uuid,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub distance: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EnableRagdollParams {
+    pub entity: EntitySelector,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RagdollResult {
+    pub present: bool,
+    pub active: bool,
+    pub body_weight: f32,
+    pub bones: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetRagdollParams {
+    pub entity: EntitySelector,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_weight: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bone: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GetRagdollParams {
+    pub entity: EntitySelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScriptErrorDto {
+    pub seq: i64,
+    pub entity: Uuid,
+    pub script: String,
+    pub message: String,
+    pub tick: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DrainScriptErrorsParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DrainScriptErrorsResult {
+    pub events: Vec<ScriptErrorDto>,
+    pub high_water_seq: i64,
+    pub oldest_seq: i64,
+    pub overflowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScriptLogDto {
+    pub seq: i64,
+    pub entity: Uuid,
+    pub message: String,
+    pub epoch_ms: i64,
+    pub tick: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DrainScriptLogsParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DrainScriptLogsResult {
+    pub events: Vec<ScriptLogDto>,
+    pub high_water_seq: i64,
+    pub oldest_seq: i64,
+    pub overflowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GetScriptSchemaParams {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScriptFieldDto {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub default_value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GetScriptSchemaResult {
+    pub fields: Vec<ScriptFieldDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetScriptOverrideParams {
+    pub entity: EntitySelector,
+    pub slot: i32,
+    pub name: String,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetScriptOverrideResult {
+    pub script_path: String,
+    pub overrides: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateScriptParams {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateScriptResult {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ActiveAlarmDto {
+    pub fingerprint: String,
+    pub metric: String,
+    pub pass: String,
+    pub severity: AlarmSeverityDto,
+    pub value: f32,
+    pub threshold: f32,
+    pub since_frame: i64,
+    pub count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ActiveAlarmsDto {
+    pub alarms: Vec<ActiveAlarmDto>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetAaParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AaModeDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetAaResult {
+    pub aa: AaModeDto,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetViewModeParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ViewModeDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetViewModeResult {
+    pub view_mode: ViewModeDto,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToggleParams {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetClusteredResult {
+    pub clustered: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetIblResult {
+    pub ibl: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetSsaoResult {
+    pub ssao: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetContactShadowsResult {
+    pub contact_shadows: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetSsgiResult {
+    pub ssgi: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetRtShadowsResult {
+    pub rt_shadows: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetRestirResult {
+    pub restir: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetGiParams {
+    pub mode: GiModeDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetGiResult {
+    pub ddgi: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetShadowsResult {
+    pub shadows: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetSkinningResult {
+    pub skinning: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetDepthPrepassResult {
+    pub depth_prepass: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ViewportNativeInfoResult {
+    pub platform: String,
+    pub transport: String,
+    pub status: String,
+    pub control_socket: String,
+    pub width: i32,
+    pub height: i32,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetViewportSizeParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetViewportSizeResult {
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetActiveViewParams {
+    pub view: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetActiveViewResult {
+    pub view: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProjectInfoDto {
+    pub loaded: bool,
+    pub root: String,
+    pub path: String,
+    pub name: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct NewProjectParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PathParams {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OptionalPathParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ImportModelResult {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub r#type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstantiateModelParams {
+    pub asset: AssetSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExtractSubAssetParams {
+    pub asset: AssetSelector,
+    pub sub_asset: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dest: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ClearExtractionParams {
+    pub asset: AssetSelector,
+    pub sub_asset: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ImportTextureResult {
+    pub texture: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetEntryDto {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub r#type: AssetTypeDto,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rigged: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetList {
+    pub assets: Vec<AssetEntryDto>,
+    pub folders: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScanAssetsResult {
+    pub added: i32,
+    pub removed: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ReimportModelResult {
+    pub updated: i32,
+    pub added: i32,
+    pub removed_from_source: i32,
+    pub skipped: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ReimportModelParams {
+    pub asset: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelInfoParams {
+    pub asset: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelSubAssetDto {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelInfoResult {
+    pub id: Uuid,
+    pub name: String,
+    pub source_path: String,
+    pub source_hash: String,
+    pub material_count: i32,
+    pub has_skin: bool,
+    pub node_count: i32,
+    pub total_bytes: u64,
+    pub sub_assets: Vec<ModelSubAssetDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetReferencesParams {
+    pub asset: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetReferencesResult {
+    pub referenced_by: Vec<String>,
+    pub references: Vec<String>,
+    pub footprint: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CleanCandidateDto {
+    pub id: Uuid,
+    pub path: String,
+    pub category: String,
+    pub bytes: u64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CleanReport {
+    pub candidates: Vec<CleanCandidateDto>,
+    pub reclaimable_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CleanAssetsParams {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub dry_run: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DeleteUnusedParams {
+    pub ids: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub confirm: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DeleteUnusedResult {
+    pub deleted: i32,
+    pub reclaimed_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RenameAssetParams {
+    pub asset: AssetSelector,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetRef {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateAssetFolderParams {
+    pub folder: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RenameAssetFolderParams {
+    pub folder: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DeleteAssetFolderParams {
+    pub folder: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MoveAssetParams {
+    pub asset: AssetSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetUsagesParams {
+    pub asset: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetUsageDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity_name: Option<String>,
+    pub slot: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetUsagesResult {
+    pub usages: Vec<AssetUsageDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetMetadataParams {
+    pub asset: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetMetadataDto {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub r#type: AssetTypeDto,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    pub size_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertex_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triangle_count: Option<u32>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DeleteAssetParams {
+    pub asset: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DeleteAssetResult {
+    pub id: Uuid,
+    pub name: String,
+    pub cleared: Vec<AssetUsageDto>,
+    pub file_deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssignAssetParams {
+    pub entity: EntitySelector,
+    pub slot: AssetSlotDto,
+    pub asset: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialCreateParams {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialCreateResult {
+    pub id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialAssignParams {
+    pub entity: EntitySelector,
+    pub material: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialAssignResult {
+    pub material: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialImportParams {
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialImportResultDto {
+    pub id: Uuid,
+    pub roles: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialRefDto {
+    pub id: Uuid,
+    pub name: String,
+    pub folder: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialListResult {
+    pub materials: Vec<MaterialRefDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialGetParams {
+    pub material: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialGetResult {
+    pub id: Uuid,
+    pub blend: String,
+    pub unlit: bool,
+    pub base_color: Vec4,
+    pub metallic: f32,
+    pub roughness: f32,
+    pub emissive: Vec3,
+    pub emissive_strength: f32,
+    pub albedo_texture: Uuid,
+    pub orm_texture: Uuid,
+    pub normal_texture: Uuid,
+    pub emissive_texture: Uuid,
+    pub height_texture: Uuid,
+    pub graph: Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialUpdateParams {
+    pub material: AssetSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_color: Option<Vec4>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metallic: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emissive: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emissive_strength: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normal_strength: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub albedo_texture: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orm_texture: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normal_texture: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emissive_texture: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_texture: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialUpdateResult {
+    pub id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PreviewRenderParams {
+    pub material: AssetSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PreviewRenderResult {
+    pub png: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialSetGraphParams {
+    pub material: AssetSelector,
+    pub graph: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialSetGraphResult {
+    pub id: Uuid,
+    pub foldable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialCreateInstanceParams {
+    pub parent: AssetSelector,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialSetOverrideParams {
+    pub material: AssetSelector,
+    pub field: String,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialSetOverrideResult {
+    pub id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialCompileParams {
+    pub material: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialCompileResult {
+    pub id: Uuid,
+    pub ok: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MaterialCookResult {
+    pub compiled: u32,
+    pub failed: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssignAssetResult {
+    pub id: Uuid,
+    pub name: String,
+    pub slot: AssetSlotDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PathResult {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScreenshotParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<ScreenshotTargetDto>,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScreenshotResult {
+    pub target: ScreenshotTargetDto,
+    pub path: String,
+    pub pending: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ThumbnailParams {
+    pub asset: AssetSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ThumbnailResult {
+    pub id: Uuid,
+    pub format: String,
+    pub width: i32,
+    pub height: i32,
+    pub base64: String,
+    pub pending: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ThumbnailCacheParams {
+    pub action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ThumbnailCacheResult {
+    pub entries: i32,
+    pub bytes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct QuitResult {
+    pub quitting: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateEntityParams {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EntityParams {
+    pub entity: EntitySelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetParentParams {
+    pub entity: EntitySelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<EntitySelector>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DestroyEntityResult {
+    pub destroyed: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EntityListEntry {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bone: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EntityList {
+    pub entities: Vec<EntityListEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ComponentList {
+    pub components: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ComponentParams {
+    pub entity: EntitySelector,
+    pub component: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AddComponentResult {
+    pub added: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemoveComponentResult {
+    pub removed: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetComponentParams {
+    pub entity: EntitySelector,
+    pub component: String,
+    pub json: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetComponentResult {
+    pub set: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetComponentOrderParams {
+    pub entity: EntitySelector,
+    pub components: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetComponentOrderResult {
+    pub components: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetTransformParams {
+    pub entity: EntitySelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub translation: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<Vec3>,
+    /// Animate the fields toward the given values over ~25ms instead of snapping
+    /// (ignored when preserve-children must rebase the subtree on each write).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub smooth: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetMaterialParams {
+    pub entity: EntitySelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_color: Option<Vec4>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub albedo_texture: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metallic_roughness_texture: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metallic: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emissive: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emissive_strength: Option<f32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub unlit: Option<bool>,
+    /// Target a slot of the entity's MaterialSetComponent instead of its
+    /// MaterialComponent. Out of range is an error; ignored without a MaterialSet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    /// Animate numeric fields toward the given values over ~25ms instead of
+    /// snapping; texture/unlit still apply immediately.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub smooth: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetLightParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<EntitySelector>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intensity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambient: Option<f32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PickParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub u: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PickResult {
+    pub hit: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<PickKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InspectResult {
+    pub id: Uuid,
+    pub name: String,
+    pub components: Value,
+    pub component_order: Vec<String>,
+}
+
+/// The scene environment block on the wire — the bare environment object (the C++ `EnvironmentDto`
+/// whose schema is `$ref Environment`), not a wrapper. `#[serde(transparent)]` so the single
+/// `value` field serializes as the object itself: `set-environment`/`get-environment`/
+/// `set-atmosphere` reply with `{ skyMode, …, atmosphere: {…} }`, never `{ value: {…} }`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(transparent)]
+#[ts(export)]
+pub struct EnvironmentDto {
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetEnvironmentParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sky_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clear_color: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sky_texture: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sky_intensity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sky_rotation: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<f32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub visible: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub use_sky_for_ambient: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambient_color: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambient_intensity: Option<f32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetAtmosphereParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json: Option<Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planet_radius: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub atmosphere_height: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rayleigh_scattering: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rayleigh_scale_height: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mie_scattering: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mie_scale_height: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mie_anisotropy: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ozone_absorption: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sun_disk_angular_radius: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sun_disk_intensity: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SelectionResult {
+    pub selection_version: i32,
+    pub scene_version: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<EntityRef>,
+    pub play_state: String,
+    pub play_version: i32,
+    pub animation_version: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayStateResult {
+    pub state: String,
+    pub play_version: i32,
+    pub scene_version: i32,
+    pub has_primary_camera: bool,
+    pub animation_version: i32,
+    pub preview_asset: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AnimationClipDto {
+    pub id: Uuid,
+    pub name: String,
+    pub duration: f32,
+    pub tracks: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BoneDto {
+    pub index: i32,
+    pub name: String,
+    pub parent: i32,
+    pub joint: bool,
+}
+
+/// What a model can do — a flat, additive capability struct read once when the asset editor
+/// opens. A new capability appends a field; existing readers ignore unknown fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetCapabilitiesDto {
+    pub mesh_count: i32,
+    pub material_count: i32,
+    pub node_count: i32,
+    pub has_rig: bool,
+    pub bone_count: i32,
+    pub clip_count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GetAssetModelParams {
+    pub asset: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetModelResult {
+    pub mesh: Uuid,
+    pub name: String,
+    pub capabilities: AssetCapabilitiesDto,
+    pub bones: Vec<BoneDto>,
+    pub clips: Vec<AnimationClipDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EnterAssetPreviewParams {
+    pub asset: AssetSelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BoneEntityDto {
+    pub index: i32,
+    pub entity: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetPreviewResult {
+    pub root_entity: Uuid,
+    pub bones: Vec<BoneEntityDto>,
+    pub target: Vec3,
+    pub distance: f32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ListClipsParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<AssetSelector>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ListClipsResult {
+    pub clips: Vec<AnimationClipDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayAnimationParams {
+    pub entity: EntitySelector,
+    pub clip: AssetSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#loop: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blend: Option<f32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub paused: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SeekAnimationParams {
+    pub entity: EntitySelector,
+    pub time: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seek_blend: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetAnimationLoopParams {
+    pub entity: EntitySelector,
+    pub wrap: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetAnimationPlayingParams {
+    pub entity: EntitySelector,
+    #[serde(deserialize_with = "coerce::boolean")]
+    pub playing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AnimationStateParams {
+    pub entity: EntitySelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AnimationStateResult {
+    pub clip: Uuid,
+    pub clip_name: String,
+    pub duration: f32,
+    pub time: f32,
+    pub playing: bool,
+    pub wrap: String,
+    pub speed: f32,
+    pub animation_version: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetSkeletonOverlayParams {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub show: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub axes: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub joint_size: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SkeletonOverlayResult {
+    pub show: bool,
+    pub axes: bool,
+    pub joint_size: f32,
+    pub highlight_joint: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DebugOverlaysParams {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub bounds: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub scene_aabb: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub light_volumes: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub grid: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub colliders: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DebugOverlaysResult {
+    pub bounds: bool,
+    pub scene_aabb: bool,
+    pub light_volumes: bool,
+    pub grid: bool,
+    pub colliders: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetSkeletonHighlightParams {
+    pub joint: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PickSkeletonJointParams {
+    pub u: f32,
+    pub v: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius_px: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PickSkeletonJointResult {
+    pub found: bool,
+    pub node_index: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetAssetPreviewOptionsParams {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub floor: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetPreviewOptionsResult {
+    pub floor: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetFootIkParams {
+    pub entity: EntitySelector,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ground_height: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GetFootIkParams {
+    pub entity: EntitySelector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FootIkResult {
+    pub enabled: bool,
+    pub ground_height: f32,
+    pub chains: i32,
+}
+
+/// An entity's composed world-space transform (the cached WorldTransformComponent), so a
+/// caller can read a bone's world position — e.g. to verify foot IK plants on the ground.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WorldTransformResult {
+    pub translation: Vec3,
+    pub scale: Vec3,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StepParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frames: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DeselectResult {
+    pub selection_version: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AddEntityParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<AddEntityPreset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RenameEntityParams {
+    pub entity: EntitySelector,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetComponentFieldParams {
+    pub entity: EntitySelector,
+    pub component: String,
+    pub field: String,
+    pub value: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetComponentFieldResult {
+    pub set: String,
+    pub field: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EditorCamera {
+    pub position: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub fov: f32,
+    pub near: f32,
+    pub far: f32,
+    pub move_speed: f32,
+    pub look_speed: f32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetCameraParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<Vec3>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yaw: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fov: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub near: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub far: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub move_speed: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub look_speed: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GizmoState {
+    pub op: GizmoOpDto,
+    pub space: GizmoSpaceDto,
+    pub preserve_children: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetGizmoParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub op: Option<GizmoOpDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space: Option<GizmoSpaceDto>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub preserve_children: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GizmoPointerParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<GizmoPointerPhase>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GizmoPointerResult {
+    pub hovered: String,
+    pub dragging: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FlyInputParams {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub look_dx: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub look_dy: Option<f32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub forward: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub back: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub left: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub right: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub up: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub down: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FlyInputResult {
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScriptInputParams {
+    pub keys: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mouse_buttons: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mouse_x: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mouse_y: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScriptInputResult {
+    pub keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetProbesParams {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "coerce::opt_boolean"
+    )]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetProbesResult {
+    pub probes: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecaptureProbesResult {
+    pub marked: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProbeRef {
+    pub slot: u32,
+    pub entity: Uuid,
+    pub origin: Vec3,
+    pub influence_radius: f32,
+    pub intensity: f32,
+    pub box_projection: bool,
+    pub valid: bool,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ListProbesResult {
+    pub enabled: bool,
+    pub count: u32,
+    pub probes: Vec<ProbeRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetExposureParams {
+    pub ev: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetExposureResult {
+    pub exposure_ev: f32,
+}
+
+#[cfg(test)]
+mod coerce_tests {
+    use super::{SetAnimationPlayingParams, ToggleParams};
+
+    #[test]
+    fn toggle_enabled_coerces_number_string_and_bool() {
+        // The C++ `readBool` contract: a bool param accepts a JSON bool, a number (`!= 0`),
+        // or a string (anything but `"0"`/`"false"`/`"off"` is true). This is the form the
+        // `sa` CLI / e2e harness send via positional `args` (`{ "enabled": 1 }`).
+        let one: ToggleParams =
+            serde_json::from_value(serde_json::json!({ "enabled": 1 })).unwrap();
+        assert_eq!(one.enabled, Some(true));
+        let zero: ToggleParams =
+            serde_json::from_value(serde_json::json!({ "enabled": 0 })).unwrap();
+        assert_eq!(zero.enabled, Some(false));
+        let on: ToggleParams =
+            serde_json::from_value(serde_json::json!({ "enabled": "on" })).unwrap();
+        assert_eq!(on.enabled, Some(true));
+        let off: ToggleParams =
+            serde_json::from_value(serde_json::json!({ "enabled": "off" })).unwrap();
+        assert_eq!(off.enabled, Some(false));
+        let real: ToggleParams =
+            serde_json::from_value(serde_json::json!({ "enabled": true })).unwrap();
+        assert_eq!(real.enabled, Some(true));
+        // Absent ⇒ None (the optional-field default), not an error.
+        let absent: ToggleParams = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(absent.enabled, None);
+    }
+
+    #[test]
+    fn required_bool_param_coerces_a_number() {
+        let p: SetAnimationPlayingParams =
+            serde_json::from_value(serde_json::json!({ "entity": "rig", "playing": 1 })).unwrap();
+        assert!(p.playing);
+    }
+}

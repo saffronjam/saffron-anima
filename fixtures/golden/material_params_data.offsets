@@ -1,0 +1,14 @@
+struct MaterialParamsData size=96 align=16
+offset baseColor 0
+offset pbr 16
+offset emissive 32
+offset uv 48
+offset tex0 64
+offset tex1 80
+hexdump:
+cd cc 4c 3f cd cc cc 3e cd cc 4c 3e 00 00 80 3f 
+00 00 80 3e 33 33 33 3f 00 00 80 3f 00 00 00 3f 
+cd cc cc 3d 00 00 00 00 00 00 00 00 cd cc 4c 3d 
+00 00 00 40 00 00 00 40 00 00 00 00 00 00 00 00 
+03 00 00 00 00 00 00 00 05 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 00 00 00 00 07 00 00 00 

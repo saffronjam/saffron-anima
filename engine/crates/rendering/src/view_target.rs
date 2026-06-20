@@ -1,0 +1,1741 @@
+//! The per-view offscreen render targets: the scene color (RGBA16F) and depth (D32)
+//! images the scene + depth-prepass passes write, plus the thin G-buffer + screen-space
+//! effect chain (AO / contact / SSGI maps + history + the per-view descriptor sets that
+//! bind them), all sized to the viewport.
+//!
+//! The C++ `ViewTargets` (`renderer_types.cppm:1265`) carried the full screen-space
+//! effect chain for every editor pane. The screen-space images + their per-view sets
+//! live here (not on the device-shared [`crate::ssao::Ssao`]) so a view switch never
+//! binds another view's images — README §2's per-view borrow split applied to compute
+//! sets. The active view's targets are borrowed `&mut self.views[active]` once per
+//! frame with `&Device` separate (the borrow split that makes the C++ `Image&` +
+//! sibling-mutate pattern legal).
+
+use ash::vk;
+
+use crate::descriptors::Descriptors;
+use crate::frame::MAX_FRAMES_IN_FLIGHT;
+use crate::pipelines::{DEPTH_FORMAT, OFFSCREEN_COLOR_FORMAT};
+use crate::resources::{Buffer, Image, ImageDesc};
+use crate::restir::RestirView;
+use crate::ssao::{AO_FORMAT, G_NORMAL_FORMAT, Ssao, mesh_set_layout};
+use crate::{Device, Result};
+
+/// One frame-in-flight's viewport shm-publish capture target: a BGRA8 image the
+/// post-processed offscreen blits into (the GPU does the `RGBA16F`→BGRA8 conversion) and
+/// a host-visible mapped staging buffer the BGRA8 is copied into. The blit + copy are
+/// recorded into the *frame's* command buffer, so the frame's in-flight fence covers the
+/// readback — no per-slot fence, no separate submit, no synchronous stall. `valid` marks
+/// that a readback was recorded into this slot, so a slot whose fence has signalled holds
+/// a completed frame's bytes (the C++ `ShmPublishSlot`).
+pub struct ShmCaptureSlot {
+    /// The `B8G8R8A8_UNORM` blit destination (TRANSFER_DST + TRANSFER_SRC, optimal).
+    pub image: Image,
+    /// The host-visible + mapped staging buffer holding the tightly-packed BGRA8 result.
+    pub staging: Buffer,
+    /// The extent the image + staging were sized for; a mismatch triggers a recreate.
+    pub extent: vk::Extent2D,
+    /// True once a readback was recorded into this slot — its staging holds a frame's
+    /// bytes once the slot's frame fence has signalled.
+    pub valid: bool,
+}
+
+/// The per-frame-in-flight ring of [`ShmCaptureSlot`]s for one view. Frame N records its
+/// readback into `slots[N % MAX_FRAMES_IN_FLIGHT]`; the bytes are published from that same
+/// slot `MAX_FRAMES_IN_FLIGHT` frames later, after its frame fence has signalled — so a
+/// frame's copy never clobbers a still-being-read staging buffer (pipelined, the C++
+/// `ShmPublish::slots`). Created lazily on the first publish, recreated only on an extent
+/// change, so the steady-state shm path allocates nothing per frame.
+#[derive(Default)]
+pub struct ShmCapture {
+    /// One capture slot per frame-in-flight; `None` until lazily created.
+    pub slots: [Option<ShmCaptureSlot>; MAX_FRAMES_IN_FLIGHT],
+}
+
+/// One editor pane's viewport-sized scene targets + screen-space effect chain.
+///
+/// `offscreen` is the linear-HDR scene color shown in the Viewport panel — created
+/// `COLOR_ATTACHMENT | SAMPLED | TRANSFER_SRC | STORAGE` so the scene pass writes it,
+/// post passes sample/store it, and capture reads it back. `depth` is the scene depth
+/// the depth-prepass lays down and the scene pass tests against. The G-buffer
+/// (`g_normal`/`g_depth`) + the AO/contact/SSGI maps feed the screen-space chain; the
+/// per-view descriptor sets (`gtao_set`, …, `mesh_set`) bind this view's images so a
+/// view switch never aliases another view's targets. `generation` bumps on every
+/// recreate so consumers (descriptor rewrites) can detect a resize.
+pub struct ViewTarget {
+    /// The scene color render target (linear HDR, RGBA16F).
+    pub offscreen: Image,
+    /// The scene depth buffer (D32), sized to the viewport.
+    pub depth: Image,
+
+    /// The thin G-buffer: view normal (rgb) + view-Z (.a), the screen-space chain's
+    /// shared input. `None` until the screen-space targets are built.
+    pub g_normal: Option<Image>,
+    /// The G-buffer prepass's own depth scratch.
+    pub g_depth: Option<Image>,
+    /// The raw GTAO trace output (r8).
+    pub ao_raw: Option<Image>,
+    /// The denoised AO map the scene samples (r8).
+    pub ao_map: Option<Image>,
+    /// The directional contact-shadow map the scene samples (r8).
+    pub contact_map: Option<Image>,
+    /// The raw one-bounce SSGI trace output (rgba16f).
+    pub ssgi_map: Option<Image>,
+    /// `ssgi_map` after the bilateral blur — what the scene reads (rgba16f).
+    pub ssgi_denoised: Option<Image>,
+    /// `ssgi_denoised` after temporal accumulation (rgba16f). Sampled once motion is on.
+    pub ssgi_resolved: Option<Image>,
+    /// The persistent previous-frame linear-HDR color SSGI gathers from (rgba16f).
+    pub prev_color: Option<Image>,
+    /// SSGI temporal history (rgba16f), ping-pong sharing TAA's parity.
+    pub ssgi_history: [Option<Image>; 2],
+
+    /// The screen-space motion-vector target (rg16f): per-pixel `prevUv - curUv`, built
+    /// when TAA or SSGI is on. `None` until the temporal targets are built.
+    pub motion: Option<Image>,
+    /// The motion prepass's own depth scratch (D32).
+    pub motion_depth: Option<Image>,
+    /// TAA's two ping-pong history color images (display-format rgba16f), built when TAA
+    /// is on.
+    pub history: [Option<Image>; 2],
+    /// The multisampled scene color + depth the scene renders into when MSAA is active
+    /// (resolved into `offscreen` / `depth`). `None` when MSAA is off.
+    pub msaa_color: Option<Image>,
+    /// The multisampled scene depth (resolve-into-`depth`).
+    pub msaa_depth: Option<Image>,
+    /// The 1× scratch the scene renders into when FXAA or TAA is active (a compute pass
+    /// then resolves it into `offscreen`). `None` when neither is on.
+    pub scratch: Option<Image>,
+
+    /// This frame writes `ssgi_history[history_index]`, reads the other.
+    pub history_index: usize,
+    /// False on the first frame / after a resize (no temporal history yet).
+    pub history_valid: bool,
+
+    /// Last frame's camera viewProj (this view's own), driving the motion prepass's camera
+    /// reprojection. Invalid until the first frame stores one. Per-view so a re-activated
+    /// view reprojects against its own last frame (the C++ `prevViewProj`).
+    pub prev_view_proj: saffron_geometry::glam::Mat4,
+    /// False until the first frame stores `prev_view_proj`.
+    pub prev_view_proj_valid: bool,
+
+    /// gtao: g_normal + ao_raw (compute2).
+    pub gtao_set: vk::DescriptorSet,
+    /// ao_blur: ao_raw + g_normal + ao_map (compute3).
+    pub ao_blur_set: vk::DescriptorSet,
+    /// contact: g_normal + contact_map (compute2).
+    pub contact_set: vk::DescriptorSet,
+    /// ssgi: g_normal + prev_color + ssgi_map (compute3).
+    pub ssgi_set: vk::DescriptorSet,
+    /// ssgi_blur: ssgi_map + g_normal + ssgi_denoised (compute3).
+    pub ssgi_blur_set: vk::DescriptorSet,
+    /// copy_color: offscreen + prev_color (compute2).
+    pub copy_color_set: vk::DescriptorSet,
+    /// ssgi-accum (taa-shape: 3 samplers + 2 storage), ping-pong by `history_index`.
+    pub ssgi_accum_sets: [vk::DescriptorSet; 2],
+    /// fxaa: scratch source sampler + offscreen storage (compute2-shape, fxaa layout).
+    pub fxaa_set: vk::DescriptorSet,
+    /// taa (taa-shape: 3 samplers scratch/history/motion + 2 storage offscreen/history),
+    /// ping-pong by `history_index`.
+    pub taa_sets: [vk::DescriptorSet; 2],
+    /// set 4 in the mesh pipeline: ao_map + contact_map + resolved SSGI.
+    pub mesh_set: vk::DescriptorSet,
+    /// The mandatory tonemap set: binding 0 = the offscreen color as a storage image
+    /// (GENERAL). Rewritten when the offscreen recreates. The C++ `tonemapSet`.
+    pub tonemap_set: vk::DescriptorSet,
+
+    /// This view's ReSTIR DI reservoirs + radiance + sets + temporal state, sized to the
+    /// viewport. Rides alongside the view so two views never read each other's reservoirs
+    /// (README §2). Inert on a software device. The C++ `restirViews[ViewId]`.
+    pub restir: RestirView,
+
+    /// The render size the UI panel last requested for this view (device pixels), `0` until
+    /// the view has been sized at least once. A view's desired size is set out-of-band (the
+    /// `set-viewport-size` control command, the host window resize); the offscreen is
+    /// recreated to match. Read to tell whether a not-yet-shown view (the asset-preview pane
+    /// before it is opened) has been seeded. The C++ `ViewTargets::desiredWidth`.
+    pub desired_width: u32,
+    /// The render height the UI panel last requested for this view. See [`ViewTarget::desired_width`].
+    pub desired_height: u32,
+
+    /// Bumped whenever the targets are recreated (a resize).
+    pub generation: u32,
+
+    /// The per-frame-in-flight BGRA8 shm-publish capture ring, allocated lazily on the
+    /// first shm readback and recreated only on an extent change. Empty until the view is
+    /// first published (the asset-preview pane before it is shown never allocates one). The
+    /// [`Image`]/[`Buffer`] slots Drop at renderer teardown after `wait_idle`.
+    pub shm_capture: ShmCapture,
+}
+
+impl ViewTarget {
+    /// Creates the offscreen color + depth images at `(width, height)`. The
+    /// screen-space images + sets are not built here — [`ViewTarget::allocate_screen_space_sets`]
+    /// allocates the per-view sets once, and [`ViewTarget::build_screen_space`] (re)creates
+    /// the images + writes the sets (at init + every resize).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Vk`] if either image/view cannot be created.
+    pub fn new(device: &Device, width: u32, height: u32) -> Result<Self> {
+        let extent = vk::Extent2D { width, height };
+        let resources = device.resources();
+
+        let offscreen = Image::new(
+            resources,
+            &ImageDesc::color_2d(
+                extent,
+                OFFSCREEN_COLOR_FORMAT,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::STORAGE,
+            ),
+        )?;
+
+        let depth_desc = ImageDesc {
+            extent,
+            format: DEPTH_FORMAT,
+            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::DEPTH,
+            view_type: vk::ImageViewType::TYPE_2D,
+            mip_levels: 1,
+            array_layers: 1,
+            samples: vk::SampleCountFlags::TYPE_1,
+        };
+        let depth = Image::new(resources, &depth_desc)?;
+
+        Ok(Self {
+            offscreen,
+            depth,
+            g_normal: None,
+            g_depth: None,
+            ao_raw: None,
+            ao_map: None,
+            contact_map: None,
+            ssgi_map: None,
+            ssgi_denoised: None,
+            ssgi_resolved: None,
+            prev_color: None,
+            ssgi_history: [None, None],
+            motion: None,
+            motion_depth: None,
+            history: [None, None],
+            msaa_color: None,
+            msaa_depth: None,
+            scratch: None,
+            history_index: 0,
+            history_valid: false,
+            prev_view_proj: saffron_geometry::glam::Mat4::IDENTITY,
+            prev_view_proj_valid: false,
+            gtao_set: vk::DescriptorSet::null(),
+            ao_blur_set: vk::DescriptorSet::null(),
+            contact_set: vk::DescriptorSet::null(),
+            ssgi_set: vk::DescriptorSet::null(),
+            ssgi_blur_set: vk::DescriptorSet::null(),
+            copy_color_set: vk::DescriptorSet::null(),
+            ssgi_accum_sets: [vk::DescriptorSet::null(); 2],
+            fxaa_set: vk::DescriptorSet::null(),
+            taa_sets: [vk::DescriptorSet::null(); 2],
+            mesh_set: vk::DescriptorSet::null(),
+            tonemap_set: vk::DescriptorSet::null(),
+            restir: RestirView::new(),
+            desired_width: width,
+            desired_height: height,
+            generation: 1,
+            shm_capture: ShmCapture::default(),
+        })
+    }
+
+    /// Ensures frame slot `slot`'s BGRA8 shm-capture target exists at `extent`, (re)creating
+    /// it on an extent change (the C++ `ensureShmPublishSlot`). The caller has waited this
+    /// slot's frame fence, so the previous target is idle and freed when replaced; recreating
+    /// drops `valid` (no completed bytes at the new size yet). Returns [`crate::Error::Vk`]
+    /// if the device lacks BLIT_SRC on the offscreen format or BLIT_DST on BGRA8 (optimal
+    /// tiling), or any allocation fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Vk`] on an unsupported blit format or a failing allocation.
+    pub fn ensure_shm_capture(
+        &mut self,
+        device: &Device,
+        slot: usize,
+        extent: vk::Extent2D,
+    ) -> Result<()> {
+        if let Some(capture) = self.shm_capture.slots[slot].as_ref()
+            && capture.extent == extent
+        {
+            return Ok(());
+        }
+        require_shm_blit_support(device, self.offscreen.format)?;
+
+        let resources = device.resources();
+        // No view: a TRANSFER-only image cannot back an image view, and the blit/copy
+        // address it by handle + layout, never through a view.
+        let image = Image::new_no_view(
+            resources,
+            &ImageDesc::color_2d(
+                extent,
+                vk::Format::B8G8R8A8_UNORM,
+                vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
+            ),
+        )?;
+        let bytes = vk::DeviceSize::from(extent.width) * vk::DeviceSize::from(extent.height) * 4;
+        let staging = Buffer::new(
+            resources,
+            bytes,
+            vk::BufferUsageFlags::TRANSFER_DST,
+            &vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::Auto,
+                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM
+                    | vk_mem::AllocationCreateFlags::MAPPED,
+                ..Default::default()
+            },
+        )?;
+        self.shm_capture.slots[slot] = Some(ShmCaptureSlot {
+            image,
+            staging,
+            extent,
+            valid: false,
+        });
+        Ok(())
+    }
+
+    /// Teardown hook for the shm-capture ring. The slots own no raw handles beyond their
+    /// [`Image`]/[`Buffer`] (which Drop), so this only drops the ring; kept as the explicit
+    /// teardown seam the renderer calls under `wait_idle` (the C++ `destroyShmPublishSlots`).
+    pub fn destroy(&mut self, _device: &Device) {
+        self.shm_capture = ShmCapture::default();
+    }
+
+    /// Allocates this view's per-view screen-space descriptor sets once (the C++
+    /// init loop over `renderer.views`). The sets are rewritten by
+    /// [`ViewTarget::build_screen_space`] whenever the images recreate; allocating
+    /// them once (not per resize) avoids churning the pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Vk`] if any `vkAllocateDescriptorSets` fails.
+    pub fn allocate_screen_space_sets(
+        &mut self,
+        descriptors: &Descriptors,
+        ssao: &Ssao,
+    ) -> Result<()> {
+        self.gtao_set = descriptors.allocate_set(ssao.compute2_layout())?;
+        self.ao_blur_set = descriptors.allocate_set(ssao.compute3_layout())?;
+        self.contact_set = descriptors.allocate_set(ssao.compute2_layout())?;
+        self.ssgi_set = descriptors.allocate_set(ssao.compute3_layout())?;
+        self.ssgi_blur_set = descriptors.allocate_set(ssao.compute3_layout())?;
+        self.copy_color_set = descriptors.allocate_set(ssao.compute2_layout())?;
+        self.ssgi_accum_sets = [
+            descriptors.allocate_set(descriptors.taa_set_layout())?,
+            descriptors.allocate_set(descriptors.taa_set_layout())?,
+        ];
+        self.fxaa_set = descriptors.allocate_set(descriptors.fxaa_set_layout())?;
+        self.taa_sets = [
+            descriptors.allocate_set(descriptors.taa_set_layout())?,
+            descriptors.allocate_set(descriptors.taa_set_layout())?,
+        ];
+        self.mesh_set = descriptors.allocate_set(mesh_set_layout(descriptors))?;
+        self.tonemap_set = descriptors.allocate_set(descriptors.tonemap_set_layout())?;
+        Ok(())
+    }
+
+    /// (Re)creates the screen-space images at the current viewport extent and writes
+    /// every per-view set to bind them, transitioning the mesh-sampled maps + prevColor
+    /// to `SHADER_READ_ONLY_OPTIMAL` so set 4 is valid even before the passes first run
+    /// (each read is gated by its enable flag in the übershader). Resets the SSGI
+    /// history validity (a resize invalidates the reprojection). The C++
+    /// `recreateSsaoTargets` + `refreshSsaoViewSets`. `ssao` supplies the device-shared
+    /// nearest G-buffer sampler the set writes bind.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Vk`] for any failing image creation or init transition.
+    pub fn build_screen_space(
+        &mut self,
+        device: &Device,
+        descriptors: &Descriptors,
+        ssao: &Ssao,
+    ) -> Result<()> {
+        let extent = self.offscreen.extent;
+        if extent.width == 0 || extent.height == 0 {
+            return Ok(());
+        }
+        let resources = device.resources();
+
+        let storage_sampled = vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::STORAGE;
+        // The G-buffer is a color attachment + sampled only (never a storage image).
+        let g_normal = Image::new(
+            resources,
+            &ImageDesc::color_2d(
+                extent,
+                G_NORMAL_FORMAT,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            ),
+        )?;
+        let g_depth = Image::new(
+            resources,
+            &ImageDesc {
+                extent,
+                format: DEPTH_FORMAT,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::DEPTH,
+                view_type: vk::ImageViewType::TYPE_2D,
+                mip_levels: 1,
+                array_layers: 1,
+                samples: vk::SampleCountFlags::TYPE_1,
+            },
+        )?;
+        let ao_raw = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, AO_FORMAT, storage_sampled),
+        )?;
+        let ao_map = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, AO_FORMAT, storage_sampled),
+        )?;
+        let contact_map = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, AO_FORMAT, storage_sampled),
+        )?;
+        let ssgi_map = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, G_NORMAL_FORMAT, storage_sampled),
+        )?;
+        let ssgi_denoised = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, G_NORMAL_FORMAT, storage_sampled),
+        )?;
+        let ssgi_resolved = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, G_NORMAL_FORMAT, storage_sampled),
+        )?;
+        let mut prev_color = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, OFFSCREEN_COLOR_FORMAT, storage_sampled),
+        )?;
+        let mut ssgi_history_0 = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, G_NORMAL_FORMAT, storage_sampled),
+        )?;
+        let mut ssgi_history_1 = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, G_NORMAL_FORMAT, storage_sampled),
+        )?;
+        let mut ao_map = ao_map;
+        let mut contact_map = contact_map;
+        let mut ssgi_map = ssgi_map;
+        let mut ssgi_denoised = ssgi_denoised;
+        let mut ssgi_resolved = ssgi_resolved;
+
+        // Transition the mesh-sampled maps + prevColor + the SSGI history to
+        // ShaderReadOnly so their descriptors are valid even before the passes run (the
+        // shader gates each read), and so the SSGI / mesh samplers + the graph's seed
+        // layout agree. The C++ one-time init transition in `recreateSsaoTargets`. The
+        // storage-only scratch (ao_raw, ssgi_map written first by their producing pass)
+        // stay UNDEFINED until the graph transitions them — except ssgi_map, also read
+        // as a sampler by ssgi_blur, so it is seeded too.
+        let read_only: [&Image; 8] = [
+            &ao_map,
+            &contact_map,
+            &ssgi_map,
+            &ssgi_denoised,
+            &ssgi_resolved,
+            &prev_color,
+            &ssgi_history_0,
+            &ssgi_history_1,
+        ];
+        initialize_screen_space_layouts(device, &read_only)?;
+        for image in [
+            &mut ao_map,
+            &mut contact_map,
+            &mut ssgi_map,
+            &mut ssgi_denoised,
+            &mut ssgi_resolved,
+            &mut prev_color,
+            &mut ssgi_history_0,
+            &mut ssgi_history_1,
+        ] {
+            image.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        }
+
+        self.g_normal = Some(g_normal);
+        self.g_depth = Some(g_depth);
+        self.ao_raw = Some(ao_raw);
+        self.ao_map = Some(ao_map);
+        self.contact_map = Some(contact_map);
+        self.ssgi_map = Some(ssgi_map);
+        self.ssgi_denoised = Some(ssgi_denoised);
+        self.ssgi_resolved = Some(ssgi_resolved);
+        self.prev_color = Some(prev_color);
+        self.ssgi_history = [Some(ssgi_history_0), Some(ssgi_history_1)];
+        // A resize invalidates the temporal reprojection; the next frame re-seeds.
+        self.history_valid = false;
+        self.history_index = 0;
+
+        self.write_screen_space_sets(device, descriptors, ssao.nearest_sampler());
+        Ok(())
+    }
+
+    /// (Re)creates the AA targets for the active mode — the motion-vector target + its
+    /// depth scratch (built when TAA *or* SSGI is on, since both need it), TAA's two
+    /// ping-pong history images (when TAA is on), the FXAA/TAA 1× scratch (when either is
+    /// on), and the MSAA multisampled scene color + depth (when MSAA is on) — then rewrites
+    /// the FXAA + TAA sets and repoints the ssgi-accum binding 2 + mesh set-4 SSGI sampler
+    /// for the new mode. Resets the temporal validity (a mode change / resize invalidates
+    /// reprojection). Call after [`ViewTarget::build_screen_space`] (it depends on the
+    /// freshly built SSGI maps) at init, every resize, and every AA change. The C++
+    /// `recreateMsaaTargets` + `recreateFxaaTarget` + `recreateTaaTargets`
+    /// (`renderer_detail.cppm:1098`/`:1142`/`:2423`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Vk`] for any failing image creation or init transition.
+    pub fn build_aa_targets(
+        &mut self,
+        device: &Device,
+        descriptors: &Descriptors,
+        aa: crate::Aa,
+    ) -> Result<()> {
+        let extent = self.offscreen.extent;
+        // Drop the previous mode's targets; rebuilt below for the active mode.
+        self.motion = None;
+        self.motion_depth = None;
+        self.history = [None, None];
+        self.scratch = None;
+        self.msaa_color = None;
+        self.msaa_depth = None;
+        // A mode change / resize invalidates the temporal reprojection + ping-pong parity.
+        self.history_valid = false;
+        self.history_index = 0;
+        self.prev_view_proj_valid = false;
+        if extent.width == 0 || extent.height == 0 {
+            return Ok(());
+        }
+        let resources = device.resources();
+        let storage_sampled = vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::STORAGE;
+
+        // The motion target is built whenever the screen-space chain exists (the C++
+        // `recreateTaaTargets` builds it unconditionally): both TAA and SSGI reproject
+        // through it, and which one runs is gated per frame, not by the target's existence.
+        let need_motion = self.ssgi_resolved.is_some();
+        if need_motion {
+            self.motion = Some(Image::new(
+                resources,
+                &ImageDesc::color_2d(
+                    extent,
+                    crate::MOTION_FORMAT,
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                ),
+            )?);
+            self.motion_depth = Some(Image::new(
+                resources,
+                &ImageDesc {
+                    extent,
+                    format: DEPTH_FORMAT,
+                    usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                    aspect: vk::ImageAspectFlags::DEPTH,
+                    view_type: vk::ImageViewType::TYPE_2D,
+                    mip_levels: 1,
+                    array_layers: 1,
+                    samples: vk::SampleCountFlags::TYPE_1,
+                },
+            )?);
+        }
+
+        // TAA's two display-format ping-pong history images (storage + sampled).
+        if aa.taa() {
+            let mut history_0 = Image::new(
+                resources,
+                &ImageDesc::color_2d(extent, OFFSCREEN_COLOR_FORMAT, storage_sampled),
+            )?;
+            let mut history_1 = Image::new(
+                resources,
+                &ImageDesc::color_2d(extent, OFFSCREEN_COLOR_FORMAT, storage_sampled),
+            )?;
+            // The history images rest ShaderReadOnly so their sampler bindings are valid
+            // before the first TAA write (`history_valid` gates the actual blend).
+            initialize_screen_space_layouts(device, &[&history_0, &history_1])?;
+            history_0.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            history_1.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            self.history = [Some(history_0), Some(history_1)];
+        }
+
+        // The 1× scratch FXAA + TAA both render the scene into.
+        if aa.fxaa() || aa.taa() {
+            self.scratch = Some(Image::new(
+                resources,
+                &ImageDesc::color_2d(
+                    extent,
+                    OFFSCREEN_COLOR_FORMAT,
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT
+                        | vk::ImageUsageFlags::SAMPLED
+                        | vk::ImageUsageFlags::TRANSFER_SRC,
+                ),
+            )?);
+        }
+
+        // The MSAA multisampled scene color + depth (resolved into offscreen / depth).
+        if aa.msaa() {
+            self.msaa_color = Some(Image::new(
+                resources,
+                &ImageDesc {
+                    extent,
+                    format: OFFSCREEN_COLOR_FORMAT,
+                    usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    view_type: vk::ImageViewType::TYPE_2D,
+                    mip_levels: 1,
+                    array_layers: 1,
+                    samples: aa.sample_count(),
+                },
+            )?);
+            self.msaa_depth = Some(Image::new(
+                resources,
+                &ImageDesc {
+                    extent,
+                    format: DEPTH_FORMAT,
+                    usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                    aspect: vk::ImageAspectFlags::DEPTH,
+                    view_type: vk::ImageViewType::TYPE_2D,
+                    mip_levels: 1,
+                    array_layers: 1,
+                    samples: aa.sample_count(),
+                },
+            )?);
+        }
+
+        self.write_aa_sets(device, descriptors, aa);
+        Ok(())
+    }
+
+    /// Writes the FXAA + TAA sets and repoints the ssgi-accum binding 2 (motion) + the mesh
+    /// set-4 SSGI sampler for the active AA mode. The TAA / FXAA scene input is the scratch
+    /// image when built, else the offscreen as a valid placeholder (the set is unused until
+    /// that mode turns on + rebinds). The C++ `recreateTaaTargets` + `updateFxaaSet` write
+    /// blocks (`renderer_detail.cppm:2511`/`:2833`).
+    fn write_aa_sets(&self, device: &Device, descriptors: &Descriptors, aa: crate::Aa) {
+        let raw = device.raw();
+        let linear = descriptors.linear_sampler();
+        let scene_input = self
+            .scratch
+            .as_ref()
+            .map_or(self.offscreen.view(), Image::view);
+        let offscreen = self.offscreen.view();
+        let motion = self.aa_view(&self.motion);
+        let ssgi_denoised = self.view_of(&self.ssgi_denoised);
+        let ssgi_resolved = self.view_of(&self.ssgi_resolved);
+
+        let mut plan: Vec<Binding> = vec![
+            // fxaa: scratch source sampler -> offscreen storage.
+            Binding::sampled(self.fxaa_set, 0, linear, scene_input),
+            Binding::storage(self.fxaa_set, 1, offscreen),
+            // mesh set 4 binding 2: the SSGI map the scene samples — the temporally
+            // resolved map when TAA is on, the spatially denoised map otherwise.
+            Binding::sampled(
+                self.mesh_set,
+                2,
+                linear,
+                if aa.taa() {
+                    ssgi_resolved
+                } else {
+                    ssgi_denoised
+                },
+            ),
+        ];
+        // TAA parities: parity p reads scratch/history[1-p]/motion, writes offscreen +
+        // history[p]. The ssgi-accum binding 2 (motion) is rebound to the real motion
+        // target now that it exists (build_screen_space seeded denoised as a placeholder).
+        for p in 0..2usize {
+            let taa = self.taa_sets[p];
+            plan.push(Binding::sampled(taa, 0, linear, scene_input));
+            plan.push(Binding::sampled(
+                taa,
+                1,
+                linear,
+                self.taa_history_view(1 - p),
+            ));
+            plan.push(Binding::sampled(taa, 2, linear, motion));
+            plan.push(Binding::storage(taa, 3, offscreen));
+            plan.push(Binding::storage(taa, 4, self.taa_history_view(p)));
+
+            let accum = self.ssgi_accum_sets[p];
+            plan.push(Binding::sampled(accum, 0, linear, ssgi_denoised));
+            plan.push(Binding::sampled(accum, 1, linear, self.history_view(1 - p)));
+            plan.push(Binding::sampled(accum, 2, linear, motion));
+            plan.push(Binding::storage(accum, 3, ssgi_resolved));
+            plan.push(Binding::storage(accum, 4, self.history_view(p)));
+        }
+
+        let infos: Vec<vk::DescriptorImageInfo> = plan.iter().map(Binding::info).collect();
+        let writes: Vec<vk::WriteDescriptorSet> = plan
+            .iter()
+            .zip(infos.iter())
+            .map(|(binding, info)| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(binding.set)
+                    .dst_binding(binding.binding)
+                    .descriptor_type(binding.kind())
+                    .image_info(std::slice::from_ref(info))
+            })
+            .collect();
+        // SAFETY: the ash seam. The sets/views/samplers outlive the renderer; host access
+        // to these per-view sets is single-threaded at the (idle) build point.
+        unsafe { raw.update_descriptor_sets(&writes, &[]) };
+    }
+
+    /// The view handle of a built AA `Option<Image>` (motion), or — when not built (the
+    /// mode is off) — the offscreen as a valid placeholder so the set is complete.
+    fn aa_view(&self, image: &Option<Image>) -> vk::ImageView {
+        image.as_ref().map_or(self.offscreen.view(), Image::view)
+    }
+
+    /// The view handle of TAA history slot `i`, or the offscreen as a placeholder when TAA
+    /// is off (the set is unused until TAA turns on + rebinds).
+    fn taa_history_view(&self, i: usize) -> vk::ImageView {
+        self.history[i]
+            .as_ref()
+            .map_or(self.offscreen.view(), Image::view)
+    }
+
+    /// Flips the temporal ping-pong parity + marks the history valid after a frame's TAA /
+    /// SSGI accumulation consumed this frame's parity. The next frame reprojects through the
+    /// buffer just written. The C++ `historyValid = true; historyIndex = 1 - historyIndex`.
+    pub fn flip_history(&mut self) {
+        self.history_valid = true;
+        self.history_index = 1 - self.history_index;
+    }
+
+    /// Records this frame's camera viewProj as the per-view previous frame for next frame's
+    /// motion reprojection. The C++ `prevViewProj = viewProj; prevViewProjValid = true`.
+    pub fn store_prev_view_proj(&mut self, view_proj: saffron_geometry::glam::Mat4) {
+        self.prev_view_proj = view_proj;
+        self.prev_view_proj_valid = true;
+    }
+
+    /// Writes every per-view screen-space set to bind this view's freshly built images.
+    /// Mirrors the C++ `refreshSsaoViewSets` write block one-for-one.
+    fn write_screen_space_sets(
+        &self,
+        device: &Device,
+        descriptors: &Descriptors,
+        nearest: vk::Sampler,
+    ) {
+        let raw = device.raw();
+        let linear = descriptors.linear_sampler();
+        let g_normal = self.view_of(&self.g_normal);
+        let ao_raw = self.view_of(&self.ao_raw);
+        let ao_map = self.view_of(&self.ao_map);
+        let contact_map = self.view_of(&self.contact_map);
+        let ssgi_map = self.view_of(&self.ssgi_map);
+        let ssgi_denoised = self.view_of(&self.ssgi_denoised);
+        let ssgi_resolved = self.view_of(&self.ssgi_resolved);
+        let prev_color = self.view_of(&self.prev_color);
+        let offscreen = self.offscreen.view();
+
+        // Each binding is a `(set, binding, kind)`. A sampler binding pairs a sampler +
+        // a view (ShaderReadOnly); a storage binding is a view only (GENERAL). The whole
+        // plan is one literal so the `DescriptorImageInfo` arena (filled below) parallels
+        // it — keeping every borrow valid for the single `update_descriptor_sets` call.
+        let mut plan: Vec<Binding> = vec![
+            // gtao: g_normal -> ao_raw
+            Binding::sampled(self.gtao_set, 0, nearest, g_normal),
+            Binding::storage(self.gtao_set, 1, ao_raw),
+            // ao_blur: ao_raw + g_normal -> ao_map
+            Binding::sampled(self.ao_blur_set, 0, nearest, ao_raw),
+            Binding::sampled(self.ao_blur_set, 1, nearest, g_normal),
+            Binding::storage(self.ao_blur_set, 2, ao_map),
+            // contact: g_normal -> contact_map
+            Binding::sampled(self.contact_set, 0, nearest, g_normal),
+            Binding::storage(self.contact_set, 1, contact_map),
+            // ssgi: g_normal + prev_color -> ssgi_map
+            Binding::sampled(self.ssgi_set, 0, nearest, g_normal),
+            Binding::sampled(self.ssgi_set, 1, linear, prev_color),
+            Binding::storage(self.ssgi_set, 2, ssgi_map),
+            // ssgi_blur: ssgi_map + g_normal -> ssgi_denoised
+            Binding::sampled(self.ssgi_blur_set, 0, nearest, ssgi_map),
+            Binding::sampled(self.ssgi_blur_set, 1, nearest, g_normal),
+            Binding::storage(self.ssgi_blur_set, 2, ssgi_denoised),
+            // copy_color: offscreen -> prev_color
+            Binding::sampled(self.copy_color_set, 0, linear, offscreen),
+            Binding::storage(self.copy_color_set, 1, prev_color),
+            // mesh set 4: AO + contact + denoised SSGI (all linear-sampled). Phase 9 (no
+            // motion) samples the spatially denoised map — the accum pass is off.
+            Binding::sampled(self.mesh_set, 0, linear, ao_map),
+            Binding::sampled(self.mesh_set, 1, linear, contact_map),
+            Binding::sampled(self.mesh_set, 2, linear, ssgi_denoised),
+            // The mandatory tonemap set: binding 0 = the offscreen color as a storage
+            // image (GENERAL). The C++ `updateTonemapSet`.
+            Binding::storage(self.tonemap_set, 0, offscreen),
+        ];
+        // ssgi-accum parities: parity p reads ssgi_history[1-p], writes ssgi_history[p].
+        // Binding 2 (motion) lands in phase 10; until then bind the denoised map as a
+        // neutral placeholder so the set is complete (the accum pass is off without motion).
+        for p in 0..2usize {
+            let set = self.ssgi_accum_sets[p];
+            plan.push(Binding::sampled(set, 0, linear, ssgi_denoised));
+            plan.push(Binding::sampled(set, 1, linear, self.history_view(1 - p)));
+            plan.push(Binding::sampled(set, 2, linear, ssgi_denoised));
+            plan.push(Binding::storage(set, 3, ssgi_resolved));
+            plan.push(Binding::storage(set, 4, self.history_view(p)));
+        }
+
+        let infos: Vec<vk::DescriptorImageInfo> = plan.iter().map(Binding::info).collect();
+        let writes: Vec<vk::WriteDescriptorSet> = plan
+            .iter()
+            .zip(infos.iter())
+            .map(|(binding, info)| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(binding.set)
+                    .dst_binding(binding.binding)
+                    .descriptor_type(binding.kind())
+                    .image_info(std::slice::from_ref(info))
+            })
+            .collect();
+        // SAFETY: the ash seam. The sets/views/samplers outlive the renderer; host
+        // access to these per-view sets is single-threaded at the (idle) build point.
+        unsafe { raw.update_descriptor_sets(&writes, &[]) };
+    }
+
+    /// The view handle of an `Option<Image>`, or null if it is not built (the
+    /// screen-space set writes never run before `build_screen_space`, so this is
+    /// always populated when used).
+    fn view_of(&self, image: &Option<Image>) -> vk::ImageView {
+        image.as_ref().map_or(vk::ImageView::null(), Image::view)
+    }
+
+    /// The view handle of SSGI history slot `i`.
+    fn history_view(&self, i: usize) -> vk::ImageView {
+        self.ssgi_history[i]
+            .as_ref()
+            .map_or(vk::ImageView::null(), Image::view)
+    }
+
+    /// Whether the screen-space chain is built (the G-buffer image exists). The C++
+    /// `gbufReady`'s `gNormal.image` check.
+    pub fn screen_space_ready(&self) -> bool {
+        self.g_normal.is_some()
+    }
+
+    /// Recreates the targets at a new size (a viewport resize), bumping
+    /// [`ViewTarget::generation`]. The caller idles the GPU before this so the old
+    /// images are no longer read; the old [`Image`]s Drop when replaced. The
+    /// screen-space images are rebuilt + the sets rewritten by the caller after this
+    /// via [`ViewTarget::build_screen_space`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Vk`] if recreation fails (the old targets are left
+    /// in place on failure).
+    pub fn resize(&mut self, device: &Device, width: u32, height: u32) -> Result<()> {
+        let extent = vk::Extent2D { width, height };
+        let resources = device.resources();
+        let offscreen = Image::new(
+            resources,
+            &ImageDesc::color_2d(
+                extent,
+                OFFSCREEN_COLOR_FORMAT,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::STORAGE,
+            ),
+        )?;
+        let depth = Image::new(
+            resources,
+            &ImageDesc {
+                extent,
+                format: DEPTH_FORMAT,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::DEPTH,
+                view_type: vk::ImageViewType::TYPE_2D,
+                mip_levels: 1,
+                array_layers: 1,
+                samples: vk::SampleCountFlags::TYPE_1,
+            },
+        )?;
+        self.offscreen = offscreen;
+        self.depth = depth;
+        self.generation += 1;
+        Ok(())
+    }
+
+    /// The viewport extent of the targets.
+    pub fn extent(&self) -> vk::Extent2D {
+        self.offscreen.extent
+    }
+}
+
+/// One descriptor-set image binding for the screen-space set writes: a sampled image
+/// (sampler + view, ShaderReadOnly) or a storage image (view only, GENERAL). Collected
+/// into a flat plan so the [`vk::DescriptorImageInfo`] arena parallels the writes.
+struct Binding {
+    set: vk::DescriptorSet,
+    binding: u32,
+    sampler: Option<vk::Sampler>,
+    view: vk::ImageView,
+}
+
+impl Binding {
+    fn sampled(
+        set: vk::DescriptorSet,
+        binding: u32,
+        sampler: vk::Sampler,
+        view: vk::ImageView,
+    ) -> Self {
+        Self {
+            set,
+            binding,
+            sampler: Some(sampler),
+            view,
+        }
+    }
+
+    fn storage(set: vk::DescriptorSet, binding: u32, view: vk::ImageView) -> Self {
+        Self {
+            set,
+            binding,
+            sampler: None,
+            view,
+        }
+    }
+
+    fn kind(&self) -> vk::DescriptorType {
+        if self.sampler.is_some() {
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER
+        } else {
+            vk::DescriptorType::STORAGE_IMAGE
+        }
+    }
+
+    fn info(&self) -> vk::DescriptorImageInfo {
+        match self.sampler {
+            Some(sampler) => vk::DescriptorImageInfo::default()
+                .sampler(sampler)
+                .image_view(self.view)
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            None => vk::DescriptorImageInfo::default()
+                .image_view(self.view)
+                .image_layout(vk::ImageLayout::GENERAL),
+        }
+    }
+}
+
+/// Crate-internal alias of [`initialize_screen_space_layouts`] for sub-state outside this
+/// module (the per-view ReSTIR build seeds its resolved-radiance image's resting layout the
+/// same way).
+pub(crate) fn initialize_read_only_layouts(device: &Device, images: &[&Image]) -> Result<()> {
+    initialize_screen_space_layouts(device, images)
+}
+
+/// Verifies the device supports the shm-capture blit: BLIT_SRC on the offscreen format and
+/// BLIT_DST on `B8G8R8A8_UNORM`, both in optimal tiling. The C++ `recordShmPublishCopy`
+/// blit assumes this (NVIDIA satisfies it); there is no CPU fallback by design.
+fn require_shm_blit_support(device: &Device, src_format: vk::Format) -> Result<()> {
+    // SAFETY: the ash seam. The format-property queries are read-only.
+    let src = unsafe {
+        device
+            .instance()
+            .get_physical_device_format_properties(device.physical_device(), src_format)
+    };
+    let dst = unsafe {
+        device.instance().get_physical_device_format_properties(
+            device.physical_device(),
+            vk::Format::B8G8R8A8_UNORM,
+        )
+    };
+    if !src
+        .optimal_tiling_features
+        .contains(vk::FormatFeatureFlags::BLIT_SRC)
+        || !dst
+            .optimal_tiling_features
+            .contains(vk::FormatFeatureFlags::BLIT_DST)
+    {
+        return Err(crate::Error::Vk {
+            context: "shm capture: offscreen lacks BLIT_SRC or BGRA8 lacks BLIT_DST",
+            result: vk::Result::ERROR_FORMAT_NOT_SUPPORTED,
+        });
+    }
+    Ok(())
+}
+
+/// One `UNDEFINED → SHADER_READ_ONLY_OPTIMAL` init transition over `images` so their
+/// descriptors are valid before any pass runs. A one-shot submit + wait at the
+/// (idle) build point. The C++ `recreateSsaoTargets` init transition.
+fn initialize_screen_space_layouts(device: &Device, images: &[&Image]) -> Result<()> {
+    use crate::checked;
+    let raw = device.raw();
+    let pool_info =
+        vk::CommandPoolCreateInfo::default().queue_family_index(device.graphics_queue_family);
+    // SAFETY: the ash seam. Freed at the end of the function.
+    let pool = checked(
+        unsafe { raw.create_command_pool(&pool_info, None) },
+        "ssao init pool",
+    )?;
+    let alloc = vk::CommandBufferAllocateInfo::default()
+        .command_pool(pool)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(1);
+    // SAFETY: the ash seam. One buffer from the pool above.
+    let cmd = checked(
+        unsafe { raw.allocate_command_buffers(&alloc) },
+        "ssao init cmd",
+    )?[0];
+    // SAFETY: the ash seam. Default fence.
+    let fence = checked(
+        unsafe { raw.create_fence(&vk::FenceCreateInfo::default(), None) },
+        "ssao init fence",
+    )?;
+
+    let result = (|| -> Result<()> {
+        let begin = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let barriers: Vec<vk::ImageMemoryBarrier2> = images
+            .iter()
+            .map(|image| {
+                vk::ImageMemoryBarrier2::default()
+                    .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
+                    .src_access_mask(vk::AccessFlags2::empty())
+                    .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image.handle())
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+            })
+            .collect();
+        // SAFETY: the ash seam. The barriers reference images this device created.
+        unsafe {
+            checked(raw.begin_command_buffer(cmd, &begin), "ssao init begin")?;
+            let dep = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+            raw.cmd_pipeline_barrier2(cmd, &dep);
+            checked(raw.end_command_buffer(cmd), "ssao init end")?;
+        }
+        let cmd_info = [vk::CommandBufferSubmitInfo::default().command_buffer(cmd)];
+        let submit = [vk::SubmitInfo2::default().command_buffer_infos(&cmd_info)];
+        // SAFETY: the ash seam. The queue is touched single-threaded at the build point.
+        unsafe {
+            checked(
+                raw.queue_submit2(device.graphics_queue, &submit, fence),
+                "ssao init submit",
+            )?;
+            checked(
+                raw.wait_for_fences(&[fence], true, u64::MAX),
+                "ssao init wait",
+            )?;
+        }
+        Ok(())
+    })();
+
+    // SAFETY: the ash seam. The fence was waited (or the submit never happened), so the
+    // pool/fence are idle and destroyed exactly once.
+    unsafe {
+        raw.destroy_fence(fence, None);
+        raw.destroy_command_pool(pool, None);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::SurfaceSource;
+    use crate::resources::BindlessFreeList;
+    use crate::validation_issue_count;
+    use std::sync::{Arc, Mutex};
+
+    /// Builds two views, each with its own screen-space targets + per-view sets, and
+    /// asserts no cross-view aliasing: each view's sets are distinct handles, each view
+    /// owns distinct images, and building the second view does not disturb the first
+    /// view's sets — switching the active view binds *this* view's images, never the
+    /// other's (the phase-9 acceptance gate). Also asserts the build + teardown is
+    /// validation-clean. Skips when no Vulkan device is present.
+    #[test]
+    fn per_view_screen_space_sets_never_alias_across_views() {
+        let device = match Device::new(&SurfaceSource::Offscreen) {
+            Ok(device) => device,
+            Err(err) => {
+                eprintln!("skipping: no Vulkan device obtainable ({err})");
+                return;
+            }
+        };
+        let before = validation_issue_count();
+
+        let free_list: BindlessFreeList = Arc::new(Mutex::new(Vec::new()));
+        let descriptors = Descriptors::new(&device, &free_list).expect("Descriptors");
+        let ssao = Ssao::new(&device).expect("Ssao");
+
+        let mut view_a = ViewTarget::new(&device, 32, 32).expect("view a");
+        view_a
+            .allocate_screen_space_sets(&descriptors, &ssao)
+            .expect("alloc a");
+        view_a
+            .build_screen_space(&device, &descriptors, &ssao)
+            .expect("build a");
+        let mut view_b = ViewTarget::new(&device, 48, 24).expect("view b");
+        view_b
+            .allocate_screen_space_sets(&descriptors, &ssao)
+            .expect("alloc b");
+        view_b
+            .build_screen_space(&device, &descriptors, &ssao)
+            .expect("build b");
+
+        // The two views' per-view sets are distinct handles — a switch never binds the
+        // other view's set.
+        assert_ne!(view_a.gtao_set, view_b.gtao_set);
+        assert_ne!(view_a.mesh_set, view_b.mesh_set);
+        assert_ne!(view_a.ssgi_set, view_b.ssgi_set);
+        // Each view owns distinct screen-space images — its sets bind its own targets.
+        let a_g = view_a.g_normal.as_ref().unwrap().handle();
+        let b_g = view_b.g_normal.as_ref().unwrap().handle();
+        assert_ne!(a_g, b_g, "each view has its own G-buffer image");
+        let a_ssgi = view_a.ssgi_denoised.as_ref().unwrap().handle();
+        let b_ssgi = view_b.ssgi_denoised.as_ref().unwrap().handle();
+        assert_ne!(a_ssgi, b_ssgi);
+
+        drop(view_a);
+        drop(view_b);
+        drop(ssao);
+        drop(descriptors);
+        device.wait_idle().expect("idle before teardown");
+        drop(device);
+
+        let after = validation_issue_count();
+        assert_eq!(
+            before,
+            after,
+            "the per-view screen-space build + teardown must be validation-clean (saw {} new issue(s))",
+            after.saturating_sub(before)
+        );
+    }
+
+    /// Drives the screen-space chain end-to-end on llvmpipe: build a draw list, record
+    /// the gbuffer prepass → gtao → ao-blur → contact → ssgi → ssgi-blur through the
+    /// render graph into this view's targets, read the AO map back, and assert the whole
+    /// chain ran validation-clean with the AO in `[0,1]`. This is the GPU-runtime gate
+    /// the toolbox can run (no ray tracing): every screen-space PSO compiles, every
+    /// per-view set binds, and the graph derives the GENERAL ↔ ShaderReadOnly barriers
+    /// the validation layer would flag if wrong.
+    ///
+    /// The crease-darkening / color-bleed golden images are DEFERRED-NEEDS-HARDWARE: a
+    /// committed golden needs a stable shaded reference, which rides the full lit color
+    /// render (lighting + IBL sets) that lands in later phases; llvmpipe's GTAO output is
+    /// numerically valid but not bit-stable enough to commit a golden against here.
+    /// Skips when no Vulkan device is present.
+    #[test]
+    fn screen_space_chain_is_validation_clean_on_gpu() {
+        use crate::draw_list::{DrawItem, SubmeshMaterial};
+        use crate::instancing::{DrawListInputs, Instancing};
+        use crate::pipelines::Pipelines;
+        use crate::render_graph::{RenderGraph, RgAttachment, RgPass, RgUsage};
+        use crate::skinning::Skinning;
+        use crate::upload::{GpuQueue, Uploader};
+        use saffron_geometry::glam::{Mat4, Vec2, Vec3};
+        use saffron_geometry::{Mesh, Submesh, Vertex};
+
+        let device = match Device::new(&SurfaceSource::Offscreen) {
+            Ok(device) => device,
+            Err(err) => {
+                eprintln!("skipping: no Vulkan device obtainable ({err})");
+                return;
+            }
+        };
+        let before = validation_issue_count();
+
+        let free_list: BindlessFreeList = Arc::new(Mutex::new(Vec::new()));
+        let descriptors = Descriptors::new(&device, &free_list).expect("Descriptors");
+        let ssao = Ssao::new(&device).expect("Ssao");
+        let mut pipelines = Pipelines::new(&device, &descriptors, vk::SampleCountFlags::TYPE_1);
+        let mut instancing = Instancing::new(&device, &descriptors).expect("Instancing");
+        let mut skinning = Skinning::new(&device).expect("Skinning");
+        let queue = GpuQueue::new(device.graphics_queue);
+        let uploader = Uploader::new(&device, &queue).expect("Uploader");
+
+        let mut view = ViewTarget::new(&device, 16, 16).expect("view");
+        view.allocate_screen_space_sets(&descriptors, &ssao)
+            .expect("alloc");
+        view.build_screen_space(&device, &descriptors, &ssao)
+            .expect("build");
+
+        // A clip-space triangle covering the viewport so the gbuffer prepass writes view
+        // normals across the center.
+        let v = |x: f32, y: f32| Vertex {
+            position: Vec3::new(x, y, 0.0),
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            uv0: Vec2::ZERO,
+        };
+        let mesh = Mesh {
+            vertices: vec![v(-3.0, -3.0), v(3.0, -3.0), v(0.0, 3.0)],
+            indices: vec![0, 1, 2],
+            submeshes: vec![Submesh {
+                first_index: 0,
+                index_count: 3,
+                vertex_offset: 0,
+                material_slot: 0,
+            }],
+        };
+        let mesh = uploader.upload_mesh(&mesh, &[]).expect("upload");
+        let item = DrawItem::new(
+            Arc::clone(&mesh),
+            Mat4::IDENTITY,
+            vec![SubmeshMaterial::defaults()],
+        );
+        let (list, _stats) = instancing
+            .submit_draw_list(
+                &descriptors,
+                &mut pipelines,
+                &mut skinning,
+                &[item],
+                &[],
+                DrawListInputs {
+                    frame: 0,
+                    view_proj: Mat4::IDENTITY,
+                    wireframe: false,
+                    default_texture_index: crate::DEFAULT_WHITE_SLOT,
+                    rt_skinned: false,
+                },
+            )
+            .expect("submit_draw_list");
+
+        // Resolve the screen-space PSOs.
+        let gbuffer = pipelines.request_gbuffer().expect("gbuffer PSO");
+        let gtao = pipelines
+            .request_gtao(ssao.compute2_layout())
+            .expect("gtao");
+        let ao_blur = pipelines
+            .request_ao_blur(ssao.compute3_layout())
+            .expect("ao_blur");
+        let contact = pipelines
+            .request_contact(ssao.compute2_layout())
+            .expect("contact");
+        let ssgi = pipelines
+            .request_ssgi(ssao.compute3_layout())
+            .expect("ssgi");
+        let ssgi_blur = pipelines
+            .request_ssgi_blur(ssao.compute3_layout())
+            .expect("ssgi_blur");
+
+        let extent = view.extent();
+        let instance_set = instancing.instance_set(0);
+        let groups = |n: u32| n.div_ceil(8);
+
+        let raw = device.raw();
+        let pool = unsafe {
+            raw.create_command_pool(
+                &vk::CommandPoolCreateInfo::default()
+                    .queue_family_index(device.graphics_queue_family),
+                None,
+            )
+        }
+        .expect("pool");
+        let cmd = unsafe {
+            raw.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+        }
+        .expect("cmd")[0];
+        let fence =
+            unsafe { raw.create_fence(&vk::FenceCreateInfo::default(), None) }.expect("fence");
+
+        let ssao_push = ssao.gbuffer_push();
+        let gtao_push = ssao.gtao_push();
+        let contact_push = ssao.contact_push();
+        // A default (identity-projection, frame-0) trace push — the chain's barriers /
+        // descriptor binds are what this GPU test exercises, not the trace values.
+        let ssgi_push = crate::SsgiPush::default();
+
+        unsafe {
+            raw.begin_command_buffer(
+                cmd,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+            .expect("begin");
+        }
+
+        let mut graph = RenderGraph::new();
+        let g_normal = graph.import_image(
+            view.g_normal.as_ref().unwrap().handle(),
+            view.g_normal.as_ref().unwrap().view(),
+            vk::ImageAspectFlags::COLOR,
+            vk::ImageLayout::UNDEFINED,
+            None,
+        );
+        let g_depth = graph.import_image(
+            view.g_depth.as_ref().unwrap().handle(),
+            view.g_depth.as_ref().unwrap().view(),
+            vk::ImageAspectFlags::DEPTH,
+            vk::ImageLayout::UNDEFINED,
+            None,
+        );
+        let ao_raw = graph.import_image(
+            view.ao_raw.as_ref().unwrap().handle(),
+            view.ao_raw.as_ref().unwrap().view(),
+            vk::ImageAspectFlags::COLOR,
+            vk::ImageLayout::UNDEFINED,
+            None,
+        );
+        let ao_slot = graph.alloc_external_layout(view.ao_map.as_ref().unwrap().layout);
+        let ao_map = graph.import_image(
+            view.ao_map.as_ref().unwrap().handle(),
+            view.ao_map.as_ref().unwrap().view(),
+            vk::ImageAspectFlags::COLOR,
+            view.ao_map.as_ref().unwrap().layout,
+            Some(ao_slot),
+        );
+
+        // gbuffer prepass.
+        {
+            let list = list.shallow_clone();
+            let raw_body = raw.clone();
+            let gbuffer = Arc::clone(&gbuffer);
+            let handle = gbuffer.handle();
+            let layout = gbuffer.layout();
+            let depth_att = RgAttachment {
+                resource: g_depth,
+                load_op: vk::AttachmentLoadOp::CLEAR,
+                store_op: vk::AttachmentStoreOp::STORE,
+                clear_value: vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
+                },
+                resolve: None,
+            };
+            graph.add_pass(
+                RgPass::graphics("gbuffer", extent)
+                    .color(RgAttachment::clear_store(g_normal))
+                    .depth_attachment(depth_att)
+                    .body(move |c| {
+                        crate::record_gbuffer(
+                            &raw_body,
+                            c,
+                            &list,
+                            handle,
+                            layout,
+                            instance_set,
+                            &ssao_push,
+                            None,
+                        );
+                        drop(gbuffer);
+                    }),
+            );
+        }
+        // gtao + ao-blur.
+        compute_pass(
+            &mut graph,
+            raw,
+            "gtao",
+            &gtao,
+            view.gtao_set,
+            &[
+                (g_normal, RgUsage::SampledReadCompute),
+                (ao_raw, RgUsage::StorageImageRwCompute),
+            ],
+            Some(bytemuck::bytes_of(&gtao_push).to_vec()),
+            groups(extent.width),
+            groups(extent.height),
+        );
+        compute_pass(
+            &mut graph,
+            raw,
+            "ao-blur",
+            &ao_blur,
+            view.ao_blur_set,
+            &[
+                (ao_raw, RgUsage::SampledReadCompute),
+                (g_normal, RgUsage::SampledReadCompute),
+                (ao_map, RgUsage::StorageImageRwCompute),
+            ],
+            None,
+            groups(extent.width),
+            groups(extent.height),
+        );
+        // contact.
+        let contact_slot = graph.alloc_external_layout(view.contact_map.as_ref().unwrap().layout);
+        let contact_map = graph.import_image(
+            view.contact_map.as_ref().unwrap().handle(),
+            view.contact_map.as_ref().unwrap().view(),
+            vk::ImageAspectFlags::COLOR,
+            view.contact_map.as_ref().unwrap().layout,
+            Some(contact_slot),
+        );
+        compute_pass(
+            &mut graph,
+            raw,
+            "contact",
+            &contact,
+            view.contact_set,
+            &[
+                (g_normal, RgUsage::SampledReadCompute),
+                (contact_map, RgUsage::StorageImageRwCompute),
+            ],
+            Some(bytemuck::bytes_of(&contact_push).to_vec()),
+            groups(extent.width),
+            groups(extent.height),
+        );
+        // ssgi + ssgi-blur (prevColor seeded ShaderReadOnly).
+        let prev_color = graph.import_image(
+            view.prev_color.as_ref().unwrap().handle(),
+            view.prev_color.as_ref().unwrap().view(),
+            vk::ImageAspectFlags::COLOR,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            None,
+        );
+        let ssgi_slot = graph.alloc_external_layout(view.ssgi_map.as_ref().unwrap().layout);
+        let ssgi_map = graph.import_image(
+            view.ssgi_map.as_ref().unwrap().handle(),
+            view.ssgi_map.as_ref().unwrap().view(),
+            vk::ImageAspectFlags::COLOR,
+            view.ssgi_map.as_ref().unwrap().layout,
+            Some(ssgi_slot),
+        );
+        let denoised_slot =
+            graph.alloc_external_layout(view.ssgi_denoised.as_ref().unwrap().layout);
+        let ssgi_denoised = graph.import_image(
+            view.ssgi_denoised.as_ref().unwrap().handle(),
+            view.ssgi_denoised.as_ref().unwrap().view(),
+            vk::ImageAspectFlags::COLOR,
+            view.ssgi_denoised.as_ref().unwrap().layout,
+            Some(denoised_slot),
+        );
+        compute_pass(
+            &mut graph,
+            raw,
+            "ssgi",
+            &ssgi,
+            view.ssgi_set,
+            &[
+                (g_normal, RgUsage::SampledReadCompute),
+                (prev_color, RgUsage::SampledReadCompute),
+                (ssgi_map, RgUsage::StorageImageRwCompute),
+            ],
+            Some(bytemuck::bytes_of(&ssgi_push).to_vec()),
+            groups(extent.width),
+            groups(extent.height),
+        );
+        compute_pass(
+            &mut graph,
+            raw,
+            "ssgi-blur",
+            &ssgi_blur,
+            view.ssgi_blur_set,
+            &[
+                (ssgi_map, RgUsage::SampledReadCompute),
+                (g_normal, RgUsage::SampledReadCompute),
+                (ssgi_denoised, RgUsage::StorageImageRwCompute),
+            ],
+            None,
+            groups(extent.width),
+            groups(extent.height),
+        );
+        graph.execute(&device, cmd);
+
+        // The screen-space maps are sampled, not transfer-copied (they carry no
+        // TRANSFER_SRC), so a CPU readback golden is DEFERRED-NEEDS-HARDWARE — the gate
+        // here is that the full chain compiles, binds, and barriers validation-clean. End
+        // + submit + wait; a clean run leaves the global validation counter unchanged.
+        unsafe {
+            raw.end_command_buffer(cmd).expect("end");
+            let cmd_info = [vk::CommandBufferSubmitInfo::default().command_buffer(cmd)];
+            let submit = [vk::SubmitInfo2::default().command_buffer_infos(&cmd_info)];
+            raw.queue_submit2(device.graphics_queue, &submit, fence)
+                .expect("submit");
+            raw.wait_for_fences(&[fence], true, u64::MAX).expect("wait");
+        }
+
+        unsafe {
+            raw.destroy_fence(fence, None);
+            raw.destroy_command_pool(pool, None);
+        }
+        drop(list);
+        drop(gbuffer);
+        drop(gtao);
+        drop(ao_blur);
+        drop(contact);
+        drop(ssgi);
+        drop(ssgi_blur);
+        drop(mesh);
+        drop(view);
+        drop(instancing);
+        device.wait_idle().expect("idle before teardown");
+        drop(skinning);
+        drop(uploader);
+        drop(pipelines);
+        drop(ssao);
+        drop(descriptors);
+        drop(device);
+
+        let after = validation_issue_count();
+        assert_eq!(
+            before,
+            after,
+            "the screen-space chain must be validation-clean (saw {} new issue(s))",
+            after.saturating_sub(before)
+        );
+    }
+
+    /// Appends one compute pass to `graph` mirroring the production
+    /// `Renderer::add_compute_pass` — bind the per-view set, push, dispatch.
+    #[allow(clippy::too_many_arguments)]
+    fn compute_pass(
+        graph: &mut crate::render_graph::RenderGraph,
+        raw: &ash::Device,
+        name: &'static str,
+        pipeline: &Arc<crate::Pipeline>,
+        set: vk::DescriptorSet,
+        accesses: &[(
+            crate::render_graph::RgResource,
+            crate::render_graph::RgUsage,
+        )],
+        push: Option<Vec<u8>>,
+        groups_x: u32,
+        groups_y: u32,
+    ) {
+        use crate::render_graph::RgPass;
+        let raw_body = raw.clone();
+        let pipeline = Arc::clone(pipeline);
+        let handle = pipeline.handle();
+        let layout = pipeline.layout();
+        let mut pass = RgPass::compute(name).body(move |cmd| unsafe {
+            raw_body.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, handle);
+            raw_body.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                layout,
+                0,
+                &[set],
+                &[],
+            );
+            if let Some(push) = &push {
+                raw_body.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::COMPUTE, 0, push);
+            }
+            raw_body.cmd_dispatch(cmd, groups_x, groups_y, 1);
+            drop(pipeline);
+        });
+        for &(resource, usage) in accesses {
+            pass = pass.access(resource, usage);
+        }
+        graph.add_pass(pass);
+    }
+
+    /// The SSGI history validity resets on a view resize: a fresh build leaves it false
+    /// (no temporal history yet), and rebuilding after a resize re-resets it even if a
+    /// frame had set it true (the reprojection is stale). The phase-9 acceptance gate.
+    /// Skips when no Vulkan device is present.
+    #[test]
+    fn ssgi_history_validity_resets_on_resize() {
+        let device = match Device::new(&SurfaceSource::Offscreen) {
+            Ok(device) => device,
+            Err(err) => {
+                eprintln!("skipping: no Vulkan device obtainable ({err})");
+                return;
+            }
+        };
+        let free_list: BindlessFreeList = Arc::new(Mutex::new(Vec::new()));
+        let descriptors = Descriptors::new(&device, &free_list).expect("Descriptors");
+        let ssao = Ssao::new(&device).expect("Ssao");
+
+        let mut view = ViewTarget::new(&device, 32, 32).expect("view");
+        view.allocate_screen_space_sets(&descriptors, &ssao)
+            .expect("alloc");
+        view.build_screen_space(&device, &descriptors, &ssao)
+            .expect("build");
+        assert!(!view.history_valid, "fresh build has no temporal history");
+
+        // A frame validates the history; a resize must invalidate it again.
+        view.history_valid = true;
+        view.history_index = 1;
+        view.resize(&device, 64, 48).expect("resize");
+        view.build_screen_space(&device, &descriptors, &ssao)
+            .expect("rebuild");
+        assert!(
+            !view.history_valid,
+            "a resize invalidates the SSGI reprojection history"
+        );
+        assert_eq!(view.history_index, 0, "the ping-pong parity resets too");
+
+        drop(view);
+        drop(ssao);
+        drop(descriptors);
+        device.wait_idle().expect("idle before teardown");
+        drop(device);
+    }
+
+    /// `build_aa_targets` creates exactly the per-mode AA targets: the motion target + its
+    /// depth are always built (SSGI feeds them, the pass gates per frame); TAA adds the two
+    /// history images + the scratch; FXAA adds the scratch but no TAA history; MSAA builds
+    /// the multisampled scene color + depth and no scratch/history; off adds neither. The
+    /// build + descriptor set writes + teardown are validation-clean across every mode (the
+    /// phase-10 GPU gate the toolbox can run — no ray tracing, no present). Skips when no
+    /// Vulkan device is present.
+    #[test]
+    fn build_aa_targets_per_mode_is_validation_clean() {
+        let device = match Device::new(&SurfaceSource::Offscreen) {
+            Ok(device) => device,
+            Err(err) => {
+                eprintln!("skipping: no Vulkan device obtainable ({err})");
+                return;
+            }
+        };
+        let before = validation_issue_count();
+
+        let free_list: BindlessFreeList = Arc::new(Mutex::new(Vec::new()));
+        let descriptors = Descriptors::new(&device, &free_list).expect("Descriptors");
+        let ssao = Ssao::new(&device).expect("Ssao");
+        let supported = device.supported_sample_counts(OFFSCREEN_COLOR_FORMAT, DEPTH_FORMAT);
+
+        let mut view = ViewTarget::new(&device, 32, 32).expect("view");
+        view.allocate_screen_space_sets(&descriptors, &ssao)
+            .expect("alloc");
+        view.build_screen_space(&device, &descriptors, &ssao)
+            .expect("build screen-space");
+
+        // Off: the motion target is built (SSGI feeds it), but no scratch / history / MSAA.
+        let mut aa = crate::Aa::new(supported);
+        view.build_aa_targets(&device, &descriptors, aa)
+            .expect("build off");
+        assert!(view.motion.is_some(), "the motion target rides with SSGI");
+        assert!(view.motion_depth.is_some());
+        assert!(view.scratch.is_none(), "off builds no scratch");
+        assert!(view.history[0].is_none() && view.history[1].is_none());
+        assert!(view.msaa_color.is_none());
+
+        // TAA: motion + its depth + two history + scratch.
+        aa.set(0, false, true);
+        view.build_aa_targets(&device, &descriptors, aa)
+            .expect("build taa");
+        assert!(view.motion.is_some(), "TAA builds the motion target");
+        assert!(view.motion_depth.is_some());
+        assert!(
+            view.history[0].is_some() && view.history[1].is_some(),
+            "TAA builds the two ping-pong history images"
+        );
+        assert!(view.scratch.is_some(), "TAA renders the scene into scratch");
+        assert!(view.msaa_color.is_none(), "TAA is not MSAA");
+        assert!(!view.history_valid, "a fresh build has no temporal history");
+
+        // FXAA: scratch + motion (SSGI feeds it), but no TAA history.
+        aa.set(0, true, false);
+        view.build_aa_targets(&device, &descriptors, aa)
+            .expect("build fxaa");
+        assert!(
+            view.scratch.is_some(),
+            "FXAA renders the scene into scratch"
+        );
+        assert!(
+            view.history[0].is_none() && view.history[1].is_none(),
+            "FXAA has no TAA history"
+        );
+        assert!(view.msaa_color.is_none());
+
+        // MSAA (only when the device supports a count > 1; llvmpipe does).
+        if supported.contains(vk::SampleCountFlags::TYPE_4)
+            || supported.contains(vk::SampleCountFlags::TYPE_2)
+        {
+            aa.set(4, false, false);
+            view.build_aa_targets(&device, &descriptors, aa)
+                .expect("build msaa");
+            assert!(
+                view.msaa_color.is_some(),
+                "MSAA builds the multisampled color"
+            );
+            assert!(view.msaa_depth.is_some());
+            assert!(view.scratch.is_none(), "MSAA has no FXAA/TAA scratch");
+            assert!(view.history[0].is_none() && view.history[1].is_none());
+        }
+
+        drop(view);
+        drop(ssao);
+        drop(descriptors);
+        device.wait_idle().expect("idle before teardown");
+        drop(device);
+
+        let after = validation_issue_count();
+        assert_eq!(
+            before,
+            after,
+            "the per-mode AA target build must be validation-clean (saw {} new issue(s))",
+            after.saturating_sub(before)
+        );
+    }
+
+    /// The temporal bookkeeping: a fresh AA build has no history and no prev-viewProj; a
+    /// frame's `store_prev_view_proj` + `flip_history` mark them valid and toggle the parity;
+    /// a rebuild (resize / AA change) re-invalidates both (the reprojection is stale). The
+    /// phase-10 "TAA history invalidates on resize" acceptance gate. Skips when no device.
+    #[test]
+    fn taa_history_and_prev_view_proj_invalidate_on_rebuild() {
+        let device = match Device::new(&SurfaceSource::Offscreen) {
+            Ok(device) => device,
+            Err(err) => {
+                eprintln!("skipping: no Vulkan device obtainable ({err})");
+                return;
+            }
+        };
+        let free_list: BindlessFreeList = Arc::new(Mutex::new(Vec::new()));
+        let descriptors = Descriptors::new(&device, &free_list).expect("Descriptors");
+        let ssao = Ssao::new(&device).expect("Ssao");
+        let supported = device.supported_sample_counts(OFFSCREEN_COLOR_FORMAT, DEPTH_FORMAT);
+        let mut aa = crate::Aa::new(supported);
+        aa.set(0, false, true);
+
+        let mut view = ViewTarget::new(&device, 32, 32).expect("view");
+        view.allocate_screen_space_sets(&descriptors, &ssao)
+            .expect("alloc");
+        view.build_screen_space(&device, &descriptors, &ssao)
+            .expect("build screen-space");
+        view.build_aa_targets(&device, &descriptors, aa)
+            .expect("build taa");
+        assert!(!view.history_valid, "fresh build: no temporal history");
+        assert!(!view.prev_view_proj_valid, "fresh build: no prev viewProj");
+        assert_eq!(view.history_index, 0);
+
+        // A frame consumes the parity + records its viewProj.
+        view.store_prev_view_proj(saffron_geometry::glam::Mat4::IDENTITY);
+        view.flip_history();
+        assert!(view.history_valid, "a frame validates the history");
+        assert!(view.prev_view_proj_valid);
+        assert_eq!(view.history_index, 1, "the ping-pong parity flipped");
+
+        // A resize rebuilds the screen-space + AA targets and re-invalidates everything.
+        view.resize(&device, 64, 48).expect("resize");
+        view.build_screen_space(&device, &descriptors, &ssao)
+            .expect("rebuild screen-space");
+        view.build_aa_targets(&device, &descriptors, aa)
+            .expect("rebuild taa");
+        assert!(
+            !view.history_valid,
+            "a resize invalidates the TAA reprojection history"
+        );
+        assert!(
+            !view.prev_view_proj_valid,
+            "a resize invalidates the prev viewProj"
+        );
+        assert_eq!(view.history_index, 0, "the parity resets too");
+
+        drop(view);
+        drop(ssao);
+        drop(descriptors);
+        device.wait_idle().expect("idle before teardown");
+        drop(device);
+    }
+}

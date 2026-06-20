@@ -34,8 +34,8 @@ read-only leaf subrows under its row, sourced from the `inspect` result the poll
 for the Inspector — never an extra control call, and never for non-selected rows. Clicking a
 subrow keeps the entity selected and scrolls the matching Inspector section into view (a one-shot
 `focusComponent` signal); editing always stays in the Inspector. The subrow list reuses the
-Inspector's `orderedComponentNames`, so the tree leaves and the panel sections share one order
-and one hidden set (`Relationship` never shows in either).
+Inspector's `orderedComponentNames`, so the tree leaves and the panel sections share the selected
+entity's stored order and hidden set (`Relationship` never shows in either).
 
 A second header toggle hides skeleton joints: rows flagged `bone` by `list-entities` drop out of
 the rendered tree and their non-bone descendants re-anchor to the nearest visible ancestor

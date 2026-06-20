@@ -206,6 +206,9 @@ export const client = {
   setComponent(id: string, component: string, body: ComponentBody): Promise<unknown> {
     return call("set-component", { entity: id, component, json: body });
   },
+  setComponentOrder(id: string, components: string[]): Promise<unknown> {
+    return call("set-component-order", { entity: id, components });
+  },
   setComponentField(
     id: string,
     component: string,

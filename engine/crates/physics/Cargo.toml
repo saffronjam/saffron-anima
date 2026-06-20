@@ -1,0 +1,23 @@
+[package]
+name = "saffron-physics"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-core = { path = "../core" }
+saffron-geometry = { path = "../geometry" }
+saffron-scene = { path = "../scene" }
+saffron-animation = { path = "../animation" }
+saffron-physics-sys = { path = "../physics-sys" }
+
+# The bridge hands back `cxx::UniquePtr<JoltWorld>`, which `World` owns; glam is the engine math
+# vocabulary (re-exported by saffron-geometry, but named directly here for the result types).
+cxx.workspace = true
+glam.workspace = true
+thiserror.workspace = true

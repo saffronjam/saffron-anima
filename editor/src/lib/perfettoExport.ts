@@ -100,6 +100,12 @@ export function toPerfettoTrace(capture: ProfileCaptureDto): Uint8Array<ArrayBuf
   const events: SliceEvent[] = [];
   for (const span of capture.spans) {
     const track = span.lane === "gpu" ? GPU_TRACK : CPU_TRACK;
+    // A zero-or-negative-duration span (e.g. a sub-tick GPU pass like ssgi-history-restore, or a
+    // pass whose timestamps were unavailable) must still get a strictly-positive width: with
+    // begin and end at the same ts the tie-break below would emit SLICE_END before SLICE_BEGIN,
+    // leaving the begin unmatched — Perfetto then renders it as "[Incomplete]". A 1 ns floor keeps
+    // every slice a valid begin→end pair while staying visually instantaneous.
+    const endTs = Math.max(span.endNs, span.startNs + 1);
     events.push({
       ts: span.startNs,
       type: TYPE_SLICE_BEGIN,
@@ -108,7 +114,7 @@ export function toPerfettoTrace(capture: ProfileCaptureDto): Uint8Array<ArrayBuf
       depth: span.depth,
     });
     events.push({
-      ts: Math.max(span.startNs, span.endNs),
+      ts: endTs,
       type: TYPE_SLICE_END,
       track,
       name: "",

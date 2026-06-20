@@ -1,0 +1,45 @@
+[package]
+name = "saffron-host"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "saffron_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "saffron-host"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-core = { path = "../core" }
+saffron-app = { path = "../app" }
+saffron-window = { path = "../window" }
+saffron-rendering = { path = "../rendering" }
+saffron-sceneedit = { path = "../sceneedit" }
+saffron-control = { path = "../control" }
+saffron-scene = { path = "../scene" }
+saffron-geometry = { path = "../geometry" }
+saffron-animation = { path = "../animation" }
+saffron-physics = { path = "../physics" }
+saffron-script = { path = "../script" }
+saffron-assets = { path = "../assets" }
+saffron-signal = { path = "../signal" }
+saffron-protocol = { path = "../protocol" }
+glam.workspace = true
+serde_json.workspace = true
+rustix = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+# The drop test mirrors the reader's read-only `shm_open` probe to assert the segment is
+# `shm_unlink`'d on drop — the same syscall seam the producer uses. The shm-ABI gate's
+# `stat_shm` replica additionally `fstat`s the segment for its inode + size.
+rustix = { workspace = true, features = ["shm", "fs"] }
+saffron-test-support = { path = "../test-support" }
+bytemuck.workspace = true

@@ -1,27 +1,49 @@
 # CI / reproducible gate
 
-`tools/ci/check.sh` is the single reproducible gate for the engine + Tauri editor.
-It runs four steps and fails if any one fails:
+`tools/ci/check.sh` is the single reproducible gate for the Rust engine + Tauri editor — the
+Cargo/xtask/bun successor of the C++ gate. It runs ten steps in dependency order, accumulates
+failures (a failure in any one turns the whole gate red), and prints a per-step pass/fail
+summary ending in a clear `ALL GATES PASSED` / `SOME GATES FAILED` verdict.
 
-1. **engine build** — `cmake --preset debug` + `cmake --build build/debug -j1`
-   (`-j1` avoids an intermittent clang module-BMI ICE).
-2. **present-only host smoke** — launches `SaffronAnima` bounded to 5 frames
-   (`SAFFRON_EXIT_AFTER_FRAMES=5`); opens a real Vulkan swapchain.
-3. **control schema contract test** — `tools/check-control-schema/check.ts`
-   diffs live `sa` control output against `schemas/control`.
-4. **frontend build** — `editor/` `bun run build` (gen `@saffron/protocol` →
-   `tsc` → `vite build`).
+1. **workspace build** — `cargo build --workspace` + `cargo run -p xtask -- shaders`
+   (the `slangc` fan-out + asset copy next to the host binary).
+2. **codegen freshness** — `cargo run -p xtask -- gen-protocol` then `git diff --exit-code`
+   over the generated wire + Luau artifacts (`editor/src/protocol/sa-types.ts`, the OpenRPC
+   schema, the command manifest, `schemas/control/sa.generated.luau`). A drift means the
+   committed artifacts no longer match the Rust DTO source.
+3. **unit + crate tests** — `cargo test --workspace`: the inline `#[cfg(test)]` + crate `tests/`
+   suites, including every ported self-test oracle, the golden/snapshot byte-exact tests, and the
+   physics cross-arch determinism gate (its x86 half — see below).
+4. **self-test-removal assertion** — the phase-8 audit: no `run*SelfTest` / `SAFFRON_SELFTEST` /
+   `fn *self_test` appears *outside* a `#[cfg(test)]` module (i.e. no runtime self-test survives).
+5. **present-only smoke + validation-clean** — boots the Rust host bounded to 5 frames
+   (`SAFFRON_EXIT_AFTER_FRAMES=5`) and greps the log for `[saffron:vulkan] error: [validation]`
+   (the only automated detector for the silent GPU-state-bug class).
+6. **control-schema contract** — `tools/check-control-schema/check.ts` diffs the live host's
+   `help`/results against the generated manifest + OpenRPC, including the decimal-string-u64
+   `assertRawU64` tripwire.
+7. **project startup smoke** — `tools/check-projects/check.sh` boots the host on a project,
+   imports a model + texture, saves, restarts, and re-reads — asserting the on-disk asset layout.
+8. **e2e** — the `tests/e2e` bun suite against the Rust host (`SAFFRON_ANIMA_BIN` repointed at
+   `engine/target/debug/saffron-host`).
+9. **frontend** — `editor/` `bun run build` (gen `@saffron/protocol` → `tsc` → `vite build`) +
+   `bun test`.
+10. **lint** — `cargo fmt --check` + `cargo clippy --workspace -- -D warnings`.
+
+The four standing gates are *in* the sequence, not adjacent to it: validation-clean (step 5),
+the control-schema contract (step 6), golden/snapshot + the cross-arch determinism gate (inside
+step 3's `cargo test`), and the e2e validation-clean assertions (step 8).
 
 ## Prerequisites
 
-This builds **only** on the local Fedora Silverblue host inside the
-`saffron-build` toolbox. You need, all at once:
+This builds **only** on the local Fedora Silverblue host inside the `saffron-build` toolbox.
+You need, all at once:
 
-- the toolbox (clang 21 + libc++ `import std`, Vulkan 1.4 headers/loader/
-  validation/tools, SDL3, slang) — see `AGENTS.md`;
-- the **host bun** on `PATH` (the frontend build);
-- a **display** — steps 2 and 3 open a Vulkan swapchain, so run a headless
-  weston compositor and point SDL at it.
+- the toolbox (Rust toolchain via `rust-toolchain.toml`, Vulkan 1.4 headers/loader/validation/
+  tools, SDL3/winit display deps, slang) — see `AGENTS.md`;
+- the **host bun** on `PATH` (steps 6–9 — the contract test, e2e, and frontend);
+- a **display** — steps 5–8 open a Vulkan swapchain, so run a headless weston compositor and
+  point SDL at it.
 
 ## Local one-liner (the everyday gate)
 
@@ -33,22 +55,34 @@ toolbox run -c saffron-build bash -lc '
   tools/ci/check.sh'
 ```
 
-Or, from inside an already-prepared toolbox shell (display + bun set up), use the
-root `Makefile`: `make check` (also `make engine`, `make editor`, `make schema`,
-`make help`). The Makefile targets are thin wrappers — they assume the
-environment is already prepared (toolbox, bun, display); they do not set it up.
+Or, from inside an already-prepared toolbox shell (display + bun set up), use `just check`,
+which invokes this script the same way. The `just` recipes carry the toolbox/bun/display lore;
+this script owns *what runs and in what order*.
+
+## Hardware/display-gated items this gate cannot fully run
+
+The toolbox is x86_64 + software GPU (llvmpipe), so two legs are intentionally out of reach here
+and run on the self-hosted runner instead. They are documented, not silently skipped:
+
+- **The determinism gate's aarch64 leg.** Step 3 runs the determinism gate's x86 half (the trace
+  hash is stable run-to-run and build-to-build, flags confirmed active). The non-negotiable
+  `Rust-x86 hash == Rust-aarch64 hash` assertion is owned by `physics/tests/determinism.rs` and is
+  `DEFERRED-NEEDS-HARDWARE` until the self-hosted aarch64 runner re-derives the trace.
+- **The cross-engine parity rig** (`tests/e2e/parity.test.ts`, phase 7) records two measured
+  tolerances rather than asserting byte-identity: the project-JSON raw-byte key order (data
+  round-trips correctly) and the studio-lit preview render under llvmpipe (a lighting/tonemap
+  delta, not geometry). The byte-exact preview match is meaningful only on the real GPU the editor
+  ships on (`DEFERRED-NEEDS-HARDWARE`). These are sign-off inputs for `14-migration`, not gate
+  failures.
 
 ## Honest CI story
 
-There is **no GitHub-hosted pipeline**, on purpose. A stock hosted runner
-(`ubuntu-latest`) cannot build Saffron Anima: the toolchain lives in an
-immutable-OS toolbox (clang 21 + libc++ `import std` C++26 modules), it needs the
-Vulkan SDK + SDL3 + slang, and the smoke/schema steps need a headless GPU display.
-Reproducing that with `apt install` is not feasible, and faking a green hosted run
-would be dishonest.
+There is **no GitHub-hosted pipeline**, on purpose. A stock hosted runner (`ubuntu-latest`)
+cannot build Saffron Anima: the toolchain lives in an immutable-OS toolbox, it needs the Vulkan
+SDK + SDL3 + slang, and the smoke/schema/e2e steps need a headless GPU display. Reproducing that
+with `apt install` is not feasible, and faking a green hosted run would be dishonest.
 
-`.github/workflows/ci.yml` is therefore configured `runs-on: [self-hosted,
-saffron-build]` — it only runs on a **self-hosted runner** provisioned with the
-`saffron-build` toolbox (or a container image that replicates it) plus a headless
-weston. Until such a runner is registered, the workflow simply queues; the
-Makefile / `check.sh` run locally is the gate that actually protects `main`.
+`.github/workflows/ci.yml` is therefore configured `runs-on: [self-hosted, saffron-build]` — it
+only runs on a **self-hosted runner** provisioned with the `saffron-build` toolbox (or a container
+image that replicates it) plus a headless weston. Until such a runner is registered, the workflow
+simply queues; the `just check` / `check.sh` run locally is the gate that actually protects `main`.

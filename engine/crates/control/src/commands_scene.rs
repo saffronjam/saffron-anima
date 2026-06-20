@@ -1,0 +1,1848 @@
+//! The 42 scene-domain control commands: entity lifecycle (create/add/destroy/copy/
+//! rename/parent), the registry-driven component commands (add/remove/set/set-field/
+//! order), selection (select/deselect/get-selection), picking + inspect + focus +
+//! world-transform, the editor camera + gizmo + fly/script input, the play-state machine
+//! (play/pause/step/stop/get-play-state), environment + atmosphere, and the scripting
+//! surface registered here (status/drain-errors/drain-logs/set-override).
+//!
+//! This is the most `sceneEdit`-coupled domain: the handlers drive the
+//! [`SceneEditContext`] (selection, gizmo state, play machine, the active-scene
+//! resolution) and read the scene world through its component registry. `set-material` /
+//! `add-entity` / `pick` also touch `assets` and the renderer. Mirrors
+//! `registerSceneCommands` (`control_commands_scene.cpp`).
+//!
+//! The C++ scene file also registers `get/set-debug-overlays` (here in the animation
+//! domain — `commands_animation.rs`), `set-probes` / `recapture-probes` / `list-probes`
+//! (here in the render domain — `commands_render.rs`), and `quit` / `create-script` /
+//! `get-script-schema` (in the asset domain / host). The Rust port groups each command by
+//! its registration file, so those live elsewhere; this file is the remaining 42.
+
+use saffron_assets::{engine_asset_path, pick_entity};
+use saffron_geometry::glam::{Mat4, Vec2, Vec3 as GlamVec3, Vec4 as GlamVec4};
+use saffron_protocol::{
+    AddComponentResult, AddEntityParams, AddEntityPreset, ComponentList, ComponentParams,
+    CreateEntityParams, DeselectResult, DestroyEntityResult, DrainScriptErrorsParams,
+    DrainScriptErrorsResult, DrainScriptLogsParams, DrainScriptLogsResult, EditorCamera,
+    EmptyParams, EntityList, EntityListEntry, EntityParams, EntityRef, EnvironmentDto,
+    FlyInputParams, FlyInputResult, GizmoOpDto, GizmoPointerParams, GizmoPointerPhase,
+    GizmoPointerResult, GizmoSpaceDto, GizmoState, InspectResult, PickKind, PickParams, PickResult,
+    PlayStateResult, RemoveComponentResult, RenameEntityParams, ScriptErrorDto, ScriptInputParams,
+    ScriptInputResult, ScriptLogDto, ScriptStatusResult, SelectionResult, SetAtmosphereParams,
+    SetCameraParams, SetComponentFieldParams, SetComponentFieldResult, SetComponentOrderParams,
+    SetComponentOrderResult, SetComponentParams, SetComponentResult, SetEnvironmentParams,
+    SetGizmoParams, SetLightParams, SetMaterialParams, SetParentParams, SetScriptOverrideParams,
+    SetScriptOverrideResult, SetTransformParams, StepParams, Uuid as WireUuid, Vec3, Vec4,
+};
+use saffron_scene::{
+    Bone, Camera, CameraView, ComponentTraits, DirectionalLight, Entity, IdComponent, Mesh, Name,
+    PointLight, Relationship, Script, SpotLight, Transform, environment_from_json,
+    environment_to_json,
+};
+use saffron_sceneedit::{
+    GizmoOp, GizmoSpace, NativeGizmoHandle, PlayState, SceneEditCamera, SceneEditContext,
+    viewport_project,
+};
+use serde_json::{Map, Value, json};
+
+use crate::error::Error;
+use crate::registry::{CommandRegistry, EngineContext};
+use crate::selector::{entity_ref_dto, entity_uuid, fit_collider, resolve_entity};
+
+/// Converts a wire `Vec3` to glam (the C++ `toGlm`).
+fn to_glam3(v: Vec3) -> GlamVec3 {
+    GlamVec3::new(v.x, v.y, v.z)
+}
+
+/// Converts a glam vector to the wire `Vec3` (the C++ `fromGlm`).
+fn from_glam3(v: GlamVec3) -> Vec3 {
+    Vec3 {
+        x: v.x,
+        y: v.y,
+        z: v.z,
+    }
+}
+
+/// A wire `Vec3` as its `{x,y,z}` JSON object (the C++ `vec3Json`).
+fn vec3_json(v: &Vec3) -> Value {
+    json!({ "x": v.x, "y": v.y, "z": v.z })
+}
+
+/// A wire `Vec4` as its `{x,y,z,w}` JSON object (the C++ `vec4Json`).
+fn vec4_json(v: &Vec4) -> Value {
+    json!({ "x": v.x, "y": v.y, "z": v.z, "w": v.w })
+}
+
+/// The editor fly-camera as its wire DTO (the C++ `cameraDto`).
+fn camera_dto(camera: &SceneEditCamera) -> EditorCamera {
+    EditorCamera {
+        position: from_glam3(camera.position),
+        yaw: camera.yaw,
+        pitch: camera.pitch,
+        fov: camera.fov,
+        near: camera.near_plane,
+        far: camera.far_plane,
+        move_speed: camera.move_speed,
+        look_speed: camera.look_speed,
+    }
+}
+
+/// The active scene's environment as its wire DTO (the C++ `environmentDto`).
+fn environment_dto(ctx: &mut EngineContext<'_>) -> EnvironmentDto {
+    EnvironmentDto {
+        value: environment_to_json(&ctx.scene_edit.active_scene().environment),
+    }
+}
+
+/// Maps the backend-neutral [`GizmoOp`] to its wire spelling (the C++ `gizmoOpDto`).
+fn gizmo_op_dto(op: GizmoOp) -> GizmoOpDto {
+    match op {
+        GizmoOp::Rotate => GizmoOpDto::Rotate,
+        GizmoOp::Scale => GizmoOpDto::Scale,
+        GizmoOp::Translate => GizmoOpDto::Translate,
+    }
+}
+
+/// Maps a wire op spelling to the backend-neutral [`GizmoOp`] (the C++ `gizmoOpFromDto`).
+fn gizmo_op_from_dto(op: GizmoOpDto) -> GizmoOp {
+    match op {
+        GizmoOpDto::Rotate => GizmoOp::Rotate,
+        GizmoOpDto::Scale => GizmoOp::Scale,
+        GizmoOpDto::Translate => GizmoOp::Translate,
+    }
+}
+
+/// Maps the backend-neutral [`GizmoSpace`] to its wire spelling (the C++ `gizmoSpaceDto`).
+fn gizmo_space_dto(space: GizmoSpace) -> GizmoSpaceDto {
+    match space {
+        GizmoSpace::Local => GizmoSpaceDto::Local,
+        GizmoSpace::World => GizmoSpaceDto::World,
+    }
+}
+
+/// Maps a wire space spelling to the backend-neutral [`GizmoSpace`] (the C++ `gizmoSpaceFromDto`).
+fn gizmo_space_from_dto(space: GizmoSpaceDto) -> GizmoSpace {
+    match space {
+        GizmoSpaceDto::Local => GizmoSpace::Local,
+        GizmoSpaceDto::World => GizmoSpace::World,
+    }
+}
+
+/// The overlay handle's wire name (the C++ `nativeGizmoHandleName`).
+fn native_gizmo_handle_name(handle: NativeGizmoHandle) -> &'static str {
+    match handle {
+        NativeGizmoHandle::X => "x",
+        NativeGizmoHandle::Y => "y",
+        NativeGizmoHandle::Z => "z",
+        NativeGizmoHandle::Xy => "xy",
+        NativeGizmoHandle::Yz => "yz",
+        NativeGizmoHandle::Xz => "xz",
+        NativeGizmoHandle::Screen => "screen",
+        NativeGizmoHandle::Uniform => "uniform",
+        NativeGizmoHandle::None => "none",
+    }
+}
+
+/// The gizmo op/space/preserve-children as its wire DTO (the C++ `gizmoStateDto`).
+fn gizmo_state_dto(editor: &SceneEditContext) -> GizmoState {
+    GizmoState {
+        op: gizmo_op_dto(editor.gizmo_op),
+        space: gizmo_space_dto(editor.gizmo_space),
+        preserve_children: editor.preserve_children,
+    }
+}
+
+/// The uniform play-state reply (the C++ `playStateResultDto`).
+fn play_state_result_dto(editor: &SceneEditContext) -> PlayStateResult {
+    PlayStateResult {
+        state: editor.play_state.name().to_owned(),
+        play_version: editor.play_version as i32,
+        scene_version: editor.scene_version as i32,
+        has_primary_camera: editor.had_primary_camera,
+        animation_version: editor.animation_version as i32,
+        preview_asset: WireUuid(editor.preview_asset.value()),
+    }
+}
+
+/// Lowercases a script-input key/button (the C++ `normalizeScriptKey`).
+fn normalize_script_key(key: &str) -> String {
+    key.to_ascii_lowercase()
+}
+
+/// Whether a parent selector means "the scene root" — absent, `0`, `"0"`, or empty (the
+/// C++ `isRootSelector`): a detach never resolves entity 0.
+fn is_root_selector(selector: &Value) -> bool {
+    if selector.is_null() {
+        return true;
+    }
+    if let Some(n) = selector.as_u64() {
+        return n == 0;
+    }
+    if let Some(text) = selector.as_str() {
+        return text.is_empty() || text == "0";
+    }
+    false
+}
+
+/// Server-side billboard hit-test: the nearest meshless light/camera entity whose
+/// screen-space glyph contains `mouse` (viewport pixels) (the C++ `pickBillboard`).
+fn pick_billboard(
+    ctx: &mut SceneEditContext,
+    cam: &CameraView,
+    width: u32,
+    height: u32,
+    mouse: Vec2,
+) -> Entity {
+    if width == 0 || height == 0 {
+        return Entity::NULL;
+    }
+    // A touch larger than the drawn glyph for easier clicking.
+    const HALF: f32 = 13.0;
+    let scene = ctx.active_scene();
+
+    // Collect candidate entities first (a `for_each` borrows the scene mutably), then
+    // hit-test each — exactly the C++ light/camera billboard set: a meshless entity that
+    // is a point light, or a spot light that is not also a point light, or a camera that
+    // is neither.
+    let mut candidates: Vec<Entity> = Vec::new();
+    scene.for_each::<&PointLight, _>(|e, _| candidates.push(e));
+    scene.for_each::<&SpotLight, _>(|e, _| candidates.push(e));
+    scene.for_each::<&Camera, _>(|e, _| candidates.push(e));
+
+    let mut hit = Entity::NULL;
+    let mut best = HALF;
+    for e in candidates {
+        if !scene.has_component::<Transform>(e) || scene.has_component::<Mesh>(e) {
+            continue;
+        }
+        // De-dupe per the C++ guards: a point light is tested via the PointLight pass; a
+        // spot light only when not also a point light; a camera only when neither.
+        let is_point = scene.has_component::<PointLight>(e);
+        let is_spot = scene.has_component::<SpotLight>(e);
+        let pos = scene.world_translation(e);
+        let p = viewport_project(cam, width, height, pos);
+        if !p.visible {
+            continue;
+        }
+        let _ = (is_point, is_spot); // the candidate set already encodes the precedence
+        let d = (mouse - p.pixel).abs();
+        if d.x <= HALF && d.y <= HALF {
+            let dist = (mouse - p.pixel).length();
+            if dist <= best {
+                best = dist;
+                hit = e;
+            }
+        }
+    }
+    hit
+}
+
+/// Registers the scene-domain commands in the frozen registration order (the C++
+/// `registerSceneCommands`, minus the commands the Rust port groups into other files:
+/// the debug-overlay pair (animation), the probe trio (render), and `quit` (asset)).
+pub fn register_scene_commands(reg: &mut CommandRegistry) {
+    reg.register::<EmptyParams, EntityList>(
+        "list-entities",
+        "list all entities",
+        |ctx, _params| {
+            let scene = ctx.scene_edit.active_scene();
+            // Gather the id+name during the scan (which borrows the scene), then read the
+            // parent/bone flags after, so the per-entity reads don't overlap the for_each.
+            let mut rows: Vec<(Entity, u64, String)> = Vec::new();
+            scene.for_each::<(&IdComponent, &Name), _>(|entity, (id, name)| {
+                rows.push((entity, id.id.value(), name.name.clone()));
+            });
+            let mut entities = Vec::with_capacity(rows.len());
+            for (entity, id, name) in rows {
+                let mut entry = EntityListEntry {
+                    id: WireUuid(id),
+                    name,
+                    parent_id: None,
+                    bone: None,
+                };
+                // Omit parentId for roots (and bone for non-joints) so the optional fields
+                // stay genuinely optional.
+                if let Ok(parent) =
+                    scene.with_component::<Relationship, _>(entity, |r| r.parent.value())
+                    && parent != 0
+                {
+                    entry.parent_id = Some(WireUuid(parent));
+                }
+                if scene.has_component::<Bone>(entity) {
+                    entry.bone = Some(true);
+                }
+                entities.push(entry);
+            }
+            Ok(EntityList { entities })
+        },
+    );
+
+    reg.register::<EmptyParams, ComponentList>(
+        "list-components",
+        "list registered component types",
+        |ctx, _params| {
+            let components = ctx
+                .scene_edit
+                .registry
+                .rows()
+                .iter()
+                .map(|t| t.name.to_owned())
+                .collect();
+            Ok(ComponentList { components })
+        },
+    );
+
+    reg.register::<CreateEntityParams, EntityRef>(
+        "create-entity",
+        "create-entity {name}",
+        |ctx, params| {
+            let entity = ctx.scene_edit.active_scene().create_entity(params.name);
+            ctx.scene_edit.scene_version += 1;
+            let scene = ctx.scene_edit.active_scene();
+            Ok(entity_ref_dto(scene, entity))
+        },
+    );
+
+    reg.register::<EntityParams, DestroyEntityResult>(
+        "destroy-entity",
+        "destroy-entity {entity}",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            let scene = ctx.scene_edit.active_scene();
+            let id = entity_uuid(scene, entity);
+            // destroyEntity takes the whole subtree, so clear the selection when it sits
+            // anywhere under the doomed root (walk the selection's ancestry).
+            let selected = ctx.scene_edit.selected;
+            let mut cursor =
+                if selected != Entity::NULL && ctx.scene_edit.active_scene().valid(selected) {
+                    Some(selected)
+                } else {
+                    None
+                };
+            while let Some(node) = cursor {
+                if node == entity {
+                    ctx.scene_edit.set_selection(Entity::NULL);
+                    break;
+                }
+                cursor = ctx
+                    .scene_edit
+                    .active_scene()
+                    .with_component::<Relationship, _>(node, |r| r.parent_handle)
+                    .ok()
+                    .flatten();
+            }
+            ctx.scene_edit.active_scene().destroy_entity(entity);
+            ctx.scene_edit.scene_version += 1;
+            Ok(DestroyEntityResult {
+                destroyed: WireUuid(id),
+            })
+        },
+    );
+
+    reg.register::<SetParentParams, EntityRef>(
+        "set-parent",
+        "set-parent {entity, parent?} — reparent (absent/0 parent detaches to root)",
+        |ctx, params| {
+            let child = resolve_entity(ctx, &params.entity)?;
+            let mut new_parent = None;
+            if let Some(parent) = &params.parent
+                && !is_root_selector(parent)
+            {
+                new_parent = Some(resolve_entity(ctx, parent)?);
+            }
+            // set_parent carries the self/cycle guards and the world-preserving rebase
+            // (keep_world); the selection stays intact (only sceneVersion bumps).
+            ctx.scene_edit
+                .active_scene()
+                .set_parent(child, new_parent, true)
+                .map_err(|e| Error::command(e.to_string()))?;
+            ctx.scene_edit.scene_version += 1;
+            let scene = ctx.scene_edit.active_scene();
+            Ok(entity_ref_dto(scene, child))
+        },
+    );
+
+    reg.register::<ComponentParams, AddComponentResult>(
+        "add-component",
+        "add-component {entity, component}",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            let row = *ctx
+                .scene_edit
+                .registry
+                .find_by_name(&params.component)
+                .ok_or_else(|| {
+                    Error::command(format!("unknown component '{}'", params.component))
+                })?;
+            if (row.has)(ctx.scene_edit.active_scene(), entity) {
+                return Err(Error::command(format!(
+                    "entity already has '{}'",
+                    params.component
+                )));
+            }
+            (row.add_default)(ctx.scene_edit.active_scene(), entity);
+            // Auto-fit a Collider's shape to the entity mesh AABB on add (the locked
+            // decision). The registry add hook can't see the asset/renderer handles, so it
+            // runs here.
+            if row.name == "Collider" {
+                let _ = fit_collider(ctx, entity);
+            } else if row.name == "KinematicBones" {
+                // Auto-fit per-bone capsules through the shared physics helper.
+                let _ = saffron_physics::fit_bone_capsules(ctx.scene_edit.active_scene(), entity);
+            }
+            let (registry, scene) = ctx.scene_edit.registry_and_active_scene();
+            registry.append_component_order(scene, entity, row.name);
+            ctx.scene_edit.scene_version += 1;
+            Ok(AddComponentResult {
+                added: row.name.to_owned(),
+            })
+        },
+    );
+
+    reg.register::<ComponentParams, RemoveComponentResult>(
+        "remove-component",
+        "remove-component {entity, component}",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            let row = *ctx
+                .scene_edit
+                .registry
+                .find_by_name(&params.component)
+                .ok_or_else(|| {
+                    Error::command(format!("unknown component '{}'", params.component))
+                })?;
+            if !row.removable {
+                return Err(Error::command(format!(
+                    "component '{}' is not removable",
+                    row.name
+                )));
+            }
+            (row.remove)(ctx.scene_edit.active_scene(), entity);
+            let (registry, scene) = ctx.scene_edit.registry_and_active_scene();
+            registry.remove_component_order(scene, entity, row.name);
+            ctx.scene_edit.scene_version += 1;
+            Ok(RemoveComponentResult {
+                removed: row.name.to_owned(),
+            })
+        },
+    );
+
+    reg.register::<SetComponentOrderParams, SetComponentOrderResult>(
+        "set-component-order",
+        "set-component-order {entity, components}",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            let (registry, scene) = ctx.scene_edit.registry_and_active_scene();
+            registry
+                .set_component_order(scene, entity, params.components)
+                .map_err(|e| Error::command(e.to_string()))?;
+            ctx.scene_edit.scene_version += 1;
+            let (registry, scene) = ctx.scene_edit.registry_and_active_scene();
+            let components = registry.component_order(scene, entity);
+            Ok(SetComponentOrderResult { components })
+        },
+    );
+
+    // Applies a component's serialized form. Routing through the registry's deserialize
+    // keeps the wire shape identical to scene files.
+    reg.register::<SetComponentParams, SetComponentResult>(
+        "set-component",
+        "set-component {entity, component, json}",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            let row = *ctx
+                .scene_edit
+                .registry
+                .find_by_name(&params.component)
+                .ok_or_else(|| {
+                    Error::command(format!("unknown component '{}'", params.component))
+                })?;
+            let had_component = (row.has)(ctx.scene_edit.active_scene(), entity);
+            (row.deserialize)(ctx.scene_edit.active_scene(), entity, &params.json)
+                .map_err(|e| Error::command(e.to_string()))?;
+            if !had_component {
+                let (registry, scene) = ctx.scene_edit.registry_and_active_scene();
+                registry.append_component_order(scene, entity, row.name);
+            }
+            // A raw Relationship write changes the durable parent uuid; relink so the caches
+            // follow (a cyclic parent is cut back to root with a warning).
+            if row.name == "Relationship" {
+                ctx.scene_edit.active_scene().relink_hierarchy();
+            }
+            ctx.scene_edit.scene_version += 1;
+            Ok(SetComponentResult {
+                set: row.name.to_owned(),
+            })
+        },
+    );
+
+    // Routes through the Transform row's deserialize so the wire shape matches scene files
+    // exactly: {translation:{x,y,z}, rotation:{x,y,z} Euler radians, scale:{x,y,z}}.
+    reg.register::<SetTransformParams, EntityRef>(
+        "set-transform",
+        "set-transform {entity, translation?, rotation?, scale?, smooth?:0|1}",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            let row = *ctx
+                .scene_edit
+                .registry
+                .find_by_name("Transform")
+                .ok_or_else(|| Error::command("Transform component is not registered"))?;
+            if !(row.has)(ctx.scene_edit.active_scene(), entity) {
+                return Err(Error::command("entity has no Transform"));
+            }
+            // With preserve-children, freeze each direct child's world pose so the write
+            // below can rebase their locals (the children visually stay put).
+            let mut child_worlds: Vec<(Entity, Mat4)> = Vec::new();
+            if ctx.scene_edit.preserve_children
+                && ctx
+                    .scene_edit
+                    .active_scene()
+                    .has_component::<Relationship>(entity)
+            {
+                let children = ctx
+                    .scene_edit
+                    .active_scene()
+                    .with_component::<Relationship, _>(entity, |r| r.children.clone())
+                    .unwrap_or_default();
+                for child in children {
+                    if ctx
+                        .scene_edit
+                        .active_scene()
+                        .has_component::<Transform>(child)
+                    {
+                        let world = ctx.scene_edit.active_scene().compose_world_matrix(child);
+                        child_worlds.push((child, world));
+                    }
+                }
+            }
+            // Smooth edits become per-frame animation targets (step_edit_smoothing) instead
+            // of writes — except under preserve-children, where every write must rebase the
+            // subtree, so the edit applies exact.
+            if params.smooth.unwrap_or(false) && child_worlds.is_empty() {
+                let target = ctx.scene_edit.transform_smooth_entry_for(entity);
+                if let Some(t) = &params.translation {
+                    target.translation = Some(to_glam3(*t));
+                }
+                if let Some(r) = &params.rotation {
+                    target.rotation = Some(to_glam3(*r));
+                }
+                if let Some(s) = &params.scale {
+                    target.scale = Some(to_glam3(*s));
+                }
+                ctx.scene_edit.scene_version += 1;
+                let scene = ctx.scene_edit.active_scene();
+                return Ok(entity_ref_dto(scene, entity));
+            }
+            ctx.scene_edit.cancel_transform_smoothing(entity);
+            // Merge provided fields over the current transform so unspecified fields (e.g.
+            // scale) are preserved rather than reset to defaults.
+            let mut body = (row.serialize)(ctx.scene_edit.active_scene(), entity);
+            if let Some(t) = &params.translation {
+                body["translation"] = vec3_json(t);
+            }
+            if let Some(r) = &params.rotation {
+                body["rotation"] = vec3_json(r);
+            }
+            if let Some(s) = &params.scale {
+                body["scale"] = vec3_json(s);
+            }
+            (row.deserialize)(ctx.scene_edit.active_scene(), entity, &body)
+                .map_err(|e| Error::command(e.to_string()))?;
+            if !child_worlds.is_empty() {
+                let inv_world = ctx
+                    .scene_edit
+                    .active_scene()
+                    .compose_world_matrix(entity)
+                    .inverse();
+                for (child, world) in child_worlds {
+                    ctx.scene_edit
+                        .active_scene()
+                        .set_local_from_matrix(child, inv_world * world);
+                }
+            }
+            ctx.scene_edit.scene_version += 1;
+            let scene = ctx.scene_edit.active_scene();
+            Ok(entity_ref_dto(scene, entity))
+        },
+    );
+
+    // Adds/updates the entity's Material, merging the provided fields over its current value
+    // (baseColor as {x,y,z,w}).
+    reg.register::<SetMaterialParams, EntityRef>(
+        "set-material",
+        "set-material {entity, baseColor?:{x,y,z,w}, albedoTexture?:uuid, \
+         metallicRoughnessTexture?:uuid, metallic?, roughness?, emissive?:{x,y,z}, \
+         emissiveStrength?, unlit?:0|1, slot?, smooth?:0|1}",
+        |ctx, params| {
+            if ctx.scene_edit.previewing() {
+                return Err(Error::command("exit the asset preview first"));
+            }
+            let entity = resolve_entity(ctx, &params.entity)?;
+            // Slot path: merge the given fields into one slot of the MaterialSet (direct
+            // writes; per-slot smoothing is not animated).
+            if let Some(slot_index) = params.slot {
+                let set_row = *ctx
+                    .scene_edit
+                    .registry
+                    .find_by_name("MaterialSet")
+                    .ok_or_else(|| Error::command("MaterialSet component is not registered"))?;
+                if !(set_row.has)(ctx.scene_edit.active_scene(), entity) {
+                    return Err(Error::command("entity has no MaterialSet component"));
+                }
+                let mut set_body = (set_row.serialize)(ctx.scene_edit.active_scene(), entity);
+                let slots = set_body.get("slots").and_then(Value::as_array);
+                if slots.is_none_or(|s| slot_index as usize >= s.len()) {
+                    return Err(Error::command(format!(
+                        "material slot {slot_index} out of range"
+                    )));
+                }
+                let slot = &mut set_body["slots"][slot_index as usize];
+                if let Some(v) = &params.base_color {
+                    slot["baseColor"] = vec4_json(v);
+                }
+                if let Some(t) = params.albedo_texture {
+                    slot["albedoTexture"] = json!(t.value());
+                }
+                if let Some(t) = params.metallic_roughness_texture {
+                    slot["metallicRoughnessTexture"] = json!(t.value());
+                }
+                if let Some(m) = params.metallic {
+                    slot["metallic"] = json!(m);
+                }
+                if let Some(r) = params.roughness {
+                    slot["roughness"] = json!(r);
+                }
+                if let Some(e) = &params.emissive {
+                    slot["emissive"] = vec3_json(e);
+                }
+                if let Some(s) = params.emissive_strength {
+                    slot["emissiveStrength"] = json!(s);
+                }
+                if let Some(u) = params.unlit {
+                    slot["unlit"] = json!(u);
+                }
+                (set_row.deserialize)(ctx.scene_edit.active_scene(), entity, &set_body)
+                    .map_err(|e| Error::command(e.to_string()))?;
+                ctx.scene_edit.scene_version += 1;
+                let scene = ctx.scene_edit.active_scene();
+                return Ok(entity_ref_dto(scene, entity));
+            }
+            let row = *ctx
+                .scene_edit
+                .registry
+                .find_by_name("Material")
+                .ok_or_else(|| Error::command("Material component is not registered"))?;
+            if !(row.has)(ctx.scene_edit.active_scene(), entity) {
+                (row.add_default)(ctx.scene_edit.active_scene(), entity);
+            }
+            let smooth = params.smooth.unwrap_or(false);
+            let mut body = (row.serialize)(ctx.scene_edit.active_scene(), entity);
+            // With smooth, numeric fields become per-frame animation targets instead of
+            // direct writes (merging only texture/unlit here keeps the JSON round-trip from
+            // stomping the component's mid-animation values back).
+            if let Some(v) = &params.base_color
+                && !smooth
+            {
+                body["baseColor"] = vec4_json(v);
+            }
+            if let Some(t) = params.albedo_texture {
+                body["albedoTexture"] = json!(t.value());
+            }
+            if let Some(t) = params.metallic_roughness_texture {
+                body["metallicRoughnessTexture"] = json!(t.value());
+            }
+            if let Some(m) = params.metallic
+                && !smooth
+            {
+                body["metallic"] = json!(m);
+            }
+            if let Some(r) = params.roughness
+                && !smooth
+            {
+                body["roughness"] = json!(r);
+            }
+            if let Some(e) = &params.emissive
+                && !smooth
+            {
+                body["emissive"] = vec3_json(e);
+            }
+            if let Some(s) = params.emissive_strength
+                && !smooth
+            {
+                body["emissiveStrength"] = json!(s);
+            }
+            if let Some(u) = params.unlit {
+                body["unlit"] = json!(u);
+            }
+            (row.deserialize)(ctx.scene_edit.active_scene(), entity, &body)
+                .map_err(|e| Error::command(e.to_string()))?;
+            if smooth {
+                let target = ctx.scene_edit.material_smooth_entry_for(entity);
+                if let Some(v) = &params.base_color {
+                    target.base_color = Some(GlamVec4::new(v.x, v.y, v.z, v.w));
+                }
+                if let Some(m) = params.metallic {
+                    target.metallic = Some(m);
+                }
+                if let Some(r) = params.roughness {
+                    target.roughness = Some(r);
+                }
+                if let Some(e) = &params.emissive {
+                    target.emissive = Some(to_glam3(*e));
+                }
+                if let Some(s) = params.emissive_strength {
+                    target.emissive_strength = Some(s);
+                }
+            } else {
+                ctx.scene_edit.cancel_material_smoothing(entity);
+            }
+            ctx.scene_edit.scene_version += 1;
+            let scene = ctx.scene_edit.active_scene();
+            Ok(entity_ref_dto(scene, entity))
+        },
+    );
+
+    // Sets the directional light (the given entity, else the first one), merging provided
+    // fields (direction/color as {x,y,z}) over its current value.
+    reg.register::<SetLightParams, EntityRef>(
+        "set-light",
+        "set-light {entity?, direction?, color?, intensity?, ambient?}",
+        |ctx, params| {
+            let row = *ctx
+                .scene_edit
+                .registry
+                .find_by_name("DirectionalLight")
+                .ok_or_else(|| Error::command("DirectionalLight component is not registered"))?;
+            let target = if let Some(selector) = &params.entity {
+                resolve_entity(ctx, selector)?
+            } else {
+                let mut found = Entity::NULL;
+                ctx.scene_edit
+                    .active_scene()
+                    .for_each::<&DirectionalLight, _>(|entity, _| {
+                        if found == Entity::NULL {
+                            found = entity;
+                        }
+                    });
+                found
+            };
+            if target == Entity::NULL || !(row.has)(ctx.scene_edit.active_scene(), target) {
+                return Err(Error::command("no DirectionalLight to set"));
+            }
+            let mut body = (row.serialize)(ctx.scene_edit.active_scene(), target);
+            if let Some(d) = &params.direction {
+                body["direction"] = vec3_json(d);
+            }
+            if let Some(c) = &params.color {
+                body["color"] = vec3_json(c);
+            }
+            if let Some(i) = params.intensity {
+                body["intensity"] = json!(i);
+            }
+            if let Some(a) = params.ambient {
+                body["ambient"] = json!(a);
+            }
+            (row.deserialize)(ctx.scene_edit.active_scene(), target, &body)
+                .map_err(|e| Error::command(e.to_string()))?;
+            ctx.scene_edit.scene_version += 1;
+            let scene = ctx.scene_edit.active_scene();
+            Ok(entity_ref_dto(scene, target))
+        },
+    );
+
+    reg.register::<EntityParams, EntityRef>("select", "select {entity}", |ctx, params| {
+        let entity = resolve_entity(ctx, &params.entity)?;
+        ctx.scene_edit.set_selection(entity);
+        let scene = ctx.scene_edit.active_scene();
+        Ok(entity_ref_dto(scene, entity))
+    });
+
+    reg.register::<PickParams, PickResult>(
+        "pick",
+        "pick {u=0.5, v=0.5} — pick at viewport UV (0,0 = top-left); tests billboards then mesh AABBs",
+        |ctx, params| {
+            let u = params.u.unwrap_or(0.5);
+            let v = params.v.unwrap_or(0.5);
+            // The eye the frame was rendered with, so a click during play ray-casts from the
+            // game camera, not the parked fly-cam.
+            let cam = ctx.scene_edit.render_camera_view();
+            let width = ctx.renderer.viewport_width();
+            let height = ctx.renderer.viewport_height();
+            let mouse = Vec2::new(u * width as f32, v * height as f32);
+
+            // Billboards first (light/camera glyphs aren't in the mesh AABB set), then the
+            // mesh ray-pick. The glyph hit rect mirrors the overlay's ~12px half-size.
+            let billboard = pick_billboard(ctx.scene_edit, &cam, width, height, mouse);
+            if billboard != Entity::NULL {
+                ctx.scene_edit.set_selection(billboard);
+                let scene = ctx.scene_edit.active_scene();
+                let r = entity_ref_dto(scene, billboard);
+                return Ok(PickResult {
+                    hit: true,
+                    id: Some(r.id),
+                    name: Some(r.name),
+                    kind: Some(PickKind::Billboard),
+                });
+            }
+
+            // pick_entity flips proj[1][1] to match the renderer's clip space, so it expects
+            // y-down NDC: v=0 (viewport top) maps to ndc.y=-1.
+            let ndc = Vec2::new(u * 2.0 - 1.0, v * 2.0 - 1.0);
+            let assets = &mut *ctx.assets;
+            let viewport = (width, height);
+            let mut hit = Entity::NULL;
+            // The borrow split: pick_entity needs the upload seam + the active scene + the
+            // asset server at once. The scene is borrowed from scene_edit; take it inside the
+            // upload closure so the renderer borrow does not overlap it.
+            ctx.renderer.with_gpu_uploader(&mut |gpu| {
+                hit = pick_entity(
+                    gpu,
+                    viewport,
+                    ctx.scene_edit.active_scene(),
+                    assets,
+                    &cam,
+                    ndc,
+                );
+            });
+            if hit == Entity::NULL {
+                ctx.scene_edit.set_selection(hit);
+                return Ok(PickResult {
+                    hit: false,
+                    id: None,
+                    name: None,
+                    kind: None,
+                });
+            }
+            // A model instance is a single subtree; a click anywhere in it selects the whole
+            // model (its container root), not the bare mesh/bone node the ray hit.
+            let selected = ctx.scene_edit.active_scene().model_root_of(hit);
+            ctx.scene_edit.set_selection(selected);
+            let scene = ctx.scene_edit.active_scene();
+            let r = entity_ref_dto(scene, selected);
+            Ok(PickResult {
+                hit: true,
+                id: Some(r.id),
+                name: Some(r.name),
+                kind: Some(PickKind::Mesh),
+            })
+        },
+    );
+
+    reg.register::<EntityParams, InspectResult>(
+        "inspect",
+        "inspect {entity} — dump all its components as json",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            let mut components = Map::new();
+            // The registry rows are `Copy`; snapshot them so the per-row active-scene borrow
+            // does not overlap the registry borrow.
+            let rows: Vec<ComponentTraits> = ctx.scene_edit.registry.rows().to_vec();
+            for row in rows {
+                let scene = ctx.scene_edit.active_scene();
+                if (row.has)(scene, entity) {
+                    components.insert(row.name.to_owned(), (row.serialize)(scene, entity));
+                }
+            }
+            let scene = ctx.scene_edit.active_scene();
+            let r = entity_ref_dto(scene, entity);
+            let (registry, scene) = ctx.scene_edit.registry_and_active_scene();
+            let component_order = registry.component_order(scene, entity);
+            Ok(InspectResult {
+                id: r.id,
+                name: r.name,
+                components: Value::Object(components),
+                component_order,
+            })
+        },
+    );
+
+    reg.register::<EntityParams, EntityRef>(
+        "focus",
+        "focus {entity} — aim the editor camera at it",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            if !ctx
+                .scene_edit
+                .active_scene()
+                .has_component::<Transform>(entity)
+            {
+                return Err(Error::command("entity has no Transform"));
+            }
+            let target = ctx.scene_edit.active_scene().world_translation(entity);
+            let forward = ctx.scene_edit.camera.forward();
+            ctx.scene_edit.camera.position = target - forward * 5.0;
+            let scene = ctx.scene_edit.active_scene();
+            Ok(entity_ref_dto(scene, entity))
+        },
+    );
+
+    reg.register::<EntityParams, saffron_protocol::WorldTransformResult>(
+        "get-world-transform",
+        "get-world-transform {entity} — the entity's composed world translation + scale",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            let world = ctx.scene_edit.active_scene().world_matrix(entity);
+            let t = world.w_axis.truncate();
+            let s = GlamVec3::new(
+                world.x_axis.truncate().length(),
+                world.y_axis.truncate().length(),
+                world.z_axis.truncate().length(),
+            );
+            Ok(saffron_protocol::WorldTransformResult {
+                translation: from_glam3(t),
+                scale: from_glam3(s),
+            })
+        },
+    );
+
+    reg.register::<EmptyParams, EnvironmentDto>(
+        "get-environment",
+        "get-environment — dump the scene sky/environment settings",
+        |ctx, _params| Ok(environment_dto(ctx)),
+    );
+
+    // Merges the provided fields over the current environment (same wire shape as the scene
+    // file's "environment" block) so unspecified fields are preserved.
+    reg.register::<SetEnvironmentParams, EnvironmentDto>(
+        "set-environment",
+        "set-environment {--json {...} | skyMode?:color|texture|procedural, clearColor?:{x,y,z}, \
+         skyTexture?:uuid, skyIntensity?, skyRotation?, exposure?, visible?:bool, \
+         useSkyForAmbient?:bool, ambientColor?:{x,y,z}, ambientIntensity?}",
+        |ctx, params| {
+            let mut body = environment_to_json(&ctx.scene_edit.active_scene().environment);
+            if let Some(Value::Object(map)) = &params.json {
+                for (key, value) in map {
+                    body[key] = value.clone();
+                }
+            }
+            if let Some(v) = &params.sky_mode {
+                body["skyMode"] = json!(v);
+            }
+            if let Some(v) = &params.clear_color {
+                body["clearColor"] = vec3_json(v);
+            }
+            if let Some(v) = params.sky_texture {
+                body["skyTexture"] = json!(v.value());
+            }
+            if let Some(v) = params.sky_intensity {
+                body["skyIntensity"] = json!(v);
+            }
+            if let Some(v) = params.sky_rotation {
+                body["skyRotation"] = json!(v);
+            }
+            if let Some(v) = params.exposure {
+                body["exposure"] = json!(v);
+            }
+            if let Some(v) = params.visible {
+                body["visible"] = json!(v);
+            }
+            if let Some(v) = params.use_sky_for_ambient {
+                body["useSkyForAmbient"] = json!(v);
+            }
+            if let Some(v) = &params.ambient_color {
+                body["ambientColor"] = vec3_json(v);
+            }
+            if let Some(v) = params.ambient_intensity {
+                body["ambientIntensity"] = json!(v);
+            }
+            ctx.scene_edit.active_scene().environment = environment_from_json(&body);
+            ctx.scene_edit.scene_version += 1;
+            Ok(environment_dto(ctx))
+        },
+    );
+
+    // Merges atmosphere fields over the current environment's "atmosphere" block (same wire
+    // shape as the scene file), so unspecified fields are preserved.
+    reg.register::<SetAtmosphereParams, EnvironmentDto>(
+        "set-atmosphere",
+        "set-atmosphere {--json {...} | enabled?:bool, planetRadius?, atmosphereHeight?, \
+         rayleighScattering?:{x,y,z}, rayleighScaleHeight?, mieScattering?, mieScaleHeight?, \
+         mieAnisotropy?, ozoneAbsorption?:{x,y,z}, sunDiskAngularRadius?, sunDiskIntensity?}",
+        |ctx, params| {
+            let mut body = environment_to_json(&ctx.scene_edit.active_scene().environment);
+            let mut atmos = body.get("atmosphere").cloned().unwrap_or_else(|| json!({}));
+            if let Some(Value::Object(map)) = &params.json {
+                for (key, value) in map {
+                    atmos[key] = value.clone();
+                }
+            }
+            if let Some(v) = params.enabled {
+                atmos["enabled"] = json!(v);
+            }
+            if let Some(v) = params.planet_radius {
+                atmos["planetRadius"] = json!(v);
+            }
+            if let Some(v) = params.atmosphere_height {
+                atmos["atmosphereHeight"] = json!(v);
+            }
+            if let Some(v) = &params.rayleigh_scattering {
+                atmos["rayleighScattering"] = vec3_json(v);
+            }
+            if let Some(v) = params.rayleigh_scale_height {
+                atmos["rayleighScaleHeight"] = json!(v);
+            }
+            if let Some(v) = params.mie_scattering {
+                atmos["mieScattering"] = json!(v);
+            }
+            if let Some(v) = params.mie_scale_height {
+                atmos["mieScaleHeight"] = json!(v);
+            }
+            if let Some(v) = params.mie_anisotropy {
+                atmos["mieAnisotropy"] = json!(v);
+            }
+            if let Some(v) = &params.ozone_absorption {
+                atmos["ozoneAbsorption"] = vec3_json(v);
+            }
+            if let Some(v) = params.sun_disk_angular_radius {
+                atmos["sunDiskAngularRadius"] = json!(v);
+            }
+            if let Some(v) = params.sun_disk_intensity {
+                atmos["sunDiskIntensity"] = json!(v);
+            }
+            body["atmosphere"] = atmos;
+            ctx.scene_edit.active_scene().environment = environment_from_json(&body);
+            ctx.scene_edit.scene_version += 1;
+            Ok(environment_dto(ctx))
+        },
+    );
+
+    reg.register::<EmptyParams, SelectionResult>(
+        "get-selection",
+        "get-selection — the current editor selection + scene/selection version stamps",
+        |ctx, _params| {
+            let sel = ctx.scene_edit.selected;
+            let entity = if sel != Entity::NULL && ctx.scene_edit.active_scene().valid(sel) {
+                let scene = ctx.scene_edit.active_scene();
+                Some(entity_ref_dto(scene, sel))
+            } else {
+                None
+            };
+            Ok(SelectionResult {
+                selection_version: ctx.scene_edit.selection_version as i32,
+                scene_version: ctx.scene_edit.scene_version as i32,
+                entity,
+                play_state: ctx.scene_edit.play_state.name().to_owned(),
+                play_version: ctx.scene_edit.play_version as i32,
+                animation_version: ctx.scene_edit.animation_version as i32,
+            })
+        },
+    );
+
+    reg.register::<EmptyParams, DeselectResult>(
+        "deselect",
+        "deselect — clear the editor selection",
+        |ctx, _params| {
+            ctx.scene_edit.set_selection(Entity::NULL);
+            Ok(DeselectResult {
+                selection_version: ctx.scene_edit.selection_version as i32,
+            })
+        },
+    );
+
+    reg.register::<EmptyParams, PlayStateResult>(
+        "play",
+        "play — enter play mode (Edit) or resume (Paused)",
+        |ctx, _params| {
+            if ctx.scene_edit.previewing() {
+                return Err(Error::command("exit the asset preview first"));
+            }
+            if ctx.scene_edit.play_state == PlayState::Paused {
+                ctx.scene_edit
+                    .resume_play()
+                    .map_err(|e| Error::command(e.to_string()))?;
+            } else {
+                ctx.scene_edit
+                    .enter_play()
+                    .map_err(|e| Error::command(e.to_string()))?;
+            }
+            Ok(play_state_result_dto(ctx.scene_edit))
+        },
+    );
+
+    reg.register::<EmptyParams, PlayStateResult>(
+        "pause",
+        "pause — freeze the running scene (Playing only)",
+        |ctx, _params| {
+            ctx.scene_edit
+                .pause_play()
+                .map_err(|e| Error::command(e.to_string()))?;
+            Ok(play_state_result_dto(ctx.scene_edit))
+        },
+    );
+
+    reg.register::<StepParams, PlayStateResult>(
+        "step",
+        "step {frames=1} — advance fixed ticks (Paused only)",
+        |ctx, params| {
+            ctx.scene_edit
+                .step_play(params.frames.unwrap_or(1))
+                .map_err(|e| Error::command(e.to_string()))?;
+            Ok(play_state_result_dto(ctx.scene_edit))
+        },
+    );
+
+    reg.register::<EmptyParams, PlayStateResult>(
+        "stop",
+        "stop — discard the play scene and restore the authored one",
+        |ctx, _params| {
+            ctx.scene_edit
+                .stop_play()
+                .map_err(|e| Error::command(e.to_string()))?;
+            Ok(play_state_result_dto(ctx.scene_edit))
+        },
+    );
+
+    reg.register::<EmptyParams, PlayStateResult>(
+        "get-play-state",
+        "get-play-state — the current play state + version",
+        |ctx, _params| Ok(play_state_result_dto(ctx.scene_edit)),
+    );
+
+    reg.register::<EmptyParams, ScriptStatusResult>(
+        "get-script-status",
+        "get-script-status — play state, live script instances, error high-water",
+        |ctx, _params| {
+            Ok(ScriptStatusResult {
+                state: ctx.scene_edit.play_state.name().to_owned(),
+                instances: ctx.scene_edit.script_instance_count,
+                error_high_water: ctx.scene_edit.script_error_seq,
+            })
+        },
+    );
+
+    reg.register::<SetScriptOverrideParams, SetScriptOverrideResult>(
+        "set-script-override",
+        "set-script-override {entity, slot, name, value} — write one per-instance script \
+         field override (a null value clears it)",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            let scene = ctx.scene_edit.active_scene();
+            if !scene.has_component::<Script>(entity) {
+                return Err(Error::command("entity has no Script component"));
+            }
+            let slot_count = scene
+                .with_component::<Script, _>(entity, |c| c.scripts.len())
+                .unwrap_or(0);
+            if params.slot < 0 || params.slot as usize >= slot_count {
+                return Err(Error::command(format!(
+                    "slot {} out of range ({} slot(s))",
+                    params.slot, slot_count
+                )));
+            }
+            let (script_path, overrides) = scene
+                .with_component_mut::<Script, _>(entity, |component| {
+                    let slot = &mut component.scripts[params.slot as usize];
+                    if !slot.overrides.is_object() {
+                        slot.overrides = Value::Object(Map::new());
+                    }
+                    if params.value.is_null() {
+                        if let Some(map) = slot.overrides.as_object_mut() {
+                            map.remove(&params.name);
+                        }
+                    } else {
+                        slot.overrides[&params.name] = params.value.clone();
+                    }
+                    (slot.script_path.clone(), slot.overrides.clone())
+                })
+                .map_err(|e| Error::command(e.to_string()))?;
+            ctx.scene_edit.scene_version += 1;
+            Ok(SetScriptOverrideResult {
+                script_path,
+                overrides,
+            })
+        },
+    );
+
+    reg.register::<DrainScriptErrorsParams, DrainScriptErrorsResult>(
+        "drain-script-errors",
+        "drain-script-errors {since} — script errors with seq > since (non-blocking)",
+        |ctx, params| {
+            let since = params.since.unwrap_or(0);
+            let high_water_seq = ctx.scene_edit.script_error_seq;
+            let oldest_seq = ctx.scene_edit.script_errors.first().map_or(0, |e| e.seq);
+            // The ring drops its oldest entries; a cursor older than what survives means the
+            // caller missed events.
+            let overflowed = oldest_seq > 0 && since + 1 < oldest_seq;
+            let events = ctx
+                .scene_edit
+                .script_errors
+                .iter()
+                .filter(|e| e.seq > since)
+                .map(|e| ScriptErrorDto {
+                    seq: e.seq,
+                    entity: WireUuid(e.entity_uuid),
+                    script: e.script.clone(),
+                    message: e.message.clone(),
+                    tick: e.tick,
+                })
+                .collect();
+            Ok(DrainScriptErrorsResult {
+                events,
+                high_water_seq,
+                oldest_seq,
+                overflowed,
+            })
+        },
+    );
+
+    reg.register::<DrainScriptLogsParams, DrainScriptLogsResult>(
+        "drain-script-logs",
+        "drain-script-logs {since} — sa.log lines with seq > since (non-blocking)",
+        |ctx, params| {
+            let since = params.since.unwrap_or(0);
+            let high_water_seq = ctx.scene_edit.script_log_seq;
+            let oldest_seq = ctx.scene_edit.script_logs.first().map_or(0, |e| e.seq);
+            let overflowed = oldest_seq > 0 && since + 1 < oldest_seq;
+            let events = ctx
+                .scene_edit
+                .script_logs
+                .iter()
+                .filter(|e| e.seq > since)
+                .map(|e| ScriptLogDto {
+                    seq: e.seq,
+                    entity: WireUuid(e.entity_uuid),
+                    message: e.message.clone(),
+                    epoch_ms: e.epoch_ms,
+                    tick: e.tick,
+                })
+                .collect();
+            Ok(DrainScriptLogsResult {
+                events,
+                high_water_seq,
+                oldest_seq,
+                overflowed,
+            })
+        },
+    );
+
+    reg.register::<AddEntityParams, EntityRef>(
+        "add-entity",
+        "add-entity {preset=empty|cube|model|point-light|spot-light|directional-light|camera|reflection-probe}",
+        |ctx, params| {
+            let preset = params.preset.unwrap_or(AddEntityPreset::Empty);
+            let entity = match preset {
+                AddEntityPreset::Empty => ctx.scene_edit.active_scene().create_entity("Entity"),
+                AddEntityPreset::Cube | AddEntityPreset::Model => {
+                    if !ctx.scene_edit.project_loaded {
+                        return Err(Error::command("no project loaded"));
+                    }
+                    // The built-in cube is a model asset like any other: ensure its .smodel
+                    // exists, then instantiate it into the scene.
+                    let cube_path = engine_asset_path("models/cube.gltf");
+                    let cube_id = ctx
+                        .assets
+                        .ensure_builtin_model_asset(&cube_path.to_string_lossy())
+                        .map_err(|e| Error::command(e.to_string()))?;
+                    ctx.assets
+                        .instantiate_model(ctx.scene_edit.active_scene(), cube_id, "Cube")
+                        .map_err(|e| Error::command(e.to_string()))?
+                }
+                AddEntityPreset::PointLight => {
+                    let e = ctx.scene_edit.active_scene().create_entity("Point Light");
+                    let scene = ctx.scene_edit.active_scene();
+                    let _ = scene.add_component(e, PointLight::default());
+                    let _ = scene.with_component_mut::<Transform, _>(e, |t| {
+                        t.translation = GlamVec3::new(0.0, 2.0, 0.0);
+                    });
+                    e
+                }
+                AddEntityPreset::SpotLight => {
+                    let e = ctx.scene_edit.active_scene().create_entity("Spot Light");
+                    let scene = ctx.scene_edit.active_scene();
+                    let _ = scene.add_component(e, SpotLight::default());
+                    let _ = scene.with_component_mut::<Transform, _>(e, |t| {
+                        t.translation = GlamVec3::new(0.0, 4.0, 0.0);
+                    });
+                    e
+                }
+                AddEntityPreset::DirectionalLight => {
+                    let e = ctx
+                        .scene_edit
+                        .active_scene()
+                        .create_entity("Directional Light");
+                    let _ = ctx
+                        .scene_edit
+                        .active_scene()
+                        .add_component(e, DirectionalLight::default());
+                    e
+                }
+                AddEntityPreset::Camera => {
+                    let e = ctx.scene_edit.active_scene().create_entity("Camera");
+                    let _ = ctx
+                        .scene_edit
+                        .active_scene()
+                        .add_component(e, Camera::default());
+                    e
+                }
+                AddEntityPreset::ReflectionProbe => {
+                    let e = ctx
+                        .scene_edit
+                        .active_scene()
+                        .create_entity("Reflection Probe");
+                    let scene = ctx.scene_edit.active_scene();
+                    let _ = scene.add_component(e, saffron_scene::ReflectionProbe::default());
+                    let _ = scene.with_component_mut::<Transform, _>(e, |t| {
+                        t.translation = GlamVec3::new(0.0, 2.0, 0.0);
+                    });
+                    e
+                }
+            };
+            ctx.scene_edit.scene_version += 1;
+            ctx.scene_edit.set_selection(entity);
+            let scene = ctx.scene_edit.active_scene();
+            Ok(entity_ref_dto(scene, entity))
+        },
+    );
+
+    reg.register::<EntityParams, EntityRef>(
+        "copy-entity",
+        "copy-entity {entity} — deep-duplicate it (selects the copy)",
+        |ctx, params| {
+            let src = resolve_entity(ctx, &params.entity)?;
+            let src_name = ctx
+                .scene_edit
+                .active_scene()
+                .with_component::<Name, _>(src, |n| n.name.clone())
+                .unwrap_or_default();
+            let copy_name = format!("{src_name} (copy)");
+            let fresh = ctx
+                .scene_edit
+                .active_scene()
+                .create_entity(copy_name.clone());
+            // deserialize add-defaults each missing component and applies fromJson, so we do
+            // not call addDefault (which would double-emplace Name/Transform that
+            // create_entity already added). Copying the Name component overwrites the
+            // "(copy)" suffix, so restore it afterwards.
+            let rows: Vec<ComponentTraits> = ctx.scene_edit.registry.rows().to_vec();
+            for row in rows {
+                let scene = ctx.scene_edit.active_scene();
+                if (row.has)(scene, src) {
+                    let body = (row.serialize)(scene, src);
+                    let _ = (row.deserialize)(scene, fresh, &body);
+                }
+            }
+            let _ = ctx
+                .scene_edit
+                .active_scene()
+                .with_component_mut::<Name, _>(fresh, |n| n.name = copy_name);
+            let (registry, scene) = ctx.scene_edit.registry_and_active_scene();
+            let src_order = registry.component_order(scene, src);
+            let (registry, scene) = ctx.scene_edit.registry_and_active_scene();
+            let _ = registry.set_component_order(scene, fresh, src_order);
+            // The round-trip duplicated the source's parent uuid (the copy joins the source's
+            // parent as a sibling); relink so the copy lands in its parent's children cache.
+            ctx.scene_edit.active_scene().relink_hierarchy();
+            ctx.scene_edit.scene_version += 1;
+            ctx.scene_edit.set_selection(fresh);
+            let scene = ctx.scene_edit.active_scene();
+            Ok(entity_ref_dto(scene, fresh))
+        },
+    );
+
+    reg.register::<RenameEntityParams, EntityRef>(
+        "rename-entity",
+        "rename-entity {entity, name} — set its Name component",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            if params.name.is_empty() {
+                return Err(Error::command("usage: rename-entity {entity, name}"));
+            }
+            let _ = ctx
+                .scene_edit
+                .active_scene()
+                .with_component_mut::<Name, _>(entity, |n| n.name = params.name.clone());
+            ctx.scene_edit.scene_version += 1;
+            let scene = ctx.scene_edit.active_scene();
+            Ok(entity_ref_dto(scene, entity))
+        },
+    );
+
+    reg.register::<SetComponentFieldParams, SetComponentFieldResult>(
+        "set-component-field",
+        "set-component-field {entity, component, field, value} — merge one field (value may \
+         be a uuid string, number, bool, or json object)",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            if params.component.is_empty() || params.field.is_empty() {
+                return Err(Error::command(
+                    "usage: set-component-field {entity, component, field, value}",
+                ));
+            }
+            let row = *ctx
+                .scene_edit
+                .registry
+                .find_by_name(&params.component)
+                .ok_or_else(|| {
+                    Error::command(format!("unknown component '{}'", params.component))
+                })?;
+            if !(row.has)(ctx.scene_edit.active_scene(), entity) {
+                (row.add_default)(ctx.scene_edit.active_scene(), entity);
+            }
+            let mut body = (row.serialize)(ctx.scene_edit.active_scene(), entity);
+            // The CLI passes every value as a string; a fully-numeric one becomes a u64 so
+            // numeric/id fields land as numbers, while non-numeric strings pass through.
+            let mut value = params.value.clone();
+            if let Some(s) = value.as_str()
+                && let Ok(n) = s.parse::<u64>()
+            {
+                value = json!(n);
+            }
+            if let Some(index) = params.index {
+                // Address one element of an array field: an object value merges its keys into
+                // body[field][index] (a partial edit), any other value replaces the element.
+                let array = body.get_mut(&params.field).and_then(Value::as_array_mut);
+                let out_of_range = array
+                    .as_ref()
+                    .is_none_or(|a| index < 0 || index as usize >= a.len());
+                if out_of_range {
+                    return Err(Error::command(format!(
+                        "'{}.{}' has no array index {}",
+                        params.component, params.field, index
+                    )));
+                }
+                let element = &mut body[&params.field][index as usize];
+                if let Value::Object(map) = value {
+                    for (key, sub) in map {
+                        element[&key] = sub;
+                    }
+                } else {
+                    *element = value;
+                }
+            } else {
+                body[&params.field] = value;
+            }
+            (row.deserialize)(ctx.scene_edit.active_scene(), entity, &body)
+                .map_err(|e| Error::command(e.to_string()))?;
+            // A raw Relationship write changes the durable parent uuid; relink so the caches
+            // follow (a cyclic parent is cut back to root with a warning).
+            if row.name == "Relationship" {
+                ctx.scene_edit.active_scene().relink_hierarchy();
+            }
+            ctx.scene_edit.scene_version += 1;
+            Ok(SetComponentFieldResult {
+                set: row.name.to_owned(),
+                field: params.field,
+            })
+        },
+    );
+
+    reg.register::<EmptyParams, EditorCamera>(
+        "get-camera",
+        "get-camera — the editor fly-camera state",
+        |ctx, _params| Ok(camera_dto(&ctx.scene_edit.camera)),
+    );
+
+    reg.register::<SetCameraParams, EditorCamera>(
+        "set-camera",
+        "set-camera {position?, yaw?, pitch?, fov?, near?, far?, moveSpeed?, lookSpeed?}",
+        |ctx, params| {
+            let c = &mut ctx.scene_edit.camera;
+            if let Some(p) = params.position {
+                c.position = to_glam3(p);
+            }
+            if let Some(y) = params.yaw {
+                c.yaw = y;
+            }
+            if let Some(p) = params.pitch {
+                c.pitch = p;
+            }
+            if let Some(f) = params.fov {
+                c.fov = f;
+            }
+            if let Some(n) = params.near {
+                c.near_plane = n;
+            }
+            if let Some(f) = params.far {
+                c.far_plane = f;
+            }
+            if let Some(m) = params.move_speed {
+                c.move_speed = m;
+            }
+            if let Some(l) = params.look_speed {
+                c.look_speed = l;
+            }
+            Ok(camera_dto(c))
+        },
+    );
+
+    reg.register::<EmptyParams, GizmoState>(
+        "get-gizmo",
+        "get-gizmo — the gizmo op + space",
+        |ctx, _params| Ok(gizmo_state_dto(ctx.scene_edit)),
+    );
+
+    reg.register::<SetGizmoParams, GizmoState>(
+        "set-gizmo",
+        "set-gizmo {op?:translate|rotate|scale, space?:world|local, preserveChildren?:0|1}",
+        |ctx, params| {
+            if ctx.scene_edit.play_state != PlayState::Edit {
+                return Err(Error::command("gizmo is hidden during play"));
+            }
+            if let Some(op) = params.op {
+                ctx.scene_edit.gizmo_op = gizmo_op_from_dto(op);
+            }
+            if let Some(space) = params.space {
+                ctx.scene_edit.gizmo_space = gizmo_space_from_dto(space);
+            }
+            if let Some(preserve) = params.preserve_children {
+                ctx.scene_edit.preserve_children = preserve;
+            }
+            Ok(gizmo_state_dto(ctx.scene_edit))
+        },
+    );
+
+    reg.register::<GizmoPointerParams, GizmoPointerResult>(
+        "gizmo-pointer",
+        "gizmo-pointer {phase:hover|begin|drag|end, x, y} — drive the overlay gizmo \
+         (x,y are NDC [-1,1])",
+        |ctx, params| {
+            if ctx.scene_edit.play_state != PlayState::Edit {
+                return Err(Error::command("gizmo is hidden during play"));
+            }
+            // Keep mode/space in sync with the backend-neutral gizmo state (the single source).
+            ctx.scene_edit.sync_native_gizmo();
+            let cam = ctx.scene_edit.camera.view();
+            let width = ctx.renderer.viewport_width();
+            let height = ctx.renderer.viewport_height();
+            // NDC [-1,1] (top-left = -1,-1) → viewport pixels, matching the SDL pointer path.
+            let x = params.x.unwrap_or(0.0);
+            let y = params.y.unwrap_or(0.0);
+            let mouse = Vec2::new(
+                (x * 0.5 + 0.5) * width as f32,
+                (y * 0.5 + 0.5) * height as f32,
+            );
+
+            let phase = params.phase.unwrap_or(GizmoPointerPhase::Hover);
+            match phase {
+                GizmoPointerPhase::Hover => {
+                    ctx.scene_edit.native_gizmo.hovered =
+                        ctx.scene_edit.hit_native_gizmo(&cam, width, height, mouse);
+                }
+                GizmoPointerPhase::Begin => {
+                    let hovered = ctx.scene_edit.hit_native_gizmo(&cam, width, height, mouse);
+                    ctx.scene_edit.native_gizmo.hovered = hovered;
+                    let selected = ctx.scene_edit.selected;
+                    if hovered != NativeGizmoHandle::None
+                        && selected != Entity::NULL
+                        && ctx
+                            .scene_edit
+                            .active_scene()
+                            .has_component::<Transform>(selected)
+                    {
+                        ctx.scene_edit.native_gizmo.active = hovered;
+                        ctx.scene_edit.native_gizmo.dragging = true;
+                        ctx.scene_edit.native_gizmo.start_mouse = mouse;
+                        ctx.scene_edit.native_gizmo.drag_target = mouse;
+                        ctx.scene_edit.native_gizmo.drag_smoothed = mouse;
+                        ctx.scene_edit.native_gizmo.drag_pending = false;
+                        ctx.scene_edit.native_gizmo.target = selected;
+                        ctx.scene_edit.snapshot_native_gizmo_start(selected);
+                    }
+                }
+                GizmoPointerPhase::Drag => {
+                    // Record the sample only; step_native_gizmo_drag smooths toward it every
+                    // rendered frame, so ~60Hz pointer samples don't staircase on screen.
+                    ctx.scene_edit.native_gizmo.drag_target = mouse;
+                    ctx.scene_edit.native_gizmo.drag_pending = true;
+                }
+                GizmoPointerPhase::End => {
+                    // Land exactly on the release position regardless of smoothing lag.
+                    if ctx.scene_edit.native_gizmo.dragging {
+                        ctx.scene_edit
+                            .apply_native_gizmo_drag(&cam, width, height, mouse);
+                    }
+                    ctx.scene_edit.native_gizmo.dragging = false;
+                    ctx.scene_edit.native_gizmo.drag_pending = false;
+                    ctx.scene_edit.native_gizmo.active = NativeGizmoHandle::None;
+                    ctx.scene_edit.native_gizmo.target = Entity::NULL;
+                }
+            }
+
+            let handle = if ctx.scene_edit.native_gizmo.dragging {
+                ctx.scene_edit.native_gizmo.active
+            } else {
+                ctx.scene_edit.native_gizmo.hovered
+            };
+            Ok(GizmoPointerResult {
+                hovered: native_gizmo_handle_name(handle).to_owned(),
+                dragging: ctx.scene_edit.native_gizmo.dragging,
+            })
+        },
+    );
+
+    reg.register::<FlyInputParams, FlyInputResult>(
+        "fly-input",
+        "fly-input {active, lookDx, lookDy, forward, back, left, right, up, down} — stream \
+         editor fly-cam input (look deltas in pixels accumulate until the next frame)",
+        |ctx, params| {
+            let fly = &mut ctx.scene_edit.fly_input;
+            fly.active = params.active.unwrap_or(false);
+            fly.look_delta +=
+                Vec2::new(params.look_dx.unwrap_or(0.0), params.look_dy.unwrap_or(0.0));
+            fly.forward = params.forward.unwrap_or(false);
+            fly.back = params.back.unwrap_or(false);
+            fly.left = params.left.unwrap_or(false);
+            fly.right = params.right.unwrap_or(false);
+            fly.up = params.up.unwrap_or(false);
+            fly.down = params.down.unwrap_or(false);
+            if !fly.active {
+                fly.look_delta = Vec2::ZERO;
+            }
+            Ok(FlyInputResult { active: fly.active })
+        },
+    );
+
+    reg.register::<ScriptInputParams, ScriptInputResult>(
+        "script-input",
+        "script-input {keys, mouseButtons?, mouseX?, mouseY?, scroll?} — forward gameplay \
+         input to Lua",
+        |ctx, params| {
+            let input = &mut ctx.scene_edit.script_input;
+            input.held.clear();
+            for key in &params.keys {
+                let normalized = normalize_script_key(key);
+                if !normalized.is_empty() {
+                    input.held.insert(normalized);
+                }
+            }
+            if let Some(buttons) = &params.mouse_buttons {
+                input.mouse_buttons.clear();
+                for button in buttons {
+                    let normalized = normalize_script_key(button);
+                    if !normalized.is_empty() {
+                        input.mouse_buttons.insert(normalized);
+                    }
+                }
+            }
+            if let Some(x) = params.mouse_x {
+                input.mouse_x = x;
+            }
+            if let Some(y) = params.mouse_y {
+                input.mouse_y = y;
+            }
+            if let Some(scroll) = params.scroll {
+                input.scroll = scroll;
+            }
+            let mut keys: Vec<String> = input.held.iter().cloned().collect();
+            keys.sort();
+            Ok(ScriptInputResult { keys })
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::registry::{CommandRegistry, register_builtin_commands};
+    use crate::test_support::{StubRenderer, with_stub};
+
+    fn registry() -> CommandRegistry {
+        let mut reg = CommandRegistry::new();
+        register_builtin_commands(&mut reg);
+        reg
+    }
+
+    /// `create-entity` then `destroy-entity` round-trips, and the returned `EntityRef.id` is
+    /// a decimal string (the frozen wire encoding).
+    #[test]
+    fn create_then_destroy_entity_round_trip() {
+        let reg = registry();
+        let mut renderer = StubRenderer::default();
+        with_stub(&mut renderer, |ctx| {
+            let created = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "create-entity", "params": { "name": "Crate" } }),
+            );
+            assert_eq!(created["ok"], json!(true));
+            let id = created["result"]["id"].as_str().expect("id is a string");
+            assert_eq!(created["result"]["name"], json!("Crate"));
+            assert!(id.parse::<u64>().is_ok(), "id is a decimal string");
+
+            let destroyed = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "destroy-entity", "params": { "entity": id } }),
+            );
+            assert_eq!(destroyed["ok"], json!(true));
+            assert_eq!(destroyed["result"]["destroyed"], json!(id));
+        });
+    }
+
+    /// `resolve_entity` finds by UUID (a numeric string), by name, and errors with the dumped
+    /// selector when absent — surfaced through `select`.
+    #[test]
+    fn resolve_entity_by_uuid_name_and_missing() {
+        let reg = registry();
+        let mut renderer = StubRenderer::default();
+        with_stub(&mut renderer, |ctx| {
+            let created = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "create-entity", "params": { "name": "Target" } }),
+            );
+            let id = created["result"]["id"].as_str().unwrap().to_owned();
+
+            // By numeric-string UUID.
+            let by_uuid =
+                reg.dispatch(ctx, &json!({ "cmd": "select", "params": { "entity": id } }));
+            assert_eq!(by_uuid["ok"], json!(true));
+            assert_eq!(by_uuid["result"]["name"], json!("Target"));
+
+            // By name.
+            let by_name = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "select", "params": { "entity": "Target" } }),
+            );
+            assert_eq!(by_name["ok"], json!(true));
+            assert_eq!(by_name["result"]["id"], json!(id));
+
+            // Absent: the error dumps the selector byte-for-byte.
+            let missing = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "select", "params": { "entity": "ghost" } }),
+            );
+            assert_eq!(missing["ok"], json!(false));
+            assert_eq!(missing["error"], json!("entity not found: \"ghost\""));
+        });
+    }
+
+    /// `add-component` / `set-component-field` dispatch through the registry by name; an
+    /// unknown component name is a typed error.
+    #[test]
+    fn component_commands_dispatch_through_registry() {
+        let reg = registry();
+        let mut renderer = StubRenderer::default();
+        with_stub(&mut renderer, |ctx| {
+            let created = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "create-entity", "params": { "name": "E" } }),
+            );
+            let id = created["result"]["id"].as_str().unwrap().to_owned();
+
+            let added = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "add-component", "params": { "entity": id, "component": "Camera" } }),
+            );
+            assert_eq!(added["ok"], json!(true));
+            assert_eq!(added["result"]["added"], json!("Camera"));
+
+            // Re-add the same component is rejected.
+            let again = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "add-component", "params": { "entity": id, "component": "Camera" } }),
+            );
+            assert_eq!(again["ok"], json!(false));
+            assert_eq!(again["error"], json!("entity already has 'Camera'"));
+
+            // An unknown component name is a typed error.
+            let unknown = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "add-component", "params": { "entity": id, "component": "Nope" } }),
+            );
+            assert_eq!(unknown["ok"], json!(false));
+            assert_eq!(unknown["error"], json!("unknown component 'Nope'"));
+
+            // set-component-field merges one field on the Name component (the string value
+            // passes through, not parsed as a number).
+            let set = reg.dispatch(
+                ctx,
+                &json!({
+                    "cmd": "set-component-field",
+                    "params": { "entity": id, "component": "Name", "field": "name", "value": "Renamed" }
+                }),
+            );
+            assert_eq!(set["ok"], json!(true));
+            assert_eq!(set["result"]["set"], json!("Name"));
+            assert_eq!(set["result"]["field"], json!("name"));
+
+            let inspect = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "inspect", "params": { "entity": id } }),
+            );
+            assert_eq!(
+                inspect["result"]["components"]["Name"]["name"],
+                json!("Renamed")
+            );
+        });
+    }
+
+    /// `inspect` returns `{id, name, components, componentOrder}` with the order in registry
+    /// order and the component blob as an opaque object.
+    #[test]
+    fn inspect_dumps_components_and_order() {
+        let reg = registry();
+        let mut renderer = StubRenderer::default();
+        with_stub(&mut renderer, |ctx| {
+            let created = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "create-entity", "params": { "name": "Inspectable" } }),
+            );
+            let id = created["result"]["id"].as_str().unwrap().to_owned();
+
+            let inspect = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "inspect", "params": { "entity": id } }),
+            );
+            assert_eq!(inspect["ok"], json!(true));
+            assert_eq!(inspect["result"]["name"], json!("Inspectable"));
+            assert!(inspect["result"]["components"].is_object());
+            let order = inspect["result"]["componentOrder"]
+                .as_array()
+                .expect("componentOrder is an array");
+            // A fresh entity carries Name + Transform.
+            assert_eq!(order[0], json!("Name"));
+            assert_eq!(order[1], json!("Transform"));
+        });
+    }
+
+    /// `play` / `pause` / `step` / `stop` produce the expected `PlayStateResult` transitions.
+    #[test]
+    fn play_machine_transitions() {
+        let reg = registry();
+        let mut renderer = StubRenderer::default();
+        with_stub(&mut renderer, |ctx| {
+            let play = reg.dispatch(ctx, &json!({ "cmd": "play" }));
+            assert_eq!(play["ok"], json!(true));
+            assert_eq!(play["result"]["state"], json!("playing"));
+
+            let pause = reg.dispatch(ctx, &json!({ "cmd": "pause" }));
+            assert_eq!(pause["ok"], json!(true));
+            assert_eq!(pause["result"]["state"], json!("paused"));
+
+            let step = reg.dispatch(ctx, &json!({ "cmd": "step", "params": { "frames": 1 } }));
+            assert_eq!(step["ok"], json!(true));
+            assert_eq!(step["result"]["state"], json!("paused"));
+
+            let stop = reg.dispatch(ctx, &json!({ "cmd": "stop" }));
+            assert_eq!(stop["ok"], json!(true));
+            assert_eq!(stop["result"]["state"], json!("edit"));
+
+            // pause from Edit is rejected (wrong state).
+            let bad = reg.dispatch(ctx, &json!({ "cmd": "pause" }));
+            assert_eq!(bad["ok"], json!(false));
+        });
+    }
+
+    /// `set-gizmo` applies op/space/preserve-children and `get-gizmo` reads them back.
+    #[test]
+    fn gizmo_state_round_trips() {
+        let reg = registry();
+        let mut renderer = StubRenderer::default();
+        with_stub(&mut renderer, |ctx| {
+            let set = reg.dispatch(
+                ctx,
+                &json!({
+                    "cmd": "set-gizmo",
+                    "params": { "op": "rotate", "space": "local", "preserveChildren": true }
+                }),
+            );
+            assert_eq!(set["ok"], json!(true));
+            assert_eq!(set["result"]["op"], json!("rotate"));
+            assert_eq!(set["result"]["space"], json!("local"));
+            assert_eq!(set["result"]["preserveChildren"], json!(true));
+
+            let get = reg.dispatch(ctx, &json!({ "cmd": "get-gizmo" }));
+            assert_eq!(get["result"]["op"], json!("rotate"));
+            assert_eq!(get["result"]["space"], json!("local"));
+        });
+    }
+}

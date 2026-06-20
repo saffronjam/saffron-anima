@@ -1,0 +1,24 @@
+[package]
+name = "saffron-control-client"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "saffron_control_client"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# Engine-free: links only the wire crates so the `sa` CLI and the Rust e2e harness can
+# share it without pulling a renderer or Jolt. `saffron-protocol` carries the frozen DTOs
+# and the `Uuid` decimal-string encoding; `serde`/`serde_json` do the framing.
+[dependencies]
+saffron-protocol = { path = "../protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rustix = { workspace = true, features = ["process"] }
+thiserror = { workspace = true }

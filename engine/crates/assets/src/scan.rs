@@ -1,0 +1,550 @@
+//! Filesystem-as-source-of-truth catalog reconciliation + standalone texture register.
+//!
+//! [`AssetServer::scan_assets`] walks the asset root (skipping the `.cache/` dir),
+//! rebuilds the catalog from disk, and diffs it against the live one: a container
+//! contributes a [`AssetType::Model`] parent + sub-asset rows via the prefix read;
+//! engine-written standalone files (a uuid filename stem) keep their prior row (only the
+//! path is refreshed); a foreign file (a raw `.png` dropped in) identifies via a sibling
+//! `.smeta` minted on first sight. Display names + folders are preserved from the prior
+//! catalog by id, and the walk is **sorted** so the catalog cache is reproducible.
+//!
+//! [`AssetServer::load_catalog`] is the cache-fast path: if `assets/.cache/catalog.json`'s
+//! stored signature still matches the on-disk signature, it reuses the cached rows
+//! (skipping every `.smodel` prefix read); on any mismatch / missing / corrupt cache it
+//! falls back to a full [`AssetServer::scan_assets`]. The cache is **never** load-bearing —
+//! a cold scan always yields the identical catalog.
+//!
+//! [`AssetServer::register_texture_bytes`] / [`AssetServer::register_hdr_texture_bytes`]
+//! write the encoded bytes under `textures/<uuid>.<ext>`, add a [`AssetType::Texture`]
+//! catalog row, and seed the GPU texture cache so the just-uploaded texture is served
+//! without a re-read.
+
+use saffron_core::Uuid;
+use saffron_geometry::{decode_image_from_memory, decode_image_from_memory_hdr};
+use saffron_json::{Value, dump_json, json_string_or, json_u64_or, parse_json, uuid_to_json};
+use saffron_scene::{AssetCatalog, AssetEntry, AssetType, Colorspace};
+use walkdir::WalkDir;
+
+use crate::AssetServer;
+use crate::catalog::{
+    catalog_folders_from_json, catalog_folders_to_json, catalog_from_json, catalog_to_json,
+};
+use crate::error::{Error, Result};
+use crate::gpu::GpuUploader;
+use crate::import::{ScanDelta, catalog_rows_for_model};
+use crate::model::read_container_metadata;
+use crate::names::{asset_type_from_name, asset_type_name, colorspace_from_name, colorspace_name};
+
+/// The `.smeta` sidecar for a foreign/headerless file (a raw `.png` dropped into
+/// `assets/`): the one place a file with no room in its own bytes carries a stable id +
+/// colorspace.
+///
+/// Engine-written files (`.smodel`, extracted `.smat`/`.smesh`) never get one — their
+/// identity is the bytes/name.
+#[derive(Clone, Debug)]
+struct SmetaData {
+    id: Uuid,
+    asset_type: AssetType,
+    colorspace: Colorspace,
+    folder: String,
+    name: String,
+}
+
+impl Default for SmetaData {
+    fn default() -> Self {
+        Self {
+            id: Uuid(0),
+            asset_type: AssetType::Texture,
+            colorspace: Colorspace::Auto,
+            folder: String::new(),
+            name: String::new(),
+        }
+    }
+}
+
+/// Reads a `.smeta` sidecar.
+///
+/// # Errors
+///
+/// [`Error::Io`] if the file is unreadable or not a JSON object, or has no id.
+fn read_smeta(path: &str) -> Result<SmetaData> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| Error::Io(format!("cannot open '{path}': {e}")))?;
+    let doc = parse_json(&text)?;
+    if !doc.is_object() {
+        return Err(Error::Io(format!("'{path}' is not a valid .smeta")));
+    }
+    let meta = SmetaData {
+        id: Uuid(json_u64_or(&doc, "id", 0)),
+        asset_type: asset_type_from_name(&json_string_or(&doc, "type", "texture".to_owned())),
+        colorspace: colorspace_from_name(&json_string_or(&doc, "colorspace", "auto".to_owned())),
+        folder: json_string_or(&doc, "folder", String::new()),
+        name: json_string_or(&doc, "name", String::new()),
+    };
+    if meta.id.value() == 0 {
+        return Err(Error::Io(format!("'{path}' has no id")));
+    }
+    Ok(meta)
+}
+
+/// Writes a `.smeta` sidecar (pretty, 2-space indent — the C++ `dumpJson(doc, 2)`).
+///
+/// # Errors
+///
+/// [`Error::Io`] if the file cannot be written.
+fn write_smeta(path: &str, meta: &SmetaData) -> Result<()> {
+    let mut doc = serde_json::Map::new();
+    doc.insert("version".to_owned(), Value::from(1));
+    doc.insert("id".to_owned(), uuid_to_json(meta.id.value()));
+    doc.insert(
+        "type".to_owned(),
+        Value::String(asset_type_name(meta.asset_type).to_owned()),
+    );
+    doc.insert(
+        "colorspace".to_owned(),
+        Value::String(colorspace_name(meta.colorspace).to_owned()),
+    );
+    if !meta.folder.is_empty() {
+        doc.insert("folder".to_owned(), Value::String(meta.folder.clone()));
+    }
+    if !meta.name.is_empty() {
+        doc.insert("name".to_owned(), Value::String(meta.name.clone()));
+    }
+    std::fs::write(path, dump_json(&Value::Object(doc), 2))
+        .map_err(|e| Error::Io(format!("cannot write '{path}': {e}")))
+}
+
+/// Whether `name` parses as a pure decimal uuid stem (an engine-written standalone file).
+fn parse_uuid_stem(stem: &str) -> Option<u64> {
+    if stem.is_empty() {
+        return None;
+    }
+    stem.parse::<u64>().ok()
+}
+
+/// The lowercased extension (without the dot) of a path's filename.
+fn lower_ext(path: &std::path::Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
+/// Lists every regular file under `root`, skipping the `.cache/` subtree, sorted by
+/// relative path so the scan order (and thus the catalog cache) is deterministic.
+fn sorted_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files: Vec<std::path::PathBuf> = WalkDir::new(root)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|e| e.file_name() != ".cache")
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .map(walkdir::DirEntry::into_path)
+        .collect();
+    files.sort();
+    files
+}
+
+impl AssetServer {
+    /// Walks `assets/`, rebuilds the catalog from disk, and diffs it against the live one.
+    ///
+    /// The filesystem is the source of truth: a never-saved import is rediscovered, a
+    /// deleted file's row is dropped. Containers contribute rows via [`catalog_rows_for_model`];
+    /// engine-written standalone files identify by their uuid filename stem; foreign files
+    /// identify via a `.smeta` sidecar (minted + written on first sight). Display names +
+    /// folders are preserved from the prior catalog by id.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible in practice (filesystem errors on individual entries are
+    /// skipped with a warn), but returns [`Result`] so the contract matches the C++ and
+    /// the cache-write caller composes with `?`.
+    pub fn scan_assets(&mut self) -> Result<ScanDelta> {
+        let mut delta = ScanDelta::default();
+        if self.root.as_os_str().is_empty() || !self.root.exists() {
+            return Ok(delta);
+        }
+        let root = self.root.clone();
+        let previous = self.catalog.clone();
+        let mut rebuilt = AssetCatalog {
+            folders: previous.folders.clone(),
+            ..AssetCatalog::default()
+        };
+
+        for path in sorted_files(&root) {
+            let rel = match path.strip_prefix(&root) {
+                Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            let ext = lower_ext(&path);
+            let path_str = path.to_string_lossy().to_string();
+
+            if ext == "smodel" {
+                match read_container_metadata(&path) {
+                    Ok(meta) => {
+                        for mut row in catalog_rows_for_model(&meta, &rel) {
+                            preserve_name_folder(&previous, &mut row);
+                            rebuilt.put(row);
+                        }
+                    }
+                    Err(err) => {
+                        saffron_core::log_warn!("scan: skipping '{rel}': {err}");
+                    }
+                }
+                continue;
+            }
+
+            let (asset_type, hdr) = match ext.as_str() {
+                "smesh" => (AssetType::Mesh, false),
+                "smat" => (AssetType::Material, false),
+                "sanim" => (AssetType::Animation, false),
+                "png" | "jpg" | "jpeg" | "tga" | "bmp" => (AssetType::Texture, false),
+                "hdr" => (AssetType::Texture, true),
+                _ => continue,
+            };
+
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            if let Some(id) = parse_uuid_stem(stem) {
+                // Engine-written standalone file (uuid name). A known one keeps its row
+                // verbatim (name/folder/duration/colorspace are not recoverable from the
+                // filename) — only its path is refreshed. A genuinely new one infers
+                // type/hdr from the extension.
+                if let Some(prev) = previous.find(Uuid(id)) {
+                    let mut row = prev.clone();
+                    row.path = rel;
+                    row.container = Uuid(0);
+                    row.chunk = -1;
+                    rebuilt.put(row);
+                } else {
+                    rebuilt.put(AssetEntry {
+                        id: Uuid(id),
+                        name: stem.to_owned(),
+                        asset_type,
+                        path: rel,
+                        hdr,
+                        ..AssetEntry::default()
+                    });
+                }
+                continue;
+            }
+
+            // A foreign / headerless file: identity + colorspace come from a sibling
+            // `.smeta`, minted + written on first sight (a wrong-colorspace guess is warned).
+            let smeta_path = format!("{path_str}.smeta");
+            let mut sidecar = None;
+            if std::path::Path::new(&smeta_path).exists() {
+                match read_smeta(&smeta_path) {
+                    Ok(loaded) => sidecar = Some(loaded),
+                    Err(err) => {
+                        saffron_core::log_warn!("scan: ignoring bad .smeta '{rel}.smeta': {err}");
+                    }
+                }
+            }
+            let sidecar = match sidecar {
+                Some(sidecar) => sidecar,
+                None => {
+                    let colorspace = if hdr {
+                        Colorspace::Hdr
+                    } else {
+                        Colorspace::Srgb
+                    };
+                    let minted = SmetaData {
+                        id: Uuid::new(),
+                        asset_type,
+                        colorspace,
+                        folder: String::new(),
+                        name: stem.to_owned(),
+                    };
+                    if let Err(err) = write_smeta(&smeta_path, &minted) {
+                        saffron_core::log_warn!("scan: could not write '{rel}.smeta': {err}");
+                    }
+                    saffron_core::log_warn!(
+                        "scan: minted .smeta for foreign file '{rel}' (colorspace {} — verify it for data maps like normals)",
+                        colorspace_name(colorspace)
+                    );
+                    minted
+                }
+            };
+
+            let mut row = AssetEntry {
+                id: sidecar.id,
+                name: if sidecar.name.is_empty() {
+                    stem.to_owned()
+                } else {
+                    sidecar.name.clone()
+                },
+                asset_type: sidecar.asset_type,
+                path: rel,
+                folder: sidecar.folder.clone(),
+                colorspace: sidecar.colorspace,
+                hdr: sidecar.colorspace == Colorspace::Hdr,
+                linear: sidecar.colorspace == Colorspace::Linear,
+                ..AssetEntry::default()
+            };
+            preserve_name_folder(&previous, &mut row);
+            rebuilt.put(row);
+        }
+
+        for (&id, &index) in &rebuilt.by_id {
+            if !previous.by_id.contains_key(&id) {
+                delta.added.push(rebuilt.entries[index].clone());
+            }
+        }
+        for &id in previous.by_id.keys() {
+            if !rebuilt.by_id.contains_key(&id) {
+                delta.removed.push(Uuid(id));
+            }
+        }
+        self.catalog = rebuilt;
+        Ok(delta)
+    }
+
+    /// Builds the catalog with the cache as a latency shortcut: a valid, signature-matching
+    /// `assets/.cache/catalog.json` is reused verbatim; on any mismatch / missing / corrupt
+    /// cache it falls back to a full [`Self::scan_assets`] and refreshes the cache.
+    ///
+    /// The cache is never load-bearing — a cold scan always yields the identical catalog.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`Self::scan_assets`] error on the fallback path.
+    pub fn load_catalog(&mut self) -> Result<ScanDelta> {
+        let cache_path = self.catalog_cache_path();
+        if cache_path.exists() {
+            if let Ok(text) = std::fs::read_to_string(&cache_path) {
+                if let Ok(doc) = parse_json(&text) {
+                    if doc.is_object() {
+                        let cached = json_string_or(&doc, "signature", String::new());
+                        let live = asset_signature(&self.root).to_string();
+                        if !cached.is_empty() && cached == live {
+                            catalog_from_json(
+                                &mut self.catalog,
+                                doc.get("assets").unwrap_or(&Value::Array(Vec::new())),
+                            );
+                            catalog_folders_from_json(
+                                &mut self.catalog,
+                                doc.get("assetFolders").unwrap_or(&Value::Array(Vec::new())),
+                            );
+                            return Ok(ScanDelta::default());
+                        }
+                    }
+                }
+            }
+        }
+        let delta = self.scan_assets()?;
+        self.write_catalog_cache();
+        Ok(delta)
+    }
+
+    /// Persists the catalog + the current asset signature to `assets/.cache/catalog.json`.
+    /// Regenerable and gitignored: deleting it is always safe (the next load is a cold scan).
+    pub fn write_catalog_cache(&self) {
+        let cache_path = self.catalog_cache_path();
+        if let Some(parent) = cache_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let doc = serde_json::json!({
+            "version": 1,
+            "signature": asset_signature(&self.root).to_string(),
+            "assets": catalog_to_json(&self.catalog),
+            "assetFolders": catalog_folders_to_json(&self.catalog),
+        });
+        let _ = std::fs::write(&cache_path, dump_json(&doc, 0));
+    }
+
+    /// The catalog cache path (`assets/.cache/catalog.json`).
+    fn catalog_cache_path(&self) -> std::path::PathBuf {
+        self.root.join(".cache").join("catalog.json")
+    }
+
+    /// Decodes + uploads `encoded` (RGBA8) as a `srgb`/unorm texture, writes the bytes to
+    /// `textures/<uuid>.<ext>`, adds a [`AssetType::Texture`] catalog row, and seeds the
+    /// GPU texture cache. Returns the minted id.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Geometry`] if the bytes do not decode, [`Error::Render`] if the upload
+    /// fails, [`Error::Io`] if the file cannot be written.
+    pub fn register_texture_bytes(
+        &mut self,
+        gpu: &dyn GpuUploader,
+        encoded: &[u8],
+        ext: &str,
+        name: &str,
+        srgb: bool,
+    ) -> Result<Uuid> {
+        let decoded = decode_image_from_memory(encoded)?;
+        let texture = gpu.upload_texture(&decoded.rgba, decoded.width, decoded.height, srgb)?;
+        let id = Uuid::new();
+        let extension = if ext.is_empty() { "png" } else { ext };
+        self.ensure_asset_directories();
+        let relative_path = format!("textures/{}.{extension}", id.value());
+        std::fs::write(format!("{}/{relative_path}", self.root.display()), encoded)
+            .map_err(|e| Error::Io(format!("cannot write texture '{relative_path}': {e}")))?;
+        self.put_texture_row(id, name, relative_path, false, !srgb);
+        self.texture_by_uuid.insert(id.value(), Some(texture));
+        Ok(id)
+    }
+
+    /// Decodes + uploads `encoded` HDR bytes as a linear float texture, writes them to
+    /// `textures/<uuid>.hdr`, adds a Texture row with `hdr = true`, and seeds the cache.
+    /// Returns the minted id.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Geometry`] if the bytes do not decode, [`Error::Render`] if the upload
+    /// fails, [`Error::Io`] if the file cannot be written.
+    pub fn register_hdr_texture_bytes(
+        &mut self,
+        gpu: &dyn GpuUploader,
+        encoded: &[u8],
+        name: &str,
+    ) -> Result<Uuid> {
+        let decoded = decode_image_from_memory_hdr(encoded)?;
+        let texture = gpu.upload_texture_float(&decoded.rgba, decoded.width, decoded.height)?;
+        let id = Uuid::new();
+        self.ensure_asset_directories();
+        let relative_path = format!("textures/{}.hdr", id.value());
+        std::fs::write(format!("{}/{relative_path}", self.root.display()), encoded)
+            .map_err(|e| Error::Io(format!("cannot write texture '{relative_path}': {e}")))?;
+        self.put_texture_row(id, name, relative_path, true, false);
+        self.texture_by_uuid.insert(id.value(), Some(texture));
+        Ok(id)
+    }
+
+    /// Imports an external image file into the asset dir + catalog (name = filename stem),
+    /// dispatching `.hdr` to the float register path.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if the file cannot be read, plus any
+    /// [`Self::register_texture_bytes`] / [`Self::register_hdr_texture_bytes`] error.
+    pub fn import_texture(&mut self, gpu: &dyn GpuUploader, path: &str) -> Result<Uuid> {
+        let encoded =
+            std::fs::read(path).map_err(|e| Error::Io(format!("cannot open '{path}': {e}")))?;
+        let file = std::path::Path::new(path);
+        let stem = file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        let ext = file
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        if ext.eq_ignore_ascii_case("hdr") {
+            return self.register_hdr_texture_bytes(gpu, &encoded, stem);
+        }
+        self.register_texture_bytes(gpu, &encoded, ext, stem, true)
+    }
+
+    /// Inserts a standalone Texture row with a name uniqued against the live catalog.
+    fn put_texture_row(&mut self, id: Uuid, name: &str, path: String, hdr: bool, linear: bool) {
+        let unique = self.catalog.unique_name(name);
+        self.catalog.put(AssetEntry {
+            id,
+            name: unique,
+            asset_type: AssetType::Texture,
+            path,
+            hdr,
+            linear,
+            ..AssetEntry::default()
+        });
+    }
+}
+
+/// Restores a row's display name (and non-empty folder) from a prior catalog entry by id.
+fn preserve_name_folder(previous: &AssetCatalog, row: &mut AssetEntry) {
+    if let Some(prev) = previous.find(row.id) {
+        row.name = prev.name.clone();
+        if !prev.folder.is_empty() {
+            row.folder = prev.folder.clone();
+        }
+    }
+}
+
+/// A cheap fingerprint of `assets/`: an FNV-1a fold over sorted `(relpath, mtime, size)`
+/// for every file (including `.smeta` sidecars; excluding `.cache/`). Stat-only — no file
+/// contents read. Any add / remove / touch / sidecar edit changes it, so it is a sound
+/// trigger for invalidating the cache (the C++ `assetSignature`).
+fn asset_signature(root: &std::path::Path) -> u64 {
+    if !root.exists() {
+        return 0;
+    }
+    let mut entries: Vec<String> = WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| e.file_name() != ".cache")
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let rel = e
+                .path()
+                .strip_prefix(root)
+                .ok()?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let meta = e.metadata().ok()?;
+            let size = meta.len();
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0u64, |d| d.as_nanos() as u64);
+            Some(format!("{rel}|{mtime}|{size}"))
+        })
+        .collect();
+    entries.sort();
+    let mut hash = 1469598103934665603u64;
+    for entry in &entries {
+        for ch in entry.bytes() {
+            hash ^= u64::from(ch);
+            hash = hash.wrapping_mul(1099511628211u64);
+        }
+        hash = hash.wrapping_mul(1099511628211u64); // separator between entries
+    }
+    hash
+}
+
+/// Detects a texture's material-map role from its filename (lowercased substring match).
+/// Returns an empty string when no role token is recognized (the C++ `detectMaterialRole`).
+#[must_use]
+pub fn detect_material_role(filename: &str) -> &'static str {
+    let lower = filename.to_ascii_lowercase();
+    let has = |token: &str| lower.contains(token);
+    if has("arm") || has("orm") || has("_mra") {
+        "orm"
+    } else if has("albedo")
+        || has("basecolor")
+        || has("base_color")
+        || has("diffuse")
+        || has("_diff")
+        || has("_col")
+        || has("color")
+    {
+        "albedo"
+    } else if has("normal") || has("_nor") || has("nrm") {
+        "normal"
+    } else if has("rough") {
+        "roughness"
+    } else if has("metal") {
+        "metallic"
+    } else if has("emissive") || has("emission") || has("_emit") {
+        "emissive"
+    } else if has("height") || has("displace") || has("_disp") || has("bump") {
+        "height"
+    } else if has("occlusion") || has("_ao") || has("ambientocclusion") {
+        "ao"
+    } else if has("gloss") {
+        "gloss"
+    } else if has("opacity") || has("alpha") || has("_mask") {
+        "opacity"
+    } else {
+        ""
+    }
+}
+
+#[cfg(test)]
+#[path = "scan_tests.rs"]
+mod tests;

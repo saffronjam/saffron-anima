@@ -5,10 +5,12 @@ import { fileURLToPath } from "node:url";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const editorDir = dirname(scriptDir);
 const repoRoot = dirname(editorDir);
-const generator = join(repoRoot, "tools", "gen-control-dto", "gen.ts");
+const engineDir = join(repoRoot, "engine");
 
-const child = spawn("bun", ["run", generator], {
-  cwd: repoRoot,
+// The protocol artifacts (sa-types.ts, the OpenRPC schema, the command manifest) are emitted by
+// the Rust workspace tooling bin from the saffron-protocol DTO crate, replacing the old gen.ts.
+const child = spawn("cargo", ["run", "-p", "xtask", "--", "gen-protocol"], {
+  cwd: engineDir,
   env: process.env,
   stdio: "inherit",
 });
