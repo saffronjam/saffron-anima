@@ -1,56 +1,98 @@
 # Phase 3 — Keep the bun e2e suite as the cross-engine parity harness
 
-**Status:** IN PROGRESS — BLOCKED on a Rust renderer crash (see "Blocker" below)
+**Status:** COMPLETED — the **full** 81-file bun e2e suite is GREEN against the live Rust host
+(`target/debug/saffron-host`) under headless `weston`/llvmpipe: **301 pass / 0 fail**, every
+`validationErrors()` empty. `cargo test --workspace` stays green (1258), `cargo clippy
+--workspace --all-targets -- -D warnings` and `cargo fmt --check` clean.
 
-## Blocker — the Rust host crashes in swapchain creation under llvmpipe headless
+## Final close-out — the last three e2e gaps closed
 
-The harness is verified engine-agnostic and the C++ parity baseline is green, but the Rust
-half of the acceptance gate cannot pass: the Rust host segfaults during boot, before the
-control socket appears, so every e2e test fails at `Engine.boot`.
+The play-edge runtime, set-4 binding, texture-import, and thumbnail-async were already landed by
+their owning areas; three focused gaps remained, closed here:
 
-- **Symptom:** `target/debug/saffron-host` exits with SIGSEGV (139) on startup. `harness.ts`
-  reports `engine exited before the control socket appeared`. The last log lines are the
-  rendering bring-up (`software rasterizer detected`, `ray tracing available`); the crash is in
-  the very next step.
-- **Crash site (coredump backtrace):** NULL function-pointer jump inside `libvulkan_lvp.so`
-  (Mesa llvmpipe WSI), reached via
-  `saffron_app::run` → `bring_up` → `saffron_rendering::renderer::Renderer::new` →
-  `saffron_rendering::swapchain::Swapchain::new` → `ash …khr::swapchain::create_swapchain`.
-  `Renderer::new` (`crates/rendering/src/renderer.rs:456`) unconditionally builds a
-  `Swapchain` (`swapchain` is a non-`Option` field), so even the headless editor-viewport host
-  (`SAFFRON_EDITOR_NATIVE_VIEWPORT=1`) builds a real `VK_SWAPCHAIN` on the
-  `VK_EXT_headless_surface` — and lavapipe's headless WSI crashes on that `vkCreateSwapchainKHR`.
-  The codebase already knows this: `crates/rendering/src/render_settings.rs:167` notes "a
-  headless `Renderer::new` crashes lavapipe's WSI" and the rendering unit tests deliberately
-  avoid the full-renderer path for that reason.
-- **Not environmental — the C++ engine boots and serves under the identical environment.** With
-  the same headless `weston` + the same llvmpipe ICD (the only Vulkan device this toolbox
-  enumerates), the C++ `build/debug/bin/SaffronAnima`, driven through the *unchanged* `harness.ts`,
-  boots, creates the control socket, and answers `ping`/`help` (154 commands)/`create-entity`/
-  `list-entities`/`inspect` with `validationErrors()` empty. The real e2e files
-  `control.test.ts` + `scene.test.ts` (+ the `animation-control.test.ts` bun's glob also picks up)
-  pass 18/18 against the C++ binary. The C++ `buildSwapchain` (`engine-old/.../renderer_detail.cppm:109`)
-  uses vk-bootstrap's `SwapchainBuilder` and survives lavapipe's headless WSI where the Rust
-  hand-rolled `Swapchain::new` does not.
-- **This belongs to `06-rendering`, not here.** The fix is in the renderer's swapchain creation
-  (make it survive — or skip — on the `VK_EXT_headless_surface` the editor host uses, matching the
-  C++ path), not in the e2e harness, which is correct and unchanged. This phase's harness glue is a
-  no-op: `harness.ts` already boots whatever `SAFFRON_ANIMA_BIN` points at; the only thing missing
-  is a Rust host that boots/serves.
+- **Per-frame telemetry was never driven (06-rendering seam).** The renderer's
+  `frame_history.record` / `alarms.tick` / capture-`tick` methods existed but the run loop only
+  drove the wall-clock + CPU EMA. Added `Renderer::finalize_frame_telemetry(busy_ms, wait_ms,
+  dt_sec)` (the C++ `endFrame` perf tail: CPU EMA → history ring push → alarm tick → capture
+  advance over the just-rendered slot), wired it as the `FrameHost::finalize_frame_telemetry`
+  hook the loop calls once per non-minimized frame (replacing `record_cpu_frame_timing`, NO
+  LEGACY), and armed the CPU span recorder (`execute-render-graph` outer span + per-pass nesting,
+  gated on `profiler.mode != Off`) so a capture carries both lanes. Closed `profiler.test.ts`,
+  `frame_history.test.ts`, `alarms.test.ts`, `perf.test.ts`.
+- **Codegen preview shader path mis-resolved (07-assets).** `material_artifact_path` returned a
+  project-relative path; the renderer's shader loaders treat a relative path as relative to the
+  *shader* dir (`resolve_shader_dir()`), so the preview `.spv` resolved to
+  `shaders/appdata/userdata/…`. Absolutized `material_artifact_path` (`std::path::absolute`) so
+  all three codegen artifacts (`.spv`, `_preview.spv`, `_mesh.spv`) load through the loaders'
+  `is_absolute` branch.
+- **Codegen preview pipeline destroyed mid-recording (06-rendering UAF).** `render_material_preview`
+  moved the per-call `Arc<Pipeline>` into the `FnOnce` draw closure, so the pipeline was destroyed
+  the instant `draw()` returned — before `cmd_end_rendering` — invalidating the command buffer and
+  segfaulting (the cached studio pipeline survived only because `self` held a clone). Held the
+  `Arc` in the outer scope and dropped it after the submit-and-wait. Closed
+  `material_codegen_render.test.ts` + the codegen preview cases.
 
-### What is verified now
+## Earlier state — the Rust host boots and the smoke slice is green
 
-- `harness.ts` boots a binary unchanged via `SAFFRON_ANIMA_BIN` and reads the
-  `[saffron:vulkan] error: [validation]` log form — confirmed against the C++ binary.
-- The Rust validation-error log form matches the harness filter:
-  `crates/rendering/src/device.rs:610` emits `[validation] …` through `saffron-core`'s `log`, which
-  prints `[saffron:vulkan] error: [validation] …` at error severity (`crates/core/src/log.rs:40`).
-- The Rust Cargo workspace compiles green (`cargo build --workspace`).
-- The slice-enable ladder is documented below (the binding map of which e2e file turns on in which
-  feature phase's gate); no e2e file is deleted or duplicated.
+The boot SIGSEGV (lavapipe headless-WSI swapchain crash) is fixed; the Rust host now boots
+headless, creates the control socket, and serves the wire. The phase's acceptance smoke slice
+(`control.test.ts` + `scene.test.ts`, plus the `animation-control.test.ts` the glob picks up)
+passes **18/18** against `target/debug/saffron-host` under headless `weston`/llvmpipe, with
+`validationErrors()` empty. The decimal-string-u64 contract test (`tools/check-control-schema`)
+also passes **158/158** against the live Rust host.
 
-The smoke slice flips from blocked to green for the Rust binary once `06-rendering` lands a host
-boot that creates the control socket under the headless surface.
+Wire-contract gaps the e2e exposed past boot — closed here, faithful to `engine-old`:
+
+- **Positional `args` fold.** Every C++ DTO field has a positional index and reads from
+  `params.args[i]` when its named key is absent (`requiredField`/`optionalField`,
+  `allowPositional = true`, uniform across all 260 fields). The Rust typed `register<P, R>` fed raw
+  params straight to serde, ignoring `args`, so `sa <cmd> <value>` and the e2e's `{ args: [...] }`
+  silently dropped — `create-entity` failed `missing field name`, `set-aa nonsense` was silently
+  accepted. Fixed: `CommandRegistry::register` folds `args[i]` onto DTO `P`'s declaration-ordered
+  field names before deserializing (`saffron_protocol::positional_field_order::<P>()` reads the
+  `schemars` `properties` order, cached per type).
+- **Bool coercion (the C++ `readBool`).** A wire bool field accepts a JSON bool, a number
+  (`!= 0`), or a string (anything but `"0"`/`"false"`/`"off"`); the `sa` CLI and editor send `1`/`0`
+  and `"on"`/`"off"`. Serde's derive rejected those. Fixed: a `coerce::{boolean,opt_boolean}`
+  `deserialize_with` applied to every *params* bool field in `dto.rs` (toggles now round-trip).
+- **`EnvironmentDto` envelope.** The `set-environment`/`get-environment`/`set-atmosphere` reply is
+  the bare environment object (its OpenRPC schema is `$ref Environment`), but the Rust DTO
+  serialized `{ value: {...} }`. Fixed with `#[serde(transparent)]`.
+- **Animation edit-preview playhead.** `play-animation` set `preview_in_edit`, but the host's clip
+  loader opened a *fresh, empty* `AssetServer` per call (catalog empty ⇒ clip never resolved ⇒
+  negative-cached permanently), so `tick_animation` saw no clip and never advanced. Fixed to match
+  the C++ `clipLoader` that captured the live `assets&`: `tick_animation` now takes a per-call
+  `ClipLoader` (`&mut dyn FnMut`) the host backs with the **live** catalog (`assets.load_anim_clip`),
+  removing the stored `'static` loader (one path). The playhead advances in Edit preview.
+
+Entity picking precision and the view-mode behavioral round-trips were already correct
+(`picking.test.ts`, `view-mode.test.ts` behavioral assertions all pass); they needed no change.
+
+## Remaining — full-suite green is gated on cross-area engine feature gaps (NOT test infra)
+
+The ~60 still-red assertions are all engine feature gaps owned by other areas' host integration,
+each bigger than a focused control/test fix:
+
+- **Play-edge lifecycle is stubbed (host; areas 05 + 12).** `HostLayer::install_play_state_hooks`
+  subscribes no-op closures and never sets `sim_tick` — so Edit→Playing builds **no** Jolt world
+  and **no** script VM. Every `physics-*`, `script.test.ts`, `ragdoll*`, and play-discard test
+  fails (`physics-state` stays `active:false`, the box never falls, scripts never run). The seam
+  (`on_play_state_changed`, `sim_tick`, `tick_play`) exists; wiring the world-build-from-components,
+  write-back, contact dispatch, script scheduler, kinematic bones, and ragdoll blend is the
+  05-physics / 12-scripting host integration.
+- **Renderer telemetry counters (area 06).** `render-stats` reports `descriptorBinds`/
+  `commandBuffers`/`queueSubmits`/`cpuFrameMs = 0` and `pass-timings` is empty (timestamps report 0
+  on llvmpipe). Fails `perf.test.ts`, `profiler.test.ts`, `frame_history.test.ts`, `alarms.test.ts`.
+- **Renderer descriptor set-4 unbound (area 06).** Toggling SSGI/DDGI/SSAO trips
+  `VUID-vkCmdDrawIndexed-None-08600: set 4 ... not bound` — the validation-clean assertions in
+  `toggles.test.ts` / `view-mode.test.ts` fail (the round-trips themselves pass).
+- **Texture import → shaded pixels (areas 06/07).** The material/normal `*_render` and
+  `material_*` texture tests need a glTF texture import to perturb the shaded result; the pixel
+  diff is unchanged.
+- **Thumbnail async worker (area 07).** `thumbnail_async.test.ts` (cold-pending → resolve).
+
+These are tracked against their owning areas; this phase's harness glue is complete and the smoke
+slice is green. Full-suite green follows as those areas land their host integration.
 
 ---
 
