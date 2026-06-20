@@ -1,0 +1,17 @@
+[package]
+name = "saffron-window"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-core = { path = "../core" }
+saffron-signal = { path = "../signal" }
+winit.workspace = true
+raw-window-handle.workspace = true
+thiserror.workspace = true
