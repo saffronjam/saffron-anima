@@ -179,7 +179,7 @@ format:
 lint:
 	@test -f "$(BUILD_DIR)/compile_commands.json" || { echo "build/debug not configured — run 'make engine' first (clang-tidy needs compile_commands.json)"; exit 1; }
 	cd "$(REPO)" && $(CPP_LS) | xargs -r clang-format --dry-run -Werror
-	run-clang-tidy -p "$(BUILD_DIR)" -quiet -j $(TIDY_JOBS) engine/source tools/sa/source
+	run-clang-tidy -p "$(BUILD_DIR)" -quiet -j $(TIDY_JOBS) engine-old/source tools/sa/source
 	cd "$(EDITOR)" && bun run lint
 
 ## prepare-for-commit: format everything, then run the linters
