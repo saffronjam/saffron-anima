@@ -41,6 +41,36 @@ runnable spine that a trivial test `Layer` drives for N frames and exits.
   the headless device path (06-rendering phase-1's by-feature selection) is used and `saffron-window` is
   not instantiated. The mode is a `run`-time branch on the env var, not two `run` functions.
 
+## The standalone windowed driver (WIRED, 2026-06)
+
+Initial bring-up stubbed the windowed path: `bring_up` ignored the mode and always built a
+no-surface offscreen (`SurfaceSource::Offscreen`) renderer with no window, and `poll_events` was a no-op —
+so `make run-engine` (no `SAFFRON_EDITOR_NATIVE_VIEWPORT`) opened no window and created no swapchain. The
+plan always called for a real standalone present-only host (README §3: "neither set → standalone
+present-only host with a winit window"); the renderer side (`SurfaceSource::Window` + swapchain present)
+was complete and covered by `tests/swapchain_present.rs`, only the run-loop driver was missing. It is now
+wired (one path, no legacy):
+
+- `run_inner` branches on `HostMode`. **Headless** builds the no-surface offscreen
+  (`SurfaceSource::Offscreen`) renderer with no window and runs the plain `while` `drive` loop. **Windowed**
+  hands off to `run_windowed`, which owns a
+  winit `EventLoop` and drives an `ApplicationHandler` (`WindowedApp`): it creates the `Window` +
+  `SurfaceSource::Window` renderer in `resumed` (winit 0.30 only makes windows from an active loop), runs
+  one frame per `about_to_wait`, feeds close/resize through `Window::dispatch_window_event` in
+  `window_event`, and runs teardown in `exiting`.
+- The per-frame body (`step_frame`) and the bring-up/teardown halves (`start` = `on_create` + `on_attach`;
+  `finish` = `wait_gpu_idle` → `on_detach` → `on_exit`) are shared by both drivers, so the hook order, the
+  minimized guard, the telemetry split, the FPS pacing, and the `wait_gpu_idle`-before-teardown ordering
+  are one implementation regardless of mode. The dead `poll_events` stub is removed; the windowed loop
+  pumps winit events through the handler instead.
+- The winit machinery (`EventLoop`, `ControlFlow`, `ApplicationHandler`, `WindowId`) is re-exported from
+  `saffron-window` (the engine's single winit facade), so `saffron-app` stays winit-free and
+  `#![deny(unsafe_code)]`.
+
+Verified on the real machine: `saffron-host` with no `SAFFRON_EDITOR_NATIVE_VIEWPORT` opens a window and
+logs `N swapchain images` on the selected GPU (the 3070 Ti with the NVIDIA ICD, llvmpipe without it), runs
+its frames, and exits 0 validation-clean.
+
 ## Grounding (real files/symbols)
 
 - `engine-old/source/saffron/app/app.cppm`: `run` (the full loop, lines 86-236), `Layer` (six optional
