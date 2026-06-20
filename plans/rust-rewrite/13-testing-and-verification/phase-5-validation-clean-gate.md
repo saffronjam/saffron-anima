@@ -1,6 +1,6 @@
 # Phase 5 — The validation-layer-clean standing gate
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 **Depends on:** 06-rendering:phase-1-device-swapchain-bringup, 08-host-and-viewport:phase-4-host-crate-lifecycle-wiring
 
@@ -57,6 +57,32 @@ Concretely:
   `SAFFRON_EXIT_AFTER_FRAMES=5`): the smoke run this gate greps.
 - The debug-utils messenger wiring: `engine-old/source/saffron/rendering/` instance/debug-messenger
   setup (the `[saffron:vulkan]` log routing) — ported by `06-rendering` phase 1, asserted here.
+
+## What closed it (WIRED)
+
+The gate is live against the running engine on lavapipe:
+
+- **The debug messenger reproduces the frozen prefix.** `device.rs::debug_callback` routes every
+  validation/performance message through `saffron_core::log` under the `vulkan` subsystem, so an
+  error-severity validation message prints exactly `[saffron:vulkan] error: [validation] <id>: <msg>` —
+  the literal substring `harness.ts::validationErrors` and the Rust `saffron_e2e::validation_errors`
+  both filter on. The Khronos validation layer is enabled in the debug instance (`create_instance`);
+  the toolbox ships it, so a headless boot runs with validation on and a clean log.
+- **The present-only smoke greps the log and fails on any hit.** `tools/ci/check.sh`'s
+  present-only step now captures the host's stdout+stderr and `grep -q`s for the frozen marker,
+  marking the gate `FAILED` on any validation error (it was previously running the smoke but never
+  inspecting the log). This is the reproducible-gate enforcement phase 9 requires.
+- **The regression probe proves the detector is live, not silently disabled.** A debug-only,
+  env-gated seam (`SAFFRON_VK_PLANT_VALIDATION_ERROR`, read in `renderer.rs::plant_validation_error`)
+  records one out-of-spec zero-width `vkCmdSetViewport` into each scene frame's command buffer right
+  after `begin_command_buffer` — overwritten by every pass's own viewport set, so the rendered output
+  is unaffected. The e2e test `crates/e2e/tests/validation_gate.rs::planted_validation_error_is_detected`
+  boots with the env set and asserts `validation_errors()` is non-empty (the planted
+  `VUID-VkViewport-width-01770`); a green-with-empty-errors there would mean the gate is disabled.
+- **A play step is in the clean coverage.** `tests/e2e/play.test.ts` asserts the play/stop cycles
+  leave `validationErrors()` empty, and `physics-falling-box.test.ts` (plus the Rust
+  `crates/e2e/tests/play_edge.rs`) drive a full on-play-edge world build + `sim_tick` step + stop and
+  assert validation-clean — so the gate covers the render path *through* a play step, not only edit.
 
 ## Acceptance gate
 
