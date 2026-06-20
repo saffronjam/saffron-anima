@@ -107,6 +107,22 @@ point+normal), `stop_scripts` (run `on_destroy` with no scene bound, drop everyt
 `read_script_schema` runs a throwaway sandboxed VM, reads the `properties` table, infers each field type,
 returns fields sorted by name.
 
+These lifecycle functions are now driven by the host's play loop (08-host phase-4):
+`HostLayer::start_play_scripts` installs the `HostScriptBridge` and runs `start_scripts` on the
+Edit→Playing edge, and the `sim_tick` closure runs `dispatch_contact` (drained contacts) + `tick_scripts`
+each fixed step. `script.test.ts`'s non-coroutine cases, `script_logs.test.ts`, and the contact paths in
+`physics-triggers.test.ts` exercise this live.
+
+**Scheduler `sa.wait` guard (diverges from the C++ here):** `sa.wait` called directly in a bare
+`on_update` (not inside `sa.spawn_task`) must be the documented ignored no-op. The C++ relied on
+`coroutine.running()`'s `ismain` being `true` on the main thread, but mlua 0.11's Luau backend runs every
+`Function::call` (including `on_update`) on an auxiliary Lua thread, so `ismain` reads `false` even in a
+bare `on_update` — `sa.wait` then reached `coroutine.yield` and errored *"attempt to yield across a
+C-call boundary"*. `scheduler.rs` instead tracks the scheduler coroutine it is currently resuming
+(`_sa_active`, saved/restored around each `spawn_task`/`_sa_advance` resume) and `sa.wait` yields only
+when `coroutine.running() == _sa_active`; a bare-`on_update` `sa.wait` (where `_sa_active` is `nil`) falls
+through to the ignored no-op. The in-task `sa.wait`/`sa.delay` paths are unchanged.
+
 **Deferred-structural-op ordering is exact** (the silent-correctness contract): `entity:destroy()`
 queues a uuid and the handle stays valid for the rest of the handler; `flush_structural_ops` runs after
 each instance loop and calls `relink_hierarchy` once if dirty; messages dispatch after the loop;
