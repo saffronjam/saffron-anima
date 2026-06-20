@@ -1,21 +1,85 @@
 # Saffron Anima — the Rust rewrite (master plan)
 
-**Status:** IN PROGRESS — phases 1-40 complete (Bands A foundations+build, B math/geometry/leaf
-formats, C ECS+scene through the ECS go/no-go gate #20, D animation player runtime, E physics through the
-whole Jolt bridge incl. the BLOCKING determinism gate #33, and the first rendering bring-up #39-40). The
-ECS gate is **locked**: `hecs` chosen on a genuine measured entt 3.16 side-by-side (per-frame iteration
-passes the ~10%-of-entt bar — 7.7× faster on the hot draw walk — and the `PoseOverrideComponent` churn
-worst case is 2.7% of a 60 FPS frame, so no `bevy_ecs` escalation; verdict recorded in
-`03-ecs-and-scene/phase-2-ecs-benchmark-gate.md`). The **physics determinism gate (#33) is PASSED on
-x86_64**: the vendored-Jolt-5.3.0 + `cxx` bridge built with the determinism flags reproduces a frozen
-stack+ragdoll+`CharacterVirtual` trace bit-exactly against the committed golden hash
-(`crates/physics/tests/determinism.rs`); the cross-arch `Rust-x86 == Rust-aarch64` half is
-DEFERRED-NEEDS-HARDWARE (the toolbox is x86_64-only — it must run on the self-hosted aarch64 runner against
-the same golden hash). All ten physics phase files (1-10) are COMPLETED. The C++ build repoint (phase 6 /
-`01-build-and-toolchain/phase-1`) is verified: every repointed reference resolves to `engine-old/` and the
-C++ tree stays green. Workspace gate green at #40: `cargo build --workspace`, `cargo test --workspace`
-(245 tests, 0 failed), `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check`. The
-remaining rendering feature phases (#41+) and Bands G-L remain NOT STARTED.
+**Status:** IN PROGRESS — phases 1-100 complete, including the previously-blocked #81/#100 and the
+teardown #98 (verified by source audit, not just a Status line): Bands A foundations+build, B
+math/geometry/leaf formats, C ECS+scene through the ECS go/no-go gate #20, D animation player runtime, E
+physics through the whole Jolt bridge incl. the BLOCKING determinism gate #33, F the **entire** rendering
+stack #39-54, G the walking skeleton #55-63 — assets/asset-server through spawn, the `saffron-app` run
+loop, the shm seqlock publisher + the #62 shm-ABI gate, and the `saffron-protocol` DTO crate — H #64-76 —
+scene serde + sceneedit/play/gizmo, the `.smat` material system + node-graph→Slang codegen + thumbnail
+worker + project IO + `render_scene`/`pick` — Band I #77-83 — the synchronous `rustix` control socket
+server + dispatch, the 29 render commands, the **13 animation (#82) + 12 physics (#83) command domains**
+(faithful ports of `control_commands_animation.cpp` / `control_commands_physics.cpp` with the shared
+`resolve_entity`/`entity_ref_dto`/`fit_collider` selector helpers, the nullable-`physics` null-guard
+degradation, and inline `#[cfg(test)]` units), **and now the #81 asset (51 typed + the host-side
+`get-script-schema`) + #100 scene (42 typed) command domains** — Band J #84-92 (the full `xtask
+gen-protocol` emitter: `codegen.rs`/`command.rs` with the 154-entry `COMMANDS` table +
+fixtures/skips/`schema.rs`, the `register_component!` macro, the ts-rs/OpenRPC/manifest/luau emitters that
+the editor `bun run check` actually runs green, and the 1906-line `sa` CLI #89-92) — Band K scripting
+#93-99 (the 3796-line `saffron-script`: mlua/Luau VM + sandbox/budget, value types + binding table,
+session guard + entity handle, component bridge, runtime lifecycle, scheduler/messages/input, with
+`runtime_lifecycle` / `scheduler_messages_input` / `value_surface` test suites) — and the **#98 host
+teardown drop graph** (`HostLayer::teardown_recording` with the pinned `WorkerJoined` → `ControlClosed` →
+`ScriptsStopped` → `PhysicsWorldDropped` → `JoltGlobalsShutdown` → `SimTickCleared` →
+`PlayHooksUnsubscribed` → `GpuCachesCleared` order, `saffron_physics::shutdown_physics()`, and the three
+UAF-surface tests). **Still genuinely NOT STARTED: the Band K tail #101-103 (`ScriptHostBridge`/contacts,
+`read_script_schema`/inspector contract, the `sa.*` `.luau` typegen + `library/sa.lua` deletion) and Band
+L #104-108 (the verification rig + cutover).** The live `saffron-control` registry now wires all five
+domains — render → scene → animation → physics → asset (151 typed + the reflective `help` builtin, with
+`get-script-schema` host-registered for 154 manifest rows total), guarded by a manifest-completeness
+contract test (`registry::tests::registry_covers_the_protocol_manifest`) that asserts every
+`saffron_protocol::COMMANDS` row has a handler. The ECS gate is **locked**: `hecs` chosen on a
+genuine measured entt 3.16 side-by-side (per-frame iteration passes the ~10%-of-entt bar — 7.7× faster on
+the hot draw walk — and the `PoseOverrideComponent` churn worst case is 2.7% of a 60 FPS frame, so no
+`bevy_ecs` escalation; verdict recorded in `03-ecs-and-scene/phase-2-ecs-benchmark-gate.md`). The
+**physics determinism gate (#33) is PASSED on x86_64**: the vendored-Jolt-5.3.0 + `cxx` bridge built with
+the determinism flags reproduces a frozen stack+ragdoll+`CharacterVirtual` trace bit-exactly against the
+committed golden hash (`crates/physics/tests/determinism.rs`); the cross-arch `Rust-x86 == Rust-aarch64`
+half is DEFERRED-NEEDS-HARDWARE (the toolbox is x86_64-only — it must run on the self-hosted aarch64
+runner against the same golden hash). All ten physics phase files (1-10) are COMPLETED. The C++ build
+repoint (phase 6 / `01-build-and-toolchain/phase-1`) is verified: every repointed reference resolves to
+`engine-old/` and the C++ tree stays green. **Band F is feature-complete and compile-green** — every
+rendering phase (#41 gpu-resources through #54 capture/shm/profiler, including #51 RT TLAS/ray-query,
+#52 DDGI, #53 ReSTIR) is a full faithful ash port with GPU-free logic unit-tested; the GPU-runtime
+golden-image / validation-clean passes run **on the toolbox's software Mesa lavapipe** — which does
+advertise `VK_KHR_acceleration_structure` + `VK_KHR_ray_query` + `VK_KHR_ray_tracing_pipeline` as device
+extensions, so the ray-tracing paths (#51/#53) actually ran validation-clean there (software-traced,
+correct but CPU-slow — the RT paths are still no-ops only when `rt_supported == false`, i.e. on a device
+that genuinely lacks the extensions). What is **DEFERRED-NEEDS-HARDWARE is real-GPU (NVIDIA 3070 Ti)
+validation** — performance and driver-specific behavior — which needs the NVIDIA ICD wired via
+`VK_ADD_DRIVER_FILES` (the toolbox falls back to lavapipe by default, no `nvidia_icd.json` in its
+`icd.d`); lavapipe is functional but not a perf/driver substitute. The **#62 shm-ABI gate (#62) PASSES on
+the byte-exact ABI**: the Rust `ShmPublish` seqlock producer (32-byte `[magic,w,h,seq,ring_slots,
+slot_capacity,0,0]` header + 4-slot BGRA8 ring, the slot-1 off-by-one preserved, `seq` bumped last under a
+`Release` fence) is consumed frame-for-frame by an in-test oracle that replicates the **unchanged**
+`editor/src-tauri/src/wayland_viewport.rs` reader field-for-field (same magic `0x5346_5632`, same
+`pixel_bytes==0 || capacity==0 || HEADER+slots*capacity>total || pixel_bytes>capacity` reject guard, same
+`seq % slots` slot) — verified against the real reader's constants. The **live editor present** (frames
+shown on a Wayland subsurface under the GTK/WebKit editor stack) is DEFERRED-NEEDS-DISPLAY: that stack does
+not run headless in the toolbox, so the gate proves the transport byte-contract PP-10 conditions the
+rewrite on, not the on-screen pixels. Workspace gate green after #81/#98/#100 + the four-seam closeout:
+`cargo build --workspace` (exit 0), `cargo test --workspace` (**1197 tests, 0 failed**, exit 0), `cargo
+clippy --workspace --all-targets -- -D warnings` (exit 0), `cargo fmt --check` (exit 0) — all in the
+`saffron-build` toolbox (the editor `bun run check` was not re-run this pass: `bun` is not on the toolbox
+PATH and the protocol DTO/`COMMANDS` table were unchanged). **The four deferred render seams are now
+LIVE** (see `06-rendering/phase-16-capture-shm-profiler.md` "Deferred seams closed"): the asset
+domain's GPU thumbnail render-to-PNG (`HostThumbnailGpu::encode_*_thumbnail_png`), the material-preview
+render (`render_material_preview` with the codegen `_preview.spv` argument), the window/composited
+capture (`request_window_capture` → next-present swapchain copy → PNG), and the project `renderSettings`
+serde (`render_settings_to_json` / `apply_render_settings`) all route to the renderer's real GPU
+primitives — `crates/host/src/control_renderer.rs` returns no deferral, the commands
+`get-thumbnail`/`view-asset`/`preview-render`/`screenshot {window}`/`save-project`/`load-project` are
+functional. Offscreen thumbnail + material-preview renders are validated non-trivial + validation-clean
+on lavapipe (`thumbnail_render.rs` tests); render-settings round-trips in `render_settings.rs` +
+`project_tests.rs`; `screenshot {window}` is validated live under the toolbox headless weston
+(`tests/swapchain_present.rs::window_capture_writes_a_png_of_the_composited_output` writes a valid PNG of
+the composited output, validation-clean) and DEFERRED-NEEDS-DISPLAY only off a display. `sa_lua_defs`
+remains an honest empty (the LuaLS typegen is the Band K tail). Remaining
+phases genuinely NOT STARTED: the Band K tail #101-103 (`ScriptHostBridge`/contacts,
+`read_script_schema`/inspector contract, the `sa.*` `.luau` typegen + `library/sa.lua` deletion); and
+**Band L #104-108** (the parity rig + the binary flip + the C++-tree retirement). The `13-testing`
+woven-in gate phases are still NOT STARTED as a standing orchestrator (unit/e2e tests live inline per
+crate today).
 
 This is the master index for the from-scratch Rust rewrite of the Saffron Anima engine. It is the
 output of the pre-planning effort ([`../rust-rewrite-pre-planning.md`](../rust-rewrite-pre-planning.md),
