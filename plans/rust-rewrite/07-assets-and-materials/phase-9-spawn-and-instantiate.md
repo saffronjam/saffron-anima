@@ -48,3 +48,16 @@ TRS). `instantiate_model` is the public entry; `spawn_*` are the lower-level bui
 - A determinism `#[test]`: instantiating the same container twice yields entities referencing the same
   sub-ids (soft references stable across instantiations); the META node/skin quaternion decode reorders
   to glam `xyzw` (assert a known node's rotation).
+
+## Post-integration fix (e2e exposed)
+
+Wiring instantiate through the e2e (`materials_render`/`normal_render`/`material_update_texture`)
+exposed that a spawned model's `Material` carried only the flat factors (base color / metallic /
+roughness) and **never the imported texture sub-ids** — so an imported glTF's albedo / MR / normal map
+read `0` and the shaded pixels never changed. The spawn material loop read the META `materials` summary
+(factors only); the texture sub-ids live in the container's `SMAT` material chunk. Fixed:
+`instantiate_model` now resolves each material sub-asset's full `.smat` from its container chunk
+(`resolve_container_material` → `material_asset_from_json`) and copies every texture slot + tiling/
+strength/alpha field into the `MaterialSlot` — the C++ `resolveMaterial` per slot. A chunk that fails
+to resolve falls back to the META flat factors (logged, never fatal). The texture sub-ids resolve
+through the catalog to bound bindless slots at draw time, so the imported textures now reach the GPU.
