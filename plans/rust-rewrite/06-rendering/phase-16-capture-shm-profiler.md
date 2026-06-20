@@ -149,3 +149,33 @@ the host's `ThumbnailGpu` / `ControlRenderer` seam (`crates/host/src/control_ren
   (`crates/control/src/commands_asset.rs`): a graph-less and a foldable material take the default studio
   preview (`None`); a non-foldable procedural graph compiles + passes its on-disk `_preview.spv`
   (slangc-gated, degrades to the default off-slangc — never an error).
+
+## Post-integration fixes (e2e exposed)
+
+The unit gate built against a stub renderer; wiring the live offscreen frame through the e2e
+(`perf.test.ts`) exposed three integration gaps, all closed faithfully against the C++:
+
+- **GPU profiler never ran in the offscreen path.** `render_scene_offscreen` called the plain
+  `RenderGraph::execute` (no timestamps), so `pass-timings` was empty and `gpuFrameMs` stayed `0`.
+  Now `record_scene_graph` arms `gpu_profiler.frame_recorder(frame)` and runs `execute_profiled`,
+  `begin_offscreen_frame` reads back the slot's prior timings (folding the EMA `gpu_frame_ms`), and
+  `render_scene_offscreen` resets the slot's query pool on the recording buffer first — the C++
+  `beginFrame` `resetQueryPool` + `readbackGpuTimings` + `executeRenderGraph` scope-recorder wiring.
+- **Throughput counters read `0`.** `descriptorBinds` was a hardcoded `2` discarded inside the pass
+  body closure; `commandBuffers`/`queueSubmits` were hardcoded `0` in the control DTO; `cpuFrameMs`
+  was never recorded by the run loop. Now `scene_pass::scene_draw_list_bind_count` is the single
+  source for the real bind count (5 + RT sets 6/7), set into `stats.descriptor_binds` at the resolve
+  site; `render_scene_offscreen` sets `commandBuffers`/`queueSubmits` to `1`; and the `saffron-app`
+  run loop measures the per-frame CPU busy/wait split and feeds the renderer's `cpuFrameMs`/`cpuWaitMs`
+  EMA (the C++ `endFrame` split).
+- **`vkGetQueryPoolResults` stride bug.** The timestamp + pipeline-stats read-backs called ash's
+  `get_query_pool_results::<u64>` with a flat `u64` element, so ash passed an 8-byte stride for a
+  `WITH_AVAILABILITY` read (must be ≥16) and the element count as the query count
+  (`VUID-vkGetQueryPoolResults-stride-08993` / `-dataSize-00817`). Both reads now use `[u64; 2]` /
+  `[u64; STRIDE]` element types so ash derives the correct count + stride, then flatten to the `[u64]`
+  layout the decoders index.
+- **`pipelineStatisticsQuery` device feature not enabled.** The stats query pool was created from the
+  physical-device *capability* without the logical device *enabling* the feature
+  (`VUID-VkQueryPoolCreateInfo-queryType-00791`). `create_logical_device` now enables the optional core
+  features it uses (`pipelineStatisticsQuery` + `fillModeNonSolid`) when advertised — the C++
+  `enable_features_if_present`.
