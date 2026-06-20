@@ -1,27 +1,42 @@
 #!/usr/bin/env bash
-# Project feature smoke tests. Requires an existing display because SaffronAnima
-# opens a Vulkan swapchain; tools/ci/check.sh runs this under the same compositor
-# as the engine and schema checks.
+# Project feature smoke tests. Requires an existing display because the host opens a
+# Vulkan swapchain; tools/ci/check.sh runs this under the same compositor as the engine
+# and schema checks. The host + `sa` binaries default to the Rust workspace build; override
+# SAFFRON_ANIMA_BIN / SAFFRON_SA_BIN to point at a different build.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-ENGINE="$REPO/build/debug/bin/SaffronAnima"
-SA="$REPO/build/debug/bin/sa"
+ENGINE="${SAFFRON_ANIMA_BIN:-$REPO/engine/target/debug/saffron-host}"
+SA="${SAFFRON_SA_BIN:-$REPO/engine/target/debug/sa}"
 APPDATA="$(mktemp -d /tmp/saffron-projects.XXXXXX)"
 PNG="$(mktemp /tmp/saffron-projects-texture.XXXXXX.png)"
 ENGINE_PID=""
 SOCK=""
 
+# Wait up to ~5s for the host to exit, then force-kill it. Under llvmpipe the host can trip a
+# known VMA "allocations not freed" assertion at device teardown and stall, so an unbounded
+# `wait` would hang the gate — the control assertions above already prove the engine ran.
+reap_engine() {
+  [ -n "$ENGINE_PID" ] || return 0
+  for _ in $(seq 1 50); do
+    kill -0 "$ENGINE_PID" 2>/dev/null || { ENGINE_PID=""; return 0; }
+    sleep 0.1
+  done
+  kill -9 "$ENGINE_PID" 2>/dev/null || true
+  wait "$ENGINE_PID" 2>/dev/null || true
+  ENGINE_PID=""
+}
+
 cleanup() {
   if [ -n "$ENGINE_PID" ] && kill -0 "$ENGINE_PID" 2>/dev/null; then
     SAFFRON_CONTROL_SOCK="$SOCK" "$SA" quit >/dev/null 2>&1 || true
-    wait "$ENGINE_PID" 2>/dev/null || true
+    reap_engine
   fi
   rm -rf "$APPDATA" "$PNG" "$SOCK"
 }
 trap cleanup EXIT
 
-printf "%s" "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lXqyyAAAAABJRU5ErkJggg==" | base64 -d > "$PNG"
+printf "%s" "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP4z8AAAAMBAQD3A0FDAAAAAElFTkSuQmCC" | base64 -d > "$PNG"
 
 start_engine() {
   local name="$1"
@@ -49,9 +64,9 @@ start_engine() {
 stop_engine() {
   SAFFRON_CONTROL_SOCK="$SOCK" "$SA" quit >/dev/null
   # The control assertions above already prove the engine ran and answered; the device-teardown
-  # exit is tolerated because llvmpipe trips a known VMA "allocations not freed" assertion at exit.
-  wait "$ENGINE_PID" || true
-  ENGINE_PID=""
+  # exit is tolerated (and bounded by reap_engine) because llvmpipe trips a known VMA
+  # "allocations not freed" assertion at exit.
+  reap_engine
 }
 
 start_engine asset-test
