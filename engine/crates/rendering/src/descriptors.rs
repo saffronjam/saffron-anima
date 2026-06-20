@@ -1,0 +1,1137 @@
+//! The descriptor infrastructure built once at startup: the device-global
+//! descriptor-set layouts, the two descriptor pools, the single global bindless
+//! combined-image-sampler set, the samplers, and the bindless slot allocator with
+//! its reclaim free-list.
+//!
+//! This is the C++ `Descriptors` sub-state (`renderer_types.cppm:1113`) plus the
+//! slice of `initDescriptorResources` (`renderer_detail.cppm:2858`) that builds it.
+//! The phase scope is the *device-global* descriptor state — layouts that never
+//! change after init, the two pools, the one bindless set bound by every draw, and
+//! the samplers. The per-frame light/instance/cluster *sets* and the per-view
+//! post-process sets are not built here (later phases own those); only the layouts
+//! they allocate against live here, immutable and borrowed `&`.
+//!
+//! # The bindless table and its slot allocator
+//!
+//! Set 0 is one global runtime-sized combined-image-sampler array
+//! (`MAX_BINDLESS_TEXTURES` slots), partially bound + update-after-bind: a texture
+//! upload writes a stable slot into the live set and the shader indexes it
+//! per-instance. The default white texture takes slot 0. Slots are handed out by
+//! [`Descriptors::claim_slot`]: it pops the reclaim free-list before growing the
+//! high-water `next_index`, so a churny scene stays bounded. Both the free-list and
+//! the `vkUpdateDescriptorSets` write into the shared set take the
+//! [`crate::resources::BindlessFreeList`] / bindless mutex, because the thumbnail
+//! worker can also upload off the main thread (README §5). Every [`crate::GpuTexture`]
+//! holds a clone of the free-list `Arc` so its `Drop` returns its slot.
+
+use std::sync::{Arc, Mutex};
+
+use ash::vk;
+use saffron_core::log_info;
+
+use crate::resources::{BindlessFreeList, DeviceResources};
+use crate::{Device, Result, checked};
+
+/// Capacity of the bindless texture array (set 0). One global combined-image-sampler
+/// array indexed per-instance; lavapipe and desktop GPUs allow far more, this is
+/// plenty (the C++ `MaxBindlessTextures`, `renderer_types.cppm:74`).
+pub const MAX_BINDLESS_TEXTURES: u32 = 1024;
+
+/// The bindless slot the default white texture occupies. Every material that names
+/// no albedo texture indexes this slot, so it is claimed first at init and never
+/// reclaimed.
+pub const DEFAULT_WHITE_SLOT: u32 = 0;
+
+/// Hard cap on reflection probes (the C++ `MaxReflectionProbes`,
+/// `renderer_types.cppm:1425`). The IBL set's probe-cube arrays are sized to it.
+pub const MAX_REFLECTION_PROBES: u32 = 8;
+
+/// The number of editor render views (scene + asset-preview), the C++ `ViewCount`
+/// (`renderer_types.cppm:69`). The general descriptor pool sizes its per-view
+/// post-process headroom against this; the per-view sets themselves live in later
+/// phases.
+const VIEW_COUNT: u32 = 2;
+
+/// The device-global descriptor infrastructure: layouts, pools, the bindless set,
+/// the samplers, and the bindless slot allocator.
+///
+/// Built once in [`Descriptors::new`], then borrowed `&Descriptors` — its layouts
+/// and samplers are immutable after init. The one piece that mutates is the bindless
+/// slot allocator (`next_index` + the shared `free_list`), guarded by the bindless
+/// mutex so the thumbnail worker can upload concurrently (README §5).
+///
+/// Owns an [`Arc`]`<`[`DeviceResources`]`>` so its [`Drop`] frees its pools, layouts,
+/// and samplers without a live `&Device` (the same structural-outlives discipline as
+/// the resource wrappers): the device is destroyed only when the last `Arc` holder
+/// drops, after every descriptor here is freed. The bindless *set* is freed
+/// implicitly with its pool, so it needs no explicit teardown.
+pub struct Descriptors {
+    resources: Arc<DeviceResources>,
+
+    linear_sampler: vk::Sampler,
+    shadow_sampler: vk::Sampler,
+
+    bindless_set_layout: vk::DescriptorSetLayout,
+    light_set_layout: vk::DescriptorSetLayout,
+    instance_set_layout: vk::DescriptorSetLayout,
+    ibl_set_layout: vk::DescriptorSetLayout,
+    ssao_mesh_set_layout: vk::DescriptorSetLayout,
+    ddgi_mesh_set_layout: vk::DescriptorSetLayout,
+    rt_mesh_set_layout: Option<vk::DescriptorSetLayout>,
+    restir_mesh_set_layout: Option<vk::DescriptorSetLayout>,
+    cluster_set_layout: vk::DescriptorSetLayout,
+    tonemap_set_layout: vk::DescriptorSetLayout,
+    fxaa_set_layout: vk::DescriptorSetLayout,
+    taa_set_layout: vk::DescriptorSetLayout,
+
+    descriptor_pool: vk::DescriptorPool,
+    bindless_pool: vk::DescriptorPool,
+    bindless_set: vk::DescriptorSet,
+
+    slots: Mutex<SlotAllocator>,
+    free_list: BindlessFreeList,
+}
+
+/// The bindless slot allocator: the high-water `next_index` and a reference to the
+/// shared reclaim free-list. Lives behind the [`Descriptors`] bindless `Mutex` so a
+/// claim that grows `next_index` and a reclaim that pushes the free-list never race
+/// (one lock covers both, matching the single C++ `bindlessMutex`).
+struct SlotAllocator {
+    next_index: u32,
+    free_list: BindlessFreeList,
+}
+
+impl SlotAllocator {
+    /// Hands out the next bindless slot: reuse a reclaimed one (LIFO) if any, else
+    /// grow `next_index`. The C++ `claimBindlessSlot` (`renderer_textures.cpp:129`).
+    fn claim(&mut self) -> u32 {
+        if let Ok(mut free) = self.free_list.lock()
+            && let Some(slot) = free.pop()
+        {
+            return slot;
+        }
+        let slot = self.next_index;
+        self.next_index += 1;
+        slot
+    }
+}
+
+impl Descriptors {
+    /// Builds the descriptor infrastructure: the samplers, the seven device-global
+    /// layouts, the two pools, and the single bindless set, then claims slot 0 for
+    /// the default white texture so the first uploaded slot is 1.
+    ///
+    /// The `free_list` is the shared [`BindlessFreeList`] every [`crate::GpuTexture`]
+    /// clones — passed in so the [`Device`] (or the renderer) owns the single
+    /// canonical `Arc` that outlives both these descriptors and any texture whose
+    /// `Drop` pushes to it (README §4/§5).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Vk`] for any failing Vulkan call; already-created
+    /// handles are freed before returning on a partial failure.
+    pub fn new(device: &Device, free_list: &BindlessFreeList) -> Result<Self> {
+        let resources = Arc::clone(device.resources());
+        let raw = resources.device();
+
+        // Build everything into a partial set so a mid-init failure can free what was
+        // already created (the C++ early-return paths leaked on failure; here the
+        // `Partial` Drop reclaims). `?` over each step short-circuits to the cleanup.
+        let mut partial = Partial::new(&resources);
+
+        partial.linear_sampler = Some(create_linear_sampler(raw)?);
+        partial.shadow_sampler = Some(create_shadow_sampler(raw)?);
+
+        partial.bindless_set_layout = Some(create_bindless_layout(raw)?);
+        partial.light_set_layout = Some(create_light_layout(raw)?);
+        partial.instance_set_layout = Some(create_instance_layout(raw)?);
+        partial.ibl_set_layout = Some(create_ibl_layout(raw)?);
+        partial.ssao_mesh_set_layout = Some(create_ssao_mesh_layout(raw)?);
+        partial.ddgi_mesh_set_layout = Some(create_ddgi_mesh_layout(raw)?);
+        // Sets 6/7 (TLAS + ReSTIR radiance) need the AS extension, so they exist only
+        // when RT is supported; the mesh PSO appends them to its layout only then.
+        if device.capabilities.rt_supported {
+            partial.rt_mesh_set_layout = Some(create_rt_mesh_layout(raw)?);
+            partial.restir_mesh_set_layout = Some(create_restir_mesh_layout(raw)?);
+        }
+        partial.cluster_set_layout = Some(create_cluster_layout(raw)?);
+        partial.tonemap_set_layout = Some(create_tonemap_layout(raw)?);
+        partial.fxaa_set_layout = Some(create_fxaa_layout(raw)?);
+        partial.taa_set_layout = Some(create_taa_layout(raw)?);
+
+        partial.descriptor_pool = Some(create_descriptor_pool(raw)?);
+        partial.bindless_pool = Some(create_bindless_pool(raw)?);
+
+        let bindless_set = allocate_bindless_set(
+            raw,
+            partial.bindless_pool.unwrap(),
+            partial.bindless_set_layout.unwrap(),
+        )?;
+
+        // Slot 0 is the default white texture: claim it up front so the allocator's
+        // high-water mark starts at 1 and the first uploaded texture gets slot 1.
+        let mut allocator = SlotAllocator {
+            next_index: 0,
+            free_list: Arc::clone(free_list),
+        };
+        let white_slot = allocator.claim();
+        debug_assert_eq!(white_slot, DEFAULT_WHITE_SLOT);
+
+        log_info!(
+            "bindless descriptor table ready ({} slots, update-after-bind)",
+            MAX_BINDLESS_TEXTURES
+        );
+
+        Ok(Self {
+            resources: Arc::clone(&resources),
+            linear_sampler: partial.take_linear_sampler(),
+            shadow_sampler: partial.take_shadow_sampler(),
+            bindless_set_layout: partial.take_bindless_set_layout(),
+            light_set_layout: partial.take_light_set_layout(),
+            instance_set_layout: partial.take_instance_set_layout(),
+            ibl_set_layout: partial.take_ibl_set_layout(),
+            ssao_mesh_set_layout: partial.take_ssao_mesh_set_layout(),
+            ddgi_mesh_set_layout: partial.take_ddgi_mesh_set_layout(),
+            rt_mesh_set_layout: partial.rt_mesh_set_layout.take(),
+            restir_mesh_set_layout: partial.restir_mesh_set_layout.take(),
+            cluster_set_layout: partial.take_cluster_set_layout(),
+            tonemap_set_layout: partial.take_tonemap_set_layout(),
+            fxaa_set_layout: partial.take_fxaa_set_layout(),
+            taa_set_layout: partial.take_taa_set_layout(),
+            descriptor_pool: partial.take_descriptor_pool(),
+            bindless_pool: partial.take_bindless_pool(),
+            bindless_set,
+            slots: Mutex::new(allocator),
+            free_list: Arc::clone(free_list),
+        })
+    }
+
+    /// The linear repeat sampler (the default texture sampler, also used by the
+    /// bindless writes and the point-shadow cube lookup).
+    pub fn linear_sampler(&self) -> vk::Sampler {
+        self.linear_sampler
+    }
+
+    /// The depth-compare PCF sampler for directional/spot shadow-map lookups.
+    pub fn shadow_sampler(&self) -> vk::Sampler {
+        self.shadow_sampler
+    }
+
+    /// Set 0: the bindless combined-image-sampler array layout.
+    pub fn bindless_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.bindless_set_layout
+    }
+
+    /// Set 1: the directional/punctual light + shadow layout.
+    pub fn light_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.light_set_layout
+    }
+
+    /// Set 2: the per-instance + joint-palette + material-params layout.
+    pub fn instance_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.instance_set_layout
+    }
+
+    /// Set 3 in the mesh pipeline: the IBL set (global irradiance/prefiltered/BRDF +
+    /// the reflection-probe cube arrays + probe metadata). The mesh PSO layout binds
+    /// it; the descriptor set + its data resources land in the IBL phase.
+    pub fn ibl_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.ibl_set_layout
+    }
+
+    /// Set 4 in the mesh pipeline: the screen-space AO + contact + SSGI sampler set.
+    pub fn ssao_mesh_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.ssao_mesh_set_layout
+    }
+
+    /// Set 5 in the mesh pipeline: the DDGI irradiance + distance sampler set.
+    pub fn ddgi_mesh_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.ddgi_mesh_set_layout
+    }
+
+    /// Set 6 in the mesh pipeline: the ray-tracing TLAS set — present only when RT is
+    /// supported (the layout needs the acceleration-structure extension).
+    pub fn rt_mesh_set_layout(&self) -> Option<vk::DescriptorSetLayout> {
+        self.rt_mesh_set_layout
+    }
+
+    /// Set 7 in the mesh pipeline: the ReSTIR radiance sampler set — present only when
+    /// RT is supported (it rides the RT path).
+    pub fn restir_mesh_set_layout(&self) -> Option<vk::DescriptorSetLayout> {
+        self.restir_mesh_set_layout
+    }
+
+    /// The clustered-light-culling compute layout.
+    pub fn cluster_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.cluster_set_layout
+    }
+
+    /// The tonemap compute layout (one storage image).
+    pub fn tonemap_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.tonemap_set_layout
+    }
+
+    /// The FXAA compute layout (sampler source + storage-image target).
+    pub fn fxaa_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.fxaa_set_layout
+    }
+
+    /// The TAA resolve compute layout (current/history/motion samplers + offscreen/
+    /// history storage images).
+    pub fn taa_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.taa_set_layout
+    }
+
+    /// The descriptor pool the per-frame light/instance/cluster + per-view sets are
+    /// allocated from (`FREE_DESCRIPTOR_SET` so texture sets free on drop).
+    pub fn descriptor_pool(&self) -> vk::DescriptorPool {
+        self.descriptor_pool
+    }
+
+    /// The single global bindless set bound as set 0 by every draw.
+    pub fn bindless_set(&self) -> vk::DescriptorSet {
+        self.bindless_set
+    }
+
+    /// The shared reclaim free-list every [`crate::GpuTexture`] clones so its `Drop`
+    /// returns its slot.
+    pub fn free_list(&self) -> &BindlessFreeList {
+        &self.free_list
+    }
+
+    /// Claims a stable bindless slot, reusing a reclaimed one if available, under the
+    /// bindless mutex. The upload path then writes the texture into this slot with
+    /// [`Descriptors::write_texture`] and constructs the [`crate::GpuTexture`] holding
+    /// the free-list clone. The C++ `claimBindlessSlot`.
+    pub fn claim_slot(&self) -> u32 {
+        self.slots
+            .lock()
+            .expect("bindless slot allocator lock")
+            .claim()
+    }
+
+    /// Writes `view` into bindless slot `index` of the global set with the linear
+    /// sampler, under the bindless mutex (host access to a descriptor set is
+    /// externally synchronized; the worker writes it too — README §5). The image must
+    /// be in `SHADER_READ_ONLY_OPTIMAL` when sampled (the graph guarantees it). The
+    /// C++ `writeBindlessTexture` (`renderer_detail.cppm:2797`).
+    pub fn write_texture(&self, view: vk::ImageView, index: u32) {
+        let image_info = [vk::DescriptorImageInfo {
+            sampler: self.linear_sampler,
+            image_view: view,
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        }];
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.bindless_set)
+            .dst_binding(0)
+            .dst_array_element(index)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info);
+        let _guard = self.slots.lock().expect("bindless slot allocator lock");
+        // SAFETY: the ash seam. The set + layout outlive this; the view is valid for
+        // the call. The lock serializes concurrent worker/main writes to the set.
+        unsafe {
+            self.resources
+                .device()
+                .update_descriptor_sets(&[write], &[])
+        };
+    }
+
+    /// Writes `view` into *every* bindless slot of the global set with the linear
+    /// sampler, in one `vkUpdateDescriptorSets`. Called once at init with the default
+    /// white view so no slot is ever sampled while unbound: some drivers (lavapipe)
+    /// fault sampling a partially-bound array even on a slot a shader never reads, and
+    /// it is undefined behaviour on real hardware. Real uploads overwrite their slot
+    /// afterwards. The C++ default-white fill in `initRenderer` (`renderer.cppm:540`).
+    pub fn seed_all_textures(&self, view: vk::ImageView) {
+        let image_info = vec![
+            vk::DescriptorImageInfo {
+                sampler: self.linear_sampler,
+                image_view: view,
+                image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            };
+            MAX_BINDLESS_TEXTURES as usize
+        ];
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.bindless_set)
+            .dst_binding(0)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info);
+        let _guard = self.slots.lock().expect("bindless slot allocator lock");
+        // SAFETY: the ash seam. The set + layout outlive this; `view` is valid for the
+        // call and `image_info` lives until the call returns. The lock serializes the
+        // concurrent worker/main writes to the set (this runs only at init, but the
+        // mutex discipline is uniform). The array length equals the layout's count.
+        unsafe {
+            self.resources
+                .device()
+                .update_descriptor_sets(&[write], &[]);
+        }
+    }
+
+    /// Allocates one descriptor set of `layout` from the shared descriptor pool (the
+    /// `FREE_DESCRIPTOR_SET` pool sized for the per-frame light/instance sets). The
+    /// per-frame instance set is allocated once and rewritten as its buffers grow.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Vk`] if `vkAllocateDescriptorSets` fails (pool
+    /// exhaustion).
+    pub fn allocate_set(&self, layout: vk::DescriptorSetLayout) -> Result<vk::DescriptorSet> {
+        let layouts = [layout];
+        let info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(self.descriptor_pool)
+            .set_layouts(&layouts);
+        // SAFETY: the ash seam. The layout outlives the call; the returned set lives
+        // for the renderer's lifetime (freed when the pool is destroyed in teardown).
+        let sets = checked(
+            unsafe { self.resources.device().allocate_descriptor_sets(&info) },
+            "allocate_descriptor_sets",
+        )?;
+        Ok(sets[0])
+    }
+
+    /// Writes a storage buffer into `(set, binding)` — the per-frame instance /
+    /// material SSBO rebind after a grow. Host access to a descriptor set is externally
+    /// synchronized, but these per-frame sets are only touched on the render thread
+    /// (after the frame's fence is waited), so no lock is taken here.
+    pub fn write_storage_buffer(
+        &self,
+        set: vk::DescriptorSet,
+        binding: u32,
+        buffer: vk::Buffer,
+        size: vk::DeviceSize,
+    ) {
+        let buffer_info = [vk::DescriptorBufferInfo {
+            buffer,
+            offset: 0,
+            range: size,
+        }];
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(binding)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&buffer_info);
+        // SAFETY: the ash seam. The set + buffer outlive the call; the write targets a
+        // single binding the set's layout declares.
+        unsafe {
+            self.resources
+                .device()
+                .update_descriptor_sets(&[write], &[]);
+        }
+    }
+
+    /// Writes a uniform buffer into `(set, binding)` — the per-frame light UBO + cluster
+    /// params UBO binds. Host access to these per-frame sets is on the render thread only
+    /// (after the frame's fence is waited), so no lock is taken (mirrors
+    /// [`Descriptors::write_storage_buffer`]).
+    pub fn write_uniform_buffer(
+        &self,
+        set: vk::DescriptorSet,
+        binding: u32,
+        buffer: vk::Buffer,
+        size: vk::DeviceSize,
+    ) {
+        let buffer_info = [vk::DescriptorBufferInfo {
+            buffer,
+            offset: 0,
+            range: size,
+        }];
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(binding)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .buffer_info(&buffer_info);
+        // SAFETY: the ash seam. The set + buffer outlive the call; the write targets a
+        // single binding the set's layout declares.
+        unsafe {
+            self.resources
+                .device()
+                .update_descriptor_sets(&[write], &[]);
+        }
+    }
+
+    /// The number of bindless slots ever handed out (the high-water mark, the C++
+    /// `bindlessTextureCount` = `nextBindlessIndex`). Slot 0 (the default white) is
+    /// counted, so this is `>= 1` after init.
+    pub fn texture_count(&self) -> u32 {
+        self.slots
+            .lock()
+            .expect("bindless slot allocator lock")
+            .next_index
+    }
+
+    /// The number of reclaimed slots currently available for reuse (the C++
+    /// `bindlessFreeCount`).
+    pub fn free_count(&self) -> u32 {
+        self.free_list.lock().map(|f| f.len() as u32).unwrap_or(0)
+    }
+}
+
+impl Drop for Descriptors {
+    fn drop(&mut self) {
+        // SAFETY: the ash seam. The `Arc<DeviceResources>` keeps the device alive for
+        // this call; the run loop idled it before teardown (README §4). The bindless
+        // set frees implicitly with its pool, so only the pools/layouts/samplers are
+        // destroyed here, each exactly once. Pools before layouts is not required
+        // (they are independent device children), but matches the C++ order.
+        let raw = self.resources.device();
+        unsafe {
+            raw.destroy_descriptor_pool(self.bindless_pool, None);
+            raw.destroy_descriptor_pool(self.descriptor_pool, None);
+            raw.destroy_descriptor_set_layout(self.bindless_set_layout, None);
+            raw.destroy_descriptor_set_layout(self.light_set_layout, None);
+            raw.destroy_descriptor_set_layout(self.instance_set_layout, None);
+            raw.destroy_descriptor_set_layout(self.ibl_set_layout, None);
+            raw.destroy_descriptor_set_layout(self.ssao_mesh_set_layout, None);
+            raw.destroy_descriptor_set_layout(self.ddgi_mesh_set_layout, None);
+            if let Some(layout) = self.rt_mesh_set_layout {
+                raw.destroy_descriptor_set_layout(layout, None);
+            }
+            if let Some(layout) = self.restir_mesh_set_layout {
+                raw.destroy_descriptor_set_layout(layout, None);
+            }
+            raw.destroy_descriptor_set_layout(self.cluster_set_layout, None);
+            raw.destroy_descriptor_set_layout(self.tonemap_set_layout, None);
+            raw.destroy_descriptor_set_layout(self.fxaa_set_layout, None);
+            raw.destroy_descriptor_set_layout(self.taa_set_layout, None);
+            raw.destroy_sampler(self.linear_sampler, None);
+            raw.destroy_sampler(self.shadow_sampler, None);
+        }
+    }
+}
+
+/// Holds the partially-built handles during [`Descriptors::new`] so a mid-init
+/// failure frees what was already created (each `?` short-circuits to this `Drop`).
+/// On success, the `take_*` methods move every handle out (clearing the field) so the
+/// `Drop` frees nothing.
+struct Partial<'a> {
+    resources: &'a Arc<DeviceResources>,
+    linear_sampler: Option<vk::Sampler>,
+    shadow_sampler: Option<vk::Sampler>,
+    bindless_set_layout: Option<vk::DescriptorSetLayout>,
+    light_set_layout: Option<vk::DescriptorSetLayout>,
+    instance_set_layout: Option<vk::DescriptorSetLayout>,
+    ibl_set_layout: Option<vk::DescriptorSetLayout>,
+    ssao_mesh_set_layout: Option<vk::DescriptorSetLayout>,
+    ddgi_mesh_set_layout: Option<vk::DescriptorSetLayout>,
+    rt_mesh_set_layout: Option<vk::DescriptorSetLayout>,
+    restir_mesh_set_layout: Option<vk::DescriptorSetLayout>,
+    cluster_set_layout: Option<vk::DescriptorSetLayout>,
+    tonemap_set_layout: Option<vk::DescriptorSetLayout>,
+    fxaa_set_layout: Option<vk::DescriptorSetLayout>,
+    taa_set_layout: Option<vk::DescriptorSetLayout>,
+    descriptor_pool: Option<vk::DescriptorPool>,
+    bindless_pool: Option<vk::DescriptorPool>,
+}
+
+/// Generates the `take_<field>` accessor (moves the handle out, leaving `None` so the
+/// `Drop` skips it) for every owned handle in [`Partial`].
+macro_rules! partial_take {
+    ($($take:ident => $field:ident: $ty:ty),+ $(,)?) => {
+        $(
+            fn $take(&mut self) -> $ty {
+                self.$field.take().expect("partial handle built before take")
+            }
+        )+
+    };
+}
+
+impl<'a> Partial<'a> {
+    fn new(resources: &'a Arc<DeviceResources>) -> Self {
+        Self {
+            resources,
+            linear_sampler: None,
+            shadow_sampler: None,
+            bindless_set_layout: None,
+            light_set_layout: None,
+            instance_set_layout: None,
+            ibl_set_layout: None,
+            ssao_mesh_set_layout: None,
+            ddgi_mesh_set_layout: None,
+            rt_mesh_set_layout: None,
+            restir_mesh_set_layout: None,
+            cluster_set_layout: None,
+            tonemap_set_layout: None,
+            fxaa_set_layout: None,
+            taa_set_layout: None,
+            descriptor_pool: None,
+            bindless_pool: None,
+        }
+    }
+
+    partial_take! {
+        take_linear_sampler => linear_sampler: vk::Sampler,
+        take_shadow_sampler => shadow_sampler: vk::Sampler,
+        take_bindless_set_layout => bindless_set_layout: vk::DescriptorSetLayout,
+        take_light_set_layout => light_set_layout: vk::DescriptorSetLayout,
+        take_instance_set_layout => instance_set_layout: vk::DescriptorSetLayout,
+        take_ibl_set_layout => ibl_set_layout: vk::DescriptorSetLayout,
+        take_ssao_mesh_set_layout => ssao_mesh_set_layout: vk::DescriptorSetLayout,
+        take_ddgi_mesh_set_layout => ddgi_mesh_set_layout: vk::DescriptorSetLayout,
+        take_cluster_set_layout => cluster_set_layout: vk::DescriptorSetLayout,
+        take_tonemap_set_layout => tonemap_set_layout: vk::DescriptorSetLayout,
+        take_fxaa_set_layout => fxaa_set_layout: vk::DescriptorSetLayout,
+        take_taa_set_layout => taa_set_layout: vk::DescriptorSetLayout,
+        take_descriptor_pool => descriptor_pool: vk::DescriptorPool,
+        take_bindless_pool => bindless_pool: vk::DescriptorPool,
+    }
+}
+
+impl Drop for Partial<'_> {
+    fn drop(&mut self) {
+        // SAFETY: the ash seam. Frees only the handles still present (a successful
+        // `Descriptors::new` `take`s them all out, so this frees nothing). Runs only
+        // on the mid-init error path, where each present handle was created on this
+        // device and not yet owned by a `Descriptors`.
+        let raw = self.resources.device();
+        unsafe {
+            if let Some(pool) = self.bindless_pool {
+                raw.destroy_descriptor_pool(pool, None);
+            }
+            if let Some(pool) = self.descriptor_pool {
+                raw.destroy_descriptor_pool(pool, None);
+            }
+            for layout in [
+                self.bindless_set_layout,
+                self.light_set_layout,
+                self.instance_set_layout,
+                self.ibl_set_layout,
+                self.ssao_mesh_set_layout,
+                self.ddgi_mesh_set_layout,
+                self.rt_mesh_set_layout,
+                self.restir_mesh_set_layout,
+                self.cluster_set_layout,
+                self.tonemap_set_layout,
+                self.fxaa_set_layout,
+                self.taa_set_layout,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                raw.destroy_descriptor_set_layout(layout, None);
+            }
+            if let Some(sampler) = self.shadow_sampler {
+                raw.destroy_sampler(sampler, None);
+            }
+            if let Some(sampler) = self.linear_sampler {
+                raw.destroy_sampler(sampler, None);
+            }
+        }
+    }
+}
+
+/// The linear repeat sampler: linear min/mag/mip, repeat address, no LOD clamp.
+fn create_linear_sampler(raw: &ash::Device) -> Result<vk::Sampler> {
+    let info = vk::SamplerCreateInfo::default()
+        .mag_filter(vk::Filter::LINEAR)
+        .min_filter(vk::Filter::LINEAR)
+        .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+        .address_mode_u(vk::SamplerAddressMode::REPEAT)
+        .address_mode_v(vk::SamplerAddressMode::REPEAT)
+        .address_mode_w(vk::SamplerAddressMode::REPEAT)
+        .max_lod(vk::LOD_CLAMP_NONE);
+    // SAFETY: the ash seam. The create-info is valid for the call; the sampler is
+    // owned and freed in `Descriptors::drop` (or the `Partial` error path).
+    checked(unsafe { raw.create_sampler(&info, None) }, "createSampler")
+}
+
+/// The depth-compare PCF sampler: linear filtering across the 2×2 compare results,
+/// clamp to an opaque-white (lit) border so off-map samples are unshadowed,
+/// `LESS_OR_EQUAL` compare.
+fn create_shadow_sampler(raw: &ash::Device) -> Result<vk::Sampler> {
+    let info = vk::SamplerCreateInfo::default()
+        .mag_filter(vk::Filter::LINEAR)
+        .min_filter(vk::Filter::LINEAR)
+        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_BORDER)
+        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_BORDER)
+        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_BORDER)
+        .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE)
+        .compare_enable(true)
+        .compare_op(vk::CompareOp::LESS_OR_EQUAL);
+    // SAFETY: the ash seam. As [`create_linear_sampler`].
+    checked(
+        unsafe { raw.create_sampler(&info, None) },
+        "createSampler (shadow)",
+    )
+}
+
+/// Set 0: the bindless albedo array — a runtime-sized combined-image-sampler array,
+/// partially bound + update-after-bind, indexed per-instance in the fragment stage.
+fn create_bindless_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let bindings = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_count(MAX_BINDLESS_TEXTURES)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+    let binding_flags =
+        [vk::DescriptorBindingFlags::PARTIALLY_BOUND
+            | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+    let mut flags_info =
+        vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+    let info = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+        .bindings(&bindings)
+        .push_next(&mut flags_info);
+    // SAFETY: the ash seam. The binding + flags structs outlive the call; the layout
+    // is owned and freed in teardown.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "bindlessSetLayout",
+    )
+}
+
+/// Set 1: directional + punctual light UBO/SSBO, cluster lists + params, and the
+/// directional/spot/point shadow samplers — all fragment-stage.
+fn create_light_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let uniform = vk::DescriptorType::UNIFORM_BUFFER;
+    let storage = vk::DescriptorType::STORAGE_BUFFER;
+    let sampler = vk::DescriptorType::COMBINED_IMAGE_SAMPLER;
+    let bindings = [
+        light_binding(0, uniform), // directional + ambient + counts UBO
+        light_binding(1, storage), // punctual light storage buffer
+        light_binding(2, storage), // per-cluster light lists (read)
+        light_binding(3, uniform), // cluster params UBO
+        light_binding(4, sampler), // directional shadow map (compare sampler)
+        light_binding(5, sampler), // spot shadow map (compare sampler)
+        light_binding(6, sampler), // point shadow distance cube (linear sampler)
+    ];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "lightSetLayout",
+    )
+}
+
+/// One fragment-stage binding of `kind` at `slot`, count 1 — the light set's shape.
+fn light_binding(slot: u32, kind: vk::DescriptorType) -> vk::DescriptorSetLayoutBinding<'static> {
+    vk::DescriptorSetLayoutBinding::default()
+        .binding(slot)
+        .descriptor_type(kind)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+}
+
+/// Set 2: per-instance array (vertex) + joint palette (vertex) + per-material params
+/// (fragment), all storage buffers.
+fn create_instance_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let storage = vk::DescriptorType::STORAGE_BUFFER;
+    let bindings = [
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(storage)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_type(storage)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(2)
+            .descriptor_type(storage)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+    ];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "instanceSetLayout",
+    )
+}
+
+/// Set 3 (mesh pipeline): the IBL set. Bindings 0-2 are the global IBL
+/// (irradiance/prefiltered/BRDF combined-image-samplers); bindings 3-4 carry the
+/// reflection-probe cube arrays (`MAX_REFLECTION_PROBES` each); binding 5 is the
+/// probe-metadata SSBO — all fragment-stage. Probes ride the always-present IBL set
+/// rather than a 9th bound set (the C++ `iblSetLayout`, `renderer_detail.cppm:3497`).
+fn create_ibl_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let sampler = vk::DescriptorType::COMBINED_IMAGE_SAMPLER;
+    let bindings = [
+        light_binding(0, sampler),
+        light_binding(1, sampler),
+        light_binding(2, sampler),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(3)
+            .descriptor_type(sampler)
+            .descriptor_count(MAX_REFLECTION_PROBES)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(4)
+            .descriptor_type(sampler)
+            .descriptor_count(MAX_REFLECTION_PROBES)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        light_binding(5, vk::DescriptorType::STORAGE_BUFFER),
+    ];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "iblSetLayout",
+    )
+}
+
+/// Set 4 (mesh pipeline): the AO + contact + SSGI sampler set — three fragment-stage
+/// combined-image-samplers (the C++ `meshAoSetLayout`, `renderer_detail.cppm:3655`).
+fn create_ssao_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let sampler = vk::DescriptorType::COMBINED_IMAGE_SAMPLER;
+    let bindings = [
+        light_binding(0, sampler),
+        light_binding(1, sampler),
+        light_binding(2, sampler),
+    ];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "ssaoMeshSetLayout",
+    )
+}
+
+/// Set 5 (mesh pipeline): the DDGI irradiance + distance sampler set — two
+/// fragment-stage combined-image-samplers (the C++ `ddgiMeshLayout`,
+/// `renderer_detail.cppm:3971`).
+fn create_ddgi_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let sampler = vk::DescriptorType::COMBINED_IMAGE_SAMPLER;
+    let bindings = [light_binding(0, sampler), light_binding(1, sampler)];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "ddgiMeshLayout",
+    )
+}
+
+/// Set 6 (mesh pipeline, RT only): the TLAS — one fragment-stage acceleration
+/// structure (the C++ `rtMeshLayout`, `renderer_detail.cppm:4146`).
+fn create_rt_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let bindings = [light_binding(
+        0,
+        vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+    )];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "rtMeshLayout",
+    )
+}
+
+/// Set 7 (mesh pipeline, RT only): the ReSTIR radiance sampler — one fragment-stage
+/// combined-image-sampler (the C++ `restirMeshLayout`, `renderer_detail.cppm:4243`).
+fn create_restir_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let bindings = [light_binding(0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER)];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "restirMeshLayout",
+    )
+}
+
+/// The clustered-light-culling compute set: params UBO (0) + light list read (1) +
+/// cluster lists write (2), all compute-stage.
+fn create_cluster_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let bindings = [
+        compute_binding(0, vk::DescriptorType::UNIFORM_BUFFER),
+        compute_binding(1, vk::DescriptorType::STORAGE_BUFFER),
+        compute_binding(2, vk::DescriptorType::STORAGE_BUFFER),
+    ];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "clusterSetLayout",
+    )
+}
+
+/// The tonemap compute set: one storage image (the offscreen color) bound in GENERAL.
+fn create_tonemap_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let bindings = [compute_binding(0, vk::DescriptorType::STORAGE_IMAGE)];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "tonemapSetLayout",
+    )
+}
+
+/// The FXAA compute set: a sampler source (0) + a storage-image target (1).
+fn create_fxaa_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let bindings = [
+        compute_binding(0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+        compute_binding(1, vk::DescriptorType::STORAGE_IMAGE),
+    ];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "fxaaSetLayout",
+    )
+}
+
+/// The TAA resolve compute set: current/history/motion samplers (0–2) + offscreen/
+/// history storage images (3–4).
+fn create_taa_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
+    let bindings = [
+        compute_binding(0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+        compute_binding(1, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+        compute_binding(2, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+        compute_binding(3, vk::DescriptorType::STORAGE_IMAGE),
+        compute_binding(4, vk::DescriptorType::STORAGE_IMAGE),
+    ];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the ash seam.
+    checked(
+        unsafe { raw.create_descriptor_set_layout(&info, None) },
+        "taaSetLayout",
+    )
+}
+
+/// One compute-stage binding of `kind` at `slot`, count 1 — the post-process set
+/// shape.
+fn compute_binding(slot: u32, kind: vk::DescriptorType) -> vk::DescriptorSetLayoutBinding<'static> {
+    vk::DescriptorSetLayoutBinding::default()
+        .binding(slot)
+        .descriptor_type(kind)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+}
+
+/// The general descriptor pool the per-frame + per-view sets allocate against
+/// (`FREE_DESCRIPTOR_SET` so freed sets return capacity). Sized for the C++
+/// headroom: the bindless count, the per-frame light/instance UBOs/SSBOs, and the
+/// per-view post-process storage images.
+fn create_descriptor_pool(raw: &ash::Device) -> Result<vk::DescriptorPool> {
+    let frames = crate::frame::MAX_FRAMES_IN_FLIGHT as u32;
+    let views = VIEW_COUNT;
+    let pool_sizes = [
+        pool_size(vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1024),
+        pool_size(vk::DescriptorType::UNIFORM_BUFFER, 4 * frames + 8),
+        pool_size(
+            vk::DescriptorType::STORAGE_BUFFER,
+            8 * frames + 16 + 8 * views,
+        ),
+        pool_size(vk::DescriptorType::STORAGE_IMAGE, 48 + 11 * views),
+        pool_size(
+            vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+            frames + 2 + views,
+        ),
+    ];
+    let info = vk::DescriptorPoolCreateInfo::default()
+        .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
+        .max_sets(1024 + 8 * frames + 64 + 10 * views)
+        .pool_sizes(&pool_sizes);
+    // SAFETY: the ash seam. The pool is owned and freed in teardown.
+    checked(
+        unsafe { raw.create_descriptor_pool(&info, None) },
+        "descriptorPool",
+    )
+}
+
+/// The bindless set's own pool: `UPDATE_AFTER_BIND`, one set, sized for the full
+/// bindless array.
+fn create_bindless_pool(raw: &ash::Device) -> Result<vk::DescriptorPool> {
+    let pool_sizes = [pool_size(
+        vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        MAX_BINDLESS_TEXTURES,
+    )];
+    let info = vk::DescriptorPoolCreateInfo::default()
+        .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+        .max_sets(1)
+        .pool_sizes(&pool_sizes);
+    // SAFETY: the ash seam. The pool is owned and freed in teardown.
+    checked(
+        unsafe { raw.create_descriptor_pool(&info, None) },
+        "bindlessPool",
+    )
+}
+
+/// A pool size of `count` descriptors of `kind`.
+fn pool_size(kind: vk::DescriptorType, count: u32) -> vk::DescriptorPoolSize {
+    vk::DescriptorPoolSize {
+        ty: kind,
+        descriptor_count: count,
+    }
+}
+
+/// Allocates the single bindless set from `pool` against `layout`.
+fn allocate_bindless_set(
+    raw: &ash::Device,
+    pool: vk::DescriptorPool,
+    layout: vk::DescriptorSetLayout,
+) -> Result<vk::DescriptorSet> {
+    let layouts = [layout];
+    let info = vk::DescriptorSetAllocateInfo::default()
+        .descriptor_pool(pool)
+        .set_layouts(&layouts);
+    // SAFETY: the ash seam. One set is allocated from the pool above against the
+    // bindless layout; the returned set is freed implicitly when the pool drops.
+    let sets = checked(
+        unsafe { raw.allocate_descriptor_sets(&info) },
+        "allocate bindlessSet",
+    )?;
+    Ok(sets[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::SurfaceSource;
+    use crate::validation_issue_count;
+
+    /// Builds a headless device or skips the test (no Vulkan ICD in this toolbox).
+    fn device_or_skip() -> Option<Device> {
+        match Device::new(&SurfaceSource::Offscreen) {
+            Ok(device) => Some(device),
+            Err(err) => {
+                eprintln!("skipping: no Vulkan device obtainable ({err})");
+                None
+            }
+        }
+    }
+
+    /// The slot allocator alone (no GPU): claiming N slots after slot 0 hands out
+    /// 1..=N; dropping those into the free-list then claiming N more reuses every
+    /// reclaimed slot LIFO and never grows the high-water mark past N+1 — the
+    /// bounded-pool invariant. This is the phase's named slot-allocator test, run on
+    /// any host (the allocator is GPU-free logic).
+    #[test]
+    fn slot_allocator_reuses_freed_slots_and_stays_bounded() {
+        let free_list: BindlessFreeList = Arc::new(Mutex::new(Vec::new()));
+        let mut allocator = SlotAllocator {
+            next_index: 0,
+            free_list: Arc::clone(&free_list),
+        };
+
+        // Slot 0 is the default white, claimed first.
+        assert_eq!(allocator.claim(), DEFAULT_WHITE_SLOT);
+
+        // Claim five more: the high-water mark grows 1..=5.
+        let claimed: Vec<u32> = (0..5).map(|_| allocator.claim()).collect();
+        assert_eq!(claimed, vec![1, 2, 3, 4, 5]);
+        assert_eq!(allocator.next_index, 6);
+
+        // Return them to the free-list (a GpuTexture drop pushes its slot). The order
+        // mimics texture drops: push 1..=5.
+        {
+            let mut free = free_list.lock().unwrap();
+            free.extend_from_slice(&claimed);
+        }
+        assert_eq!(free_list.lock().unwrap().len(), 5);
+
+        // Claim five more: every slot is reused (LIFO, so 5,4,3,2,1) and the
+        // high-water mark does NOT grow past 6.
+        let reclaimed: Vec<u32> = (0..5).map(|_| allocator.claim()).collect();
+        assert_eq!(reclaimed, vec![5, 4, 3, 2, 1]);
+        assert_eq!(
+            allocator.next_index, 6,
+            "the free-list reuse kept next_index bounded — no growth past the prior high-water mark"
+        );
+        assert!(free_list.lock().unwrap().is_empty());
+
+        // The next claim with an empty free-list grows the high-water mark again.
+        assert_eq!(allocator.claim(), 6);
+        assert_eq!(allocator.next_index, 7);
+    }
+
+    /// Two threads claiming slots concurrently never alias a slot — every handed-out
+    /// index across both threads is distinct. Proves the bindless `Mutex` discipline
+    /// holds (README §5: the thumbnail worker and the main thread both claim). Run on
+    /// any host (GPU-free). The phase's named concurrency test.
+    #[test]
+    fn concurrent_claims_never_alias_a_slot() {
+        let free_list: BindlessFreeList = Arc::new(Mutex::new(Vec::new()));
+        let allocator = Arc::new(Mutex::new(SlotAllocator {
+            next_index: 0,
+            free_list: Arc::clone(&free_list),
+        }));
+
+        const PER_THREAD: usize = 2000;
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let allocator = Arc::clone(&allocator);
+            handles.push(std::thread::spawn(move || {
+                let mut claimed = Vec::with_capacity(PER_THREAD);
+                for _ in 0..PER_THREAD {
+                    claimed.push(allocator.lock().unwrap().claim());
+                }
+                claimed
+            }));
+        }
+
+        let mut all: Vec<u32> = Vec::new();
+        for handle in handles {
+            all.extend(handle.join().expect("worker thread joins"));
+        }
+
+        // 4000 claims with no reuse: the high-water mark is exactly 4000, and every
+        // index 0..4000 was handed out exactly once (no alias, no gap).
+        assert_eq!(all.len(), 2 * PER_THREAD);
+        assert_eq!(
+            allocator.lock().unwrap().next_index,
+            (2 * PER_THREAD) as u32
+        );
+        all.sort_unstable();
+        let expected: Vec<u32> = (0..(2 * PER_THREAD) as u32).collect();
+        assert_eq!(
+            all, expected,
+            "concurrent claims handed out every slot exactly once — no aliasing"
+        );
+    }
+
+    /// The full descriptor infrastructure builds against a device with the bindless
+    /// set created update-after-bind, slot 0 reserved for the default white, and a
+    /// validation-clean construct + teardown. Skips when no Vulkan device is present.
+    /// This is the phase's GPU-side acceptance: the descriptor wiring is real-GPU
+    /// valid (the update-after-bind flag, the partially-bound binding) and the Drop
+    /// frees every handle with no validation message.
+    #[test]
+    fn descriptors_build_and_teardown_is_validation_clean() {
+        let Some(device) = device_or_skip() else {
+            return;
+        };
+        let before = validation_issue_count();
+
+        let free_list: BindlessFreeList = Arc::new(Mutex::new(Vec::new()));
+        let descriptors = Descriptors::new(&device, &free_list).expect("Descriptors::new");
+
+        // Slot 0 is the default white: the high-water mark starts at 1, the free-list
+        // is empty, and every layout/sampler/set handle is non-null.
+        assert_eq!(
+            descriptors.texture_count(),
+            1,
+            "slot 0 (default white) is claimed at init"
+        );
+        assert_eq!(descriptors.free_count(), 0);
+        assert_ne!(descriptors.bindless_set(), vk::DescriptorSet::null());
+        assert_ne!(
+            descriptors.bindless_set_layout(),
+            vk::DescriptorSetLayout::null()
+        );
+        assert_ne!(descriptors.linear_sampler(), vk::Sampler::null());
+        assert_ne!(descriptors.shadow_sampler(), vk::Sampler::null());
+
+        // A claim after init hands out slot 1 (the first uploadable slot), and the
+        // free-list reclaim path is wired through `free_list`.
+        assert_eq!(descriptors.claim_slot(), 1);
+        assert_eq!(descriptors.texture_count(), 2);
+
+        drop(descriptors);
+        device.wait_idle().expect("idle before teardown");
+        drop(device);
+
+        let after = validation_issue_count();
+        assert_eq!(
+            before,
+            after,
+            "the descriptor infrastructure's construct + teardown must be \
+             validation-clean (saw {} new issue(s))",
+            after.saturating_sub(before)
+        );
+    }
+}
