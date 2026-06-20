@@ -35,6 +35,14 @@ resolve with two ping-pong history images). This is where the per-view temporal 
 - **The MSAA resolve is the graph's `RgAttachment.resolve` (phase 2), not a hand-coded resolve** — color
   via `eAverage`, depth via `eSampleZero` (`render_graph.cppm:637`/`:659`). The graph already treats it
   as a second write of the matching kind.
+- **Under MSAA the sky pass STOREs the multisampled color and does NOT resolve — only the scene pass
+  resolves into `scene_output`.** The sky clears + stores the multisampled samples; the scene pass then
+  `LOAD`s them (the `did_sky` color-load gate) and owns the single MSAA resolve. The sky must not set
+  `store_op = DONT_CARE` or carry a `resolve` of its own: discarding the multisampled samples after the
+  sky draw leaves the scene pass loading undefined MSAA color, which reads back as a noisy dithered band
+  over a black sky (only under MSAA — 1×/FXAA/TAA paths were unaffected). The C++ sky pass is likewise
+  unconditionally `eClear`/`eStore` with no resolve (`renderer.cppm:~2000`); the Rust port briefly
+  diverged and was corrected to match (`renderer.rs` sky-pass attachment in `begin_frame_graph`).
 
 ## Grounding (real files/symbols)
 
