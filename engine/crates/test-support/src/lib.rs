@@ -1,0 +1,350 @@
+//! Shared test comparators and the golden-byte diff helper.
+//!
+//! Pulled in under `[dev-dependencies]` by the crates whose oracles were ported from the
+//! C++ `run*SelfTest` functions (animation, geometry, physics, …). It exists so the float
+//! tolerances that *are* the contract live in one place rather than re-defined per test:
+//! the C++ self-tests each re-declared their own `expect`/`eps`/`quatClose` lambdas
+//! (`animation.cpp:769`, `scene.cppm:1714`, `geometry.cppm:2024`), and copying every one
+//! across would recreate that drift surface.
+//!
+//! # The C++ epsilons (the ported tolerances)
+//!
+//! These are the exact tolerances the `runAnimationSelfTest` oracle (`animation.cpp:766`)
+//! asserts against, lifted verbatim so a Rust port that drifts a tolerance is visible here,
+//! not buried in a copied literal:
+//!
+//! - [`EPS`] = `1e-4` — the general "values are equal" tolerance (`eps`, `animation.cpp:782`):
+//!   sampled translations/scales, playhead times, applied-delta endpoints, `quatClose`'s
+//!   double-cover margin.
+//! - [`IK_REACH_EPS`] = `1e-3` — two-bone IK lands its end effector on an in-range target
+//!   this close (`animation.cpp:565,1160,1172`); also the bent-chain reach check.
+//! - [`IK_OVER_REACH_EPS`] = `1e-2` — an over-extended chain straightens and clamps to its
+//!   max reach this close (`animation.cpp:1183,1185`); looser because the clamped solve only
+//!   approximately straightens.
+//!
+//! # Where the helpers live
+//!
+//! Comparators are free functions ([`close`], [`assert_close`], [`quat_close`],
+//! [`assert_quat_close`]); the golden byte diff is [`golden`] / [`assert_golden`].
+//!
+//! # The on-disk golden snapshot harness
+//!
+//! [`assert_bytes_match_golden`] is the phase-2 snapshot helper: it loads a committed
+//! fixture from `fixtures/golden/` (at the repo root), diffs `actual` against it with
+//! [`golden`], and on mismatch panics with the first-differing-offset hexdump. The
+//! fixtures are byte-exact reference artifacts generated *once* from the C++ engine's
+//! format owners (see `fixtures/golden/gen/`), then frozen — the detector for the silent
+//! byte-drift class (`.smesh`/`.smat`/`.sanim` byte shifts, std430 offset moves, shm
+//! header changes) that never throws and never fails validation.
+//!
+//! Setting `UPDATE_GOLDEN=1` rewrites the fixture from `actual` instead of asserting — the
+//! seed/reseed path, for an *intentional* format change that updates the one writer and the
+//! one fixture together (NO LEGACY), never to mask a real Rust drift.
+
+#![deny(unsafe_code)]
+
+use std::path::{Path, PathBuf};
+
+use glam::Quat;
+
+/// The general float-equality tolerance the C++ animation oracle calls `eps`
+/// (`animation.cpp:782` — `constexpr f32 eps = 1e-4f`). The default for "these two values
+/// are the same value".
+pub const EPS: f32 = 1e-4;
+
+/// Two-bone IK end-effector reach tolerance (`animation.cpp:565,1160` — `< 1e-3f`): a
+/// solved chain lands its end on an in-range target this close.
+pub const IK_REACH_EPS: f32 = 1e-3;
+
+/// Two-bone IK over-reach clamp tolerance (`animation.cpp:1183` — `< 1e-2f`): an
+/// over-extended chain straightens toward the target and lands at max reach this close.
+/// Looser than [`IK_REACH_EPS`] because the clamped solve only approximately straightens.
+pub const IK_OVER_REACH_EPS: f32 = 1e-2;
+
+/// Whether `a` and `b` are within `eps` of each other.
+///
+/// The predicate form for use inside a larger boolean; prefer [`assert_close`] in a test so
+/// the failure message reports both values.
+#[must_use]
+pub fn close(a: f32, b: f32, eps: f32) -> bool {
+    (a - b).abs() <= eps
+}
+
+/// Asserts `a` and `b` are within `eps`, reporting both values and the delta on failure.
+///
+/// Pass [`EPS`] for the general case, [`IK_REACH_EPS`] / [`IK_OVER_REACH_EPS`] for IK.
+#[track_caller]
+pub fn assert_close(a: f32, b: f32, eps: f32) {
+    assert!(
+        close(a, b, eps),
+        "values differ by {} (> {eps}): {a} vs {b}",
+        (a - b).abs()
+    );
+}
+
+/// Whether `a` and `b` are the same orientation under the quaternion double cover.
+///
+/// `q` and `-q` rotate identically, so equality is `|dot(a, b)| > 1 - 1e-4` rather than a
+/// component compare — the exact check the C++ oracle's `quatClose` lambda uses
+/// (`animation.cpp:780`). The `1e-4` margin is [`EPS`].
+#[must_use]
+pub fn quat_close(a: Quat, b: Quat) -> bool {
+    a.dot(b).abs() > 1.0 - EPS
+}
+
+/// Asserts `a` and `b` are the same orientation under the double cover, reporting both
+/// quaternions and their dot on failure.
+#[track_caller]
+pub fn assert_quat_close(a: Quat, b: Quat) {
+    assert!(
+        quat_close(a, b),
+        "quaternions differ: dot={} (need |dot| > {}): {a:?} vs {b:?}",
+        a.dot(b),
+        1.0 - EPS
+    );
+}
+
+/// A byte-level diff of `actual` against a golden `expected`.
+///
+/// Returns `Ok(())` when the two byte slices are identical, else `Err` with the first
+/// differing offset and a windowed hexdump around it — the failure mode an implementer can
+/// act on (which byte drifted, in context), not a wall of bytes. Lengths that differ are
+/// reported with the shorter side's tail. This is the comparison core the phase-2 snapshot
+/// helper (`assert_bytes_match_golden`) wraps once it adds on-disk fixture loading and the
+/// `UPDATE_GOLDEN` reseed path.
+pub fn golden(actual: &[u8], expected: &[u8]) -> Result<(), String> {
+    if actual == expected {
+        return Ok(());
+    }
+    let first = actual
+        .iter()
+        .zip(expected)
+        .position(|(a, b)| a != b)
+        .unwrap_or_else(|| actual.len().min(expected.len()));
+    let mut message = format!(
+        "golden mismatch at offset {first}: actual {} bytes, expected {} bytes\n",
+        actual.len(),
+        expected.len()
+    );
+    message.push_str(&hexdump_window("actual  ", actual, first));
+    message.push_str(&hexdump_window("expected", expected, first));
+    Err(message)
+}
+
+/// Asserts `actual` is byte-identical to the golden `expected`, panicking with the
+/// first-differing-offset hexdump from [`golden`] on mismatch.
+#[track_caller]
+pub fn assert_golden(actual: &[u8], expected: &[u8]) {
+    if let Err(message) = golden(actual, expected) {
+        panic!("{message}");
+    }
+}
+
+/// The repo-root `fixtures/golden/` directory holding the committed byte-exact fixtures.
+///
+/// Resolved from this crate's `CARGO_MANIFEST_DIR` (`engine/crates/test-support`) up to the
+/// repo root, so it is stable regardless of the consuming crate or the test's working
+/// directory.
+#[must_use]
+pub fn golden_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../fixtures/golden")
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("golden fixtures dir does not exist: {e}"))
+}
+
+/// Asserts `actual` matches the committed golden fixture named `name` under
+/// `fixtures/golden/`, the phase-2 snapshot contract.
+///
+/// On a match this is silent. On a mismatch it panics with [`golden`]'s
+/// first-differing-offset windowed hexdump — the byte an implementer must fix and its
+/// neighborhood. A missing fixture (when not reseeding) panics with the resolved path so
+/// the cause is obvious.
+///
+/// When the `UPDATE_GOLDEN` env var is set (to any non-empty value), `actual` is *written*
+/// to the fixture instead of asserted — the seed/reseed path. This exists only to seed the
+/// fixtures from the C++ engine the first time, or to land an *intentional* format change
+/// (the one writer and the one fixture move together, NO LEGACY). It is never the way to
+/// quiet a real Rust drift: a drift is a finding, not a reseed.
+#[track_caller]
+pub fn assert_bytes_match_golden(name: &str, actual: &[u8]) {
+    let path = golden_path(name);
+    if update_golden_enabled() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|e| panic!("cannot create golden dir '{}': {e}", parent.display()));
+        }
+        std::fs::write(&path, actual)
+            .unwrap_or_else(|e| panic!("cannot (re)seed golden '{}': {e}", path.display()));
+        return;
+    }
+    let expected = std::fs::read(&path).unwrap_or_else(|e| {
+        panic!(
+            "golden fixture '{}' is missing ({e}); seed it with UPDATE_GOLDEN=1 from the C++ \
+             reference, then commit it",
+            path.display()
+        )
+    });
+    if let Err(message) = golden(actual, &expected) {
+        panic!("golden '{}' drifted:\n{message}", path.display());
+    }
+}
+
+/// Resolves a fixture `name` (e.g. `"cube.smesh"`) under [`golden_dir`].
+///
+/// In `UPDATE_GOLDEN` mode the dir is resolved without `canonicalize` (the fixture may not
+/// exist yet on a first seed), joined directly from the manifest dir.
+fn golden_path(name: &str) -> PathBuf {
+    if update_golden_enabled() {
+        return Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../fixtures/golden")
+            .join(name);
+    }
+    golden_dir().join(name)
+}
+
+/// Whether `UPDATE_GOLDEN` is set to a non-empty value (the reseed switch).
+fn update_golden_enabled() -> bool {
+    std::env::var_os("UPDATE_GOLDEN").is_some_and(|v| !v.is_empty())
+}
+
+/// 16 bytes per row, centered on `at`, with `±2` rows of context — enough to see the
+/// differing byte and its neighbors without dumping the whole buffer.
+fn hexdump_window(label: &str, bytes: &[u8], at: usize) -> String {
+    const ROW: usize = 16;
+    const CONTEXT_ROWS: usize = 2;
+    let center_row = at / ROW;
+    let start = center_row.saturating_sub(CONTEXT_ROWS) * ROW;
+    let end = ((center_row + CONTEXT_ROWS + 1) * ROW).min(bytes.len());
+    let mut out = format!("{label}:\n");
+    let mut offset = start;
+    while offset < end {
+        let row_end = (offset + ROW).min(end);
+        let hex: Vec<String> = bytes[offset..row_end]
+            .iter()
+            .enumerate()
+            .map(|(i, byte)| {
+                let mark = if offset + i == at { '>' } else { ' ' };
+                format!("{mark}{byte:02x}")
+            })
+            .collect();
+        out.push_str(&format!("  {offset:08x}  {}\n", hex.join(" ")));
+        offset = row_end;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::Quat;
+
+    use super::*;
+
+    #[test]
+    fn close_respects_the_epsilon() {
+        assert!(close(1.0, 1.0 + 5e-5, EPS));
+        assert!(!close(1.0, 1.0 + 2e-4, EPS));
+        // The IK tolerances are progressively looser than the general one.
+        const {
+            assert!(IK_REACH_EPS > EPS);
+            assert!(IK_OVER_REACH_EPS > IK_REACH_EPS);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "values differ")]
+    fn assert_close_panics_past_epsilon() {
+        assert_close(0.0, 1.0, EPS);
+    }
+
+    #[test]
+    fn quat_close_treats_q_and_negative_q_as_equal() {
+        let q = Quat::from_rotation_y(0.7);
+        // The double cover: -q is the same orientation.
+        assert!(quat_close(q, -q));
+        assert!(quat_close(q, q));
+        // A genuinely different orientation is rejected.
+        assert!(!quat_close(q, Quat::from_rotation_y(1.4)));
+    }
+
+    #[test]
+    #[should_panic(expected = "quaternions differ")]
+    fn assert_quat_close_panics_on_distinct_orientations() {
+        assert_quat_close(Quat::IDENTITY, Quat::from_rotation_x(1.0));
+    }
+
+    #[test]
+    fn golden_accepts_identical_bytes() {
+        assert!(golden(b"abc", b"abc").is_ok());
+        assert!(golden(&[], &[]).is_ok());
+    }
+
+    #[test]
+    fn golden_reports_the_first_differing_offset() {
+        let actual = [0u8, 1, 2, 0xAA, 4, 5];
+        let expected = [0u8, 1, 2, 0xBB, 4, 5];
+        let message = golden(&actual, &expected).expect_err("differing bytes must fail");
+        assert!(message.contains("offset 3"), "message was: {message}");
+        // The hexdump marks the differing byte from each side.
+        assert!(message.contains(">aa"), "message was: {message}");
+        assert!(message.contains(">bb"), "message was: {message}");
+    }
+
+    #[test]
+    fn golden_reports_a_length_mismatch() {
+        let message = golden(b"abcd", b"abc").expect_err("differing lengths must fail");
+        assert!(message.contains("offset 3"), "message was: {message}");
+        assert!(
+            message.contains("actual 4 bytes, expected 3 bytes"),
+            "message was: {message}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "golden mismatch")]
+    fn assert_golden_panics_on_drift() {
+        assert_golden(b"\x00\x01", b"\x00\x02");
+    }
+
+    #[test]
+    fn golden_dir_resolves_to_the_committed_fixtures() {
+        let dir = golden_dir();
+        assert!(dir.is_dir(), "golden dir must exist: {}", dir.display());
+        // The seeded fixtures the phase commits are present.
+        for name in [
+            "cube.smesh",
+            "cube.sanim",
+            "material.smat",
+            "shm_header.layout",
+        ] {
+            assert!(
+                dir.join(name).is_file(),
+                "missing committed fixture: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn assert_bytes_match_golden_accepts_the_committed_bytes() {
+        // Loading a committed fixture and matching its own bytes is the happy path; this
+        // also proves the path resolution + read are wired (separately from the per-format
+        // tests, which run in the owning crates).
+        let bytes = std::fs::read(golden_dir().join("cube.smesh")).expect("read cube.smesh");
+        assert_bytes_match_golden("cube.smesh", &bytes);
+    }
+
+    #[test]
+    #[should_panic(expected = "drifted")]
+    fn assert_bytes_match_golden_panics_on_a_drifted_byte() {
+        let mut bytes = std::fs::read(golden_dir().join("cube.smesh")).expect("read cube.smesh");
+        // Flip one byte deep in the payload: a silent corruption the byte compare catches.
+        bytes[200] ^= 0xFF;
+        assert_bytes_match_golden("cube.smesh", &bytes);
+    }
+
+    #[test]
+    #[should_panic(expected = "is missing")]
+    fn assert_bytes_match_golden_panics_on_a_missing_fixture() {
+        assert_bytes_match_golden("does-not-exist.golden", b"whatever");
+    }
+}
