@@ -28,5 +28,5 @@ include(Dependencies)
 include(Slang)
 include(CompileShaders)
 
-add_subdirectory(engine)
+add_subdirectory(engine-old)
 add_subdirectory(tools/sa)
