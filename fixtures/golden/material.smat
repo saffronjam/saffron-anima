@@ -1,0 +1,45 @@
+{
+  "blend": "masked",
+  "doubleSided": true,
+  "factors": {
+    "alphaCutoff": 0.5,
+    "baseColor": [
+      0.800000011920929,
+      0.4000000059604645,
+      0.20000000298023224,
+      1.0
+    ],
+    "emissive": [
+      0.10000000149011612,
+      0.0,
+      0.0
+    ],
+    "emissiveStrength": 2.0,
+    "heightScale": 0.05000000074505806,
+    "metallic": 0.25,
+    "normalStrength": 1.0,
+    "roughness": 0.699999988079071,
+    "uvOffset": [
+      0.0,
+      0.0
+    ],
+    "uvTiling": [
+      2.0,
+      2.0
+    ]
+  },
+  "graph": {},
+  "normalConvention": "gl",
+  "overrides": {},
+  "parent": "1024",
+  "shader": "mesh",
+  "textures": {
+    "albedo": "4242",
+    "emissive": "0",
+    "height": "0",
+    "normal": "4243",
+    "ormOrMr": "0"
+  },
+  "unlit": false,
+  "version": 1
+}
