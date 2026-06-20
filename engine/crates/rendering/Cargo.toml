@@ -1,0 +1,28 @@
+[package]
+name = "saffron-rendering"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-core = { path = "../core" }
+saffron-window = { path = "../window" }
+saffron-geometry = { path = "../geometry" }
+ash.workspace = true
+ash-window.workspace = true
+raw-window-handle.workspace = true
+vk-mem.workspace = true
+thiserror.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+serde_json.workspace = true
+rustix = { workspace = true, features = ["shm", "mm", "time"] }
+
+[dev-dependencies]
+winit.workspace = true
+saffron-test-support = { path = "../test-support" }
