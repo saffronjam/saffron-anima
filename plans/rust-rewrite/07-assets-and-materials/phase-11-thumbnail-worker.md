@@ -63,3 +63,19 @@ material thumbnail renders through the cached default studio preview, exactly as
 3-arg `renderMaterialPreview(renderer, sm, size)` does. The live `preview-render` control command is the
 only caller that compiles the `_preview.spv` for a non-foldable graph (it has the `AssetServer`) and
 passes it through the host seam to the renderer's per-call codegen pipeline.
+
+## Post-integration fix (e2e exposed)
+
+The unit gate built the worker against a stub GPU; the host never started a *real* worker, so the
+host's `thumbnail_worker` stayed `None` and every `get-thumbnail`/`view-asset` took the synchronous
+fallback (replied `pending: false`, blocking the frame loop on the ~1s 4K-HDR decode + upload +
+render — `thumbnail_async.test.ts`). The blocker was the absence of a `Send + 'static` worker GPU
+seam. Closed: `Renderer.device` / `Renderer.descriptors` are now `Arc<Device>` / `Arc<Descriptors>`
+(both `Send + Sync` — ash handles + the VMA allocator + the bindless `Mutex` are thread-safe, and
+every slot claim/write serializes through that mutex), shared via `device_arc()` / `descriptors_arc()`.
+The new `WorkerThumbnailGpu` (in `saffron-host`) holds those `Arc`s + its own per-thread `Uploader`
+(shared queue behind its `Arc<Mutex>`) + its own prewarmed `ThumbnailRenderer` (per-thread command
+pools + PSO cache), implementing `ThumbnailGpu`. The host starts the worker in `on_attach`
+(`start_thumbnail_worker`) after prewarming the renderer's own pipelines; the existing teardown joins
+it before `wait_gpu_idle`. A cold thumbnail now enqueues + replies `pending`, the worker generates
+off-thread, and the retry is a disk-cache hit — validation-clean.
