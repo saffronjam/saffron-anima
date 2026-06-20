@@ -1,6 +1,6 @@
 # Phase 6 — The control-schema contract gate (decimal-string-u64)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 **Depends on:** 10-protocol-codegen:phase-5-xtask-emitters-and-editor-repoint, 09-control-plane:phase-1-socket-server-and-dispatch
 
@@ -87,3 +87,36 @@ Concretely:
   OpenRPC schema; the bad-command and hierarchy round-trip checks pass.
 - The Cargo workspace compiles; `cargo test --workspace` green; the contract step is wired into the
   reproducible gate (phase 9).
+
+## How it closed (GREEN)
+
+The canonical TS gate runs unchanged against the live Rust host: with `SAFFRON_ANIMA_BIN` pointed at
+`target/debug/saffron-host` under a headless weston, `tools/check-control-schema/check.ts` reports
+**"all 158 manifest-driven control checks passed"** — help↔manifest completeness both ways, every typed
+command's result validated against its OpenRPC schema, `assertRawU64` green on every id-returning
+command, plus the hierarchy round-trip, cycle rejection, and bad-command envelope checks. The
+reproducible gate (`tools/ci/check.sh`) already invokes it as the "control DTO contract test" step and
+it passes there too. The decimal-string-u64 encoding is correct at the source: `saffron-protocol`'s
+`Uuid` newtype carries `serde_with::PickFirst<(DisplayFromStr, _)>`, so every id serializes as a quoted
+decimal string.
+
+The optional Rust mirror landed in `saffron-e2e` (the phase-4 driver):
+
+- `saffron_e2e::assert_raw_u64(raw, label) -> Vec<String>` ports `check.ts:assertRawU64` faithfully —
+  it scans the raw reply line's `result` region for the nine id-bearing keys and requires each value to
+  be a quoted decimal string (or `null`), working on the *bytes* deliberately (a parsed `Value` would
+  coerce a number into a `Number` and erase the quoted-vs-bare distinction).
+- The committed **negative probe** is the unit test
+  `assert_raw_u64_accepts_decimal_strings_and_bites_numbers` (in `crates/e2e/src/lib.rs`): a quoted
+  decimal-string id passes clean and a deliberately number-encoded id is *caught*. It runs with
+  `cargo test`, no display needed, so the detector's bite is regression-protected in CI. Sibling unit
+  tests prove every id key is covered, `null` is allowed, only the `result` region is scanned, and a
+  missing `result` never panics.
+- The live positive proof is `crates/e2e/tests/contract_u64.rs`
+  (`live_id_returning_commands_emit_decimal_string_ids`): it drives `add-entity cube` and
+  `list-entities` against the booted host and asserts their raw reply bytes carry every id as a quoted
+  decimal string.
+- The byte-exact path needed a verbatim-bytes accessor, so `saffron_control_client::Client` gained
+  `call_raw_text` (returns the raw reply line, lifting `ok:false` into `Error::Engine`) and `TestEngine`
+  forwards it as `call_raw_text`. The TS check remains the canonical gate the reproducible gate invokes
+  because it also proves the *editor's* JSON path.
