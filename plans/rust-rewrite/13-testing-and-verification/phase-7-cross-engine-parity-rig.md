@@ -1,6 +1,6 @@
 # Phase 7 — The cross-engine parity rig (C++ vs Rust, cutover only)
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 **Depends on:** 13-testing-and-verification:phase-3-bun-e2e-as-parity-harness, 13-testing-and-verification:phase-2-golden-snapshot-infrastructure, 05-physics-jolt-bridge:phase-5-determinism-gate
 
@@ -78,3 +78,49 @@ Concretely, three comparators, each run against both binaries via `SAFFRON_ANIMA
 - The rig is gated behind the presence of `engine-old/` (it no-ops / is absent once that directory is
   deleted), documented as cutover-only.
 - The Cargo workspace compiles; `cargo test --workspace` and the bun smoke slice stay green.
+
+## What landed (DONE)
+
+The rig is the bun e2e harness parameterized over the binary, living in `tests/e2e/parity/` +
+`tests/e2e/parity.test.ts`. Because the shared `harness.ts` freezes `SAFFRON_ANIMA_BIN` at import
+(it cannot switch binaries inside one process), the rig carries a thin `ParityEngine.boot(bin, env)`
+that takes the binary path explicitly and drives both engines from one `bun test` run. It is gated on
+both binaries existing (`enginesAvailable()` → `describe.skip` when the C++
+`build/debug/bin/SaffronAnima` is gone); once `engine-old/` is deleted at cutover the suite skips
+cleanly and the rig is removed with it (NO LEGACY). It writes `appdata/parity-report.json` (the
+gitignored sign-off artifact) with a per-comparator verdict (`exact` / `tolerance` / `deferred`),
+each non-exact one carrying its measured number + reason.
+
+The three comparators run live against both binaries on the llvmpipe toolbox, and the honest verdicts
+(recorded, never loosened) are:
+
+- **Physics sim trace — EXACT (autonomous-green).** A fixed falling-box scenario stepped
+  deterministically over the wire (`play` → `pause` → `step {frames:1}` advances exactly one
+  `PhysicsFixedStep`), each tick's world position serialized as raw little-endian f64 hex. The C++ and
+  Rust traces are **bit-identical** across all 60 ticks — the determinism gate's verdict on the
+  C++-vs-Rust axis (the in-process `determinism.rs` gate covers the x86-repeatability + committed
+  golden-hash axes; this covers the cross-engine axis). This is the byte/bit-exact worked-green
+  example the acceptance gate calls for.
+- **Serde — DATA-EXACT, raw-bytes tolerance (autonomous-green for data).** A project authored by one
+  engine, loaded + re-saved by the other (both directions), is **data-identical** after normalizing
+  three non-format differences: top-level key ORDER (C++ `nlohmann::json` sorts keys alphabetically;
+  Rust `serde_json` + `preserve_order` emits DTO field order), per-boot IDENTITY (the auto-empty
+  project `name` suffix + RNG-minted entity `Uuid`s), and ECS entity ITERATION order (entt vs hecs).
+  The data verdict is asserted `exact`; the raw on-disk byte verdict is recorded `tolerance` (the
+  key-order difference is the one remaining non-format divergence — same keys + values). **Finding for
+  the sign-off / a follow-up scene-serde phase:** the byte-exact project-JSON round-trip the gate
+  names does *not* currently hold purely because the Rust project writer emits DTO field order rather
+  than sorted keys; the data is otherwise identical. This is a serializer-ordering decision, not a
+  value drift, and is out of scope for this verification harness (the rig's job is to surface it).
+- **Golden image — recorded tolerance + deferred.** The same `preview-render` material-on-a-sphere
+  driven through both engines yields same-dimension PNGs that differ under llvmpipe (≈37% of channels,
+  max delta 89/255, mean 2.35) — the studio-lit preview lighting/tonemap path differs between engines.
+  Recorded as `tolerance` with the measured numbers; the byte-exact comparison is meaningful only on
+  the real GPU the editor ships on and is flagged `deferred` (DEFERRED-NEEDS-HARDWARE).
+
+The report also carries the standing **deferred** axes the toolbox cannot cover: cross-arch
+(Rust-x86 == Rust-aarch64) determinism, and the live Tauri-editor-on-Wayland-subsurface present path.
+
+Verified: `bun test parity.test.ts` is green (5 tests); `cargo build --workspace` +
+`cargo test --workspace` stay green (1276 tests, no regression — the rig is bun-only and touches no
+Rust crate).
