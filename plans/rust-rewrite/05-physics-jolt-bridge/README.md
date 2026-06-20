@@ -162,6 +162,13 @@ step → write ragdoll poses → drain contacts to scripts) is a **host** concer
 `saffron-physics` functions it calls are designed to compose in exactly that order. The `sa.raycast`
 host-callback POD bridge (`host.cppm:1200`) is preserved as the seam (area 12 wires it).
 
+This composition is now wired in `saffron-host` (08-host phase-4): `HostLayer::install_sim_tick` builds
+the `sim_tick` closure that runs `drive_ragdolls_to_pose → advance_ragdoll_blend → step →
+write_ragdoll_poses → drain_contacts → dispatch_contact → derive_input → tick_scripts` over the
+single-thread shared cells, and `reconcile_play_edge` builds the world (`populate` + `build_bone_bodies`
++ `add_character`) on the Edit→Playing edge and drops it on →Edit. The `physics-falling-box`,
+`physics-triggers`, `physics-character`, `physics-bones`, and ragdoll e2e exercise it live.
+
 ---
 
 ## 5. The two crates and the dependency edges
