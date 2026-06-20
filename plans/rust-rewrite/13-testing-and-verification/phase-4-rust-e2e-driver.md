@@ -1,6 +1,6 @@
 # Phase 4 — A native-Rust e2e driver over the wire
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 
 **Depends on:** 13-testing-and-verification:phase-3-bun-e2e-as-parity-harness, 11-sa-cli:phase-1-crate-and-socket-client
 
@@ -68,3 +68,28 @@ Concretely:
   shared client).
 - The harness honors `SAFFRON_ANIMA_BIN` and the same headless-weston isolation as `harness.ts`.
 - `cargo test --workspace` green; clippy + fmt clean; the Cargo workspace compiles.
+
+## What landed
+
+- **The one socket client became a crate (NO LEGACY): `saffron-control-client`.** The `sa` CLI's
+  inline framing (`socket_path`/`resolve_socket_path`, the `<json>\n` round-trip, the request envelope,
+  the `{ok,result,error}` reply parse) moved out of `crates/sa/src/main.rs` into
+  `crates/control-client/src/lib.rs`, exposing `Client` (`call_raw`/`call::<R>`/`is_up`/`wait_until_up`),
+  `request_envelope`, `socket_path`/`resolve_socket_path`, and a typed `Error`. The CLI now links it and
+  keeps only its *argument* coercion (`build_params`/`coerce`) and text formatters — argument parsing,
+  not wire framing. The socket-path-resolution and envelope-parse unit tests moved to the client crate;
+  the CLI's `did_you_mean` / presentation tests were rewritten against `present_outcome` (a
+  `wire::Result<Value>` → `Outcome`), so there is exactly one wire implementation in the tree.
+- **`saffron-e2e` is the harness crate.** `crates/e2e/src/lib.rs`'s `TestEngine` mirrors `harness.ts`:
+  `boot(env)` spawns a per-run headless weston + the host on a per-run control socket with stdout+stderr
+  captured by reader threads; `call::<R>`/`call_raw`/`validation_errors`/`settle`/`shutdown`; a `Drop`
+  backstop kills the children. It links the shared client + protocol DTOs (no host crate dep — it spawns
+  the built binary by path), honors `SAFFRON_ANIMA_BIN`, and sets a per-run `SAFFRON_APPDATA_DIR` under
+  the temp dir so a booted auto-empty project never pollutes the source tree (the
+  `no_legacy_overlay_or_tripwire` tripwire stays clean).
+- **Seed tests (`crates/e2e/tests/`).** `smoke.rs`: ping/help/quit, a typed `render-stats` round-trip
+  into `RenderStatsDto`, and a `validation_errors()`-empty one-cube scene. `play_edge.rs`: the
+  falling-box slice over the live play-edge runtime (build world on Play → step + write-back → settle →
+  Stop restores y=5, validation-clean) — the Rust peer of `physics-falling-box.test.ts`, proving the
+  host play loop end to end from Cargo. All four pass live under headless weston; `cargo test
+  --workspace --exclude saffron-e2e` is green (1265 tests), clippy `-D warnings` + fmt clean.
