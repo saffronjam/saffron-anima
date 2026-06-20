@@ -36,22 +36,22 @@ interface ManifestCommand {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = dirname(dirname(scriptDir));
-const dtoFile = join(repoRoot, "engine/source/saffron/control/control_dto.cppm");
-const cppOut = join(repoRoot, "engine/source/saffron/control/control_dto_serde.generated.cpp");
+const dtoFile = join(repoRoot, "engine-old/source/saffron/control/control_dto.cppm");
+const cppOut = join(repoRoot, "engine-old/source/saffron/control/control_dto_serde.generated.cpp");
 const sceneSerdeOut = join(
   repoRoot,
-  "engine/source/saffron/scene/scene_component_serde.generated.cpp",
+  "engine-old/source/saffron/scene/scene_component_serde.generated.cpp",
 );
 const tsOut = join(repoRoot, "editor/src/protocol/sa-types.ts");
 const openRpcOut = join(repoRoot, "schemas/control/openrpc.generated.json");
 const manifestOut = join(repoRoot, "schemas/control/command-manifest.generated.json");
 const componentDefsOut = join(
   repoRoot,
-  "engine/source/saffron/assets/script_component_defs.generated.hpp",
+  "engine-old/source/saffron/assets/script_component_defs.generated.hpp",
 );
 const sceneEditComponentsFile = join(
   repoRoot,
-  "engine/source/saffron/sceneedit/scene_edit_components.cpp",
+  "engine-old/source/saffron/sceneedit/scene_edit_components.cpp",
 );
 
 const scalarTypes = new Set([
