@@ -1,0 +1,2240 @@
+//! The übershader PSO cache: one shader backs every renderable, and a typed
+//! [`PsoKey`] (unlit / skinned / wireframe / sample-count) selects a cached
+//! [`Pipeline`]. [`Pipelines::request_mesh_pipeline`] builds-and-caches on first
+//! request and returns the shared [`Arc`].
+//!
+//! This ports `requestMeshPipeline` + `newMeshPipeline` (`renderer_pipelines.cpp:40`/
+//! `:205`/`:238`) and the `Pipelines` cache (`renderer_types.cppm:1227`). The C++
+//! cache keyed by a built-up string (`shader|unlit|skinned|wireframe`); the Rust port
+//! keys by a [`PsoKey`] struct so the key is matchable, not a stringly-typed concat —
+//! one cache, one key shape (the phase's NO-LEGACY note).
+//!
+//! # Variants
+//!
+//! - **unlit** — a `vk::Bool32` specialization constant (id 0) baked into the fragment
+//!   stage, so one PSO is the lit branch and another the unlit branch.
+//! - **skinned** — binds `vertexMainSkinned` and adds the [`VertexSkin`] stream on
+//!   binding 1 (joints + weights); the base layout (binding 0) is untouched, so the
+//!   unskinned PSO is unchanged.
+//! - **wireframe** — `vk::PolygonMode::LINE`, gated on the `fill_mode_non_solid`
+//!   capability (a software device may lack it; the request falls back to fill).
+
+use std::collections::HashMap;
+use std::ffi::CStr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use ash::vk;
+use saffron_core::log_error;
+use saffron_geometry::{Vertex, VertexSkin};
+
+use crate::descriptors::Descriptors;
+use crate::gpu_types::Material;
+use crate::resources::{DeviceResources, Pipeline};
+use crate::{Device, Error, Result, checked};
+
+/// The offscreen color attachment format every mesh PSO renders into — the C++
+/// `OffscreenColorFormat` (`renderer_types.cppm:54`).
+pub const OFFSCREEN_COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
+
+/// The depth attachment format — the C++ `DepthFormat` (`renderer_types.cppm:49`).
+pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
+
+/// Which screen-space compute PSO slot a request memoizes — the closed set the
+/// phase-9 chain owns, dispatched by [`Pipelines::request_screen_compute`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScreenCompute {
+    Gtao,
+    AoBlur,
+    Contact,
+    Ssgi,
+    SsgiBlur,
+    SsgiAccum,
+    CopyColor,
+    DdgiVoxelize,
+    DdgiTrace,
+    DdgiBlendIrr,
+    DdgiBlendDist,
+    DdgiBorder,
+    RestirInitial,
+    RestirReuse,
+    RestirResolve,
+}
+
+/// The typed mesh-PSO cache key. One übershader backs every renderable; this tuple is
+/// the full permutation set (the C++ string key, made matchable).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PsoKey {
+    /// The shader the PSO compiles (the übershader, or a codegen'd material `.spv`).
+    pub shader: String,
+    /// The unlit fragment permutation (a distinct spec-constant value).
+    pub unlit: bool,
+    /// The skinned vertex permutation (binds the `VertexSkin` stream).
+    pub skinned: bool,
+    /// The wireframe rasterizer permutation (`PolygonMode::LINE`).
+    pub wireframe: bool,
+    /// The MSAA sample count the PSO's multisample state matches.
+    pub sample_count: vk::SampleCountFlags,
+}
+
+/// The übershader PSO cache + the lazy thumbnail/preview pipelines.
+///
+/// Built once in [`Pipelines::new`], then mutated through its own `&mut self` methods
+/// (the cache map grows; the lazy pipelines populate on first use). Owns an
+/// [`Arc`]`<`[`DeviceResources`]`>` so its handles free without a live `&Device`;
+/// every cached [`Pipeline`] is itself a Drop type holding the same `Arc`.
+pub struct Pipelines {
+    resources: Arc<DeviceResources>,
+    shader_dir: PathBuf,
+    /// The set layouts every mesh PSO's pipeline layout binds (set 0/1/2 in this
+    /// phase; later phases extend the list as their sub-state lands).
+    set_layouts: Vec<vk::DescriptorSetLayout>,
+    fill_mode_non_solid: bool,
+    sample_count: vk::SampleCountFlags,
+
+    cache: HashMap<PsoKey, Arc<Pipeline>>,
+    pipelines_created: u32,
+
+    /// The vertex-only depth pre-pass PSO (binds sets 0/1/2, the viewProj push), built
+    /// lazily on the first request and reused. The C++ `Pipelines::depthPrepass`.
+    depth_prepass: Option<Arc<Pipeline>>,
+
+    /// The vertex-only, depth-biased shadow depth PSO (the directional + spot shadow
+    /// maps), built lazily. The C++ `Pipelines::shadowDepth`.
+    shadow_depth: Option<Arc<Pipeline>>,
+
+    /// The color (distance) + depth point-shadow cube-face PSO, built lazily. The C++
+    /// `Pipelines::pointShadow`.
+    point_shadow: Option<Arc<Pipeline>>,
+
+    /// The clustered light-cull compute PSO, built lazily. The C++ `Pipelines::cull`.
+    light_cull: Option<Arc<Pipeline>>,
+
+    /// The compute skinning PSO (skin set layout, a 16-byte push), built lazily. The C++
+    /// `Pipelines::skin`.
+    skin: Option<Arc<Pipeline>>,
+
+    /// The cluster compute set layout the cull PSO binds (set 0).
+    cluster_set_layout: vk::DescriptorSetLayout,
+
+    /// The thin G-buffer prepass PSO (view normal + view-Z), built lazily on the first
+    /// request and reused. The C++ `Pipelines::gbuffer`.
+    gbuffer: Option<Arc<Pipeline>>,
+
+    /// The screen-space compute PSOs (gtao / ao-blur / contact / ssgi / ssgi-blur /
+    /// ssgi-accum / copy-color), built lazily once their set layouts are known. The C++
+    /// `Pipelines::{gtao,aoBlur,contact,ssgi,ssgiBlur,ssgiAccum,copyColor}`.
+    gtao: Option<Arc<Pipeline>>,
+    ao_blur: Option<Arc<Pipeline>>,
+    contact: Option<Arc<Pipeline>>,
+    ssgi: Option<Arc<Pipeline>>,
+    ssgi_blur: Option<Arc<Pipeline>>,
+    ssgi_accum: Option<Arc<Pipeline>>,
+    copy_color: Option<Arc<Pipeline>>,
+
+    /// The five DDGI compute PSOs (voxelize / trace / blend-irradiance / blend-distance /
+    /// border), built lazily once the DDGI sub-state's set layouts are known. The C++
+    /// `Pipelines::{ddgiVoxelize,ddgiTrace,ddgiBlendIrr,ddgiBlendDist,ddgiBorder}`.
+    ddgi_voxelize: Option<Arc<Pipeline>>,
+    ddgi_trace: Option<Arc<Pipeline>>,
+    ddgi_blend_irr: Option<Arc<Pipeline>>,
+    ddgi_blend_dist: Option<Arc<Pipeline>>,
+    ddgi_border: Option<Arc<Pipeline>>,
+
+    /// The three ReSTIR DI compute PSOs (initial candidate sampling / temporal+spatial
+    /// reuse / resolve incl. the TLAS visibility ray), built lazily once the device-shared
+    /// [`crate::Restir`] set layouts are known. RT-only (the resolve needs ray-query). The
+    /// C++ `Pipelines::{restirInitial,restirReuse,restirResolve}`.
+    restir_initial: Option<Arc<Pipeline>>,
+    restir_reuse: Option<Arc<Pipeline>>,
+    restir_resolve: Option<Arc<Pipeline>>,
+
+    /// The motion-vector prepass PSO (instanced, depth-tested, rg16f motion), built
+    /// lazily. The C++ `Pipelines::motion`.
+    motion: Option<Arc<Pipeline>>,
+    /// The TAA resolve compute PSO (taa-shape set layout, a 16-byte push), built lazily.
+    /// The C++ `Pipelines::taa`.
+    taa: Option<Arc<Pipeline>>,
+    /// The FXAA edge-blur compute PSO (fxaa set layout, no push), built lazily. The C++
+    /// `Pipelines::fxaa`.
+    fxaa: Option<Arc<Pipeline>>,
+
+    /// The mandatory tonemap compute PSO (tonemap set layout, a 4-byte exposure push),
+    /// built lazily. The C++ `Pipelines::tonemap`.
+    tonemap: Option<Arc<Pipeline>>,
+    /// The tonemap compute set layout (one storage image) the tonemap PSO binds (set 0).
+    tonemap_set_layout: vk::DescriptorSetLayout,
+    /// The analytic ground-grid graphics PSO (fullscreen, depth-tested, alpha-blended,
+    /// a 2×mat4 push), built lazily. The C++ `Pipelines::grid`.
+    grid: Option<Arc<Pipeline>>,
+    /// The always-on-top editor-overlay graphics PSO (the [`crate::OverlayVertex`]
+    /// stream, alpha-blended, no depth test), built lazily. The C++ `Pipelines::overlay`.
+    overlay: Option<Arc<Pipeline>>,
+    /// The depth-tested editor-overlay graphics PSO (same as `overlay` but depth-tested
+    /// so scene geometry occludes it), built lazily. The C++ `Pipelines::overlayDepth`.
+    overlay_depth: Option<Arc<Pipeline>>,
+}
+
+impl Pipelines {
+    /// Builds the cache front door against the device-global descriptor layouts.
+    ///
+    /// `sample_count` is the MSAA target sample count the mesh PSOs match (1× until
+    /// the AA phase lands); `descriptors` supplies the set layouts the pipeline layout
+    /// binds. The shader dir is resolved once (`SAFFRON_SHADER_DIR` override, else the
+    /// `shaders/` dir beside the running binary) so a build-and-cache never re-walks it.
+    pub fn new(
+        device: &Device,
+        descriptors: &Descriptors,
+        sample_count: vk::SampleCountFlags,
+    ) -> Self {
+        // The übershader declares descriptor sets 0-5 (and 6-7 under RT). The mesh PSO
+        // layout must bind every one the SPIR-V references or pipeline creation is
+        // invalid, so the full list is assembled here from the device-global layouts:
+        //   0 bindless albedo · 1 lights+clusters+shadows · 2 per-instance+joints+mat
+        //   3 IBL+probes · 4 AO+contact+SSGI · 5 DDGI · 6 TLAS (RT) · 7 ReSTIR (RT)
+        let mut set_layouts = vec![
+            descriptors.bindless_set_layout(),
+            descriptors.light_set_layout(),
+            descriptors.instance_set_layout(),
+            descriptors.ibl_set_layout(),
+            descriptors.ssao_mesh_set_layout(),
+            descriptors.ddgi_mesh_set_layout(),
+        ];
+        if let (Some(rt), Some(restir)) = (
+            descriptors.rt_mesh_set_layout(),
+            descriptors.restir_mesh_set_layout(),
+        ) {
+            set_layouts.push(rt);
+            set_layouts.push(restir);
+        }
+
+        Self {
+            resources: Arc::clone(device.resources()),
+            shader_dir: resolve_shader_dir(),
+            set_layouts,
+            fill_mode_non_solid: device.capabilities.fill_mode_non_solid,
+            sample_count,
+            cache: HashMap::new(),
+            pipelines_created: 0,
+            depth_prepass: None,
+            shadow_depth: None,
+            point_shadow: None,
+            light_cull: None,
+            skin: None,
+            cluster_set_layout: descriptors.cluster_set_layout(),
+            gbuffer: None,
+            gtao: None,
+            ao_blur: None,
+            contact: None,
+            ssgi: None,
+            ssgi_blur: None,
+            ssgi_accum: None,
+            copy_color: None,
+            ddgi_voxelize: None,
+            ddgi_trace: None,
+            ddgi_blend_irr: None,
+            ddgi_blend_dist: None,
+            ddgi_border: None,
+            restir_initial: None,
+            restir_reuse: None,
+            restir_resolve: None,
+            motion: None,
+            taa: None,
+            fxaa: None,
+            tonemap: None,
+            tonemap_set_layout: descriptors.tonemap_set_layout(),
+            grid: None,
+            overlay: None,
+            overlay_depth: None,
+        }
+    }
+
+    /// Re-targets the mesh + depth-prepass PSOs to a new MSAA sample count, clearing every
+    /// sample-count-baked PSO so the next request rebuilds it. The mesh PSOs (cache),
+    /// depth-prepass, and motion PSO bake the count; the screen-space + shadow PSOs are
+    /// always 1× and untouched. The caller has idled the GPU (an AA change). The C++
+    /// `setAa`'s `pipelines.cache.clear()` + depth-prepass/sky rebuild
+    /// (`renderer_aa.cpp:94`).
+    pub fn set_sample_count(&mut self, sample_count: vk::SampleCountFlags) {
+        if self.sample_count == sample_count {
+            return;
+        }
+        self.sample_count = sample_count;
+        // The mesh cache keys by sample count, so stale entries would never be hit again;
+        // clear them so the dropped `Arc`s free once the GPU is idle (the caller's job).
+        self.cache.clear();
+        // The depth-prepass PSO bakes the count too — drop it to rebuild lazily. The
+        // G-buffer / shadow / motion PSOs are always 1× (they feed post-resolve targets),
+        // so they are untouched. The C++ `setAa` cleared the cache + rebuilt the depth
+        // prepass (`renderer_aa.cpp:94`).
+        self.depth_prepass = None;
+    }
+
+    /// The MSAA sample count the sample-count-baked PSOs currently target.
+    pub fn sample_count(&self) -> vk::SampleCountFlags {
+        self.sample_count
+    }
+
+    /// The PSO-cache front door: returns the mesh pipeline for `material` + the
+    /// skinned/wireframe permutation, building and caching it on first request and
+    /// returning the shared [`Arc`] on a cache hit.
+    ///
+    /// Wireframe is gated on `fill_mode_non_solid`: an unsupported device falls back
+    /// to the fill PSO (so the key never names a permutation the device cannot make).
+    /// A build failure is logged and returns `None` (the C++ returned a null `Ref`).
+    pub fn request_mesh_pipeline(
+        &mut self,
+        material: &Material,
+        skinned: bool,
+        wireframe: bool,
+    ) -> Option<Arc<Pipeline>> {
+        let wireframe = wireframe && self.fill_mode_non_solid;
+        let key = PsoKey {
+            shader: material.shader.clone(),
+            unlit: material.unlit,
+            skinned,
+            wireframe,
+            sample_count: self.sample_count,
+        };
+        if let Some(pipeline) = self.cache.get(&key) {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_mesh_pipeline(&key) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.cache.insert(key, Arc::clone(&pipeline));
+                // A non-zero count on a steady-state frame is a PSO-compile hitch.
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_mesh_pipeline: {err}");
+                None
+            }
+        }
+    }
+
+    /// The vertex-only depth pre-pass PSO, built and cached on first request. It binds
+    /// sets 0/1/2 (the same prefix as the mesh layout) and the viewProj push, writes no
+    /// color, and depth-tests `LESS` with depth writes on. Returns `None` on a build
+    /// failure (logged). The C++ `makeDepthPrepassPipeline`.
+    pub fn request_depth_prepass(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.depth_prepass {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_depth_prepass() {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.depth_prepass = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_depth_prepass: {err}");
+                None
+            }
+        }
+    }
+
+    /// The vertex-only, depth-biased shadow depth PSO, built and cached on first request.
+    /// Like the depth pre-pass but always single-sampled (the shadow map is 1×) and
+    /// depth-biased (dynamic, set per shadow pass) to kill acne. Binds sets 0/1/2 + the
+    /// light-space viewProj push. Returns `None` on a build failure (logged). The C++
+    /// `makeShadowPipeline`.
+    pub fn request_shadow_depth(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.shadow_depth {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_shadow_depth() {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.shadow_depth = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_shadow_depth: {err}");
+                None
+            }
+        }
+    }
+
+    /// The point-shadow cube-face PSO (color distance + depth), built and cached on first
+    /// request. Renders world distance-to-light into one cube face; the push carries the
+    /// face viewProj (mat4) + the light world position (vec4), in the VERTEX|FRAGMENT
+    /// stages. Returns `None` on a build failure (logged). The C++ `makePointShadowPipeline`.
+    pub fn request_point_shadow(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.point_shadow {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_point_shadow() {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.point_shadow = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_point_shadow: {err}");
+                None
+            }
+        }
+    }
+
+    /// The clustered light-cull compute PSO, built and cached on first request. Binds the
+    /// cluster compute set (set 0: params UBO + light list + cluster lists) and dispatches
+    /// one invocation per froxel. Returns `None` on a build failure (logged). The C++
+    /// `newComputePipeline("shaders/light_cull.spv", clusterSetLayout)`.
+    pub fn request_light_cull(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.light_cull {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_compute("shaders/light_cull.spv", self.cluster_set_layout, 0) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.light_cull = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_light_cull: {err}");
+                None
+            }
+        }
+    }
+
+    /// The compute skinning PSO, built and cached on first request. Binds the skin set
+    /// layout (four storage buffers: static vertices, skin, palette, deformed output) +
+    /// a 16-byte push, and deforms one vertex per invocation. `skin_set_layout` is owned
+    /// by [`crate::skinning::Skinning`]. Returns `None` on a build failure (logged). The
+    /// C++ `newComputePipeline("shaders/skin.spv", skinning.setLayout, 16)`.
+    pub fn request_skin(
+        &mut self,
+        skin_set_layout: vk::DescriptorSetLayout,
+    ) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.skin {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_compute("shaders/skin.spv", skin_set_layout, 16) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.skin = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_skin: {err}");
+                None
+            }
+        }
+    }
+
+    /// The thin G-buffer prepass PSO (view normal rgb + view-Z in .a), built and cached
+    /// on first request. Instanced (sets 0/1/2), single-sampled (the G-buffer is
+    /// post-resolve), depth `LESS` + write, the `viewProj + view` push. Returns `None`
+    /// on a build failure (logged). The C++ `makeGbufferPipeline`.
+    pub fn request_gbuffer(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.gbuffer {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_gbuffer() {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.gbuffer = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_gbuffer: {err}");
+                None
+            }
+        }
+    }
+
+    /// The GTAO compute PSO (compute2 layout, an 80-byte push), built + cached on first
+    /// request. The C++ `newComputePipeline("shaders/gtao.spv", compute2Layout, 80)`.
+    pub fn request_gtao(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(ScreenCompute::Gtao, "shaders/gtao.spv", layout, 80)
+    }
+
+    /// The AO bilateral-blur compute PSO (compute3 layout, no push). The C++
+    /// `newComputePipeline("shaders/ao_blur.spv", compute3Layout)`.
+    pub fn request_ao_blur(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(ScreenCompute::AoBlur, "shaders/ao_blur.spv", layout, 0)
+    }
+
+    /// The directional contact-shadow compute PSO (compute2 layout, a 160-byte push).
+    /// The C++ `newComputePipeline("shaders/contact.spv", compute2Layout, 160)`.
+    pub fn request_contact(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(ScreenCompute::Contact, "shaders/contact.spv", layout, 160)
+    }
+
+    /// The one-bounce SSGI trace compute PSO (compute3 layout, a 144-byte push). The
+    /// C++ `newComputePipeline("shaders/ssgi.spv", compute3Layout, 144)`.
+    pub fn request_ssgi(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(ScreenCompute::Ssgi, "shaders/ssgi.spv", layout, 144)
+    }
+
+    /// The SSGI bilateral-blur compute PSO (compute3 layout, no push). The C++
+    /// `newComputePipeline("shaders/ssgi_blur.spv", compute3Layout)`.
+    pub fn request_ssgi_blur(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(ScreenCompute::SsgiBlur, "shaders/ssgi_blur.spv", layout, 0)
+    }
+
+    /// The SSGI temporal-accumulation compute PSO (taa-shape layout, a 16-byte push).
+    /// The C++ `newComputePipeline("shaders/ssgi_accum.spv", taaSetLayout, 16)`.
+    pub fn request_ssgi_accum(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::SsgiAccum,
+            "shaders/ssgi_accum.spv",
+            layout,
+            16,
+        )
+    }
+
+    /// The SSGI prev-color history-copy compute PSO (compute2 layout, no push). The C++
+    /// `newComputePipeline("shaders/copy_color.spv", compute2Layout)`.
+    pub fn request_copy_color(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::CopyColor,
+            "shaders/copy_color.spv",
+            layout,
+            0,
+        )
+    }
+
+    /// The DDGI voxelize compute PSO (its set layout, a 48-byte push). The C++
+    /// `newComputePipeline("shaders/ddgi_voxelize.spv", voxelLayout, 48)`.
+    pub fn request_ddgi_voxelize(
+        &mut self,
+        layout: vk::DescriptorSetLayout,
+    ) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::DdgiVoxelize,
+            "shaders/ddgi_voxelize.spv",
+            layout,
+            48,
+        )
+    }
+
+    /// The DDGI trace compute PSO (its set layout, a 112-byte push). The C++
+    /// `newComputePipeline("shaders/ddgi_trace.spv", traceLayout, 112)`.
+    pub fn request_ddgi_trace(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::DdgiTrace,
+            "shaders/ddgi_trace.spv",
+            layout,
+            112,
+        )
+    }
+
+    /// The DDGI blend-irradiance compute PSO (its set layout, a 48-byte push). The C++
+    /// `newComputePipeline("shaders/ddgi_blend_irradiance.spv", blendIrrLayout, 48)`.
+    pub fn request_ddgi_blend_irr(
+        &mut self,
+        layout: vk::DescriptorSetLayout,
+    ) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::DdgiBlendIrr,
+            "shaders/ddgi_blend_irradiance.spv",
+            layout,
+            48,
+        )
+    }
+
+    /// The DDGI blend-distance compute PSO (its set layout, a 48-byte push). The C++
+    /// `newComputePipeline("shaders/ddgi_blend_distance.spv", blendDistLayout, 48)`.
+    pub fn request_ddgi_blend_dist(
+        &mut self,
+        layout: vk::DescriptorSetLayout,
+    ) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::DdgiBlendDist,
+            "shaders/ddgi_blend_distance.spv",
+            layout,
+            48,
+        )
+    }
+
+    /// The DDGI octahedral-border compute PSO (its set layout, a 32-byte push). The C++
+    /// `newComputePipeline("shaders/ddgi_border.spv", borderLayout, 32)`.
+    pub fn request_ddgi_border(
+        &mut self,
+        layout: vk::DescriptorSetLayout,
+    ) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::DdgiBorder,
+            "shaders/ddgi_border.spv",
+            layout,
+            32,
+        )
+    }
+
+    /// The ReSTIR initial-candidate-sampling compute PSO (its set layout, a 176-byte push).
+    /// The C++ `newComputePipeline("shaders/restir_initial.spv", initialLayout, 176)`.
+    pub fn request_restir_initial(
+        &mut self,
+        layout: vk::DescriptorSetLayout,
+    ) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::RestirInitial,
+            "shaders/restir_initial.spv",
+            layout,
+            crate::RESTIR_INITIAL_PUSH_SIZE,
+        )
+    }
+
+    /// The ReSTIR temporal+spatial reuse compute PSO (its set layout, a 160-byte push). The
+    /// C++ `newComputePipeline("shaders/restir_reuse.spv", reuseLayout, 160)`.
+    pub fn request_restir_reuse(
+        &mut self,
+        layout: vk::DescriptorSetLayout,
+    ) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::RestirReuse,
+            "shaders/restir_reuse.spv",
+            layout,
+            crate::RESTIR_REUSE_PUSH_SIZE,
+        )
+    }
+
+    /// The ReSTIR resolve compute PSO (its set layout incl. the TLAS binding, a 160-byte
+    /// push). RT-only — the resolve traces one visibility ray via the TLAS. The C++
+    /// `newComputePipeline("shaders/restir_resolve.spv", resolveLayout, 160)`.
+    pub fn request_restir_resolve(
+        &mut self,
+        layout: vk::DescriptorSetLayout,
+    ) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(
+            ScreenCompute::RestirResolve,
+            "shaders/restir_resolve.spv",
+            layout,
+            crate::RESTIR_RESOLVE_PUSH_SIZE,
+        )
+    }
+
+    /// The motion-vector prepass PSO (instanced scene, depth-tested, rg16f motion from
+    /// cur/prev camera reprojection), built and cached on first request. Two vertex
+    /// bindings (cur + prev position), sets 0/1/2, a 2×mat4 push. Built single-sampled but
+    /// re-dropped on a sample-count change so it tracks the active count. Returns `None` on
+    /// a build failure (logged). The C++ `makeMotionPipeline`.
+    pub fn request_motion(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.motion {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_motion() {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.motion = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_motion: {err}");
+                None
+            }
+        }
+    }
+
+    /// The TAA resolve compute PSO (the taa-shape set layout: 3 samplers + 2 storage, a
+    /// 16-byte push), built and cached on first request. The C++
+    /// `newComputePipeline("shaders/taa.spv", taaSetLayout, 16)`.
+    pub fn request_taa(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.taa {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_compute("shaders/taa.spv", layout, 16) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.taa = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_taa: {err}");
+                None
+            }
+        }
+    }
+
+    /// The FXAA edge-blur compute PSO (the fxaa set layout: source sampler + offscreen
+    /// storage, no push), built and cached on first request. The C++
+    /// `newComputePipeline("shaders/fxaa.spv", fxaaSetLayout)`.
+    pub fn request_fxaa(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.fxaa {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_compute("shaders/fxaa.spv", layout, 0) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.fxaa = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_fxaa: {err}");
+                None
+            }
+        }
+    }
+
+    /// The mandatory tonemap compute PSO (tonemap set layout, a 4-byte exposure push),
+    /// built and cached on first request. The C++
+    /// `newComputePipeline("shaders/tonemap.spv", tonemapSetLayout, 4)`. Returns `None`
+    /// only on a build failure (logged) — the tonemap is otherwise always present.
+    pub fn request_tonemap(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.tonemap {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_compute("shaders/tonemap.spv", self.tonemap_set_layout, 4) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.tonemap = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_tonemap: {err}");
+                None
+            }
+        }
+    }
+
+    /// The analytic ground-grid graphics PSO (fullscreen triangle, depth-tested without
+    /// writing, alpha-blended, a 2×mat4 vertex+fragment push), built and cached on first
+    /// request. Single-sampled (the grid draws on the 1× resolved color after tonemap).
+    /// Returns `None` on a build failure (logged). The C++ `newGridPipeline`.
+    pub fn request_grid(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.grid {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_grid() {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.grid = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_grid: {err}");
+                None
+            }
+        }
+    }
+
+    /// The always-on-top editor-overlay graphics PSO (the [`crate::OverlayVertex`]
+    /// stream, alpha-blended, no depth test, single-sampled, no descriptor sets), built
+    /// and cached on first request. Returns `None` on a build failure (logged). The C++
+    /// `newOverlayPipeline(renderer, false)`.
+    pub fn request_overlay(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.overlay {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_overlay(false) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.overlay = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_overlay: {err}");
+                None
+            }
+        }
+    }
+
+    /// The depth-tested editor-overlay graphics PSO (same as `overlay` but depth-tested
+    /// so scene geometry occludes it — camera frustums, etc.), built and cached on first
+    /// request. Returns `None` on a build failure (logged). The C++
+    /// `newOverlayPipeline(renderer, true)`.
+    pub fn request_overlay_depth(&mut self) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.overlay_depth {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_overlay(true) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.overlay_depth = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request_overlay_depth: {err}");
+                None
+            }
+        }
+    }
+
+    /// Builds + caches one screen-space compute PSO, returning the cached `Arc` on a
+    /// hit. The `which` slot selects the field to memoize. Returns `None` on a build
+    /// failure (logged) — that effect's pass is skipped this frame.
+    fn request_screen_compute(
+        &mut self,
+        which: ScreenCompute,
+        shader: &str,
+        layout: vk::DescriptorSetLayout,
+        push_size: u32,
+    ) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = self.screen_slot(which) {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_compute(shader, layout, push_size) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                *self.screen_slot_mut(which) = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                log_error!("request {shader}: {err}");
+                None
+            }
+        }
+    }
+
+    fn screen_slot(&self, which: ScreenCompute) -> Option<&Arc<Pipeline>> {
+        match which {
+            ScreenCompute::Gtao => self.gtao.as_ref(),
+            ScreenCompute::AoBlur => self.ao_blur.as_ref(),
+            ScreenCompute::Contact => self.contact.as_ref(),
+            ScreenCompute::Ssgi => self.ssgi.as_ref(),
+            ScreenCompute::SsgiBlur => self.ssgi_blur.as_ref(),
+            ScreenCompute::SsgiAccum => self.ssgi_accum.as_ref(),
+            ScreenCompute::CopyColor => self.copy_color.as_ref(),
+            ScreenCompute::DdgiVoxelize => self.ddgi_voxelize.as_ref(),
+            ScreenCompute::DdgiTrace => self.ddgi_trace.as_ref(),
+            ScreenCompute::DdgiBlendIrr => self.ddgi_blend_irr.as_ref(),
+            ScreenCompute::DdgiBlendDist => self.ddgi_blend_dist.as_ref(),
+            ScreenCompute::DdgiBorder => self.ddgi_border.as_ref(),
+            ScreenCompute::RestirInitial => self.restir_initial.as_ref(),
+            ScreenCompute::RestirReuse => self.restir_reuse.as_ref(),
+            ScreenCompute::RestirResolve => self.restir_resolve.as_ref(),
+        }
+    }
+
+    fn screen_slot_mut(&mut self, which: ScreenCompute) -> &mut Option<Arc<Pipeline>> {
+        match which {
+            ScreenCompute::Gtao => &mut self.gtao,
+            ScreenCompute::AoBlur => &mut self.ao_blur,
+            ScreenCompute::Contact => &mut self.contact,
+            ScreenCompute::Ssgi => &mut self.ssgi,
+            ScreenCompute::SsgiBlur => &mut self.ssgi_blur,
+            ScreenCompute::SsgiAccum => &mut self.ssgi_accum,
+            ScreenCompute::CopyColor => &mut self.copy_color,
+            ScreenCompute::DdgiVoxelize => &mut self.ddgi_voxelize,
+            ScreenCompute::DdgiTrace => &mut self.ddgi_trace,
+            ScreenCompute::DdgiBlendIrr => &mut self.ddgi_blend_irr,
+            ScreenCompute::DdgiBlendDist => &mut self.ddgi_blend_dist,
+            ScreenCompute::DdgiBorder => &mut self.ddgi_border,
+            ScreenCompute::RestirInitial => &mut self.restir_initial,
+            ScreenCompute::RestirReuse => &mut self.restir_reuse,
+            ScreenCompute::RestirResolve => &mut self.restir_resolve,
+        }
+    }
+
+    /// Number of distinct mesh PSOs the cache holds — inspectable to verify übershader
+    /// reuse (many materials, few PSOs). The C++ `pipelineCount`.
+    pub fn pipeline_count(&self) -> u32 {
+        self.cache.len() as u32
+    }
+
+    /// Total PSOs ever compiled (the cache only grows in this phase, so this equals
+    /// [`Pipelines::pipeline_count`]; it diverges once eviction lands). The C++
+    /// `stats.pipelinesCreated`.
+    pub fn pipelines_created(&self) -> u32 {
+        self.pipelines_created
+    }
+
+    /// Builds one mesh PSO for `key`: loads the shader, sets the unlit spec constant,
+    /// selects the vertex entry/input for the skinned variant, the wireframe polygon
+    /// mode, and the dynamic-rendering color/depth formats. The C++ `newMeshPipeline`.
+    fn build_mesh_pipeline(&self, key: &PsoKey) -> Result<Pipeline> {
+        let raw = self.resources.device();
+        let module = self.load_shader_module(&key.shader)?;
+        // Free the shader module however the rest of this function returns.
+        let result = self.build_mesh_pipeline_with_module(raw, key, module);
+        // SAFETY: the ash seam. The module is consumed by pipeline creation; freeing
+        // it after creation is valid and required (the C++ destroyed it post-create).
+        unsafe { raw.destroy_shader_module(module, None) };
+        result
+    }
+
+    fn build_mesh_pipeline_with_module(
+        &self,
+        raw: &ash::Device,
+        key: &PsoKey,
+        module: vk::ShaderModule,
+    ) -> Result<Pipeline> {
+        // The übershader's unlit branch is specialization constant id 0.
+        let unlit_value: vk::Bool32 = u32::from(key.unlit);
+        let spec_data = unlit_value.to_ne_bytes();
+        let spec_entries = [vk::SpecializationMapEntry::default()
+            .constant_id(0)
+            .offset(0)
+            .size(std::mem::size_of::<vk::Bool32>())];
+        let spec_info = vk::SpecializationInfo::default()
+            .map_entries(&spec_entries)
+            .data(&spec_data);
+
+        let vertex_entry: &CStr = if key.skinned {
+            c"vertexMainSkinned"
+        } else {
+            c"vertexMain"
+        };
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(module)
+                .name(vertex_entry),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(module)
+                .name(c"fragmentMain")
+                .specialization_info(&spec_info),
+        ];
+
+        // Binding 0: the base Vertex stream. Binding 1: the VertexSkin stream, added
+        // only for the skinned variant (the unskinned layout is untouched).
+        let bindings = [
+            vk::VertexInputBindingDescription::default()
+                .binding(0)
+                .stride(size_of::<Vertex>() as u32)
+                .input_rate(vk::VertexInputRate::VERTEX),
+            vk::VertexInputBindingDescription::default()
+                .binding(1)
+                .stride(size_of::<VertexSkin>() as u32)
+                .input_rate(vk::VertexInputRate::VERTEX),
+        ];
+        let attributes = [
+            vk::VertexInputAttributeDescription::default()
+                .location(0)
+                .binding(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(offset_of_vertex_position()),
+            vk::VertexInputAttributeDescription::default()
+                .location(1)
+                .binding(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(offset_of_vertex_normal()),
+            vk::VertexInputAttributeDescription::default()
+                .location(2)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(offset_of_vertex_uv0()),
+            vk::VertexInputAttributeDescription::default()
+                .location(3)
+                .binding(1)
+                .format(vk::Format::R16G16B16A16_UINT)
+                .offset(offset_of_skin_joints()),
+            vk::VertexInputAttributeDescription::default()
+                .location(4)
+                .binding(1)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .offset(offset_of_skin_weights()),
+        ];
+        let (binding_count, attribute_count) = if key.skinned { (2, 5) } else { (1, 3) };
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&bindings[..binding_count])
+            .vertex_attribute_descriptions(&attributes[..attribute_count]);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+
+        let polygon_mode = if key.wireframe {
+            vk::PolygonMode::LINE
+        } else {
+            vk::PolygonMode::FILL
+        };
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(polygon_mode)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(key.sample_count);
+
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+
+        let blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(false)
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let color_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachment);
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let color_formats = [OFFSCREEN_COLOR_FORMAT];
+        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_formats)
+            .depth_attachment_format(DEPTH_FORMAT);
+
+        let push_constant = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(size_of::<saffron_geometry::glam::Mat4>() as u32)]; // viewProj
+
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&self.set_layouts)
+            .push_constant_ranges(&push_constant);
+        // SAFETY: the ash seam. The set layouts outlive the call (owned by the
+        // descriptors sub-state); the layout is owned by the returned `Pipeline`.
+        let layout = checked(
+            unsafe { raw.create_pipeline_layout(&layout_info, None) },
+            "create_pipeline_layout (mesh)",
+        )?;
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .push_next(&mut rendering_info)
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic)
+            .layout(layout);
+
+        // SAFETY: the ash seam. The create-info chain outlives the call; the cache
+        // (`VK_NULL_HANDLE`) is the no-cache path. On failure the layout is freed.
+        let created = unsafe {
+            raw.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        };
+        let pipeline = match created {
+            Ok(pipelines) => pipelines[0],
+            Err((_, result)) => {
+                // SAFETY: the ash seam. The layout was created above and is freed
+                // exactly once on the error path.
+                unsafe { raw.destroy_pipeline_layout(layout, None) };
+                return Err(Error::Vk {
+                    context: "create_graphics_pipelines (mesh)",
+                    result,
+                });
+            }
+        };
+
+        Ok(Pipeline::from_parts(&self.resources, pipeline, layout))
+    }
+
+    /// Builds the vertex-only depth pre-pass PSO from the übershader's `vertexMain`:
+    /// binding 0 = the base [`Vertex`] stream (position/normal/uv0), no color, depth
+    /// `LESS` + write, sets 0/1/2, the viewProj push. The C++ `makeDepthPrepassPipeline`.
+    fn build_depth_prepass(&self) -> Result<Pipeline> {
+        let raw = self.resources.device();
+        let module = self.load_shader_module("shaders/mesh.spv")?;
+        let result = self.build_depth_prepass_with_module(raw, module);
+        // SAFETY: the ash seam. The module is consumed by pipeline creation; freeing it
+        // after creation is valid and required.
+        unsafe { raw.destroy_shader_module(module, None) };
+        result
+    }
+
+    fn build_depth_prepass_with_module(
+        &self,
+        raw: &ash::Device,
+        module: vk::ShaderModule,
+    ) -> Result<Pipeline> {
+        let stages = [vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(module)
+            .name(c"vertexMain")];
+
+        let bindings = [vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(size_of::<Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+        let attributes = base_vertex_attributes();
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&bindings)
+            .vertex_attribute_descriptions(&attributes);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(self.sample_count);
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS);
+        // No color attachments — depth only.
+        let color_blend = vk::PipelineColorBlendStateCreateInfo::default();
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let mut rendering_info =
+            vk::PipelineRenderingCreateInfo::default().depth_attachment_format(DEPTH_FORMAT);
+
+        let push_constant = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(size_of::<saffron_geometry::glam::Mat4>() as u32)];
+        // The depth pre-pass binds the same set prefix as the mesh layout (0 bindless,
+        // 1 light, 2 instance) so the viewProj push + instance read match the scene pass.
+        let set_layouts = &self.set_layouts[..3];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(set_layouts)
+            .push_constant_ranges(&push_constant);
+        // SAFETY: the ash seam. The set layouts outlive the call; the layout is owned by
+        // the returned `Pipeline`.
+        let layout = checked(
+            unsafe { raw.create_pipeline_layout(&layout_info, None) },
+            "create_pipeline_layout (depth-prepass)",
+        )?;
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .push_next(&mut rendering_info)
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic)
+            .layout(layout);
+        // SAFETY: the ash seam. The create-info chain outlives the call; on failure the
+        // layout is freed exactly once.
+        let created = unsafe {
+            raw.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        };
+        let pipeline = match created {
+            Ok(pipelines) => pipelines[0],
+            Err((_, result)) => {
+                // SAFETY: the ash seam. The layout was created above; freed once here.
+                unsafe { raw.destroy_pipeline_layout(layout, None) };
+                return Err(Error::Vk {
+                    context: "create_graphics_pipelines (depth-prepass)",
+                    result,
+                });
+            }
+        };
+        Ok(Pipeline::from_parts(&self.resources, pipeline, layout))
+    }
+
+    /// Builds the thin G-buffer prepass PSO from `gbuffer.slang`: binding 0 = the base
+    /// [`Vertex`] stream, one `R16G16B16A16_SFLOAT` color (view normal rgb + view-Z),
+    /// depth `LESS` + write, single-sampled (the G-buffer is post-resolve), sets 0/1/2,
+    /// the `viewProj + view` push. The C++ `makeGbufferPipeline`.
+    fn build_gbuffer(&self) -> Result<Pipeline> {
+        let raw = self.resources.device();
+        let module = self.load_shader_module("shaders/gbuffer.spv")?;
+        let result = self.build_gbuffer_with_module(raw, module);
+        // SAFETY: the ash seam. The module is consumed by pipeline creation; freeing it
+        // after creation is valid and required.
+        unsafe { raw.destroy_shader_module(module, None) };
+        result
+    }
+
+    fn build_gbuffer_with_module(
+        &self,
+        raw: &ash::Device,
+        module: vk::ShaderModule,
+    ) -> Result<Pipeline> {
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(module)
+                .name(c"vertexMain"),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(module)
+                .name(c"fragmentMain"),
+        ];
+
+        let bindings = [vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(size_of::<Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+        let attributes = base_vertex_attributes();
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&bindings)
+            .vertex_attribute_descriptions(&attributes);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+        // The G-buffer is always single-sampled (the screen-space effects are post-resolve).
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS);
+        let blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(false)
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let color_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachment);
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let color_formats = [crate::ssao::G_NORMAL_FORMAT];
+        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_formats)
+            .depth_attachment_format(DEPTH_FORMAT);
+
+        // The push is two mat4s (viewProj + view), vertex stage.
+        let push_constant = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(2 * size_of::<saffron_geometry::glam::Mat4>() as u32)];
+        let set_layouts = &self.set_layouts[..3];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(set_layouts)
+            .push_constant_ranges(&push_constant);
+        // SAFETY: the ash seam. The set layouts outlive the call; the layout is owned by
+        // the returned `Pipeline`.
+        let layout = checked(
+            unsafe { raw.create_pipeline_layout(&layout_info, None) },
+            "create_pipeline_layout (gbuffer)",
+        )?;
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .push_next(&mut rendering_info)
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic)
+            .layout(layout);
+        // SAFETY: the ash seam. The create-info chain outlives the call; on failure the
+        // layout is freed exactly once.
+        let created = unsafe {
+            raw.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        };
+        let pipeline = match created {
+            Ok(pipelines) => pipelines[0],
+            Err((_, result)) => {
+                // SAFETY: the ash seam. The layout was created above; freed once here.
+                unsafe { raw.destroy_pipeline_layout(layout, None) };
+                return Err(Error::Vk {
+                    context: "create_graphics_pipelines (gbuffer)",
+                    result,
+                });
+            }
+        };
+        Ok(Pipeline::from_parts(&self.resources, pipeline, layout))
+    }
+
+    /// Builds the motion-vector prepass PSO from `motion.slang`: two vertex bindings (cur
+    /// position on binding 0, prev position on binding 1), instanced (sets 0/1/2),
+    /// single-sampled (the motion target is 1×), depth `LESS` + write, rg16f color, the
+    /// cur/prev viewProj push. The C++ `makeMotionPipeline`.
+    fn build_motion(&self) -> Result<Pipeline> {
+        let raw = self.resources.device();
+        let module = self.load_shader_module("shaders/motion.spv")?;
+        let result = self.build_motion_with_module(raw, module);
+        // SAFETY: the ash seam. The module is consumed by pipeline creation; freeing it
+        // after creation is valid and required.
+        unsafe { raw.destroy_shader_module(module, None) };
+        result
+    }
+
+    fn build_motion_with_module(
+        &self,
+        raw: &ash::Device,
+        module: vk::ShaderModule,
+    ) -> Result<Pipeline> {
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(module)
+                .name(c"vertexMain"),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(module)
+                .name(c"fragmentMain"),
+        ];
+
+        // Two per-vertex streams: binding 0 is this frame's position (+ normal + uv0),
+        // binding 1 the previous frame's position. The `drawIndexed` vertex offset applies
+        // to both; a static batch binds the same buffer twice (prevPosition == position).
+        let bindings = [
+            vk::VertexInputBindingDescription::default()
+                .binding(0)
+                .stride(size_of::<Vertex>() as u32)
+                .input_rate(vk::VertexInputRate::VERTEX),
+            vk::VertexInputBindingDescription::default()
+                .binding(1)
+                .stride(size_of::<Vertex>() as u32)
+                .input_rate(vk::VertexInputRate::VERTEX),
+        ];
+        let attributes = [
+            vk::VertexInputAttributeDescription::default()
+                .location(0)
+                .binding(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(offset_of_vertex_position()),
+            vk::VertexInputAttributeDescription::default()
+                .location(1)
+                .binding(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(offset_of_vertex_normal()),
+            vk::VertexInputAttributeDescription::default()
+                .location(2)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(offset_of_vertex_uv0()),
+            // The previous-frame position reads `Vertex::position` off binding 1.
+            vk::VertexInputAttributeDescription::default()
+                .location(3)
+                .binding(1)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(offset_of_vertex_position()),
+        ];
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&bindings)
+            .vertex_attribute_descriptions(&attributes);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+        // Always single-sampled: the motion target is 1×, sampled by the TAA / SSGI resolve.
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS);
+        let blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(false)
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let color_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachment);
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let color_formats = [crate::aa::MOTION_FORMAT];
+        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_formats)
+            .depth_attachment_format(DEPTH_FORMAT);
+
+        let push_constant = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(2 * size_of::<saffron_geometry::glam::Mat4>() as u32)]; // cur + prev viewProj
+        let set_layouts = &self.set_layouts[..3];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(set_layouts)
+            .push_constant_ranges(&push_constant);
+        // SAFETY: the ash seam. The set layouts outlive the call; the layout is owned by
+        // the returned `Pipeline`.
+        let layout = checked(
+            unsafe { raw.create_pipeline_layout(&layout_info, None) },
+            "create_pipeline_layout (motion)",
+        )?;
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .push_next(&mut rendering_info)
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic)
+            .layout(layout);
+        // SAFETY: the ash seam. The create-info chain outlives the call; on failure the
+        // layout is freed exactly once.
+        let created = unsafe {
+            raw.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        };
+        let pipeline = match created {
+            Ok(pipelines) => pipelines[0],
+            Err((_, result)) => {
+                // SAFETY: the ash seam. The layout was created above; freed once here.
+                unsafe { raw.destroy_pipeline_layout(layout, None) };
+                return Err(Error::Vk {
+                    context: "create_graphics_pipelines (motion)",
+                    result,
+                });
+            }
+        };
+        Ok(Pipeline::from_parts(&self.resources, pipeline, layout))
+    }
+
+    /// Builds the vertex-only, depth-biased shadow depth PSO from the übershader's
+    /// `vertexMain`: binding 0 = the base [`Vertex`] stream, no color, depth `LESS` +
+    /// write, dynamic depth-bias, single-sampled, sets 0/1/2, the light-viewProj push.
+    /// The C++ `makeShadowPipeline`.
+    fn build_shadow_depth(&self) -> Result<Pipeline> {
+        let raw = self.resources.device();
+        let module = self.load_shader_module("shaders/mesh.spv")?;
+        let result = self.build_shadow_depth_with_module(raw, module);
+        // SAFETY: the ash seam. The module is consumed by pipeline creation; freeing it
+        // after creation is valid and required.
+        unsafe { raw.destroy_shader_module(module, None) };
+        result
+    }
+
+    fn build_shadow_depth_with_module(
+        &self,
+        raw: &ash::Device,
+        module: vk::ShaderModule,
+    ) -> Result<Pipeline> {
+        let stages = [vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(module)
+            .name(c"vertexMain")];
+
+        let bindings = [vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(size_of::<Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+        let attributes = base_vertex_attributes();
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&bindings)
+            .vertex_attribute_descriptions(&attributes);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        // Depth-biased (set dynamically per shadow pass) to remove shadow acne.
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .depth_bias_enable(true)
+            .line_width(1.0);
+        // The shadow map is never multisampled.
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS);
+        let color_blend = vk::PipelineColorBlendStateCreateInfo::default();
+        let dynamic_states = [
+            vk::DynamicState::VIEWPORT,
+            vk::DynamicState::SCISSOR,
+            vk::DynamicState::DEPTH_BIAS,
+        ];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let mut rendering_info =
+            vk::PipelineRenderingCreateInfo::default().depth_attachment_format(DEPTH_FORMAT);
+
+        let push_constant = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(size_of::<saffron_geometry::glam::Mat4>() as u32)];
+        let set_layouts = &self.set_layouts[..3];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(set_layouts)
+            .push_constant_ranges(&push_constant);
+        // SAFETY: the ash seam. The set layouts outlive the call; the layout is owned by
+        // the returned `Pipeline`.
+        let layout = checked(
+            unsafe { raw.create_pipeline_layout(&layout_info, None) },
+            "create_pipeline_layout (shadow)",
+        )?;
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .push_next(&mut rendering_info)
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic)
+            .layout(layout);
+        // SAFETY: the ash seam. The create-info chain outlives the call; on failure the
+        // layout is freed exactly once.
+        let created = unsafe {
+            raw.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        };
+        let pipeline = match created {
+            Ok(pipelines) => pipelines[0],
+            Err((_, result)) => {
+                // SAFETY: the ash seam. The layout was created above; freed once here.
+                unsafe { raw.destroy_pipeline_layout(layout, None) };
+                return Err(Error::Vk {
+                    context: "create_graphics_pipelines (shadow)",
+                    result,
+                });
+            }
+        };
+        Ok(Pipeline::from_parts(&self.resources, pipeline, layout))
+    }
+
+    /// Builds the point-shadow cube-face PSO from `point_shadow.slang`: binding 0 = the
+    /// base [`Vertex`] stream, one `R32_SFLOAT` color (distance) + depth, depth `LESS` +
+    /// write, single-sampled, sets 0/1/2, the (mat4 viewProj + vec4 lightPos) push in the
+    /// VERTEX|FRAGMENT stages. The C++ `makePointShadowPipeline`.
+    fn build_point_shadow(&self) -> Result<Pipeline> {
+        let raw = self.resources.device();
+        let module = self.load_shader_module("shaders/point_shadow.spv")?;
+        let result = self.build_point_shadow_with_module(raw, module);
+        // SAFETY: the ash seam. The module is consumed by pipeline creation; freeing it
+        // after creation is valid and required.
+        unsafe { raw.destroy_shader_module(module, None) };
+        result
+    }
+
+    fn build_point_shadow_with_module(
+        &self,
+        raw: &ash::Device,
+        module: vk::ShaderModule,
+    ) -> Result<Pipeline> {
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(module)
+                .name(c"vertexMain"),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(module)
+                .name(c"fragmentMain"),
+        ];
+
+        let vertex_bindings = [vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(size_of::<Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+        let attributes = base_vertex_attributes();
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&vertex_bindings)
+            .vertex_attribute_descriptions(&attributes);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS);
+        let blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(false)
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let color_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachment);
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let color_formats = [crate::lighting::POINT_SHADOW_COLOR_FORMAT];
+        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_formats)
+            .depth_attachment_format(DEPTH_FORMAT);
+
+        // The push is mat4 viewProj + vec4 lightPos, read in the vertex AND fragment stages.
+        let push_size = (size_of::<saffron_geometry::glam::Mat4>()
+            + size_of::<saffron_geometry::glam::Vec4>()) as u32;
+        let push_constant = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(push_size)];
+        let set_layouts = &self.set_layouts[..3];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(set_layouts)
+            .push_constant_ranges(&push_constant);
+        // SAFETY: the ash seam. The set layouts outlive the call; the layout is owned by
+        // the returned `Pipeline`.
+        let layout = checked(
+            unsafe { raw.create_pipeline_layout(&layout_info, None) },
+            "create_pipeline_layout (point-shadow)",
+        )?;
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .push_next(&mut rendering_info)
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic)
+            .layout(layout);
+        // SAFETY: the ash seam. The create-info chain outlives the call; on failure the
+        // layout is freed exactly once.
+        let created = unsafe {
+            raw.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        };
+        let pipeline = match created {
+            Ok(pipelines) => pipelines[0],
+            Err((_, result)) => {
+                // SAFETY: the ash seam. The layout was created above; freed once here.
+                unsafe { raw.destroy_pipeline_layout(layout, None) };
+                return Err(Error::Vk {
+                    context: "create_graphics_pipelines (point-shadow)",
+                    result,
+                });
+            }
+        };
+        Ok(Pipeline::from_parts(&self.resources, pipeline, layout))
+    }
+
+    /// Builds a compute PSO from `shader` over `set_layout` with an optional
+    /// compute-stage push of `push_size` bytes (0 = none). Entry point `computeMain`.
+    /// The C++ `newComputePipeline`.
+    fn build_compute(
+        &self,
+        shader: &str,
+        set_layout: vk::DescriptorSetLayout,
+        push_size: u32,
+    ) -> Result<Pipeline> {
+        let raw = self.resources.device();
+        let module = self.load_shader_module(shader)?;
+
+        let set_layouts = [set_layout];
+        let push_constant = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .offset(0)
+            .size(push_size)];
+        let mut layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+        if push_size > 0 {
+            layout_info = layout_info.push_constant_ranges(&push_constant);
+        }
+        // SAFETY: the ash seam. The set layout outlives the call; the layout is owned by
+        // the returned `Pipeline`.
+        let layout = match checked(
+            unsafe { raw.create_pipeline_layout(&layout_info, None) },
+            "create_pipeline_layout (compute)",
+        ) {
+            Ok(layout) => layout,
+            Err(err) => {
+                // SAFETY: the ash seam. The module was loaded above; freed once here.
+                unsafe { raw.destroy_shader_module(module, None) };
+                return Err(err);
+            }
+        };
+
+        let stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(module)
+            .name(c"computeMain");
+        let pipeline_info = [vk::ComputePipelineCreateInfo::default()
+            .stage(stage)
+            .layout(layout)];
+        // SAFETY: the ash seam. The create-info outlives the call; on failure both the
+        // layout and the module are freed.
+        let created = unsafe {
+            raw.create_compute_pipelines(vk::PipelineCache::null(), &pipeline_info, None)
+        };
+        // SAFETY: the ash seam. The module is consumed by creation; free it now.
+        unsafe { raw.destroy_shader_module(module, None) };
+        let pipeline = match created {
+            Ok(pipelines) => pipelines[0],
+            Err((_, result)) => {
+                // SAFETY: the ash seam. The layout was created above; freed once here.
+                unsafe { raw.destroy_pipeline_layout(layout, None) };
+                return Err(Error::Vk {
+                    context: "create_compute_pipelines",
+                    result,
+                });
+            }
+        };
+        Ok(Pipeline::from_parts(&self.resources, pipeline, layout))
+    }
+
+    /// Builds the analytic ground-grid PSO from `grid.slang`: a fullscreen triangle (no
+    /// vertex buffer), depth-tested `LESS_OR_EQUAL` without writing (it emits `SV_Depth`
+    /// to occlude against the persisted 1× scene depth), alpha-blended over the resolved
+    /// color, single-sampled, the `viewProj + invViewProj` push (vertex+fragment), no
+    /// descriptor sets. The C++ `newGridPipeline`.
+    fn build_grid(&self) -> Result<Pipeline> {
+        let raw = self.resources.device();
+        let module = self.load_shader_module("shaders/grid.spv")?;
+        let result = self.build_grid_with_module(raw, module);
+        // SAFETY: the ash seam. The module is consumed by pipeline creation; freeing it
+        // after creation is valid and required.
+        unsafe { raw.destroy_shader_module(module, None) };
+        result
+    }
+
+    fn build_grid_with_module(
+        &self,
+        raw: &ash::Device,
+        module: vk::ShaderModule,
+    ) -> Result<Pipeline> {
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(module)
+                .name(c"vertexMain"),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(module)
+                .name(c"fragmentMain"),
+        ];
+        // Fullscreen triangle — no vertex buffer.
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+        // 1× post-resolve, like the overlay.
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        // Test against the persisted 1× scene depth without writing it; the fragment
+        // emits SV_Depth so geometry in front of the plane occludes the grid.
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(false)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+        let blend_attachment = [alpha_blend_attachment()];
+        let color_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachment);
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let color_formats = [OFFSCREEN_COLOR_FORMAT];
+        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_formats)
+            .depth_attachment_format(DEPTH_FORMAT);
+
+        // The push is viewProj + invViewProj, read in the vertex AND fragment stages.
+        let push_constant = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(2 * size_of::<saffron_geometry::glam::Mat4>() as u32)];
+        let layout_info =
+            vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant);
+        // SAFETY: the ash seam. The push range outlives the call; the layout is owned by
+        // the returned `Pipeline`.
+        let layout = checked(
+            unsafe { raw.create_pipeline_layout(&layout_info, None) },
+            "create_pipeline_layout (grid)",
+        )?;
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .push_next(&mut rendering_info)
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic)
+            .layout(layout);
+        // SAFETY: the ash seam. The create-info chain outlives the call; on failure the
+        // layout is freed exactly once.
+        let created = unsafe {
+            raw.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        };
+        let pipeline = match created {
+            Ok(pipelines) => pipelines[0],
+            Err((_, result)) => {
+                // SAFETY: the ash seam. The layout was created above; freed once here.
+                unsafe { raw.destroy_pipeline_layout(layout, None) };
+                return Err(Error::Vk {
+                    context: "create_graphics_pipelines (grid)",
+                    result,
+                });
+            }
+        };
+        Ok(Pipeline::from_parts(&self.resources, pipeline, layout))
+    }
+
+    /// Builds an editor-overlay PSO from `gizmo_overlay.slang`: the four-attribute
+    /// [`crate::OverlayVertex`] stream (position / color / edge / depth), no descriptor
+    /// sets, alpha-blended, single-sampled, no depth write. `depth_test` selects the
+    /// occluded variant (`LESS_OR_EQUAL` against the scene depth) vs the on-top variant
+    /// (no test); both declare the depth format so the PSO stays render-pass compatible
+    /// with the overlay pass's depth attachment. The C++ `newOverlayPipeline`.
+    fn build_overlay(&self, depth_test: bool) -> Result<Pipeline> {
+        let raw = self.resources.device();
+        let module = self.load_shader_module("shaders/gizmo_overlay.spv")?;
+        let result = self.build_overlay_with_module(raw, module, depth_test);
+        // SAFETY: the ash seam. The module is consumed by pipeline creation; freeing it
+        // after creation is valid and required.
+        unsafe { raw.destroy_shader_module(module, None) };
+        result
+    }
+
+    fn build_overlay_with_module(
+        &self,
+        raw: &ash::Device,
+        module: vk::ShaderModule,
+        depth_test: bool,
+    ) -> Result<Pipeline> {
+        use crate::overlay::OverlayVertex;
+
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(module)
+                .name(c"vertexMain"),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(module)
+                .name(c"fragmentMain"),
+        ];
+
+        let bindings = [vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(size_of::<OverlayVertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+        let attributes = [
+            vk::VertexInputAttributeDescription::default()
+                .location(0)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(std::mem::offset_of!(OverlayVertex, position) as u32),
+            vk::VertexInputAttributeDescription::default()
+                .location(1)
+                .binding(0)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .offset(std::mem::offset_of!(OverlayVertex, color) as u32),
+            vk::VertexInputAttributeDescription::default()
+                .location(2)
+                .binding(0)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .offset(std::mem::offset_of!(OverlayVertex, edge) as u32),
+            vk::VertexInputAttributeDescription::default()
+                .location(3)
+                .binding(0)
+                .format(vk::Format::R32_SFLOAT)
+                .offset(std::mem::offset_of!(OverlayVertex, depth) as u32),
+        ];
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&bindings)
+            .vertex_attribute_descriptions(&attributes);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        // The depth-tested variant occludes against the scene depth without touching it
+        // (LESS_OR_EQUAL matches the scene pass's compare); the on-top variant never
+        // tests. Neither writes depth.
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(depth_test)
+            .depth_write_enable(false)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+        let blend_attachment = [alpha_blend_attachment()];
+        let color_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachment);
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        // Both variants run in the overlay pass, which binds a depth attachment; declare
+        // its format so the PSO is render-pass compatible even when depth testing is off.
+        let color_formats = [OFFSCREEN_COLOR_FORMAT];
+        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_formats)
+            .depth_attachment_format(DEPTH_FORMAT);
+
+        let layout_info = vk::PipelineLayoutCreateInfo::default();
+        // SAFETY: the ash seam. The layout is owned by the returned `Pipeline`.
+        let layout = checked(
+            unsafe { raw.create_pipeline_layout(&layout_info, None) },
+            "create_pipeline_layout (overlay)",
+        )?;
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .push_next(&mut rendering_info)
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic)
+            .layout(layout);
+        // SAFETY: the ash seam. The create-info chain outlives the call; on failure the
+        // layout is freed exactly once.
+        let created = unsafe {
+            raw.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        };
+        let pipeline = match created {
+            Ok(pipelines) => pipelines[0],
+            Err((_, result)) => {
+                // SAFETY: the ash seam. The layout was created above; freed once here.
+                unsafe { raw.destroy_pipeline_layout(layout, None) };
+                return Err(Error::Vk {
+                    context: "create_graphics_pipelines (overlay)",
+                    result,
+                });
+            }
+        };
+        Ok(Pipeline::from_parts(&self.resources, pipeline, layout))
+    }
+
+    /// Loads a SPIR-V shader module from the runtime shader dir (or an absolute path
+    /// for a codegen'd material shader). The C++ `loadShaderModule` + `assetPath`.
+    fn load_shader_module(&self, shader: &str) -> Result<vk::ShaderModule> {
+        let path = if Path::new(shader).is_absolute() {
+            PathBuf::from(shader)
+        } else {
+            // `shaders/mesh.spv` → `<shader_dir>/mesh.spv` (the C++ kept the `shaders/`
+            // prefix because `assetPath` joined onto the exe dir; here the dir already
+            // *is* the shaders dir, so a `shaders/` prefix is stripped).
+            self.shader_dir
+                .join(shader.strip_prefix("shaders/").unwrap_or(shader))
+        };
+        let bytes = std::fs::read(&path)
+            .map_err(|err| Error::ShaderLoad(format!("cannot read '{}': {err}", path.display())))?;
+        if bytes.is_empty() || bytes.len() % 4 != 0 {
+            return Err(Error::ShaderLoad(format!(
+                "invalid SPIR-V size for '{}' ({} bytes)",
+                path.display(),
+                bytes.len()
+            )));
+        }
+        // ash wants the code as `&[u32]`; reinterpret the 4-aligned byte buffer.
+        let words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|chunk| u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+        let info = vk::ShaderModuleCreateInfo::default().code(&words);
+        // SAFETY: the ash seam. The code slice outlives the call; the module is freed
+        // by the caller after pipeline creation.
+        checked(
+            unsafe { self.resources.device().create_shader_module(&info, None) },
+            "create_shader_module (mesh)",
+        )
+    }
+}
+
+/// The straight-alpha over blend attachment the grid + overlay PSOs share
+/// (`srcAlpha`/`1-srcAlpha` color, `one`/`1-srcAlpha` alpha). The C++ grid/overlay
+/// `blendAttachment`.
+fn alpha_blend_attachment() -> vk::PipelineColorBlendAttachmentState {
+    vk::PipelineColorBlendAttachmentState::default()
+        .blend_enable(true)
+        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        .color_blend_op(vk::BlendOp::ADD)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        .alpha_blend_op(vk::BlendOp::ADD)
+        .color_write_mask(vk::ColorComponentFlags::RGBA)
+}
+
+/// The three base-[`Vertex`]-stream attributes (position/normal/uv0 on binding 0) the
+/// depth-only PSOs (depth-prepass, shadow, point-shadow) all declare.
+fn base_vertex_attributes() -> [vk::VertexInputAttributeDescription; 3] {
+    [
+        vk::VertexInputAttributeDescription::default()
+            .location(0)
+            .binding(0)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(offset_of_vertex_position()),
+        vk::VertexInputAttributeDescription::default()
+            .location(1)
+            .binding(0)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(offset_of_vertex_normal()),
+        vk::VertexInputAttributeDescription::default()
+            .location(2)
+            .binding(0)
+            .format(vk::Format::R32G32_SFLOAT)
+            .offset(offset_of_vertex_uv0()),
+    ]
+}
+
+/// The offset of `Vertex::position` (the vertex-input attribute the PSO declares).
+fn offset_of_vertex_position() -> u32 {
+    std::mem::offset_of!(Vertex, position) as u32
+}
+fn offset_of_vertex_normal() -> u32 {
+    std::mem::offset_of!(Vertex, normal) as u32
+}
+fn offset_of_vertex_uv0() -> u32 {
+    std::mem::offset_of!(Vertex, uv0) as u32
+}
+fn offset_of_skin_joints() -> u32 {
+    std::mem::offset_of!(VertexSkin, joints) as u32
+}
+fn offset_of_skin_weights() -> u32 {
+    std::mem::offset_of!(VertexSkin, weights) as u32
+}
+
+/// Resolves the runtime shader directory: the `SAFFRON_SHADER_DIR` override, else the
+/// `shaders/` dir beside the running binary, else walking up from the binary to find
+/// one (the test binary runs from `target/<profile>/deps/`, one level below the
+/// `shaders/` the xtask emits into `target/<profile>/shaders/`). Shared with the IBL bake
+/// (which builds its own transient compute pipelines off the same dir).
+pub(crate) fn resolve_shader_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("SAFFRON_SHADER_DIR") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut dir = exe.parent().map(Path::to_path_buf);
+        while let Some(candidate) = dir {
+            let shaders = candidate.join("shaders");
+            if shaders.is_dir() {
+                return shaders;
+            }
+            dir = candidate.parent().map(Path::to_path_buf);
+        }
+    }
+    PathBuf::from("shaders")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::SurfaceSource;
+    use crate::resources::BindlessFreeList;
+    use crate::validation_issue_count;
+    use std::sync::Mutex;
+
+    /// Builds a headless device + descriptors + the cache, or skips (no Vulkan ICD).
+    fn fixture_or_skip() -> Option<(Device, Descriptors, Pipelines)> {
+        let device = match Device::new(&SurfaceSource::Offscreen) {
+            Ok(device) => device,
+            Err(err) => {
+                eprintln!("skipping: no Vulkan device obtainable ({err})");
+                return None;
+            }
+        };
+        let free_list: BindlessFreeList = Arc::new(Mutex::new(Vec::new()));
+        let descriptors = Descriptors::new(&device, &free_list).expect("Descriptors::new");
+        let pipelines = Pipelines::new(&device, &descriptors, vk::SampleCountFlags::TYPE_1);
+        Some((device, descriptors, pipelines))
+    }
+
+    /// A `PsoKey` is the matchable cache key: equal tuples are equal + hash equal, a
+    /// differing flag is a distinct key. Runs on any host (the key is GPU-free logic);
+    /// proves the C++ stringly key became a typed tuple with no behavior loss.
+    #[test]
+    fn pso_key_distinguishes_every_variant() {
+        use std::collections::HashSet;
+        let base = PsoKey {
+            shader: "shaders/mesh.spv".to_string(),
+            unlit: false,
+            skinned: false,
+            wireframe: false,
+            sample_count: vk::SampleCountFlags::TYPE_1,
+        };
+        let mut set = HashSet::new();
+        set.insert(base.clone());
+        // Re-inserting the identical key does not grow the set (the cache-hit path).
+        assert!(!set.insert(base.clone()));
+        assert_eq!(set.len(), 1);
+        // Each toggled flag is a distinct key.
+        for variant in [
+            PsoKey {
+                unlit: true,
+                ..base.clone()
+            },
+            PsoKey {
+                skinned: true,
+                ..base.clone()
+            },
+            PsoKey {
+                wireframe: true,
+                ..base.clone()
+            },
+            PsoKey {
+                sample_count: vk::SampleCountFlags::TYPE_4,
+                ..base.clone()
+            },
+        ] {
+            assert!(set.insert(variant));
+        }
+        assert_eq!(set.len(), 5);
+    }
+
+    /// The same variant requested twice returns the *same* `Arc` (one PSO, a cache
+    /// hit); distinct variants produce distinct entries; `pipeline_count` reflects the
+    /// cache size — the phase's übershader-reuse gate. Validation-clean build +
+    /// teardown. Skips when no Vulkan device is present.
+    #[test]
+    fn request_mesh_pipeline_caches_per_variant() {
+        let Some((device, _descriptors, mut pipelines)) = fixture_or_skip() else {
+            return;
+        };
+        let before = validation_issue_count();
+
+        let lit = Material::default();
+        // First request builds + caches; the second is a cache hit (same Arc).
+        let a = pipelines
+            .request_mesh_pipeline(&lit, false, false)
+            .expect("lit PSO builds on llvmpipe");
+        let b = pipelines
+            .request_mesh_pipeline(&lit, false, false)
+            .expect("second request hits the cache");
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "the same variant returns the same cached Arc (one PSO)"
+        );
+        assert_eq!(pipelines.pipeline_count(), 1, "many requests, one PSO");
+        assert_eq!(pipelines.pipelines_created(), 1);
+
+        // The unlit permutation is a distinct cache entry.
+        let unlit = Material {
+            unlit: true,
+            ..Material::default()
+        };
+        let c = pipelines
+            .request_mesh_pipeline(&unlit, false, false)
+            .expect("unlit PSO builds");
+        assert!(!Arc::ptr_eq(&a, &c), "unlit is a distinct PSO");
+        assert_eq!(pipelines.pipeline_count(), 2);
+
+        // The skinned permutation is a third distinct entry.
+        let _skinned = pipelines
+            .request_mesh_pipeline(&lit, true, false)
+            .expect("skinned PSO builds");
+        assert_eq!(
+            pipelines.pipeline_count(),
+            3,
+            "skinned adds a third distinct PSO"
+        );
+        assert_eq!(pipelines.pipelines_created(), 3);
+
+        drop(a);
+        drop(b);
+        drop(c);
+        drop(_skinned);
+        drop(pipelines);
+        drop(_descriptors);
+        device.wait_idle().expect("idle before teardown");
+        drop(device);
+
+        let after = validation_issue_count();
+        assert_eq!(
+            before,
+            after,
+            "the PSO cache build + teardown must be validation-clean (saw {} new issue(s))",
+            after.saturating_sub(before)
+        );
+    }
+
+    /// The AA PSOs build on llvmpipe (motion graphics + TAA/FXAA compute), and
+    /// `set_sample_count` clears the sample-count-baked cache + drops the depth-prepass so
+    /// the next request rebuilds for the new count, while leaving the always-1× motion PSO
+    /// intact. The phase-10 PSO-cache-clear acceptance gate. Skips when no device.
+    #[test]
+    fn aa_pipelines_build_and_sample_count_change_clears_the_baked_cache() {
+        let Some((device, descriptors, mut pipelines)) = fixture_or_skip() else {
+            return;
+        };
+        let before = validation_issue_count();
+
+        // The three AA PSOs compile on llvmpipe.
+        let motion = pipelines.request_motion().expect("motion PSO builds");
+        let _taa = pipelines
+            .request_taa(descriptors.taa_set_layout())
+            .expect("taa PSO builds");
+        let _fxaa = pipelines
+            .request_fxaa(descriptors.fxaa_set_layout())
+            .expect("fxaa PSO builds");
+
+        // A sample-count-baked mesh PSO + the depth-prepass populate the count-keyed cache.
+        let lit = Material::default();
+        let _mesh = pipelines
+            .request_mesh_pipeline(&lit, false, false)
+            .expect("mesh PSO builds");
+        let _depth = pipelines
+            .request_depth_prepass()
+            .expect("depth-prepass builds");
+        assert_eq!(pipelines.pipeline_count(), 1, "one mesh PSO cached at 1×");
+        assert_eq!(pipelines.sample_count(), vk::SampleCountFlags::TYPE_1);
+
+        // Changing the count clears the mesh cache + drops the depth-prepass so they rebuild
+        // for the new count; the motion PSO (always 1×) is untouched (same Arc on re-request).
+        pipelines.set_sample_count(vk::SampleCountFlags::TYPE_4);
+        assert_eq!(pipelines.sample_count(), vk::SampleCountFlags::TYPE_4);
+        assert_eq!(
+            pipelines.pipeline_count(),
+            0,
+            "the sample-count change cleared the mesh cache"
+        );
+        let motion_again = pipelines.request_motion().expect("motion re-request");
+        assert!(
+            Arc::ptr_eq(&motion, &motion_again),
+            "the always-1× motion PSO survives a sample-count change"
+        );
+        // The next mesh request rebuilds at the new count.
+        let _mesh4 = pipelines
+            .request_mesh_pipeline(&lit, false, false)
+            .expect("mesh PSO rebuilds at 4×");
+        assert_eq!(pipelines.pipeline_count(), 1);
+
+        drop(motion);
+        drop(motion_again);
+        drop(_taa);
+        drop(_fxaa);
+        drop(_mesh);
+        drop(_depth);
+        drop(_mesh4);
+        drop(pipelines);
+        drop(descriptors);
+        device.wait_idle().expect("idle before teardown");
+        drop(device);
+
+        let after = validation_issue_count();
+        assert_eq!(
+            before,
+            after,
+            "the AA PSO build + teardown must be validation-clean (saw {} new issue(s))",
+            after.saturating_sub(before)
+        );
+    }
+}
