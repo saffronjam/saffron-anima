@@ -60,3 +60,15 @@ in `ViewTargets`.
 - **Golden-image** tests: GTAO on a creased mesh darkens the contact crevices to a committed golden;
   contact shadows produce their golden; SSGI produces a one-bounce color bleed golden. Validation log
   clean across the whole screen-space chain.
+
+## Post-integration fix (e2e exposed)
+
+Wiring the live scene pass through the e2e (`toggles.test.ts`) exposed a **descriptor set-4 unbound**
+error (`VUID-vkCmdDrawIndexed-None-08600`) whenever the screen-space prepass did not run that frame
+(the default off state, or toggling SSGI/SSAO back off). The übershader's pipeline layout always
+declares set 4 (AO/contact/SSGI samplers) + set 5 (DDGI), so both must be bound on every scene draw —
+the C++ binds `activeView().meshSet` + `ddgi.meshSet` unconditionally, gating the reads in-shader.
+The Rust `add_screen_space_passes` returned `mesh_set = null` on its early-return (no prepass this
+frame), leaving set 4 unbound. Fixed: the early return now binds the per-view set 4 whenever the
+view's screen-space sets are built (`screen_space_ready()`) — the always-allocated set written to the
+neutral init-transitioned maps. Verified: a headless SSGI/DDGI/SSAO toggle cycle is validation-clean.
