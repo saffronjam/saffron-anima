@@ -1,0 +1,18 @@
+[package]
+name = "saffron-script"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+saffron-core = { path = "../core" }
+saffron-scene = { path = "../scene" }
+glam.workspace = true
+mlua.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
