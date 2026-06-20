@@ -1,0 +1,206 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "gen_leg.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "LegMesh",
+   "mesh": 0,
+   "skin": 0
+  },
+  {
+   "name": "Hip",
+   "children": [
+    2
+   ],
+   "translation": [
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "name": "Knee",
+   "children": [
+    3
+   ],
+   "translation": [
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "name": "Ankle",
+   "translation": [
+    0,
+    1,
+    0
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Leg",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "JOINTS_0": 1,
+      "WEIGHTS_0": 2
+     },
+     "indices": 3
+    }
+   ]
+  }
+ ],
+ "skins": [
+  {
+   "skeleton": 1,
+   "joints": [
+    1,
+    2,
+    3
+   ],
+   "inverseBindMatrices": 4
+  }
+ ],
+ "animations": [
+  {
+   "name": "KneeBend",
+   "samplers": [
+    {
+     "input": 5,
+     "output": 6,
+     "interpolation": "LINEAR"
+    }
+   ],
+   "channels": [
+    {
+     "sampler": 0,
+     "target": {
+      "node": 2,
+      "path": "rotation"
+     }
+    }
+   ]
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 6,
+   "type": "VEC3",
+   "min": [
+    -0.1,
+    0,
+    0
+   ],
+   "max": [
+    0.1,
+    2,
+    0
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5121,
+   "count": 6,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 6,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 12,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 3,
+   "type": "MAT4"
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 3,
+   "type": "SCALAR",
+   "min": [
+    0.0
+   ],
+   "max": [
+    1.0
+   ]
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC4"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 72,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 72,
+   "byteLength": 24,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 96,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 192,
+   "byteLength": 24,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 216,
+   "byteLength": 192
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 408,
+   "byteLength": 12
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 420,
+   "byteLength": 48
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 468,
+   "uri": "data:application/octet-stream;base64,zczMvQAAAAAAAAAAzczMPQAAAAAAAAAAzczMvQAAgD8AAAAAzczMPQAAgD8AAAAAzczMvQAAAEAAAAAAzczMPQAAAEAAAAAAAAAAAAAAAAABAAAAAQAAAAIAAAACAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAABAAMAAAADAAIAAgADAAUAAgAFAAQAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAIAAAAAAAACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAgD8AAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAwAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAFe/DPl6DbD8AAAAAAAAAAPMENT/zBDU/"
+  }
+ ]
+}
