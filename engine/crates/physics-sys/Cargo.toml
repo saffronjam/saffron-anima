@@ -1,0 +1,23 @@
+[package]
+name = "saffron-physics-sys"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The `cxx` bridge half: the runtime glue (`rust::Vec`, `UniquePtr`, the generated FFI symbols)
+# the `#[cxx::bridge]` in `src/bridge.rs` expands to. Pinned in `[workspace.dependencies]`.
+cxx.workspace = true
+
+# `build.rs` compiles vendored Jolt 5.3.0 + the C++ shim with the confined determinism flag set
+# (`JoltBuildFlags::DETERMINISTIC`). `cxx-build` generates the bridge's C++ glue from
+# `src/bridge.rs` and feeds the resulting TU to the same flag-confined `cc` invocation.
+[build-dependencies]
+cc = "1"
+cxx-build.workspace = true
