@@ -1,5 +1,5 @@
 {
-  "generatedBy": "tools/gen-control-dto/gen.ts",
+  "generatedBy": "cargo run -p xtask -- gen-protocol",
   "commands": [
     {
       "name": "ping",
