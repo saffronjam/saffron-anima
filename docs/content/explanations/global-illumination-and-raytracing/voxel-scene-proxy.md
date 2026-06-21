@@ -16,10 +16,10 @@ diffuse bounce needs.
 
 ## The 3D image
 
-The proxy is an `Image3D` — a VMA-allocated 3D image, kept separate from the 2D `Image` type. It is
-created once at `DdgiVoxelRes`³ (`32³`) in `rgba16f`, with storage *and* sampled usage so the same
-image can be written by the voxelize pass and read by the trace (`newImage3D`, type `e3D`, usage
-`Storage | Sampled`).
+The proxy is an `Image3D` — a VMA-allocated 3D image, kept as a distinct RAII wrapper from the 2D
+`Image` type. It is created once at `DDGI_VOXEL_RES`³ (`32³`) in `rgba16f`, with storage *and*
+sampled usage so the same image can be written by the voxelize pass and read by the trace
+(`Image3D::new`, `vk::ImageType::TYPE_3D`, `Storage | Sampled` usage).
 
 ## Rasterizing AABBs, not triangles
 
@@ -36,19 +36,20 @@ across probes.
 
 ## Where the boxes come from
 
-`renderScene` walks the scene's `TransformComponent` + `MeshComponent` entities. For each, it
-transforms the mesh's local AABB corners into world space to get a world AABB plus the material base
-color. Those values go into three parallel arrays handed to `setDdgiScene`, which interleaves them as
-`[min, max, albedo]` into the mapped box SSBO and flushes it.
+`render_scene` walks the scene's `Transform` + `Mesh` component entities (queried through the
+`hecs` registry). For each, it transforms the mesh's local AABB corners into world space to get a
+world AABB plus the material base color. Those values go into three parallel arrays handed to
+`set_ddgi_scene`, which interleaves them as `[min, max, albedo]` into the mapped box SSBO.
 
 ## Fitting the volume
 
-`setDdgiScene` also receives a volume placement, computed in `renderScene` from the scene's overall
-world AABB padded by one unit:
+`set_ddgi_scene` also receives a volume placement, computed in `render_scene` from the scene's
+overall world AABB padded by one unit:
 
-```cpp
-const glm::vec3 volMin = sceneMin - glm::vec3{ 1.0f };
-const glm::vec3 volExt = (sceneMax + glm::vec3{ 1.0f }) - volMin;
+```rust
+let pad = Vec3::ONE;
+let vol_min = scene_min - pad;
+let vol_ext = (scene_max + pad) - vol_min;
 ```
 
 The `32³` voxels and the `8×4×8` probes both span this volume, so a voxel's world size is
@@ -57,10 +58,11 @@ re-fits next frame, because the proxy is never cached.
 
 ## Layout in the graph
 
-The voxelize pass declares the 3D image as `StorageImageRWCompute`, written in `GENERAL`. The trace
-pass reads it through the *same* RW-storage usage rather than a sampled read. This is deliberate: the
-graph's `StorageReadCompute` usage is modeled for buffers (layout `Undefined`) and would
-mis-transition a 3D image, so the voxels stay in `GENERAL` across both passes and the
+The voxelize pass declares the 3D image as `RgUsage::StorageImageRwCompute`, written in `GENERAL`.
+The trace pass reads it through the *same* RW-storage usage rather than a sampled read. This is
+deliberate: the graph's `RgUsage::StorageReadCompute` usage is modeled for buffers (layout
+`Undefined`) and would mis-transition a 3D image, so the voxels stay in `GENERAL` across both passes
+and the
 [render graph](../../frame-and-render-graph/render-graph-overview/) inserts a plain write→read memory
 barrier.
 
@@ -69,16 +71,16 @@ barrier.
 | What | File | Symbols |
 |---|---|---|
 | Voxelize shader | `ddgi_voxelize.slang` | `computeMain`, `Box`, the AABB test |
-| 3D image type | `renderer_types.cppm` | `Image3D` |
-| 3D image allocation | `renderer_detail.cppm` | `newImage3D` |
-| Box upload + volume fit | `renderer.cppm` | `setDdgiScene` |
-| World AABBs from the scene | `assets.cppm` | `renderScene` (corner-transform loop) |
-| Voxelize graph pass | `renderer.cppm` | `ddgi-voxelize` pass (the `doDdgi` block) |
+| 3D image type | `rendering/src/resources.rs` | `Image3D` |
+| 3D image allocation | `rendering/src/resources.rs` | `Image3D::new` |
+| Box upload + volume fit | `rendering/src/ddgi.rs` | `Ddgi::set_scene`; `renderer.rs` · `Renderer::set_ddgi_scene` |
+| World AABBs from the scene | `assets/src/render_scene.rs` | `render_scene`, `gather_static_draw_list` (corner-transform loop) |
+| Voxelize graph pass | `rendering/src/renderer.rs` | `ddgi-voxelize` pass (`Renderer::add_ddgi_passes`) |
 
 > [!WARNING]
 > The voxelize loop is `O(voxels × boxes)` — every voxel tests every box linearly, with no spatial
 > acceleration. At `32³` voxels that is fine for a few dozen draws. The box SSBO is capped at
-> `boxCapacity`; extra draws past the cap are dropped from the proxy (they still shade normally,
+> `Ddgi::box_capacity` (`DDGI_MAX_BOXES`); extra draws past the cap are dropped from the proxy (they still shade normally,
 > they just don't contribute indirect bounce).
 
 ## Related

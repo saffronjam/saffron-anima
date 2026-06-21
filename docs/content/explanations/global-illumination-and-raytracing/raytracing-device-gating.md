@@ -10,49 +10,53 @@ code paths only on hardware that supports it. Ray tracing is such a capability: 
 acceleration-structure and ray-query extensions are not present on every device.
 
 Saffron detects RT support during device bring-up, enables the extensions and features only when
-they are present, and resolves the acceleration-structure entry points manually. A single flag,
-`rtSupported`, records the result and gates every downstream RT path.
+they are present, and resolves the acceleration-structure command dispatch only on a supporting
+device. A single flag, `Capabilities::rt_supported`, records the result and gates every downstream
+RT path.
 
 ## Detection at device selection
 
-vk-bootstrap's `enable_extension_if_present` enables an extension when the device has it and does
-nothing otherwise, so requesting the RT extensions never fails device creation. Presence alone is
-insufficient; the feature bits must also be set. The check requires both:
+`probe_optional_features` enumerates the chosen device's extensions and checks for both the KHR
+acceleration-structure and ray-query extensions. Presence alone is insufficient; the feature bits
+must also be set, so it chains `vk::PhysicalDeviceAccelerationStructureFeaturesKHR` and
+`vk::PhysicalDeviceRayQueryFeaturesKHR` into a `get_physical_device_features2` query and requires
+both:
 
-```cpp
-const bool hasAsExt = physical.enable_extension_if_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
-const bool hasRqExt = physical.enable_extension_if_present(VK_KHR_RAY_QUERY_EXTENSION_NAME);
-bool rtSupported = hasAsExt && hasRqExt
-    && asFeat.accelerationStructure == VK_TRUE && rqFeat.rayQuery == VK_TRUE;
+```rust
+let has_as = has_ext(ash::khr::acceleration_structure::NAME);
+let has_rq = has_ext(ash::khr::ray_query::NAME);
+let rt_supported = has_as && has_rq
+    && as_feat.acceleration_structure != 0 && rq_feat.ray_query != 0;
 ```
 
-The RT feature structs are chained into device creation *only* when `rtSupported`, so a device
-without them is never asked to enable a feature it lacks. When RT is on, the VMA allocator also gets
-`BUFFER_DEVICE_ADDRESS`, because AS builds feed vertex, index, and instance buffers by device
-address.
+`create_logical_device` re-probes the same two extensions and pushes them (plus
+`VK_KHR_deferred_host_operations`) onto the device only when both are present, chaining the RT
+feature structs into `vk::DeviceCreateInfo` only then — so a device without them is never asked to
+enable a feature it lacks. The allocator always carries `vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS`
+and `buffer_device_address` is in the required feature set, because the renderer uses BDA broadly;
+AS builds, which feed vertex, index, and instance buffers by device address, simply ride on that.
 
-## Resolving the entry points
+## Resolving the command dispatch
 
-The acceleration-structure and ray-query functions are not core, so the loader does not export them
-statically; the engine otherwise relies on Vulkan-Hpp's static dispatch. When RT is supported, the
-five functions the engine calls are resolved through `vkGetDeviceProcAddr` into a small dispatch
-table (`getBuildSizes`, `createAccel`, `destroyAccel`, `cmdBuild`, `getAccelAddress`).
-
-If any resolve returns null, `rtSupported` is forced back to false. A device that advertised the
-extensions but cannot supply the functions is treated as non-RT. The `RtDispatch` table is the only
-place these C entry points are held, and the rest of the renderer calls through it.
+The acceleration-structure and ray-query commands are extension entry points, not core Vulkan. When
+RT is supported, the renderer constructs an `ash::khr::acceleration_structure::Device` dispatch
+(`accel::Device::new`) once and holds it on the `Device`; it exposes it through
+`Device::accel_dispatch`, which returns `None` on a non-RT device. The `AccelerationStructure`
+wrapper clones this dispatch so it can destroy itself independently, and the BLAS/TLAS build path
+calls every AS command through it.
 
 ## The gate everywhere downstream
 
-`rtSupported` is a hard precondition for everything in the RT and ReSTIR paths:
+`rt_supported` is a hard precondition for everything in the RT and ReSTIR paths:
 
-- `rtSupported(renderer)` exposes it; `setRtShadows`/`setRestir` are no-ops when it is false.
-- `buildTlas` returns immediately if `!rtSupported`.
-- `buildBlas` is called from mesh upload only when RT is supported, so `GpuMesh::blas` stays null
-  otherwise.
+- `Device::rt_supported` / `Renderer::rt_supported` expose it; `set_rt_shadows` / `set_restir` are
+  no-ops when it is false.
+- the `tlas-build` pass is skipped unless `Rt::build_pending` (which requires `Rt::supported`).
+- the per-mesh BLAS is built from mesh upload only when RT is supported, so `GpuMesh::blas` stays
+  `None` otherwise.
 
-The feature toggles therefore wire into the UI and the `sa` control plane unconditionally: on a
-non-RT device they are inert rather than fatal.
+The feature toggles therefore wire into the editor UI and the `sa` control plane unconditionally: on
+a non-RT device they are inert rather than fatal.
 
 ## What stays compiled regardless
 
@@ -66,11 +70,11 @@ that will never trace; the binding is present, just never accessed. See
 
 | What | File | Symbols |
 |---|---|---|
-| Extension + feature detection | `renderer.cppm` | device bring-up (`hasAsExt`, `rtSupported`) |
-| Entry-point resolution | `renderer.cppm` | the `vkGetDeviceProcAddr` block |
-| The dispatch table | `renderer_types.cppm` | `RtDispatch`, `VulkanContext::rtSupported` |
-| The public gate | `renderer.cppm` | `rtSupported`, `setRtShadows`, `setRestir` |
-| BDA on the allocator | `renderer.cppm` | the `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` branch |
+| Extension + feature detection | `rendering/src/device.rs` | `probe_optional_features`, `Capabilities::rt_supported` |
+| Device extension / feature enable | `rendering/src/device.rs` | `create_logical_device` (the `enable_rt` branch) |
+| The command dispatch | `rendering/src/device.rs` | `Device::accel_dispatch` (`ash::khr::acceleration_structure::Device`) |
+| The public gate | `rendering/src/device.rs`, `renderer.rs` | `Device::rt_supported`; `Renderer::rt_supported`, `set_rt_shadows`, `set_restir` |
+| BDA on the allocator | `rendering/src/device.rs` | `create_allocator` (the `BUFFER_DEVICE_ADDRESS` flag) |
 
 > [!NOTE]
 > On the software (llvmpipe) dev GPU the extensions can be present and the RT path activates, but
@@ -81,4 +85,4 @@ that will never trace; the binding is present, just never accessed. See
 
 - [Acceleration structures](../raytracing-foundation/) — what the resolved entry points build
 - [Ray-query shadows](../ray-query-shadows/) — the runtime-gated consumer
-- [Vulkan foundation](../../vulkan-foundation/) — static dispatch + the no-exceptions result convention
+- [Vulkan foundation](../../vulkan-foundation/) — the ash dispatch + the `Result` error convention

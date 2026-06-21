@@ -13,11 +13,11 @@ the point are blended, weighted so probes behind walls or behind the surface do 
 
 The blend combines three weights: a trilinear interpolation, a backface term, and a Chebyshev
 visibility test. Together they keep indirect light from bleeding through geometry, which is the
-classic DDGI failure mode. `ddgiSampleIrradiance` in `mesh.slang` performs the blend.
+classic DDGI failure mode. `ddgiSampleIrradiance` in `lighting.slang` performs the blend.
 
 ## The probe cage
 
-The grid holds `DdgiProbesX × DdgiProbesY × DdgiProbesZ` = 8×4×8 = 256 probes. Probe $p$ sits at
+The grid holds `DDGI_PROBES_X × DDGI_PROBES_Y × DDGI_PROBES_Z` = 8×4×8 = 256 probes. Probe $p$ sits at
 
 $$
 \mathbf{x}_p = \mathbf{v}_\text{min} + \frac{\mathbf{p} + \tfrac12}{\mathbf{N}}\,\mathbf{v}_\text{ext}
@@ -103,11 +103,11 @@ to fix.
 
 | What | File | Symbols |
 |---|---|---|
-| Eight-probe blend | `mesh.slang` | `ddgiSampleIrradiance` |
-| Octahedral encode | `mesh.slang` | `ddgiOctEncode` |
-| Atlas UV (interior + gutter) | `mesh.slang` | `ddgiAtlasUv` |
-| Probe count / tile interior | `renderer_types.cppm` | `Ddgi::ddgiProbeCount` |
-| Moment atlas read | `mesh.slang` | the `ddgiDistance` sample + Chebyshev block |
+| Eight-probe blend | `lighting.slang` | `ddgiSampleIrradiance` |
+| Octahedral encode | `lighting.slang` | `ddgiOctEncode` |
+| Atlas UV (interior + gutter) | `lighting.slang` | `ddgiAtlasUv` |
+| Probe count / tile interior | `rendering/src/ddgi.rs` | `DDGI_PROBES_X/Y/Z`, `DDGI_IRR_INTERIOR`, `Ddgi::probe_count_ubo` |
+| Moment atlas read | `lighting.slang` | the `distAtlas` sample + Chebyshev block in `ddgiSampleIrradiance` |
 
 ## Related
 

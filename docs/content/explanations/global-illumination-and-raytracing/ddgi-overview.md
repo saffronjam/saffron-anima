@@ -16,8 +16,8 @@ is software, so DDGI runs on any GPU including the llvmpipe dev device.
 ## The per-frame pipeline
 
 DDGI is an all-compute prelude before the scene pass. Five passes rebuild the probe state each
-frame, then the mesh fragment reads it. The grid is fixed at 8×4×8 probes (`DdgiProbesX/Y/Z`),
-each tracing 64 rays (`DdgiRaysPerProbe`).
+frame, then the mesh fragment reads it. The grid is fixed at 8×4×8 probes (`DDGI_PROBES_X/Y/Z`),
+each tracing 64 rays (`DDGI_RAYS_PER_PROBE`).
 
 ```mermaid
 flowchart LR
@@ -63,24 +63,25 @@ with no extra rays. That feedback is why the volume is re-traced rather than bak
 
 ## A self-fitting volume
 
-The probe cage is not authored. `setDdgiScene` runs from `renderScene` each frame with the scene's
-world AABB, and the volume fits to it, padded slightly so probes sit just outside the geometry.
-Moving or resizing the scene moves the cage with it, which keeps DDGI dynamic.
+The probe cage is not authored. `set_ddgi_scene` runs from `render_scene` each frame with the
+scene's world AABB, and the volume fits to it, padded slightly so probes sit just outside the
+geometry. Moving or resizing the scene moves the cage with it, which keeps DDGI dynamic.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Five-pass per-frame pipeline | `renderer.cppm` | the `doDdgi` block (`ddgi-voxelize` … `ddgi-border`) |
-| Probe / grid constants | `renderer_detail.cppm` | `DdgiProbesX/Y/Z`, `DdgiRaysPerProbe`, `DdgiVoxelRes` |
-| Volume fit + box upload | `renderer.cppm` | `setDdgiScene`; `assets.cppm` · `renderScene` |
-| Sampling into shading | `mesh.slang` | `ddgiSampleIrradiance`, the `screenFlags.z` branch |
-| State + toggle | `renderer_types.cppm` | `Ddgi`; `renderer.cppm` · `setDdgi`, `ddgiEnabled` |
+| Five-pass per-frame pipeline | `rendering/src/renderer.rs` | `Renderer::add_ddgi_passes` (the `ddgi-voxelize` … `ddgi-border` passes) |
+| Probe / grid constants | `rendering/src/ddgi.rs` | `DDGI_PROBES_X/Y/Z`, `DDGI_RAYS_PER_PROBE`, `DDGI_VOXEL_RES` |
+| Volume fit + box upload | `rendering/src/renderer.rs` | `Renderer::set_ddgi_scene`; `assets/src/render_scene.rs` · `render_scene` |
+| Sampling into shading | `lighting.slang` | `ddgiSampleIrradiance`, the `screenFlags.z` branch |
+| State + toggle | `rendering/src/ddgi.rs` | `Ddgi`, `Ddgi::wants_ddgi`; `renderer.rs` · `Renderer::set_ddgi`, `ddgi_enabled` |
 
 > [!NOTE]
 > DDGI adds five compute passes every frame whether or not the scene changed, so it's off by
-> default (`Ddgi::useDdgi`). Enabling it (or resizing) sets `historyReset`, which zeroes the
-> temporal blend for one frame so the probes re-converge instead of ghosting in from stale data.
+> default (`Ddgi::enabled`). Enabling it (or resizing) sets the history-reset flag
+> (`Ddgi::reset_history`), which zeroes the temporal blend for one frame so the probes re-converge
+> instead of ghosting in from stale data.
 
 ## Related
 

@@ -21,7 +21,7 @@ M-clamping controls.
 ## The reservoir buffers
 
 Three SSBOs each hold one `Reservoir` (32 bytes) per pixel, sized to the offscreen resolution
-(`reservoirCapacity`):
+(`RestirView::reservoir_capacity`):
 
 - `initial` — this frame's RIS result (written by pass 1, read by pass 2)
 - `combined` — after reuse (written by pass 2, read by pass 3)
@@ -37,7 +37,7 @@ derives the write→read barriers between them.
 `restir_initial.slang` reconstructs the world surface from the G-buffer (view normal and view-Z),
 finds the pixel's froxel cluster, and draws $K$ candidate lights from that cluster's light list. The
 candidate set is the [clustered](../../lighting-and-brdf/clustered-forward/) light pool, and $K = 16$
-by default (`candidateCount`). Each candidate is weighted by its unshadowed target contribution
+by default (`RESTIR_CANDIDATE_COUNT`). Each candidate is weighted by its unshadowed target contribution
 $\hat p$ and kept by weighted reservoir sampling.
 
 `targetContribution` is the scalar luminance of the light's diffuse contribution: intensity ×
@@ -68,7 +68,8 @@ $$
 
 The temporal source is last frame's combined reservoir, which itself absorbed the frame before it.
 Left unbounded, $M$ grows without limit and the estimator becomes badly biased: stale samples
-dominate and lighting lags. The history's $M$ is therefore clamped before merging (`maxM = 20`).
+dominate and lighting lags. The history's $M$ is therefore clamped before merging
+(`RESTIR_MAX_M = 20`).
 
 Clamping caps how much weight any past frame carries, trading a little variance for a bounded bias and
 keeping the lighting responsive to change. It is the standard ReSTIR bias control.
@@ -98,8 +99,8 @@ copies the combined reservoir into `previous` for next frame's temporal reuse, c
 | Reservoir merge | `restir_reuse.slang` | `combineInto`, the temporal + spatial blocks |
 | M-clamping | `restir_reuse.slang` | `prevM = min(prev.a.w, maxM)`, `nbM` |
 | Resolve ray + shade | `restir_resolve.slang` | `computeMain`, `rayShadow` |
-| The three graph passes | `renderer.cppm` | `restir-initial`, `restir-reuse`, `restir-resolve` |
-| Reservoir SSBOs | `renderer_types.cppm` | `Restir::initial`, `combined`, `previous` |
+| The three graph passes | `rendering/src/renderer.rs` | `restir-initial`, `restir-reuse`, `restir-resolve` (`Renderer::add_restir_passes`) |
+| Reservoir SSBOs | `rendering/src/restir.rs` | `RestirView::initial`, `combined`, `previous` |
 
 > [!WARNING]
 > The three passes serialize through a single *sentinel* buffer access (`combined`) rather than

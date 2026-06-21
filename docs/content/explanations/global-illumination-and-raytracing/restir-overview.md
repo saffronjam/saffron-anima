@@ -90,16 +90,16 @@ trade is noise — one sample is noisy — against the spatiotemporal reuse and
 
 | What | File | Symbols |
 |---|---|---|
-| The reservoir struct | `restir_initial.slang` | `Reservoir` |
+| The reservoir struct | `restir_initial.slang` | `Reservoir` (mirrored by `Reservoir` in `rendering/src/restir.rs`) |
 | RIS candidate sampling | `restir_initial.slang` | `computeMain`, `targetContribution` |
 | Reuse + M-clamping | `restir_reuse.slang` | `combineInto` |
 | Resolve + shade | `restir_resolve.slang` | `computeMain`, `rayShadow` |
-| State + toggle | `renderer_types.cppm` | `Restir`; `renderer.cppm` · `setRestir`, `restirEnabled` |
-| Sampling into shading | `mesh.slang` | the `screenFlags.w` branch |
+| State + toggle | `rendering/src/restir.rs` | `Restir`, `RestirView`; `renderer.rs` · `Renderer::set_restir`, `restir_enabled` |
+| Sampling into shading | `lighting.slang` | the `screenFlags.w` branch (`evalLighting`) |
 
 > [!WARNING]
-> ReSTIR is gated on `rtSupported` (it needs the TLAS for the one resolve ray) and on the G-buffer +
-> froxel cull running. `setRestir` is a no-op otherwise.
+> ReSTIR is gated on `rt_supported` (it needs the TLAS for the one resolve ray) and on the G-buffer +
+> froxel cull running. `Renderer::set_restir` is a no-op otherwise.
 
 ## Related
 

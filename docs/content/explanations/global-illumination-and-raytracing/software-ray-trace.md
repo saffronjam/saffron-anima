@@ -76,7 +76,7 @@ atlas for Chebyshev visibility.
 | Ray directions | `ddgi_trace.slang` | `sphericalFibonacci` |
 | Multi-bounce sample | `ddgi_trace.slang` | `sampleProbeIrradiance` |
 | Probe world position | `ddgi_trace.slang` | `probeWorldPos` |
-| Trace graph pass | `renderer.cppm` | `ddgi-trace` pass (the `doDdgi` block) |
+| Trace graph pass | `rendering/src/renderer.rs` | `ddgi-trace` pass (`Renderer::add_ddgi_passes`) |
 
 > [!NOTE]
 > The bounce term reads the same probe's *previous* irradiance, not the irradiance at the actual

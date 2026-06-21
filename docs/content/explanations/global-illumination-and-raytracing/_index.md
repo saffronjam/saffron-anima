@@ -21,13 +21,13 @@ plus ray-query shadows), and ReSTIR for many-light direct lighting.
 
 | Page | Covers | Code |
 |---|---|---|
-| `ddgi-overview` | what DDGI is, the per-frame probe pipeline, why probes over screen-space | `mesh.slang` · `ddgiSampleIrradiance`; `renderer.cppm` · DDGI passes |
-| `voxel-scene-proxy` | per-frame voxel rasterization of draw AABBs, `Image3D`, dynamic volume fitting | `ddgi_voxelize.slang`; `renderer_types.cppm` · `Image3D`; `renderer.cppm` · `setDdgiScene` |
-| `probe-volume-and-sampling` | the 8×4×8 probe cage, octahedral encoding, trilinear + backface + Chebyshev weights | `mesh.slang` · `ddgiSampleIrradiance`, `ddgiOctEncode`; `renderer_types.cppm` · `Ddgi` |
+| `ddgi-overview` | what DDGI is, the per-frame probe pipeline, why probes over screen-space | `lighting.slang` · `ddgiSampleIrradiance`; `rendering/src/renderer.rs` · `add_ddgi_passes` |
+| `voxel-scene-proxy` | per-frame voxel rasterization of draw AABBs, `Image3D`, dynamic volume fitting | `ddgi_voxelize.slang`; `rendering/src/resources.rs` · `Image3D`; `ddgi.rs` · `Ddgi::set_scene` |
+| `probe-volume-and-sampling` | the 8×4×8 probe cage, octahedral encoding, trilinear + backface + Chebyshev weights | `lighting.slang` · `ddgiSampleIrradiance`, `ddgiOctEncode`; `rendering/src/ddgi.rs` · `Ddgi` |
 | `software-ray-trace` | Fibonacci-sphere rays, voxel march, free multi-bounce via probe reuse | `ddgi_trace.slang` · `computeMain`, `sphericalFibonacci` |
 | `irradiance-and-moment-atlases` | temporal irradiance blend, Chebyshev moment atlas, octahedral border wrap | `ddgi_blend_irradiance.slang`, `ddgi_blend_distance.slang`, `ddgi_border.slang` |
-| `raytracing-foundation` | per-mesh BLAS, per-frame TLAS + instance buffer, buffer device address | `renderer_types.cppm` · `AccelerationStructure`, `Rt`; `renderer_detail.cppm` · `buildBlas`, `recordTlasBuild` |
-| `raytracing-device-gating` | optional RT extensions, `rtSupported`, entry points via `getDeviceProcAddr` | `renderer.cppm` · device bring-up; `renderer_types.cppm` · `RtDispatch` |
-| `ray-query-shadows` | inline `RayQuery` shadow rays in the mesh fragment, replacing shadow maps | `mesh.slang` · `rayQueryShadow`; `renderer.cppm` · `setRtShadows` |
-| `restir-overview` | reservoirs, RIS, the three-pass spatiotemporal resampling pipeline | `restir_initial.slang` · `Reservoir`; `renderer_types.cppm` · `Restir` |
+| `raytracing-foundation` | per-mesh BLAS, per-frame TLAS + instance buffer, buffer device address | `rendering/src/resources.rs` · `AccelerationStructure`; `rt.rs` · `record_mesh_blas_build`, `record_tlas_build_plan` |
+| `raytracing-device-gating` | optional RT extensions, `rt_supported`, the `ash::khr::acceleration_structure` dispatch | `rendering/src/device.rs` · `probe_optional_features`, `Device::accel_dispatch` |
+| `ray-query-shadows` | inline `RayQuery` shadow rays in the mesh fragment, replacing shadow maps | `lighting.slang` · `rayQueryShadow`; `rendering/src/renderer.rs` · `set_rt_shadows` |
+| `restir-overview` | reservoirs, RIS, the three-pass spatiotemporal resampling pipeline | `restir_initial.slang` · `Reservoir`; `rendering/src/restir.rs` · `Restir` |
 | `restir-passes` | initial candidate sampling, temporal+spatial reuse, resolve + shading, M-clamping | `restir_initial.slang`, `restir_reuse.slang`, `restir_resolve.slang` |

@@ -54,9 +54,9 @@ paths approximate: same `shadow` scalar, same BRDF, sourced from a ray instead o
 
 ## No pipeline or binding table
 
-Inline ray queries traverse within the existing graphics pipeline. There is no
-`VkRayTracingPipeline`, no shader binding table, and no hit or miss shaders — only the `RayQuery`
-object and the TLAS bound in set 6. The sole RT-specific frame work is building the TLAS
+Inline ray queries traverse within the existing graphics pipeline. There is no ray-tracing pipeline
+object, no shader binding table, and no hit or miss shaders — only the `RayQuery` object and the
+TLAS bound in set 6. The sole RT-specific frame work is building the TLAS
 ([the foundation](../raytracing-foundation/)); the shadow itself is a few instructions in the
 fragment shader.
 
@@ -64,11 +64,11 @@ fragment shader.
 
 | What | File | Symbols |
 |---|---|---|
-| The inline shadow ray | `mesh.slang` | `rayQueryShadow` |
-| TLAS binding (set 6) | `mesh.slang` | `rtScene` |
-| Directional / punctual switch | `mesh.slang` | `fragmentMain`, `punctual` (the `pointShadowMeta.z` branches) |
-| The runtime toggle | `renderer.cppm` | `setRtShadows`, `rtShadowsEnabled` |
-| TLAS supply | `renderer.cppm` | `buildTlas`, `tlasReady` |
+| The inline shadow ray | `lighting.slang` | `rayQueryShadow` |
+| TLAS binding (set 6) | `lighting.slang` | `rtScene` |
+| Directional / punctual switch | `lighting.slang` | `evalLighting`, `punctual` (the `pointShadowMeta.z` branches) |
+| The runtime toggle | `rendering/src/renderer.rs` | `Renderer::set_rt_shadows`, `rt_shadows_enabled` |
+| TLAS supply | `rendering/src/rt.rs` | `Rt::prepare_tlas_build`, `Rt::tlas_ready` |
 
 > [!WARNING]
 > The mesh PSO declares `rtScene` and `rayQueryShadow` unconditionally, so the compiled SPIR-V

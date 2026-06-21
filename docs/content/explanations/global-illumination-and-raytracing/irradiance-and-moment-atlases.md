@@ -14,7 +14,7 @@ and gutter-fixed so bilinear sampling never reads across a tile edge.
 
 Each probe occupies one tile in each atlas. A tile is an `interior × interior` block of octahedral
 texels plus a one-texel gutter on every side, giving a full size of `interior + 2`. The irradiance
-atlas uses an 8×8 interior (`DdgiIrrInterior`); the moment atlas uses 16×16 (`DdgiDistInterior`),
+atlas uses an 8×8 interior (`DDGI_IRR_INTERIOR`); the moment atlas uses 16×16 (`DDGI_DIST_INTERIOR`),
 because distance needs more directional resolution to localize occluders.
 
 ## Integrating rays into a texel
@@ -51,7 +51,7 @@ moments ($\overline{r}$, $\overline{r^2}$) are stored in an `rg16f` texel, and
 ## Temporal hysteresis
 
 Neither atlas is overwritten outright. The new integral is lerped against the previous frame's
-value with a high history weight ($\alpha = 0.95$, `DdgiHysteresis`):
+value with a high history weight ($\alpha = 0.95$, `DDGI_HYSTERESIS`):
 
 $$
 A_t = \operatorname{lerp}(A_\text{new},\ A_{t-1},\ \alpha)
@@ -59,7 +59,8 @@ $$
 
 so each frame nudges the atlas 5% toward the new estimate. This suppresses the noise of only 64 rays
 per frame: over ~20 frames the volume converges to a smooth, many-sample result. On the first frame
-after enable or resize, `firstFrame` forces $\alpha = 0$ so no stale history blends in.
+after enable or resize, the blend push's history-reset flag forces $\alpha = 0$ so no stale history
+blends in.
 
 ## The octahedral border wrap
 
@@ -83,12 +84,12 @@ pass as their sole writer.
 | Irradiance integration + blend | `ddgi_blend_irradiance.slang` | `computeMain`, `octDecode` |
 | Distance moments + sharp weight | `ddgi_blend_distance.slang` | `computeMain`, the `pow(..., 50.0)` weight |
 | Octahedral gutter wrap | `ddgi_border.slang` | `computeMain` (corner / edge cases) |
-| Tile sizes + hysteresis | `renderer_detail.cppm` | `DdgiIrrInterior`, `DdgiDistInterior`, `DdgiHysteresis` |
-| Blend/border graph passes | `renderer.cppm` | `ddgi-blend-irr`, `ddgi-blend-dist`, `ddgi-border` |
+| Tile sizes + hysteresis | `rendering/src/ddgi.rs` | `DDGI_IRR_INTERIOR`, `DDGI_DIST_INTERIOR`, `DDGI_HYSTERESIS` |
+| Blend/border graph passes | `rendering/src/renderer.rs` | `ddgi-blend-irr`, `ddgi-blend-dist`, `ddgi-border` |
 
 > [!NOTE]
 > The border pass only fixes the *irradiance* atlas. The moment atlas's Chebyshev read in
-> `mesh.slang` samples interior texels directly via `ddgiAtlasUv`, so it tolerates its gutter being
+> `lighting.slang` samples interior texels directly via `ddgiAtlasUv`, so it tolerates its gutter being
 > unwrapped — the distance term is robust to the small bilinear error at tile edges.
 
 ## Related
