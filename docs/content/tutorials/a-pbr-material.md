@@ -14,12 +14,12 @@ scene with one mesh entity.
 
 ## Set base color and metallic-roughness
 
-A mesh's look comes from its `MaterialComponent`: a base color, an optional albedo texture,
+A mesh's look comes from its `Material`: a base color, an optional albedo texture,
 and the PBR knobs `metallic` and `roughness`. `set-material` adds the component if missing
 and merges only the fields you pass:
 
 ```sh
-./cmd/sa set-material Mesh --baseColor '{"x":0.95,"y":0.64,"z":0.22,"w":1}' --metallic 1 --roughness 0.25
+just sa set-material Mesh --baseColor '{"x":0.95,"y":0.64,"z":0.22,"w":1}' --metallic 1 --roughness 0.25
 ```
 
 That makes the cube gold: warm base color, fully metallic, fairly smooth. The metallic flag
@@ -35,7 +35,7 @@ Roughness controls how tight the highlight is; lower is sharper. In the editor t
 (Metallic and Roughness are `0..1` sliders). Read back what you set:
 
 ```sh
-./cmd/sa inspect Mesh        # the Material block shows baseColor, metallic, roughness
+just sa inspect Mesh        # the Material block shows baseColor, metallic, roughness
 ```
 
 > [!NOTE]
@@ -50,21 +50,21 @@ nearby point light gives a tight one that moves as you orbit. Place one above an
 side:
 
 ```sh
-./cmd/sa create-entity Key Light
-./cmd/sa add-component "Key Light" PointLight
-./cmd/sa set-transform "Key Light" --translation '{"x":2,"y":3,"z":2}'
-./cmd/sa set-component "Key Light" PointLight --json '{"intensity":20,"range":15,"color":{"x":1,"y":1,"z":1}}'
+just sa create-entity Key Light
+just sa add-component "Key Light" PointLight
+just sa set-transform "Key Light" --translation '{"x":2,"y":3,"z":2}'
+just sa set-component "Key Light" PointLight --json '{"intensity":20,"range":15,"color":{"x":1,"y":1,"z":1}}'
 ```
 
 `set-component` writes the exact JSON shape used in scene files, setting the whole
-`PointLightComponent` at once. In the editor: **Create ▸ Point Light**, then edit
+`PointLight` at once. In the editor: **Create ▸ Point Light**, then edit
 **Intensity**, **Range**, and **Color** in the Inspector. Point lights are culled per froxel
 by the clustered-forward path, so adding more costs almost nothing per pixel.
 
 Confirm the renderer is feeding lights:
 
 ```sh
-./cmd/sa render-stats        # clustered=on; the fragment loops only its cluster's lights
+just sa render-stats        # clustered=on; the fragment loops only its cluster's lights
 ```
 
 ## Tune exposure so the highlight doesn't clip
@@ -74,8 +74,8 @@ intensity-20 light can blow out to white. The tonemap takes an exposure in stops
 applied as $2^{EV}$ before the curve, so negative EV darkens:
 
 ```sh
-./cmd/sa set-exposure -1.5      # pull the image down 1.5 stops
-./cmd/sa screenshot viewport /tmp/gold.png
+just sa set-exposure -1.5      # pull the image down 1.5 stops
+just sa screenshot viewport /tmp/gold.png
 ```
 
 Sweep it and compare PNGs: `set-exposure 0` is neutral, `-2` is much darker, `+1` brightens.
@@ -93,7 +93,7 @@ Pick the value where the highlight reads as a bright spot rather than a flat whi
 the mesh a faint emissive tint:
 
 ```sh
-./cmd/sa set-material Mesh --emissive '{"x":0.2,"y":0.1,"z":0}' --emissiveStrength 2
+just sa set-material Mesh --emissive '{"x":0.2,"y":0.1,"z":0}' --emissiveStrength 2
 ```
 
 Emissive radiance is added after lighting, so it shows even in shadow. In the Inspector it's
@@ -105,7 +105,7 @@ turn it off.
 Save the look into your project so it persists:
 
 ```sh
-./cmd/sa save-project /tmp/first-scene/project.json
+just sa save-project /tmp/first-scene/project.json
 ```
 
 - [Cook-Torrance BRDF](../../explanations/lighting-and-brdf/cook-torrance-brdf/) — the math your metallic/roughness drive.

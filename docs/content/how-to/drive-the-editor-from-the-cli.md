@@ -14,7 +14,7 @@ Script and inspect a running editor with the `sa` CLI over its unix socket.
    ```sh
    sa start          # or: sa start --build, or --attach to keep it foreground
    ```
-   `sa start` launches `SaffronAnima` in the toolbox. Every other command talks JSON over the socket.
+   `sa start` launches the `saffron-host` binary in the toolbox. Every other command talks JSON over the socket.
 2. Check liveness and list commands:
    ```sh
    sa ping
@@ -63,10 +63,10 @@ sa stop-preview <rig>                     # revert to the rest pose
 
 | What | File | Symbols |
 |---|---|---|
-| `start` wrapper + socket path | `cmd/sa` | `cmd_start`, `socket_path` |
-| CLI request/reply + arg coercion | `tools/sa/source/main.cpp` | `buildParams`, `coerce`, `printResult` |
-| Scene commands | `control_commands_scene.cpp` | `select`, `set-transform`, `pick`, `focus`, `inspect` |
-| Render stats + screenshot | `control_commands_render.cpp`, `control_commands_asset.cpp` | `render-stats`, `screenshot` |
+| `start` wrapper + engine binary path | `engine/crates/sa/src/main.rs` | `start`, `engine_binary_path` |
+| CLI request/reply + arg coercion | `engine/crates/sa/src/main.rs` | `build_params`, `coerce`, `print_result` |
+| Scene commands | `engine/crates/control/src/commands_scene.rs` | `select`, `set-transform`, `pick`, `focus`, `inspect` |
+| Render stats + screenshot | `engine/crates/control/src/commands_render.rs`, `engine/crates/control/src/commands_asset.rs` | `render_stats_dto`, `screenshot` |
 
 ## Related
 

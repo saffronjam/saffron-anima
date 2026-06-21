@@ -6,57 +6,60 @@ math = false
 
 # Build and run
 
-Build the C++ engine host and the Tauri editor, then run both.
+Build the Rust engine host and the Tauri editor, then run both.
 
-The editor is a Tauri/React app that drives the engine over the control socket. The engine is the C++ `SaffronAnima` host executable, built from the `engine/` project as a headless viewport host. Both build in the `saffron-build` toolbox. The Silverblue host has no C++ toolchain; the home directory is shared into the container, so the host's `bun` runs inside the toolbox by PATH.
+The editor is a Tauri/React app that drives the engine over the control socket. The engine is the Rust `saffron-host` binary — a headless, present-only viewport host built from the Cargo workspace in `engine/`. `just` is the task runner; its recipes auto-enter the `saffron-build` toolbox when run from a host shell, so the same `just engine` works on the Silverblue host or inside the container. The home directory is shared into the toolbox, which carries the Rust toolchain, the Vulkan SDK, SDL3, Slang, and the host's `bun` on PATH.
 
 ## Build the engine host
 
-Build `SaffronAnima` first; the Tauri app spawns it on launch.
+`just engine` builds the workspace and compiles the shaders next to the host binary. The Tauri app spawns that binary on launch, so build it first.
 
-1. Configure once, or after any CMake change:
-   ```sh
-   toolbox run -c saffron-build bash -lc '
-     cd /var/home/saffronjam/repos/SaffronAnima
-     cmake --preset debug'
-   ```
-2. Build with `-j1` (parallel builds intermittently hit a Clang module-BMI ICE):
-   ```sh
-   toolbox run -c saffron-build bash -lc '
-     cd /var/home/saffronjam/repos/SaffronAnima
-     cmake --build build/debug -j1'
-   ```
-3. Run the host on its own. It opens its own window, useful for a headless check or for driving it from the `sa` CLI without the Tauri app:
-   ```sh
-   toolbox run -c saffron-build bash -lc '
-     cd /var/home/saffronjam/repos/SaffronAnima
-     ./build/debug/bin/SaffronAnima'
-   ```
+```sh
+just engine
+```
 
-## Run the Tauri editor
+That runs `cargo build --workspace` then `cargo run -p xtask -- shaders` inside the toolbox. To use the host toolchain directly instead of the container, set `SAFFRON_NO_TOOLBOX=true`:
 
-The Tauri app builds and runs in the same toolbox, with the host `bun` on the PATH (the home directory is shared in). `bun run tauri dev` spawns the `SaffronAnima` host built above and composites its frames under the webview, so build the host first.
+```sh
+SAFFRON_NO_TOOLBOX=true just engine
+```
+
+You can also drive the underlying commands by hand:
 
 ```sh
 toolbox run -c saffron-build bash -lc '
-  export PATH="/var/home/saffronjam/.bun/bin:$PATH"
-  cd /var/home/saffronjam/repos/SaffronAnima/editor
-  bun install        # first time / after dependency changes
-  bun run check      # generate protocol types + typecheck
-  bun run tauri dev  # spawns the engine host + opens the editor'
+  cd /var/home/saffronjam/repos/SaffronEngine/engine
+  cargo build --workspace
+  cargo run -p xtask -- shaders'
 ```
 
-`bun run check` regenerates `editor/src/protocol/` from the [control schemas](../../explanations/tooling-and-control/shared-types/) and typechecks. The dev launch needs a Wayland session because the viewport presents on a wl_subsurface; use a real desktop session.
+To run the host on its own — useful for a headless check or for driving it from the `sa` CLI without the editor — use `just run-engine`, which loads a default content project so the viewport shows a scene:
+
+```sh
+just run-engine
+```
+
+## Run the Tauri editor
+
+`just run` starts the editor, which spawns the `saffron-host` binary as a native child and composites its frames under the webview. Build the host first.
+
+```sh
+just run
+```
+
+The editor resolves its engine binary from `SAFFRON_ANIMA_BIN`, defaulting to `engine/target/debug/saffron-host`. The dev launch needs a Wayland session because the viewport presents on a `wl_subsurface`; use a real desktop session.
+
+To build and typecheck the frontend on its own, `just editor` runs `bun run build`, which regenerates `editor/src/protocol/` from the [control schemas](../../explanations/tooling-and-control/shared-types/) via `xtask gen-protocol` and then runs `tsc` + `vite build`.
 
 ## Verify
 
-- **Engine host alone**: the window opens and presents the scene; drive it with the `sa` CLI over its control socket.
+- **Engine host alone**: the viewport presents the scene; drive it with the `sa` CLI over its control socket.
 - **Tauri editor**: the shell opens with the Hierarchy / tabbed Inspector·Environment·Stats / Assets / Viewport dock; a "Preparing renderer…" overlay clears once the embedded scene attaches.
-- For a headless engine check, bound the host run and dump the offscreen image:
+- **Headless check**: with no display attached, `just run-engine-headless` boots the host under a private headless `weston`, bounded to a few frames:
   ```sh
-  SAFFRON_EXIT_AFTER_FRAMES=5 SAFFRON_CAPTURE=/tmp/frame.png ./build/debug/bin/SaffronAnima
+  just run-engine-headless 5
   ```
-  `SAFFRON_EXIT_AFTER_FRAMES=N` exits after `N` frames; `SAFFRON_CAPTURE=path` writes the viewport image at exit.
+  It sets `SAFFRON_EXIT_AFTER_FRAMES=5` and a per-run `SAFFRON_CONTROL_SOCK`. `SAFFRON_EXIT_AFTER_FRAMES=N` exits after `N` frames; the offscreen image is captured over the control plane via the screenshot command (`capture_viewport`).
 
 > [!NOTE]
 > The Tauri editor is the only editor. Undo/redo, multi-viewport, and native Wayland are non-goals for now.
@@ -65,10 +68,11 @@ toolbox run -c saffron-build bash -lc '
 
 | What | File | Symbols |
 |---|---|---|
-| Toolbox + preset + run | `AGENTS.md` | the `saffron-build` recipe, `cmake --preset debug` |
-| The loop + frame limit | `app.cppm` | `run`, `detail::frameLimitFromEnv` |
-| Capture on exit | `app.cppm` | `SAFFRON_CAPTURE` → `captureViewport` |
-| Debug preset | `CMakePresets.json` | `debug` (clang++, libc++, lld, Ninja) |
+| Task runner + toolbox auto-enter | `justfile` | `engine`, `run`, `run-engine-headless` |
+| Host entry point | `engine/crates/host/src/main.rs` | `main`, `saffron_host::run_host` |
+| The loop + frame limit | `engine/crates/app/src/lib.rs` | `run`, `frame_limit_from_env` |
+| Shader + protocol build steps | `engine/xtask/src/main.rs` | `run_shaders`, `run_gen_protocol` |
+| Viewport screenshot | `engine/crates/rendering/src/renderer.rs` | `Renderer::capture_viewport` |
 | Frontend scripts | `editor/package.json` | `dev`, `check`, `tauri:dev`, `gen:protocol` |
 
 ## Related
@@ -76,3 +80,5 @@ toolbox run -c saffron-build bash -lc '
 - [Tauri editor and the viewport bridge](../../explanations/ui-and-editor/tauri-editor-and-viewport-bridge/) — how the editor drives the host
 - [Main loop](../../explanations/app-lifecycle-and-window/main-loop-and-run/)
 - [Headless runs and capture](../../explanations/app-lifecycle-and-window/headless-and-capture/)
+</content>
+</invoke>

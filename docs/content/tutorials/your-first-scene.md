@@ -13,12 +13,12 @@ camera.
 ## Start the editor and the control CLI
 
 The engine builds and runs inside the `saffron-build` toolbox (see [the build
-environment](../../explanations/architecture-and-conventions/) and `AGENTS.md`). The
-`cmd/sa` wrapper in the repo root launches the editor and a CLI that talks to it:
+environment](../../explanations/architecture-and-conventions/) and `AGENTS.md`); the `just`
+recipes auto-enter it. Start the editor, then drive it with the `sa` CLI:
 
 ```sh
-./cmd/sa start --build      # builds, launches SaffronAnima, waits for its socket
-./cmd/sa ping               # pong  engine=SaffronAnima  version=...  pid=...
+just run            # builds + launches the editor (which spawns the saffron-host viewport)
+just sa ping        # pong  engine=Saffron Anima  version=...  pid=...
 ```
 
 `ping` confirms the CLI is connected to the live editor over its unix socket. Every command
@@ -27,7 +27,7 @@ below drives that same editor. To work in the window instead, use the **Hierarch
 **Viewport** in the center.
 
 > [!NOTE]
-> `cmd/sa` runs the built `sa` binary through `toolbox run`. If you launched the editor
+> `just sa` runs the built `sa` binary inside the toolbox. If you launched the editor
 > another way, plain `sa <command>` from inside the toolbox reaches the same socket.
 
 ## Add a cube
@@ -36,16 +36,16 @@ The engine ships a `cube` model under `engine/assets/models/`, copied next to th
 host executable at build time. Import it:
 
 ```sh
-./cmd/sa import-model models/cube.gltf
+just sa import-model models/cube.gltf
 ```
 
-This bakes the model to a `.smesh`, registers it in the project asset catalog, and spawns an
+This bakes the model to a `.smodel`, registers it in the project asset catalog, and spawns an
 entity carrying it, already selected. The reply gives you the entity id and the mesh asset
 id. List what you have so far:
 
 ```sh
-./cmd/sa list-entities      # one entity named "Mesh"
-./cmd/sa list-assets        # the cube mesh in the catalog
+just sa list-entities      # one entity named "Mesh"
+just sa list-assets        # the cube mesh in the catalog
 ```
 
 In the editor this is **File ▸ Import...** (or the **Import...** button in the Assets
@@ -55,7 +55,7 @@ Position the cube so the camera you add next has something to frame. `set-transf
 only the fields you pass, leaving scale and rotation alone:
 
 ```sh
-./cmd/sa set-transform Mesh --translation '{"x":0,"y":0,"z":0}'
+just sa set-transform Mesh --translation '{"x":0,"y":0,"z":0}'
 ```
 
 > [!NOTE]
@@ -69,21 +69,21 @@ An unlit cube renders flat. Add a directional light; the engine shades through t
 in the scene:
 
 ```sh
-./cmd/sa create-entity Sun
-./cmd/sa add-component Sun DirectionalLight
-./cmd/sa set-light Sun --direction '{"x":-0.5,"y":-1,"z":-0.3}' --intensity 3 --color '{"x":1,"y":0.95,"z":0.9}'
+just sa create-entity Sun
+just sa add-component Sun DirectionalLight
+just sa set-light Sun --direction '{"x":-0.5,"y":-1,"z":-0.3}' --intensity 3 --color '{"x":1,"y":0.95,"z":0.9}'
 ```
 
 `set-light` targets the entity you name, or the first directional light if you omit it. The
 `ambient` field fills shadowed faces so nothing goes fully black:
 
 ```sh
-./cmd/sa set-light Sun --ambient 0.2
+just sa set-light Sun --ambient 0.2
 ```
 
 In the editor this is **Create ▸ Directional Light**, then editing Direction / Color /
 Intensity / Ambient in the Inspector. For a local look, **Create ▸ Point Light** drops a
-`PointLightComponent`; point and spot lights are dynamic and get
+`PointLight`; point and spot lights are dynamic and get
 [clustered](../../explanations/lighting-and-brdf/clustered-forward/) automatically.
 
 ## Give it a camera
@@ -92,16 +92,16 @@ The viewport draws through a fly-camera by default. A scene needs its own camera
 render is reproducible. Add one back from the cube, looking down -Z:
 
 ```sh
-./cmd/sa create-entity Main Camera
-./cmd/sa add-component "Main Camera" Camera
-./cmd/sa set-transform "Main Camera" --translation '{"x":0,"y":1,"z":5}'
+just sa create-entity Main Camera
+just sa add-component "Main Camera" Camera
+just sa set-transform "Main Camera" --translation '{"x":0,"y":1,"z":5}'
 ```
 
 The scene renders through the first camera whose `primary` flag is set, which a new
-`CameraComponent` is by default. Confirm it:
+`Camera` is by default. Confirm it:
 
 ```sh
-./cmd/sa inspect "Main Camera"     # dumps every component as JSON
+just sa inspect "Main Camera"     # dumps every component as JSON
 ```
 
 In the editor: **Create ▸ Camera**, then aim it with the gizmo. In edit mode, a camera shows
@@ -112,8 +112,8 @@ as a small camera model plus its frustum; both helpers are hidden while playing.
 Ask the renderer what it drew, then screenshot the viewport:
 
 ```sh
-./cmd/sa render-stats               # draws=1  batches=1  instances=1  clustered=on
-./cmd/sa screenshot viewport /tmp/first-scene.png
+just sa render-stats               # draws=1  batches=1  instances=1  clustered=on
+just sa screenshot viewport /tmp/first-scene.png
 ```
 
 One draw call, one batch, and one instance is your cube. If `render-stats` shows
@@ -126,13 +126,13 @@ A project file bundles the asset catalog and the scene into one document, so reo
 restores the cube, light, camera, and imported mesh:
 
 ```sh
-./cmd/sa save-project /tmp/first-scene/project.json
+just sa save-project /tmp/first-scene/project.json
 ```
 
 In the editor this is **File ▸ Save Project**. Reload it any time:
 
 ```sh
-./cmd/sa load-project /tmp/first-scene/project.json
+just sa load-project /tmp/first-scene/project.json
 ```
 
 `load-project` re-imports the catalog (so the mesh resolves to GPU buffers again) and

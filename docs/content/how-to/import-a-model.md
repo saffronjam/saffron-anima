@@ -60,10 +60,11 @@ materials, and — for a rig — its bones and a stopped `AnimationPlayer`), and
 
 | What | File | Symbols |
 |---|---|---|
-| `sa import-model` / `import-texture` / `instantiate-model` | `control_commands_asset.cpp` | `import-model`, `import-texture`, `instantiate-model` |
-| Bake the `.smodel` | `assets.cppm` | `importModel`, `bakeModel`, `importTexture` |
-| Place it in the scene | `assets.cppm` | `instantiateModel`, `spawnModel`, `spawnSkinnedModel` |
-| Catalog listing | `control_commands_asset.cpp` | `list-assets` |
+| `sa import-model` / `import-texture` / `instantiate-model` | `control/src/commands_asset.rs` | `import-model`, `import-texture`, `instantiate-model` |
+| Bake the `.smodel` | `assets/src/import.rs` | `import_model`, `bake_model` |
+| Import a loose texture | `assets/src/scan.rs` | `import_texture`, `register_texture_bytes` |
+| Place it in the scene | `assets/src/spawn.rs` | `instantiate_model`, `spawn_model`, `spawn_skinned_model` |
+| Catalog listing | `control/src/commands_asset.rs` | `list-assets` |
 
 ## Related
 

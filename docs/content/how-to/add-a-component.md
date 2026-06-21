@@ -6,28 +6,43 @@ math = false
 
 # Add a component
 
-Add a new ECS component type. A single `registerComponent` call wires up serialization, the CLI, and the Inspector.
+Add a new ECS component type. A single `register_component!` line wires up serialization, the CLI, and the Inspector.
 
 ## Steps
 
-1. Declare the value struct in `scene.cppm` — a plain struct, registered with entt like the existing ones.
-2. Register it once in `registerBuiltinComponents` (`scene_edit_components.cpp`) with four things: the stable name, a draw closure, a `toJson`, and a `fromJson`:
-   ```cpp
-   registerComponent<HealthComponent>(reg, "Health",
-       [](Scene&, Entity) {},
-       [](const HealthComponent& c) -> nlohmann::json
-       {
-           return nlohmann::json{ { "hp", c.hp } };
-       },
-       [](HealthComponent& c, const nlohmann::json& j) -> Result<void>
-       {
-           c.hp = jsonF32Or(j, "hp", 100.0f);
-           return {};
-       },
-       true);  // removable
+1. Declare the value struct in `component.rs` (the `saffron-scene` crate) — a plain `struct` deriving `Clone + Default`, like the existing ones:
+   ```rust
+   #[derive(Clone, Copy, Debug, PartialEq)]
+   pub struct Health {
+       /// Current hit points.
+       pub hp: f32,
+   }
+
+   impl Default for Health {
+       fn default() -> Self {
+           Self { hp: 100.0 }
+       }
+   }
    ```
-   The draw closure is empty: the engine renders no UI. The Inspector is the React/Tauri frontend, which builds each field from the DTO catalog over the control plane. The two closures that matter are `toJson`/`fromJson`, which carry the component's fields on the wire and to disk. `registerComponent` synthesizes `has` / `addDefault` / `remove` / `copyTo` / `serialize` / `deserialize` from the generic helpers. The last argument is `removable`, which is `false` for always-present types like Name and Transform.
-3. Rebuild with `cmake --build build/debug -j1`.
+2. Give it a `SceneSerialize` impl in `serde.rs` — the `to_json` / `load_json` pair that carries the component's fields on the wire and to disk:
+   ```rust
+   impl SceneSerialize for Health {
+       fn to_json(&self) -> Value {
+           json!({ "hp": self.hp })
+       }
+
+       fn load_json(&mut self, value: &Value) -> Result<()> {
+           self.hp = value.get("hp").and_then(Value::as_f64).unwrap_or(100.0) as f32;
+           Ok(())
+       }
+   }
+   ```
+3. Register it with one line in `register_builtin_components` (`registry.rs`), and add its name to `BUILTIN_COMPONENT_NAMES` in the same file (the `registry_is_complete` test fails if the two lists drift):
+   ```rust
+   register_component!(reg, Health, "Health");
+   ```
+   There is no per-type UI draw hook: the engine renders no UI. The Inspector is the React/Tauri frontend, which builds each field from the DTO catalog over the control plane. The macro defaults the serde to the type's `SceneSerialize` impl and synthesizes the structural fn-pointers (`has` / `add_default` / `remove` / `copy_to` / `serialize` / `deserialize`) into a `ComponentTraits` row. An optional trailing `bool` is `removable`, which is `false` for always-present types like `Name`, `Transform`, and `Relationship` (it defaults to `true`).
+4. Rebuild with `cargo build --workspace`.
 
 The stable name is the JSON key, the Inspector header, and the CLI token. Keep it consistent across all three.
 
@@ -46,10 +61,13 @@ The stable name is the JSON key, the Inspector header, and the CLI token. Keep i
 
 | What | File | Symbols |
 |---|---|---|
-| `registerComponent` template | `scene.cppm` | `registerComponent`, `ComponentTraits`, `ComponentRegistry` |
-| Where built-ins register | `scene_edit_components.cpp` | `registerBuiltinComponents` |
-| Generic add/get/has/remove | `scene.cppm` | `addComponent`, `getComponent`, `hasComponent` |
-| CLI add/set/inspect | `control_commands_scene.cpp` | `add-component`, `set-component`, `inspect` |
+| `register_component!` macro | `engine/crates/scene/src/macros.rs` | `register_component!` |
+| The traits row + registry | `engine/crates/scene/src/registry.rs` | `ComponentTraits`, `ComponentRegistry::register` |
+| Where built-ins register | `engine/crates/scene/src/registry.rs` | `register_builtin_components`, `BUILTIN_COMPONENT_NAMES` |
+| Component structs | `engine/crates/scene/src/component.rs` | the component value structs |
+| The per-type serde | `engine/crates/scene/src/serde.rs` | `SceneSerialize` impls (`to_json` / `load_json`) |
+| Generic add/get/has/remove | `engine/crates/scene/src/scene.rs` | `add_component`, `with_component`, `has_component` |
+| CLI add/set/inspect | `engine/crates/control/src/commands_scene.rs` | `register_scene_commands` (`add-component`, `set-component`, `inspect`) |
 
 ## Related
 

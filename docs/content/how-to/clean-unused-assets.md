@@ -48,10 +48,10 @@ the scene whose assets you want to keep before you start.
 
 | What | File | Symbols |
 |---|---|---|
-| Classify by reachability | `assets.cppm` | `analyzeClean`, `buildDependencyGraph` |
-| Script-referenced (review) | `assets.cppm` | `collectScriptReferencedIds` |
-| Confirm-gated delete + rescan | `assets.cppm` | `deleteUnused` |
-| Commands | `control_commands_asset.cpp` | `clean-assets`, `delete-unused` |
+| Classify by reachability | `assets/src/manage.rs` | `analyze_clean`, `build_dependency_graph` |
+| Script-referenced (review) | `assets/src/manage.rs` | `collect_script_referenced_ids` |
+| Confirm-gated delete + rescan | `assets/src/manage.rs` | `delete_unused` |
+| Commands | `control/src/commands_asset.rs` | `clean-assets`, `delete-unused` |
 
 > [!WARNING]
 > `delete-unused` removes files and is irreversible. It refuses without `confirm`, deletes only

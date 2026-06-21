@@ -6,120 +6,133 @@ math = false
 
 # Renderer API
 
-These are the exported entry points of `Saffron.Rendering` (the `:Types` partition). Each takes a `Renderer&`; fallible calls return `Result<…>`.
+The public surface of `saffron-rendering`. The `Renderer` owns the instance/device/swapchain/allocator, the descriptor sets, the IBL bake, and the per-view offscreen targets; nearly every method takes `&mut self` and fallible ones return `Result<T>`. Vulkan handles are the `ash` `vk::` bindings. Mesh/texture upload runs through a separate `Uploader` (the host constructs one per drain), not through the `Renderer`.
+
+| What | File | Symbols |
+|---|---|---|
+| The renderer | `renderer.rs` | `Renderer`, `Renderer::new`, `ViewId`, `ViewMode`, `RenderStatsFull` |
+| GPU-facing data types | `gpu_types.rs` | `Material`, `InstanceData`, `GpuLight`, `MaterialParamsData` |
+| Draw items | `draw_list.rs` | `DrawItem`, `SubmeshMaterial`, `RenderStats` |
+| Lighting inputs | `lighting.rs` | `SceneLighting`, `ClusterCamera` |
+| Upload | `upload.rs` | `Uploader`, `GpuQueue` |
 
 ## Lifecycle
-| Symbol | Signature | Effect |
-|---|---|---|
-| `newRenderer` | `auto newRenderer(Window&) -> Result<Renderer>` | instance/device/swapchain/allocator + descriptors + IBL bake |
-| `destroyRenderer` | `void destroyRenderer(Renderer&)` | waits idle, frees in teardown order |
-| `waitGpuIdle` | `void waitGpuIdle(Renderer&)` | block until all submitted work finishes |
+
+| Symbol | Effect |
+|---|---|
+| `Renderer::new(surface_source: &SurfaceSource, width: u32, height: u32) -> Result<Renderer>` | build instance/device/swapchain/allocator + descriptors + IBL bake |
+| `device().wait_idle() -> Result<()>` | block until all submitted work finishes (also run by `Renderer`'s `Drop`) |
+
+The renderer holds an explicit `Drop` that waits idle before tearing down, so resources free in order.
 
 ## Per-frame
-| Symbol | Signature | Effect |
-|---|---|---|
-| `beginFrame` | `auto beginFrame(Renderer&) -> bool` | acquire image; `false` if it recreated the swapchain/targets (skip the frame) |
-| `submit` | `void submit(Renderer&, RenderFn)` | record a closure into the scene (offscreen) pass |
-| `submitUi` | `void submitUi(Renderer&, RenderFn)` | record a closure into the swapchain overlay pass (unused under the present-only host) |
-| `beginFrameGraph` | `void beginFrameGraph(Renderer&)` | build the frame graph (cull + scene + AA + tonemap) before layer passes |
-| `frameGraph` | `auto frameGraph(Renderer&) -> RenderGraph&` | the in-progress graph |
-| `viewportColorResource` | `auto viewportColorResource(const Renderer&) -> RgResource` | offscreen color handle for an app pass |
-| `addTonemapPass` | `void addTonemapPass(Renderer&, RenderGraph&)` | the mandatory HDR→display pass |
-| `endFrame` | `void endFrame(Renderer&)` | execute the graph, blit the offscreen to the swapchain, present, run pending window capture |
 
-`RenderFn` is `std::function<void(vk::CommandBuffer)>`.
-
-## Viewport target
-| Symbol | Signature |
+| Symbol | Effect |
 |---|---|
-| `setViewportDesiredSize` | `void setViewportDesiredSize(Renderer&, u32 w, u32 h)` |
-| `viewportWidth` / `viewportHeight` | `auto …(const Renderer&) -> u32` |
+| `begin_offscreen_frame() -> Result<()>` | start the offscreen scene frame for the active view |
+| `render_scene_offscreen() -> Result<()>` | build + execute the frame graph (cull + scene + AA + tonemap) into the offscreen target |
+| `submit(body: impl FnOnce(vk::CommandBuffer) + 'static)` | record a closure into the scene pass after the batched draw list (the gizmo / native overlay seam) |
+| `render_frame() -> Result<bool>` | the full present-only loop: acquire → render → present; `false` if it recreated the swapchain |
+| `begin_present_frame() -> Result<bool>` / `present_active_view_to_swapchain() -> Result<()>` | the split acquire / present steps |
 
-## Resource upload
-| Symbol | Signature |
+The submit closure type is `RenderFn = Box<dyn FnOnce(vk::CommandBuffer)>`; it captures resolved handles and runs once on the render thread.
+
+## Views and viewport target
+
+The renderer keeps `VIEW_COUNT` views (`ViewId::Scene` and `ViewId::AssetPreview`).
+
+| Symbol | Effect |
 |---|---|
-| `uploadMesh` | `auto uploadMesh(Renderer&, const Mesh&) -> Result<Ref<GpuMesh>>` |
-| `uploadTexture` | `auto uploadTexture(Renderer&, const u8* rgba, u32 w, u32 h, bool srgb) -> Result<Ref<GpuTexture>>` |
-| `renderMeshThumbnail` | `auto renderMeshThumbnail(Renderer&, const Ref<GpuMesh>&, u32 size) -> Result<Ref<GpuTexture>>` |
-
-## Pipelines (PSO cache)
-| Symbol | Signature | Effect |
-|---|---|---|
-| `requestMeshPipeline` | `auto requestMeshPipeline(Renderer&, const Material&) -> Ref<Pipeline>` | cache front door; build on miss |
-| `newMeshPipeline` | `auto newMeshPipeline(Renderer&, std::string_view shaderName, bool unlit = false) -> Result<Ref<Pipeline>>` | build a mesh PSO |
-| `pipelineCount` | `auto pipelineCount(const Renderer&) -> u32` | distinct cached mesh PSOs |
+| `set_active_view(view: ViewId)` / `active_view_id() -> ViewId` | the view subsequent calls address |
+| `view(view: ViewId) -> &ViewTarget` | a view's offscreen target |
+| `set_viewport_desired_size(width, height) -> Result<()>` | desired offscreen size in device pixels |
+| `viewport_width() -> u32` / `viewport_height() -> u32` | current offscreen size |
+| `reset_view_temporal(view: ViewId)` | drop a view's TAA history |
 
 ## Draw list
-| Symbol | Signature | Effect |
-|---|---|---|
-| `submitDrawList` | `void submitDrawList(Renderer&, const glm::mat4& viewProj, const std::vector<DrawItem>&)` | resolve materials → batch by (pipeline, mesh) → upload instance buffer |
-| `recordSceneDrawList` | `void recordSceneDrawList(Renderer&, vk::CommandBuffer)` | scene-pass body |
-| `recordDepthPrepass` | `void recordDepthPrepass(Renderer&, vk::CommandBuffer)` | depth-pre-pass body |
-| `renderStats` | `auto renderStats(const Renderer&) -> RenderStats` | last frame's draw counters |
+
+| Symbol | Effect |
+|---|---|
+| `submit_draw_list(view_proj: Mat4, items: &[DrawItem]) -> Result<()>` | resolve materials → batch by (pipeline, mesh) → upload the instance buffer |
+| `submit_draw_list_skinned(view_proj: Mat4, items: &[DrawItem], joints: &[Mat4]) -> Result<()>` | the skinned path, with the joint palette |
+| `stats() -> RenderStats` / `render_stats() -> RenderStatsFull` | last frame's draw counters / counters + timing + flags |
+| `pipeline_count() -> u32` | distinct cached mesh PSOs |
+
+`pipelines()` returns `&mut Pipelines`; `Pipelines::request_mesh_pipeline(material, …)` is the PSO-cache front door (build-and-cache on first request).
 
 ## Lighting
-| Symbol | Signature |
+
+| Symbol | Effect |
 |---|---|
-| `setDirectionalLight` | `void setDirectionalLight(Renderer&, glm::vec3 direction, glm::vec3 color, f32 intensity, f32 ambient)` |
-| `setSceneLighting` | `void setSceneLighting(Renderer&, glm::vec3 dir, glm::vec3 color, f32 intensity, f32 ambient, glm::vec3 eye, const std::vector<GpuLight>&)` |
-| `setClusterCamera` | `void setClusterCamera(Renderer&, const glm::mat4& view, const glm::mat4& proj, f32 near, f32 far)` |
-| `setClustered` / `clusteredEnabled` | toggle / query clustered culling |
+| `set_scene_lighting(scene: &SceneLighting) -> Result<()>` | directional + ambient + eye + the per-frame punctual `GpuLight` list |
+| `set_cluster_camera(camera: ClusterCamera)` | view / projection / size / z-planes for froxel culling |
+| `set_clustered(bool)` / `clustered_enabled() -> bool` | toggle / query clustered culling |
+
+`SceneLighting { direction, color, intensity, ambient: Vec3, eye_position, lights: Vec<GpuLight> }`. `ClusterCamera { view, projection: Mat4, width, height: u32, near, far: f32 }`.
 
 ## Feature toggles (paired set/query)
-| Symbol | Signature |
+
+Each is a `set_*(&mut self, bool)` with a `*_enabled(&self) -> bool` query:
+
+| Feature | Methods |
 |---|---|
-| `setExposure(Renderer&, f32 ev)` / `exposureEv(const Renderer&) -> f32` | tonemap exposure in stops |
-| `setIbl(Renderer&, bool)` / `iblEnabled(const Renderer&) -> bool` | IBL ambient vs flat |
-| `setSsao` / `ssaoEnabled` | GTAO |
-| `setContactShadows` / `contactShadowsEnabled` | screen-space contact shadows |
-| `setSsgi` / `ssgiEnabled` | screen-space GI |
-| `setDdgi` / `ddgiEnabled` | DDGI probe GI |
-| `setShadows` / `shadowsEnabled` | directional shadow map |
-| `setDepthPrepass` / `depthPrepassEnabled` | depth pre-pass |
-| `setRtShadows` / `rtShadowsEnabled`, `rtSupported`, `rtBlasCount` | hardware ray-query shadows |
-| `setRestir` / `restirEnabled` | ReSTIR many-light direct |
-| `setAa(Renderer&, u32 msaaSamples, bool fxaa, bool taa)` / `aaMode(const Renderer&) -> std::string` | anti-aliasing (`"off"`/`"fxaa"`/`"taa"`/`"msaa2\|4\|8"`) |
+| IBL ambient | `set_ibl` / `ibl_enabled` |
+| GTAO | `set_ssao` / `ssao_enabled` |
+| Contact shadows | `set_contact_shadows` / `contact_shadows_enabled` |
+| Screen-space GI | `set_ssgi` / `ssgi_enabled` |
+| DDGI probe GI | `set_ddgi` / `ddgi_enabled` |
+| Directional shadows | `set_shadows` / `shadows_enabled` |
+| Depth pre-pass | `set_depth_prepass` / `depth_prepass_enabled` |
+| GPU skinning | `set_skinning` / `skinning_enabled` |
+| Reflection probes | `set_reflection_probes` / `reflection_probes_enabled` |
+| RT shadows | `set_rt_shadows` / `rt_shadows_enabled` (with `rt_supported() -> bool`) |
+| ReSTIR direct | `set_restir` / `restir_enabled` |
+
+Tonemap exposure is `set_exposure(ev: f32)` / `exposure_ev() -> f32`. Anti-aliasing is `set_aa(msaa_samples: u32, fxaa: bool, taa: bool) -> Result<()>` (or `set_aa_mode(&str)`) with `aa_mode() -> String` returning `"off"` / `"fxaa"` / `"taa"` / `"msaa2|4|8"`. The debug view channel is `set_view_mode(ViewMode)` / `view_mode() -> ViewMode`.
 
 ## Shadow / screen-space arming (per frame)
-| Symbol | Signature |
-|---|---|
-| `setDirectionalShadow` | `void setDirectionalShadow(Renderer&, const glm::mat4& lightViewProj, bool casting)` |
-| `setSpotShadow` | `void setSpotShadow(Renderer&, const glm::mat4& lightViewProj, u32 lightIndex, bool casting)` |
-| `setPointShadow` | `void setPointShadow(Renderer&, glm::vec3 lightPos, f32 farPlane, u32 lightIndex, bool casting)` |
-| `recordShadowDepth` | `void recordShadowDepth(Renderer&, vk::CommandBuffer, const glm::mat4& lightViewProj)` |
-| `recordPointShadow` | `void recordPointShadow(Renderer&, vk::CommandBuffer, glm::vec3 lightPos, f32 farPlane)` |
-| `setSsaoCamera` | `void setSsaoCamera(Renderer&, const glm::mat4& view, const glm::mat4& proj, glm::vec3 sunDirWorld)` |
-| `recordGbuffer` | `void recordGbuffer(Renderer&, vk::CommandBuffer)` |
-| `recordMotion` | `void recordMotion(Renderer&, vk::CommandBuffer)` |
-| `setDdgiScene` | `void setDdgiScene(Renderer&, boxMins, boxMaxs, boxAlbedos, volumeMin, volumeExtent, sunDir, sunColor, sunIntensity)` |
-| `setRtScene` | `void setRtScene(Renderer&, std::vector<glm::mat4> models, std::vector<Ref<GpuMesh>> meshes)` |
-| `buildTlas` | `void buildTlas(Renderer&, vk::CommandBuffer, const std::vector<glm::mat4>& models, const std::vector<Ref<GpuMesh>>& meshes)` |
 
-## Capture
-| Symbol | Signature | Effect |
-|---|---|---|
-| `captureViewport` | `auto captureViewport(Renderer&, const std::string& path) -> Result<void>` | synchronous PNG of the offscreen |
-| `requestWindowCapture` | `auto requestWindowCapture(Renderer&, std::string path) -> Result<void>` | PNG of the next presented frame (in `endFrame`) |
-| `assetPath` | `auto assetPath(std::string_view relative) -> std::string` | resolve a path next to the exe |
+| Symbol | Effect |
+|---|---|
+| `set_directional_shadow(light_view_proj: Mat4, casting: bool)` | arm the directional shadow map |
+| `set_spot_shadow(light_view_proj: Mat4, light_index: u32, casting: bool)` | arm a spot shadow |
+| `set_point_shadow(light_view_proj: Mat4, light_index: u32, casting: bool)` | arm an omnidirectional point shadow |
+| `set_ssao_camera(camera: ClusterCamera)` | the camera SSAO/GTAO and motion need |
+| `set_ddgi_scene(models, meshes, extent) -> Result<()>` | the DDGI volume box geometry |
+
+## Capture and thumbnails
+
+| Symbol | Effect |
+|---|---|
+| `capture_viewport(path: &Path) -> Result<()>` | synchronous PNG of the active view's offscreen color |
+| `request_window_capture(path: &Path) -> Result<()>` | arm a PNG of the next presented frame; `window_capture_pending() -> bool` |
+| `render_mesh_thumbnail(mesh: &Arc<GpuMesh>, size: u32) -> Result<Arc<GpuTexture>>` | render a mesh to a thumbnail texture |
+
+Mesh and texture upload go through `Uploader::upload_mesh(mesh, skin) -> Result<Arc<GpuMesh>>` and `Uploader::upload_texture(...) -> Result<Arc<GpuTexture>>`, constructed over the device + a `GpuQueue`.
 
 ## Constants
-| Symbol | Value |
-|---|---|
-| `MaxFramesInFlight` | `2` |
-| `MaxBindlessTextures` | `1024` |
-| `DepthFormat` | `vk::Format::eD32Sfloat` |
-| `OffscreenColorFormat` | `vk::Format::eR16G16B16A16Sfloat` |
+
+| Symbol | Value | File |
+|---|---|---|
+| `MAX_FRAMES_IN_FLIGHT` | `2` | `frame.rs` |
+| `MAX_BINDLESS_TEXTURES` | `1024` | `descriptors.rs` |
+| `VIEW_COUNT` | `2` | `renderer.rs` |
+| `OFFSCREEN_COLOR_FORMAT` | `vk::Format::R16G16B16A16_SFLOAT` | `pipelines.rs` |
+| `DEPTH_FORMAT` | `vk::Format::D32_SFLOAT` | `pipelines.rs` |
 
 ## Key data structs
+
 | Type | Fields (abridged) |
 |---|---|
-| `Material` | `std::string shader = "shaders/mesh.spv"`; `bool unlit = false` |
-| `DrawItem` | `Ref<GpuMesh> mesh`; `Ref<GpuTexture> texture`; `glm::mat4 model`, `normalMatrix`; `glm::vec4 baseColor`; `f32 metallic`, `roughness`; `glm::vec3 emissive`; `f32 emissiveStrength`; `Material material` |
-| `RenderStats` | `u32 drawCalls`, `batches`, `instances` |
-| `InstanceData` | `glm::mat4 model`, `normalMatrix`; `glm::vec4 baseColor`; `glm::uvec4 texture` (.x = bindless index); `glm::vec4 pbr` (x=metallic, y=roughness); `glm::vec4 emissive` |
-| `GpuLight` | `glm::vec4 positionRange`, `colorIntensity`, `directionType` (w: 0=point, 1=spot), `spotCos` |
+| `Material` | `shader: String` (default `"shaders/mesh.spv"`); `unlit: bool` |
+| `DrawItem` | `mesh: Arc<GpuMesh>`; `model`, `normal_matrix: Mat4`; `submesh_materials: Vec<SubmeshMaterial>`; `material: Material`; `skinned: bool`; `joint_offset`, `joint_count: u32`; `entity: u64` |
+| `SubmeshMaterial` | the per-submesh textures (`Option<Arc<GpuTexture>>`) + `base_color`, `metallic`, `roughness`, `emissive`, UV / normal / alpha factors |
+| `RenderStats` | `draw_calls`, `batches`, `instances`, `triangles`, `descriptor_binds`, `command_buffers`, `queue_submits`, `pipelines_created: u32` |
+| `InstanceData` | std430: `model`, `normal_matrix`, `prev_model: Mat4`; `base_color: Vec4`; `texture: UVec4` (.x = bindless albedo); `pbr`, `emissive: Vec4` |
+| `GpuLight` | `position_range`, `color_intensity`, `direction_type` (.w: 0 = point, 1 = spot), `spot_cos: Vec4` |
 
 ## Related
-- [Render seams](../../explanations/app-lifecycle-and-window/the-submit-and-rendergraph-seams/) — how `submit`/`onRenderGraph` feed the frame
-- [Material and PSO selection](../../explanations/materials-and-pipelines/material-and-pso-selection/) — what `requestMeshPipeline` keys on
-- [Meta-layer resources](../../explanations/vulkan-foundation/meta-layer-resources/) — `Ref<GpuMesh>`/`GpuTexture`/`Pipeline` ownership
+
+- [Render seams](../../explanations/app-lifecycle-and-window/the-submit-and-rendergraph-seams/) — how `submit` feeds the frame
+- [Material and PSO selection](../../explanations/materials-and-pipelines/material-and-pso-selection/) — what `request_mesh_pipeline` keys on
+- [Meta-layer resources](../../explanations/vulkan-foundation/meta-layer-resources/) — `Arc<GpuMesh>` / `GpuTexture` ownership

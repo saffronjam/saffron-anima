@@ -14,5 +14,5 @@ working result. Each one is self-contained and suited to your first hour with th
 | Page | Covers |
 |---|---|
 | `your-first-scene` | from an empty project to a lit, saved scene with a camera |
-| `a-custom-slang-shader` | write a shader, compile it in CMake, draw with it through the graph |
+| `a-custom-slang-shader` | write a shader, compile it with the xtask shader pipeline, draw with it through the graph |
 | `a-pbr-material` | set metallic/roughness, add a point light, light it, tune exposure |

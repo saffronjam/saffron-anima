@@ -43,9 +43,9 @@ sa set-gi ddgi              # off | ddgi (probe global illumination)
 
 | What | File | Symbols |
 |---|---|---|
-| AA / clustered / depth-prepass / exposure | `control_commands_render.cpp` | `set-aa`, `set-clustered`, `set-depth-prepass`, `set-exposure` |
-| Shadows / IBL / SSAO / GI | `control_commands_render.cpp` | `set-shadows`, `set-ibl`, `set-ssao`, `set-gi` |
-| Live flag readout | `control_commands_render.cpp` | `render-stats` (`aaMode`, `clusteredEnabled`, …) |
+| AA / clustered / depth-prepass / exposure | `engine/crates/control/src/commands_render.rs` | `set-aa`, `set-clustered`, `set-depth-prepass`, `set-exposure` |
+| Shadows / IBL / SSAO / GI | `engine/crates/control/src/commands_render.rs` | `set-shadows`, `set-ibl`, `set-ssao`, `set-gi` |
+| Live flag readout | `engine/crates/control/src/commands_render.rs` | `render-stats` (`aaMode`, `clusteredEnabled`, …) |
 
 ## Related
 

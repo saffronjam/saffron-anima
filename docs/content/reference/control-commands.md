@@ -6,14 +6,14 @@ math = false
 
 # Control commands
 
-Every command registered in `Saffron.Control` and driven by the `sa` CLI over the unix socket. Commands are grouped by registering file. Params are positional unless named, and `?` marks an optional param. Each command returns a JSON result.
+Every command registered in `saffron-control` and driven by the `sa` CLI over the unix socket. Commands are grouped by their registering module (`commands_scene.rs`, `commands_render.rs`, `commands_asset.rs`, `commands_animation.rs`, `commands_physics.rs`), all wired up by `register_builtin_commands` in `registry.rs`; `ping` and `help` are the two builtins registered directly there. The wire DTOs are generated into the `saffron-protocol` crate by `cargo run -p xtask -- gen-protocol`. Params are positional unless named, and `?` marks an optional param. Each command returns a JSON result.
 
 Entity and asset ids are u64, carried on the wire as decimal JSON strings (see [the id-encoding contract](../../explanations/tooling-and-control/control-plane-architecture/#id-encoding-on-the-wire)). Entity selectors resolve a string id, a number, or an exact name. Every scene-mutating command bumps `sceneVersion`; selection changes bump `selectionVersion` — both are read back by `get-selection`, which also carries `playState`/`playVersion`.
 
 During play (see `play`/`pause`/`stop`/`step`), scene commands address the *running* scene — a throwaway duplicate of the authored one — so every read and write is discarded on `stop`. Project and scene swaps (`load-scene`, `load-project`, `reload-project`, `new-project`, `open-project`, `delete-asset`) error with "stop play first"; `save-scene`/`save-project` always serialize the authored scene; the gizmo (`set-gizmo`, `gizmo-pointer`) is hidden during play.
 
 ## Scene commands
-*(`control_commands_scene.cpp`)*
+*(`commands_scene.rs`)*
 
 | Command | Params | Effect |
 |---|---|---|
@@ -52,8 +52,9 @@ During play (see `play`/`pause`/`stop`/`step`), scene commands address the *runn
 | `script-input` | `{keys:[...]}` | set the normalized key names visible to Lua through `sa.is_key_down(key)` (and the derived `sa.is_key_pressed`/`sa.is_key_up` edges) |
 
 ## Animation commands
+*(`commands_animation.rs`)*
 
-Drive a rig's `AnimationPlayerComponent`. `play`/`seek` set `previewInEdit`, so they animate in Edit
+Drive a rig's `AnimationPlayer` component. `play`/`seek` set `previewInEdit`, so they animate in Edit
 without entering Play; every mutation bumps `animationVersion` (carried on `get-animation-state`,
 `get-play-state`, and `get-selection`). The state result is `{clip, clipName, duration, time, playing,
 wrap, speed, animationVersion}`.
@@ -69,12 +70,12 @@ wrap, speed, animationVersion}`.
 | `stop-preview` | `{entity}` | clear the Edit preview and stop, reverting the rig to its rest pose |
 
 ## Render commands
-*(`control_commands_render.cpp`)*
+*(`commands_render.rs`)*
 
 | Command | Params | Effect |
 |---|---|---|
-| `ping` | — | liveness + engine name/version/pid |
-| `help` | — | list available commands |
+| `ping` | — | liveness + engine name/version/pid (a builtin, registered in `registry.rs`) |
+| `help` | — | list available commands (a builtin, registered in `registry.rs`) |
 | `render-stats` | — | draw counters + frame timing (`frameMs`/`fps` CPU loop EMA, `gpuMs` from the timestamp ring, 0 when unsupported) + every feature flag (clustered, shadows, ibl, ssao, contactShadows, ssgi, ddgi, rtSupported, rtShadows, restir, blasCount, pipelines, hdr, exposureEv, aa) |
 | `set-aa` | `{off\|fxaa\|taa\|msaa2\|msaa4\|msaa8}` | anti-aliasing mode |
 | `set-clustered` | `{0\|1}` | toggle clustered light culling |
@@ -96,7 +97,7 @@ wrap, speed, animationVersion}`.
 > capturable layout) — use `screenshot target=viewport` instead.
 
 ## Asset commands
-*(`control_commands_asset.cpp`)*
+*(`commands_asset.rs`)*
 
 | Command | Params | Effect |
 |---|---|---|

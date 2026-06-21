@@ -57,10 +57,10 @@ The editor offers the same operations: the **Create** menu, the in-viewport gizm
 
 | What | File | Symbols |
 |---|---|---|
-| Entities + components + transform | `control_commands_scene.cpp` | `create-entity`, `add-component`, `set-transform` |
-| Lights + material | `control_commands_scene.cpp` | `set-light`, `set-material` |
-| Assign catalog assets | `control_commands_asset.cpp` | `assign-asset` |
-| Save / load project | `control_commands_asset.cpp` | `save-project`, `load-project` |
+| Entities + components + transform | `engine/crates/control/src/commands_scene.rs` | `create-entity`, `add-component`, `set-transform` |
+| Lights + material | `engine/crates/control/src/commands_scene.rs` | `set-light`, `set-material` |
+| Assign catalog assets | `engine/crates/control/src/commands_asset.rs` | `assign-asset` |
+| Save / load project | `engine/crates/control/src/commands_asset.rs` | `save-project`, `load-project` |
 
 ## Related
 

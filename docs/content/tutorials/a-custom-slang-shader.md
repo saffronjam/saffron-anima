@@ -5,32 +5,32 @@ weight = 2
 
 # Custom Slang shader
 
-This tutorial writes a new Slang shader, lets CMake compile it to SPIR-V, and draws scene
-meshes with it through the renderer's PSO cache. The shader matches the engine's mesh I/O
-contract, so it slots into the existing scene pass. Changing the fragment math changes how
-every mesh using that material looks.
+This tutorial writes a new Slang shader, lets the `xtask` shader pipeline compile it to SPIR-V,
+and draws scene meshes with it through the renderer's PSO cache. The shader matches the engine's
+mesh I/O contract, so it slots into the existing scene pass. Changing the fragment math changes
+how every mesh using that material looks.
 
 ## How shaders get compiled
 
-The build globs every `*.slang` under `engine/assets/shaders/` and compiles each to
-`bin/shaders/<name>.spv` with `slangc`, wired in `engine/CMakeLists.txt`:
+The `xtask shaders` task scans every `*.slang` under `engine/assets/shaders/` and compiles each
+to `<name>.spv` next to the host binary, under `engine/target/<profile>/shaders/`:
 
-```cmake
-saffron_compile_shaders(SaffronAnima
-    ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
-    ${SAFFRON_RUNTIME_DIR}/shaders)
+```sh
+cargo run -p xtask -- shaders
 ```
 
-`saffron_compile_shaders` (in `cmake/CompileShaders.cmake`) runs, per file:
+Per entry-point shader it runs:
 
 ```
 slangc <shader>.slang -profile glsl_450 -target spirv -emit-spirv-directly \
-        -fvk-use-entrypoint-name -matrix-layout-column-major -o <shader>.spv
+        -fvk-use-entrypoint-name -matrix-layout-column-major -I <shader_dir> -o <shader>.spv
 ```
 
-Adding a `.slang` to that folder compiles it with no CMake edit. The glob uses
-`CONFIGURE_DEPENDS`, so re-running the build picks up the new file. Both entry points live
-in one `.slang` module, named by their `[shader(...)]` tag.
+The shared `lighting.slang` is precompiled once to `lighting.slang-module` (`slangc … -emit-ir`,
+no `.spv`); every other shader `import lighting` against it. Adding a `.slang` to the folder
+compiles it with no code edit — the next pipeline run picks it up, and `just engine` runs the
+pipeline right after the Cargo build, so a plain build sees it too. Both entry points live in
+one `.slang` module, named by their `[shader(...)]` tag.
 
 ## Write the shader
 
@@ -103,31 +103,32 @@ fixed.
 
 > [!NOTE]
 > The entry points must be named `vertexMain` and `fragmentMain` — that's what
-> `newMeshPipeline` looks up when it builds the stage create-infos
-> (`renderer_pipelines.cpp`). The vertex input layout (3 attributes) and set 2 (instances)
-> are baked into that pipeline layout.
+> `build_mesh_pipeline` looks up when it builds the stage create-infos
+> (`engine/crates/rendering/src/pipelines.rs`). The vertex input layout (3 attributes) and
+> set 2 (instances) are baked into that pipeline layout.
 
 ## Build it
 
-Rebuild so the new `.slang` compiles, then confirm the SPIR-V landed:
+Run the shader pipeline so the new `.slang` compiles, then confirm the SPIR-V landed:
 
 ```sh
-./cmd/sa start --build      # CONFIGURE_DEPENDS sees flat.slang, builds it
-ls build/debug/bin/shaders/flat.spv
+cargo run -p xtask -- shaders          # scans flat.slang, compiles it
+ls engine/target/debug/shaders/flat.spv
 ```
 
-If `slangc` rejects the file, the build fails with the line and message. The `.spv` under
-`bin/shaders/` is what the renderer loads at run time via `assetPath("shaders/flat.spv")`.
+If `slangc` rejects the file, the run fails with the line and message. The `.spv` under
+`engine/target/debug/shaders/` is what the renderer loads at run time via
+`asset_path("shaders/flat.spv")`.
 
 ## Draw with it
 
-The renderer picks a pipeline per material. A `Material` carries a `shader` path (default
-`"shaders/mesh.spv"`), and `requestMeshPipeline` builds and caches one PSO per distinct
-`(shader, unlit)` key. Point a material at the new shader:
+The renderer picks a pipeline per material. The renderer's `Material` carries a `shader` path
+(default `"shaders/mesh.spv"`), and `request_mesh_pipeline` builds and caches one PSO per
+distinct `(shader, unlit)` key. Point a material at the new shader:
 
-```cpp
-Material flat;
-flat.shader = "shaders/flat.spv";   // the .spv you just compiled
+```rust
+let mut flat = Material::default();
+flat.shader = "shaders/flat.spv".to_string();   // the .spv you just compiled
 // attach `flat` to the DrawItems for the meshes you want drawn with it
 ```
 
@@ -135,20 +136,20 @@ The PSO cache builds `flat.spv` on first use and reuses it after. Check the pipe
 once a mesh draws with it:
 
 ```sh
-./cmd/sa render-stats       # "pipelines" increments when flat.spv's PSO is built
+sa render-stats       # "pipelines" increments when flat.spv's PSO is built
 ```
 
 > [!NOTE]
-> `Material.shader` is selected in engine code, not over the CLI — there's no `sa
-> set-shader`. To see your shader live: assign the `Material` in the layer that builds the
-> scene draw list, or edit the engine's `mesh.slang` in place so every mesh redraws with
-> your changes on the next build. See
+> The renderer's `Material::shader` is selected in engine code, not over the CLI — there's no
+> `sa set-shader`. To see your shader live: set the shader path where the draw list is built,
+> or edit the engine's `mesh.slang` in place so every mesh redraws with your changes on the
+> next pipeline run. See
 > [material and PSO selection](../../explanations/materials-and-pipelines/material-and-pso-selection/).
 
 ## Next
 
 - [Übershader](../../explanations/materials-and-pipelines/ubershader-and-specialization/) — one shader for many materials via a spec constant.
-- [Material and PSO selection](../../explanations/materials-and-pipelines/material-and-pso-selection/) — how `Material.shader` becomes a cached pipeline.
+- [Material and PSO selection](../../explanations/materials-and-pipelines/material-and-pso-selection/) — how the renderer's `Material::shader` becomes a cached pipeline.
 - [Vertex layout](../../explanations/geometry-and-assets/mesh-and-vertex-layout/) — the vertex inputs your shader has to match.
 - [Descriptor sets](../../explanations/materials-and-pipelines/descriptor-sets/) — what sets 0–7 bind.
 - [Render seams](../../explanations/app-lifecycle-and-window/the-submit-and-rendergraph-seams/) — adding a whole new pass from a layer.
