@@ -1,65 +1,77 @@
 +++
-title = 'Go-flavored design'
+title = 'Rust house style'
 weight = 1
 +++
 
-# Go-flavored design
+# Rust house style
 
-Go-flavored design is a way of writing C++ that follows Go's structural choices: small data
-structs, free functions that transform them, errors returned as values, and no class hierarchies.
-When a design question arises, the answer is the one Go would give.
+The house style is idiomatic Rust with the conventional Rust answers to design questions:
+plain data structs, free functions and inherent methods over them, errors as typed values,
+traits for behaviour, and ownership tracked by the borrow checker rather than by hand. When a
+question has a clear idiomatic Rust answer, that is the answer Saffron takes.
 
-Saffron Anima uses this style throughout, and the rendering code relies on it most. Knowing the
-style first makes the graphics pages easier to read.
+Knowing the style first makes the later pages easier to read: the rendering, scene, and control
+code all lean on it.
 
 ## What the style uses
 
 The vocabulary is small and built from plain data:
 
-- Structs with public fields and methods, where a method is a function with a receiver.
-- Free functions, preferred because most logic is a pure function over plain data, which keeps it
-  testable.
-- Concepts as compile-time interfaces and `std::function` closures as runtime ones.
-- `std::variant` for sum types and `Result<T>` for anything that can fail.
+- Structs with public fields plus inherent methods (a method is a function with a `self`
+  receiver). Most logic is a free function or an associated function over plain data, which
+  keeps it testable.
+- Traits as interfaces — `Layer` (the lifecycle hook bundle) and `FrameHost` (the loop's GPU
+  seam) are both traits. A boxed `dyn Trait` is the runtime-polymorphic form; closures
+  (`Box<dyn FnOnce(..)>`, `impl FnMut(..)`) are the lightweight one.
+- `enum` for sum types and the typed error model — and `Result<T>` (each crate's alias over its
+  own `Error`) for anything that can fail.
+- `Drop` for resource cleanup; ownership and `Arc<T>` for sharing (the [ownership
+  page](../ownership-and-raii/) covers the rules).
 
-GPU resources are the one exception to the no-operators rule. They live in move-only RAII wrapper
-structs that own a Vulkan handle and free it in the destructor. That is resource management, not
-the operator overloading the style otherwise bans.
+## Clippy is law
 
-## What the style excludes
+The workspace turns the whole Clippy `all` group on as a warning and denies `unsafe_code`
+crate-wide; the leaf crates (`saffron-core`, `saffron-signal`, `saffron-json`) re-deny
+`unsafe_code` at the crate root for good measure. The lint gate is part of "done": a change that
+trips a Clippy lint is not finished until the lint is clean. Where `unsafe` is genuinely
+required — the VMA and shared-memory seams in `saffron-rendering` — it is local, documented with
+a `// SAFETY:` note, and confined to the crate that owns the FFI boundary.
 
-The prohibitions are as deliberate as the vocabulary:
+```toml
+[workspace.lints.rust]
+unsafe_code = "deny"
 
-- No inheritance and no `virtual`, and no base classes. A runtime interface is a struct of function
-  values — an explicit form of what a Go interface is under the hood. The clearest example is
-  `Layer` in the [main loop](../../app-lifecycle-and-window/main-loop-and-run/): a bundle of
-  optional callbacks, not a subclass.
-- No exceptions in engine code. Fallible work returns [`Result<T>`](../error-handling/) and is
-  checked at the call site. Libraries that throw are driven through their no-throw APIs and
-  converted at the boundary — Vulkan-Hpp with exceptions disabled, nlohmann with `JSON_NOEXCEPTION`,
-  cgltf and tinyobjloader through their C-style returns.
-- No ternary operator and no operator overloading on our own types. Use `if`/`else` and named
-  functions like `add(a, b)`. GLM's operators are fine; they belong to GLM.
+[workspace.lints.clippy]
+all = "warn"
+```
+
+## Errors are typed values
+
+No panics on the fallible path. Each library crate declares its own error `enum` with
+[`thiserror`](../error-handling/) and exports a `Result<T>` alias over it; callers compose
+errors with `#[from]` and propagate with `?`. Panics are reserved for genuine invariants the
+type system can't express, and `#[should_panic]` tests pin those.
 
 ## Why it holds up in a renderer
 
-Graphics code is where OOP engines usually grow the deepest hierarchies: a `Resource` base, a
-`RenderPass` base, a `Material` base. Saffron Anima has none of them. A render pass is a
-[`RgPass`](../../frame-and-render-graph/render-graph-overview/) struct with a closure inside it. A
-GPU buffer is a move-only struct passed around as a `Ref<T>`. A component is a plain struct the
-[registry](../../scene-and-ecs/component-registry/) knows how to serialize. The data is visible,
-the control flow is explicit, and there is no vtable to trace when something goes wrong.
+Graphics code is where engines usually grow the deepest class hierarchies — a `Resource` base, a
+`RenderPass` base, a `Material` base. Saffron has none. A GPU buffer is a plain struct
+(`Buffer`) whose `Drop` frees its Vulkan handle; a render pass is data the [render
+graph](../../frame-and-render-graph/render-graph-overview/) walks; a component is a plain struct
+the [registry](../../scene-and-ecs/component-registry/) knows how to serialize. The data is
+visible, the control flow is explicit, and the borrow checker — not a hand-audited teardown
+order — proves the lifetimes.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Full rules | `CONVENTIONS.md` | naming, allowed/prohibited, return-type style |
-| Itable pattern | `app.cppm` | `Layer` (struct of closures), `attachLayer` |
-| RAII GPU wrappers | `renderer_types.cppm` | `Pipeline`, `Image`, `Buffer`, `GpuMesh`, `GpuTexture` |
+| The lint gate | `engine/Cargo.toml` | `[workspace.lints.rust]` (`unsafe_code = "deny"`), `[workspace.lints.clippy]` (`all = "warn"`) |
+| The lifecycle trait | `engine/crates/app/src/lib.rs` | `Layer`, `attach_layer` |
+| Drop-based GPU wrappers | `engine/crates/rendering/src/resources.rs` | `Buffer`, `Image`, `GpuMesh`, `GpuTexture`, `Pipeline` |
 
 ## Related
 
-- [Error handling](../error-handling/) — the `Result<T>` half of the style
-- [Main loop and run](../../app-lifecycle-and-window/main-loop-and-run/) — the layer itable in action
-- [Meta-layer resources](../../vulkan-foundation/) — the move-only GPU wrappers
+- [Error handling](../error-handling/) — the typed `Result<T>` / `thiserror` half of the style
+- [Ownership](../ownership-and-raii/) — `Drop`, ownership, and `Arc<T>`
+- [Main loop and run](../../app-lifecycle-and-window/main-loop-and-run/) — the `Layer` trait in action

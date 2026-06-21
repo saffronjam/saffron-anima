@@ -5,91 +5,96 @@ weight = 7
 
 # JSON gateway
 
-The JSON gateway is a thin wrapper around nlohmann/json that converts every fallible JSON
-operation into the engine's [error-as-value style](../error-handling/). Scene and project
-files pass through it; engine code never calls the library directly.
+The JSON gateway is a thin layer over [`serde_json`](https://docs.rs/serde_json) that gives the
+engine one parse/dump entry point, a set of lenient typed readers the control-command handlers
+depend on, and the decimal-string-`u64` wire encoding the engine and editor share byte-for-byte.
+Scene and project files and every control message pass through it; engine code reaches `serde_json`
+through this crate.
 
-The wrapper exists because of how nlohmann/json is configured here. The library compiles
-with `JSON_NOEXCEPTION`, which means its own error path is `std::abort()` rather than a
-thrown exception. A parse error, a `.dump()` on invalid UTF-8, or a typed read such as
-`get<T>()` or `at()` on the wrong type kills the process outright. The gateway turns each
-operation that would abort into a `Result` or a checked default, so untrusted JSON cannot
-take down the editor.
+Every fallible operation returns the crate's typed [`Result`](../error-handling/) over a structured
+error — a parse failure, a missing key, and a wrong-type read are three distinct variants, so a
+caller can react to each:
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("invalid JSON: {0}")]
+    Parse(String),
+    #[error("missing key '{0}'")]
+    MissingKey(String),
+    #[error("key '{key}' is not {expected}")]
+    WrongType { key: String, expected: &'static str },
+}
+```
 
 ## Parse and dump
 
-Parsing uses nlohmann's `allow_exceptions = false` overload, which returns a discarded
-value instead of aborting. The gateway maps that discarded value to an `Err`:
+`parse_json` wraps `serde_json::from_str` and maps a parse error to `Error::Parse`. `dump_json`
+serializes a `Value`: a negative indent produces compact output, zero or more pretty-prints with
+that many spaces per level.
 
-```cpp
-auto parseJson(std::string_view text) -> Result<Json>
-{
-    Json value = Json::parse(text, nullptr, false);  // allow_exceptions = false
-    if (value.is_discarded()) { return Err(std::string{ "invalid JSON" }); }
-    return value;
-}
+```rust
+pub fn parse_json(text: &str) -> Result<Value>;
+pub fn dump_json(value: &Value, indent: i32) -> String;
 ```
 
-Serializing is the mirror image. `.dump()` aborts on invalid UTF-8, so `dumpJson` passes
-`error_handler_t::replace`, substituting the replacement character instead of dying. A
-negative indent produces compact output; zero or more pretty-prints with that many spaces.
+`dump_json_sorted` is the asset-format variant: it re-emits every object's keys in
+lexicographically sorted order, recursively. `serde_json` is built workspace-wide with
+`preserve_order` (the control wire needs insertion order = field order), so the byte-frozen asset
+formats — `.smat`, the `.smodel` META chunk — call `dump_json_sorted` instead to keep their stable
+source hash.
 
 ## Typed reads
 
-A typed read asks a value for a type it may not hold, such as a `u64`. The field readers
-locate the key, verify the stored type, and only then extract. A missing key and a wrong
-type each become a descriptive `Err`, never an abort.
+A typed read asks a value for a type it may not hold. Each reader locates the key, checks the stored
+type, and only then extracts; a missing key is `Error::MissingKey`, a wrong type is
+`Error::WrongType`, never a panic.
 
-```cpp
-auto jsonString(const Json& object, std::string_view key) -> Result<std::string>
-{
-    Json::const_iterator it = findField(object, key);
-    if (it == object.end()) { return Err(std::format("missing key '{}'", key)); }
-    if (it->is_string())    { return it->get<std::string>(); }
-    return Err(std::format("key '{}' is not a string", key));
-}
+```rust
+pub fn json_u64(object: &Value, key: &str) -> Result<u64>;
+pub fn json_string(object: &Value, key: &str) -> Result<String>;
+pub fn json_f64(object: &Value, key: &str) -> Result<f64>;
+pub fn json_bool(object: &Value, key: &str) -> Result<bool>;
 ```
 
-`jsonU64` accepts the widest range of inputs: an unsigned number, a non-negative signed
-number, and a decimal string. Ids cross the control wire as strings (see below), and older
-saves stored them as numbers, so accepting both is what lets a project load either way.
+`json_u64` accepts the widest range of inputs: an unsigned number, a non-negative integer, or a
+decimal string whose *entire* content parses. Ids cross the control wire as strings (below), so
+accepting both number and string is what lets a value load either way; a trailing-garbage string
+(`"42x"`) or a negative number is rejected.
 
 ## Ids as strings
 
-A u64 id spans the full 64-bit range, past the 2^53 a JavaScript number holds exactly.
-Emitted as a JSON number, an id larger than that is silently rounded the moment a JS client
-runs the response through `JSON.parse`. `uuidToJson` serializes every id as a decimal JSON
-string, which survives `JSON.parse` losslessly; the reads accept a string or a number, so a
-project saved before this convention still loads. Every id on the control wire and in a
-saved scene or project file — entity ids, asset ids, `Mesh.mesh`, `Material.albedoTexture`,
-`Environment.skyTexture` — goes through it.
+A `u64` id spans the full 64-bit range, past the `2^53` a JavaScript number holds exactly. Emitted
+as a JSON number, an id larger than that is silently rounded the moment a JS client runs the
+response through `JSON.parse`. `uuid_to_json` serializes every id as a decimal JSON *string*, which
+survives `JSON.parse` losslessly. `WireUuid` is the `serde_with` adapter that drives the same
+encoding from a derive — `#[serde_as(as = "WireUuid")]` on a `Uuid` field emits the decimal string
+and accepts a string *or* a number on read. The encoding is defined once here, and the protocol
+crate reuses `WireUuid`, so there is exactly one wire form for every id on the control wire and in a
+saved scene or project file.
 
 ## Value-or-default variant
 
-Optional fields do not want a `Result` at every call site. Each reader therefore has an `Or`
-twin that swallows the error and returns a fallback: `jsonU64Or`, `jsonStringOr`,
-`jsonF32Or`, `jsonBoolOr`. Scene and project loading rely on these. A field absent from an
-older save reads as its default rather than failing the whole load, which is how a
-[project file](../../geometry-and-assets/project-serialization/) stays forward-compatible as
-components gain fields.
+Optional fields do not want a `Result` at every call site. Each strict reader has an `_or` twin that
+swallows the error and returns a fallback: `json_u64_or`, `json_string_or`, `json_f32_or`,
+`json_bool_or` (the last two read the `f64` wire value and narrow / coerce). Scene and project
+loading rely on these: a field absent from a save reads as its default rather than failing the whole
+load, which is how a [project file](../../geometry-and-assets/project-serialization/) stays
+forward-compatible as components gain fields.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Gateway rationale | `json.cppm` | module doc (`JSON_NOEXCEPTION` → abort) |
-| Parse / serialize | `json.cppm` | `parseJson`, `dumpJson` |
-| Id serialization | `json.cppm` | `uuidToJson` |
-| Checked typed reads | `json.cppm` | `jsonU64`, `jsonString`, `jsonF64`, `jsonBool` |
-| Value-or-default reads | `json.cppm` | `jsonU64Or`, `jsonStringOr`, `jsonF32Or`, `jsonBoolOr` |
-
-> [!WARNING]
-> Reach for `Json::get<T>()`, `at()`, or `.dump()` directly and a malformed value aborts
-> the process — `JSON_NOEXCEPTION` has no throw to catch. Always go through the gateway's
-> checked readers; they are the reason bad input fails gracefully instead of crashing.
+| Typed gateway error | `engine/crates/json/src/lib.rs` | `Error`, `Result` |
+| Parse / serialize | `engine/crates/json/src/lib.rs` | `parse_json`, `dump_json`, `dump_json_sorted` |
+| Id wire encoding | `engine/crates/json/src/lib.rs` | `uuid_to_json`, `WireUuid` |
+| Checked typed reads | `engine/crates/json/src/lib.rs` | `json_u64`, `json_string`, `json_f64`, `json_bool` |
+| Value-or-default reads | `engine/crates/json/src/lib.rs` | `json_u64_or`, `json_string_or`, `json_f32_or`, `json_bool_or` |
 
 ## Related
 
-- [Error handling](../error-handling/) — the `Result`/`Err` style the gateway converts into
+- [Error handling](../error-handling/) — the typed `Result` style the readers return
+- [Core primitives](../type-aliases-and-primitives/) — `Uuid`, whose decimal-string wire form `WireUuid` defines
 - [Scene serialization](../../scene-and-ecs/scene-serialization/) — the registry-driven save/load built on these readers
-- [Project serialization](../../geometry-and-assets/project-serialization/) — the unified `project.json`
+- [Project serialization](../../geometry-and-assets/project-serialization/) — the unified project file

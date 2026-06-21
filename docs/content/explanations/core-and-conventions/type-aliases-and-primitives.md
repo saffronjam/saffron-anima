@@ -1,87 +1,84 @@
 +++
-title = 'Type aliases'
+title = 'Core primitives'
 weight = 3
 +++
 
-# Type aliases
+# Core primitives
 
-A type alias gives a familiar type a shorter, clearer name. `Saffron.Core` defines a small
-set of them — fixed-width number names and a few value types — that every other module
-shares.
+`saffron-core` is the root of the crate DAG — it depends on no other Saffron crate, and every
+other crate depends on it. It defines the handful of small value types the whole engine shares: a
+stable identity newtype, a duration, the engine identity strings, the `Ref` ownership alias, and a
+base64 helper for the control wire. Rust's own `u8`…`u64` / `f32` / `f64` are the numeric
+vocabulary, so the only custom primitives here are the ones that carry engine meaning.
 
-The names are short and spelled identically everywhere, so a declaration shows the width or
-intent of its type at a glance. `Saffron.Core` sits at the bottom of the module DAG, which is
-why these primitives live there.
+## Uuid — the stable identity
 
-## Number aliases
+`Uuid` is a stable 64-bit identity, a newtype over `u64`:
 
-The integer and float types take short, Go-like names so a field declaration reads at the
-same width as the type it holds:
+```rust
+pub struct Uuid(pub u64);
 
-```cpp
-using u8  = std::uint8_t;
-using u32 = std::uint32_t;
-using u64 = std::uint64_t;
-using f32 = float;
-using f64 = double;
-// … i8…i64, u16 …
-```
-
-The codebase prefers these to `int`, `unsigned`, `float`, and `size_t`. A vertex count is a
-`u32`, a hash or identity is a `u64`, a shader push constant is an `f32`. The width is part
-of the name, so a struct laid out for the GPU shows its byte layout directly.
-
-## TimeSpan
-
-A duration is a `TimeSpan`: a one-field struct holding seconds, with a free function to read
-it in other units. This is the [Go-flavored](../go-flavored-design/) shape in miniature —
-plain data and a free function that transforms it, rather than a method on the type. The
-frame delta passed to a layer's `onUpdate` is a `TimeSpan`.
-
-```cpp
-struct TimeSpan
-{
-    f32 seconds = 0.0f;
-};
-
-constexpr auto toMilliseconds(TimeSpan span) -> f32 { return span.seconds * 1000.0f; }
-```
-
-## Uuid and newUuid
-
-`Uuid` is a stable 64-bit identity. entt's own `entt::entity` values are not stable across
-runs, since they are reused as entities are created and destroyed, so anything serialized and
-reloaded carries a `Uuid` instead.
-
-```cpp
-auto newUuid() -> Uuid
-{
-    static std::mt19937_64 engine{ std::random_device{}() };
-    static std::uniform_int_distribution<u64> distribution{ 1, std::numeric_limits<u64>::max() };
-    return Uuid{ distribution(engine) };
+impl Uuid {
+    pub fn new() -> Self { /* mint from [1024, u64::MAX] */ }
+    pub fn value(self) -> u64 { self.0 }
 }
 ```
 
-`newUuid` draws from a static Mersenne Twister seeded once from `random_device`. The
-distribution starts at 1, so a fresh `Uuid` is never zero; zero reads as "unset", the
-default member initializer. Catalog assets and saved-scene entities are keyed by `Uuid`,
-which is how a reloaded `project.json` reconnects a `MeshComponent` to the right mesh.
+A `hecs` ECS entity value is not stable across runs — entities are reused as they are created and
+destroyed — so anything serialized and reloaded carries a `Uuid` instead. `Uuid::new` mints from a
+per-thread SplitMix64 generator seeded once from a high-resolution clock; ids below `1024` are
+reserved for built-in / synthetic assets (e.g. the default material), so a minted id never
+collides with a reserved one. Catalog assets and saved-scene entities are keyed by `Uuid`, which is
+how a reloaded project reconnects a mesh component to the right mesh.
+
+> [!NOTE]
+> A `Uuid`'s wire form is a **decimal string**, not a number — ids span the full `u64` range past
+> JavaScript's `2^53` safe integer. The newtype carries no `serde` derive of its own; the encoding
+> lives once in the [JSON gateway](../json-gateway/) (`WireUuid`) and the protocol crate.
+
+## TimeSpan — a duration
+
+A duration is a `TimeSpan`: a one-field struct over seconds, with `const` constructors and a unit
+read. The frame delta passed to a layer's `on_update` is a `TimeSpan`.
+
+```rust
+pub struct TimeSpan {
+    pub seconds: f32,
+}
+
+impl TimeSpan {
+    pub const fn from_seconds(seconds: f32) -> Self { Self { seconds } }
+    pub const fn to_milliseconds(self) -> f32 { self.seconds * 1000.0 }
+}
+```
+
+## Ref — the ownership alias
+
+`Ref<T>` is `Arc<T>`, the shared-read default of the [ownership policy](../ownership-and-raii/). It
+lives in the core crate so every downstream crate names the shared-read shape the same way.
+
+## base64_encode — small blobs on the wire
+
+`base64_encode` renders a byte buffer as standard base64 (RFC 4648), used to carry small binary
+blobs — thumbnail PNGs, say — over the JSON control plane.
+
+## Engine identity
+
+`ENGINE_NAME` (`"Saffron Anima"`) and `ENGINE_VERSION` (`"0.1.0-vulkan"`) are the two identity
+constants the host reports.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Width aliases | `core.cppm` | `u8`…`u64`, `i8`…`i64`, `f32`, `f64` |
-| Duration | `core.cppm` | `TimeSpan`, `toMilliseconds` |
-| Stable identity | `core.cppm` | `Uuid`, `newUuid` |
-| Engine name/version | `core.cppm` | `EngineName`, `EngineVersion` |
-
-> [!NOTE]
-> A default-constructed `Uuid` has `value == 0`, and `newUuid` never returns zero. Treat
-> zero as the unset sentinel — don't compare a fresh `Uuid` against `Uuid{}` expecting a
-> match.
+| Stable identity | `engine/crates/core/src/uuid.rs` | `Uuid`, `Uuid::new`, `Uuid::value` |
+| Duration | `engine/crates/core/src/time.rs` | `TimeSpan`, `from_seconds`, `to_milliseconds` |
+| Ownership alias | `engine/crates/core/src/lib.rs` | `Ref` |
+| Base64 helper | `engine/crates/core/src/base64.rs` | `base64_encode` |
+| Engine identity | `engine/crates/core/src/lib.rs` | `ENGINE_NAME`, `ENGINE_VERSION` |
 
 ## Related
 
-- [Go-flavored design](../go-flavored-design/) — why a duration is a struct plus a free function
-- [Ownership and RAII](../ownership-and-raii/) — `Ref<T>`, the other core alias
+- [Rust house style](../go-flavored-design/) — why a duration is a struct plus methods
+- [Ownership](../ownership-and-raii/) — `Ref<T>`, the shared-read alias
+- [JSON gateway](../json-gateway/) — where `Uuid`'s decimal-string wire form is defined

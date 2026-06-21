@@ -5,77 +5,96 @@ weight = 2
 
 # Error handling
 
-Error handling in the engine is value-based: every operation that can fail returns its
-error as an ordinary return value rather than throwing. There are no exceptions and no
-error base class. The failure path stays visible in normal control flow instead of
-drifting upward invisibly.
+Error handling in the engine is value-based: every operation that can fail returns a typed
+`Result`, propagated with the `?` operator, never a panic on the expected-failure path. The
+failure stays visible in ordinary control flow instead of unwinding invisibly.
 
-The whole scheme is two declarations in `Saffron.Core`:
+Each library crate owns its own error type. `saffron-core` defines the root:
 
-```cpp
-template <typename T>
-using Result = std::expected<T, std::string>;
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("{0}")]
+    Message(String),
+}
 
-inline auto Err(std::string message) -> std::unexpected<std::string>
-{
-    return std::unexpected<std::string>(std::move(message));
+pub type Result<T> = core::result::Result<T, Error>;
+```
+
+The error is a [`thiserror`](https://docs.rs/thiserror) `enum`: each variant carries its own
+fields and renders its own `Display` message through the `#[error("…")]` attribute. Success is
+the value; failure is a variant. There is no string-typed catch-all dressed up as an error —
+where a failure genuinely has structure, the variant carries it.
+
+## A type per crate, composed with `#[from]`
+
+`saffron-core::Error` has almost no fallible functions of its own; its value is that downstream
+crates compose against it. Every library crate exports its own `Error` enum and a `Result<T>`
+alias bound to it. A crate that calls into another lifts the callee's error into its own with a
+`#[from]` variant, so `?` converts as it propagates:
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Renderer(#[from] saffron_rendering::Error),
+    // … this crate's own variants …
 }
 ```
 
-`Result<T>` is exactly `std::expected<T, std::string>`. Success is the value itself;
-failure is `Err("message")`. There is no `Ok(...)` wrapper: a function returns the value
-directly, or `{}` for `Result<void>`.
+`saffron-json` shows the structured-variant style: a parse failure, a missing key, and a
+wrong-type read are three distinct variants, each with the fields a caller needs to react.
 
-## How it works
-
-A `Result` is checked at the call site and never propagated unchecked. The pattern reads
-the same everywhere:
-
-```cpp
-auto windowResult = newWindow(config.window);
-if (!windowResult)
-{
-    logError(std::format("failed to create window: {}", windowResult.error()));
-    return 1;
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("invalid JSON: {0}")]
+    Parse(String),
+    #[error("missing key '{0}'")]
+    MissingKey(String),
+    #[error("key '{key}' is not {expected}")]
+    WrongType { key: String, expected: &'static str },
 }
 ```
 
-`run` shows this shape at scale: the window, renderer, and UI are each created and checked
-in turn, and each failure cleans up what came before it and bails. Without exceptions, that
-cleanup is ordinary code, not a stack-unwinding side effect.
+## How it reads at the call site
 
-## A string, not an enum
+A `Result` is handled at the call site: propagate it with `?`, or match when the function reacts
+differently to different failures. Without unwinding, cleanup is ordinary `Drop` — a value
+dropped on an early return frees itself, so the failure path needs no manual teardown.
 
-The error type is a plain `std::string`. This trades programmatic matching for a readable
-message at the point of failure. That is the right trade for an engine where most errors
-are "this Vulkan call returned this result" or "this file failed to parse". Callers that
-react differently to different failures branch on specific calls rather than inspecting an
-error code.
+```rust
+let value = json::parse_json(text)?;       // propagate
+let id = json::json_u64(&value, "id")?;    // typed, structured error on miss/mistype
+```
+
+The app's `run` shows this at scale: the window, renderer, and frame host are each built and the
+error propagated in turn; a failure short-circuits and every already-built resource drops on the
+way out.
 
 ## The third-party boundary
 
-The no-exceptions rule extends to libraries that would otherwise throw. They are driven
-through their no-throw surfaces and converted to `Result` at the boundary: Vulkan-Hpp
-compiles with `VULKAN_HPP_NO_EXCEPTIONS` so calls return a result code; nlohmann/json
-compiles with `JSON_NOEXCEPTION`; cgltf and tinyobjloader expose C-style return values
-that map cleanly onto `Result`.
+The no-panic-on-failure rule extends to the libraries the engine wraps. They are driven through
+their `Result`-returning surfaces and lifted into the wrapping crate's error at the boundary:
+`serde_json` parse/serialize errors become `json::Error::Parse`; `ash` Vulkan calls return
+`VkResult`, checked and converted in `saffron-rendering`; `vk-mem` allocation failures convert
+the same way. The `?` operator carries each across the seam.
 
-> [!WARNING]
-> `JSON_NOEXCEPTION` turns what would be a thrown exception into a call to `std::abort`. A
-> `Result`-returning JSON path still has to avoid the operations that would throw — it
-> parses defensively and validates before indexing. The no-throw build does not make bad
-> access safe, it makes it fatal.
+> [!NOTE]
+> Panics are reserved for invariants the type system can't express — never for a foreseeable
+> failure like a bad file or a failed Vulkan call. Those are `Result`. The workspace keeps
+> `panic = "unwind"` so the FFI/shm seams unwind cleanly and `#[should_panic]` tests work.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The types | `core.cppm` | `Result`, `Err` |
-| The rule | `CONVENTIONS.md` | "Return types" and "Prohibited" |
-| A real chain of checks | `app.cppm` | `run` — window → renderer → UI |
-| The JSON gateway | `json.cppm` | `JSON_NOEXCEPTION` parse/access helpers |
+| The root error + alias | `engine/crates/core/src/error.rs` | `Error`, `Result` |
+| Structured-variant errors | `engine/crates/json/src/lib.rs` | `Error::Parse`, `Error::MissingKey`, `Error::WrongType` |
+| Composing with `#[from]` | `engine/crates/app/src/lib.rs` | `Error::Renderer(#[from] …)` |
+| A real chain of checks | `engine/crates/app/src/lib.rs` | `run` — window → renderer → frame host |
 
 ## Related
 
-- [Go-flavored design](../go-flavored-design/) — the style this is part of
-- [Vulkan foundation](../../vulkan-foundation/) — where Vulkan results become `Result`
+- [Rust house style](../go-flavored-design/) — the style this is part of
+- [JSON gateway](../json-gateway/) — typed reads return these errors
