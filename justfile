@@ -1,21 +1,18 @@
 # Saffron Anima task runner — the Rust front door.
 #
-# Replaces the C++ Makefile's build commands with cargo/xtask/bun, while carrying its
-# hard-won environment lore verbatim: the NVIDIA Vulkan ICD knob, the WEBVIEW_HW webview
-# render path, the headless-weston run env, and the host-runnable `sa`. The toolbox-bound
+# Drives the build/test/run flow through cargo, the xtask helper, and bun. The toolbox-bound
 # recipes AUTO-ENTER the `saffron-build` container when run from the host (so `just lint`
 # works the same from a host shell or inside the toolbox); recipes that don't need the
 # toolchain (help/run-docs) run on the host directly.
 #
-# The Rust workspace lives in `engine/`; this file is at the repo root. The C++ reference
-# build keeps using the Makefile/CMake until cutover deletes both `engine-old/` and the
-# Makefile — they build different binaries, so this is the parallel-binary strategy, not a
-# duplicate path for one artifact.
+# Set `SAFFRON_NO_TOOLBOX=true` to skip that auto-enter and run a recipe directly on the host
+# (`SAFFRON_NO_TOOLBOX=true just <recipe>`) — this trusts the host to provide cargo plus the
+# Vulkan/SDL/Slang toolchain itself.
 #
 # Env vars are set INSIDE each recipe, never as a host-side prefix — a host-side
-# `ENV=… just …` would no-op across the `toolbox run` boundary (the trap the Makefile
-# documents). Each toolbox recipe is a single bash script that re-execs `just` inside the
-# container when /run/.toolboxenv is absent (host invocation) and runs directly otherwise.
+# `ENV=… just …` would no-op across the `toolbox run` boundary. Each toolbox recipe is a
+# single bash script that re-execs `just` inside the container when /run/.toolboxenv is
+# absent (host invocation) and runs directly otherwise.
 
 set shell := ["bash", "-uc"]
 
@@ -25,17 +22,13 @@ engine := repo / "engine"
 editor := repo / "editor"
 docs := repo / "docs"
 
-# The toolbox + host bun (added to PATH on re-entry, mirroring the Makefile).
+# The toolbox + host bun (added to PATH on re-entry).
 toolbox := "saffron-build"
 bun_bin := "/var/home/saffronjam/.bun/bin"
 
-# Parallel binary contract: the editor + e2e spawn whatever SAFFRON_ANIMA_BIN resolves to.
-# Until cutover it points at the still-shipping C++ host; the binary flip (14-migration)
-# repoints it at the Rust host with no editor/test source change.
-cpp_engine_bin := repo / "build/debug/bin/SaffronAnima"
-
-# The Rust present-only host binary produced by `cargo build` (saffron-host crate).
-rust_engine_bin := engine / "target/debug/saffron-host"
+# The present-only host binary produced by `cargo build` (saffron-host crate). The editor + e2e
+# spawn whatever SAFFRON_ANIMA_BIN resolves to; the recipes below point it here.
+engine_bin := engine / "target/debug/saffron-host"
 
 # Prelude prepended to every toolbox-bound recipe: if not already inside the toolbox,
 # re-exec the same recipe in the saffron-build container, then exit. Either way — re-exec
@@ -43,7 +36,7 @@ rust_engine_bin := engine / "target/debug/saffron-host"
 # work both via `just <recipe>` on the host AND `toolbox run … bash -lc 'just <recipe>'`
 # (the latter enters the toolbox first, so the re-exec branch is skipped).
 reenter := '''
-    if [ ! -f /run/.toolboxenv ]; then
+    if [ ! -f /run/.toolboxenv ] && [ -z "${SAFFRON_NO_TOOLBOX:-}" ]; then
       command -v toolbox >/dev/null || { echo "toolbox not found — install it, or run inside the saffron-build container" >&2; exit 1; }
       exec toolbox run -c saffron-build bash -lc 'export PATH="''' + bun_bin + ''':$PATH"; exec just --justfile "''' + justfile() + '''" "$@"' _ "$RECIPE" "$@"
     fi
@@ -60,7 +53,7 @@ nvidia_icd := '''
 '''
 
 # Resolve a default content project for the editor-less `run-engine` so the viewport shows a
-# scene (the C++ host opened the last/default project, not an empty one). Points the engine at
+# scene rather than an empty project. Points the engine at
 # the repo-root appdata (the editor's project store) and picks the most-recently-opened project
 # that has mesh entities; if none qualifies it leaves SAFFRON_PROJECT unset and the engine's own
 # resolution applies. A SAFFRON_PROJECT already in the environment always wins (manual override).
@@ -168,9 +161,12 @@ run:
     #!/usr/bin/env bash
     set -euo pipefail
     RECIPE=run; {{reenter}}
+    cd "{{engine}}"
+    cargo build --bin saffron-host
+    cargo run -p xtask -- shaders
     {{nvidia_icd}}
     export SAFFRON_WEBVIEW_HW=1
-    export SAFFRON_ANIMA_BIN="{{cpp_engine_bin}}"
+    export SAFFRON_ANIMA_BIN="{{engine_bin}}"
     cd "{{editor}}" && bun run tauri dev
 
 # like `run`, but with the editor's developer mode pre-enabled
@@ -178,9 +174,12 @@ run-debug:
     #!/usr/bin/env bash
     set -euo pipefail
     RECIPE=run-debug; {{reenter}}
+    cd "{{engine}}"
+    cargo build --bin saffron-host
+    cargo run -p xtask -- shaders
     {{nvidia_icd}}
     export SAFFRON_WEBVIEW_HW=1 VITE_SAFFRON_DEV_MODE=1
-    export SAFFRON_ANIMA_BIN="{{cpp_engine_bin}}"
+    export SAFFRON_ANIMA_BIN="{{engine_bin}}"
     cd "{{editor}}" && bun run tauri dev
 
 # run the editor on the llvmpipe software GPU (control case; no NVIDIA ICD)
@@ -188,25 +187,13 @@ run-software:
     #!/usr/bin/env bash
     set -euo pipefail
     RECIPE=run-software; {{reenter}}
-    export SAFFRON_ANIMA_BIN="{{cpp_engine_bin}}"
-    cd "{{editor}}" && bun run tauri dev
-
-# start the Tauri editor against the RUST host (pre-cutover validation: SAFFRON_ANIMA_BIN -> rust,
-# NVIDIA ICD on). NOT the cutover (#107) — `run` still defaults to the C++ host; this is the explicit
-# way to drive the Rust engine in the live editor on the real GPU before flipping the default.
-run-rust:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    RECIPE=run-rust; {{reenter}}
     cd "{{engine}}"
     cargo build --bin saffron-host
     cargo run -p xtask -- shaders
-    {{nvidia_icd}}
-    export SAFFRON_WEBVIEW_HW=1
-    export SAFFRON_ANIMA_BIN="{{rust_engine_bin}}"
+    export SAFFRON_ANIMA_BIN="{{engine_bin}}"
     cd "{{editor}}" && bun run tauri dev
 
-# start only the Rust present-only host (loads a default content project so it shows a scene)
+# start only the present-only host (loads a default content project so it shows a scene)
 run-engine:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -216,9 +203,9 @@ run-engine:
     cargo run -p xtask -- shaders
     {{nvidia_icd}}
     {{default_project}}
-    exec "{{rust_engine_bin}}"
+    exec "{{engine_bin}}"
 
-# the Rust present-only host forced onto llvmpipe (no NVIDIA ICD)
+# the present-only host forced onto llvmpipe (no NVIDIA ICD)
 run-engine-software:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -227,9 +214,10 @@ run-engine-software:
     cargo build --bin saffron-host
     cargo run -p xtask -- shaders
     {{default_project}}
-    exec "{{rust_engine_bin}}"
+    exec "{{engine_bin}}"
 
-# boot the Rust host under a private headless weston, bounded frames (no display attached)
+# boot the host headless for a bounded number of frames (the native-viewport driver the editor
+# spawns: renders offscreen, no window or compositor needed)
 run-engine-headless frames="5":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -237,16 +225,10 @@ run-engine-headless frames="5":
     cd "{{engine}}"
     cargo build --bin saffron-host
     cargo run -p xtask -- shaders
-    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-    sock="wl-just-$$"
-    weston --backend=headless --width=1280 --height=720 --socket="$sock" --idle-time=0 &
-    wl_pid=$!
-    trap 'kill "$wl_pid" 2>/dev/null || true' EXIT
-    sleep 2
-    export WAYLAND_DISPLAY="$sock" SDL_VIDEODRIVER=wayland
-    SAFFRON_EXIT_AFTER_FRAMES={{frames}} SAFFRON_CONTROL_SOCK="/tmp/sa-just-$$.sock" "{{rust_engine_bin}}"
+    export SAFFRON_EDITOR_NATIVE_VIEWPORT=1
+    SAFFRON_EXIT_AFTER_FRAMES={{frames}} SAFFRON_CONTROL_SOCK="/tmp/sa-just-$$.sock" "{{engine_bin}}"
 
-# the host-runnable control CLI; `just sa ping`, `just sa help` (no engine dep, no libc++)
+# the host-runnable control CLI; `just sa ping`, `just sa help` (no engine dep)
 sa *args:
     #!/usr/bin/env bash
     set -euo pipefail
