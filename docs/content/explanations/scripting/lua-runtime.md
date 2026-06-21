@@ -5,43 +5,48 @@ weight = 1
 
 # Lua runtime
 
-The engine embeds Lua 5.5 so entities can run gameplay logic without recompiling C++. All
-knowledge of Lua lives in one module, `Saffron.Script`; nothing else imports the Lua headers or
-the LuaBridge3 binding layer, so the rest of the engine stays free of VM concerns and the binding
-library could be swapped without touching callers.
+The engine embeds a Luau VM so entities can run gameplay logic without rebuilding the engine. All
+knowledge of the VM lives in one crate, `saffron-script`; nothing else links `mlua` or holds a VM
+handle, so the rest of the engine stays free of VM concerns and the host sees only a small surface
+of plain types and `Result`-returning functions.
 
 ## How it works
 
-A `ScriptVm` owns one `lua_State` and closes it in its destructor — the same move-only RAII shape
-the rendering wrappers use. `newScriptVm` opens a deliberately minimal library set
-(base, coroutine, string, math, table, utf8) and withholds `io`, `os`, `debug`, and `package`,
-so a script cannot touch the filesystem or load arbitrary native code.
+A `ScriptVm` owns one `mlua::Lua` and frees it on `Drop`. It is `!Send` and single-thread-owned by
+value, matching the host's ownership model. `ScriptVm::new` loads a deliberately minimal standard
+library (base, coroutine, string, math, table, utf8) and withholds `io`, `os`, `debug`, and
+`package` — they read as `nil` in script — so a chunk cannot touch the filesystem or load native
+code. The VM then calls Luau's `sandbox(true)`, which freezes the base tables and makes execution
+deterministic.
 
-Lua is compiled as C, which means its error model is `setjmp`/`longjmp` rather than C++
-exceptions. No Lua error is allowed to unwind through C++ frames: every chunk runs under
-`lua_pcall` with a message handler that appends a `luaL_traceback`, and a failure surfaces as an
-`Err` carrying the full traceback string. This matches the engine-wide errors-as-values rule —
-a broken script is a logged, inspectable failure, never a crash.
+Two budgets bound a runaway script so it can never hang the frame. An interrupt callback counts the
+cycles a single scripted call takes and aborts it past `DEFAULT_INSTRUCTION_BUDGET`, and a memory
+ceiling (`DEFAULT_MEMORY_LIMIT`) aborts a chunk that allocates without bound. The per-call counter
+resets before every run, so one heavy handler cannot starve the next.
 
-Lua 5.5 and LuaBridge3 are vendored through CMake (CMake's bundled `FindLua` predates 5.5). The
-Lua core and stdlib compile into one static C library; LuaBridge3 is a header-only C++ layer over
-the C API used to register engine functions, starting with a `sa.log` that routes into the engine
-log.
+Errors are values, never crashes. `run_string` loads and calls a chunk and maps any failure to the
+crate's `Error` enum: a syntax error becomes `Error::Load`, a raised or faulting runtime error
+becomes `Error::Runtime` with the Luau stack traceback already in the message, and a budget or
+memory abort becomes `Error::Budget`. `mlua` surfaces a traceback on every Lua error, so a broken
+script is a logged, inspectable failure that the play loop can pause on.
+
+Because the whole crate confines its `mlua` unsafety internally, `saffron-script` builds under
+`#![deny(unsafe_code)]`.
 
 > [!NOTE]
-> This page covers the runtime layer only. The per-entity `ScriptComponent`, the `self.entity`
-> API surface, and script-declared editable fields are later phases of `plans/scripting-mvp`.
+> This page covers the VM layer only. The per-entity `Script` component, the `self.entity` API
+> surface, and script-declared editable fields live on the sibling pages.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| VM ownership and lifecycle | `script.cppm` | `ScriptVm`, `newScriptVm` |
-| Running chunks, errors → `Result` | `script.cppm` | `runString` |
-| Spike self-check | `script.cppm` | `runScriptSelfTest` |
-| Vendored Lua 5.5 + LuaBridge3 | `Dependencies.cmake` | `lua_static`, `LuaBridge` |
+| VM ownership, sandbox, budgets | `script/src/vm.rs` | `ScriptVm`, `DEFAULT_INSTRUCTION_BUDGET`, `DEFAULT_MEMORY_LIMIT` |
+| Running chunks, errors → `Result` | `script/src/vm.rs` | `ScriptVm::run_string`, `map_lua_error` |
+| The typed error and `Result` alias | `script/src/error.rs` | `Error`, `Result` |
+| Crate surface and module map | `script/src/lib.rs` | `ScriptVm`, `ScriptHost`, `BINDINGS` |
 
 ## Related
 
-- [Error handling](../../core-and-conventions/error-handling/) — the `Result<T>` idiom script errors convert into
-- [Module DAG](../../architecture-and-conventions/) — where `Saffron.Script` sits and why only the Host may import it
+- [Error handling](../../core-and-conventions/error-handling/) — the per-crate `Error` + `Result<T>` idiom script errors convert into
+- [Architecture overview](../../architecture-and-conventions/) — where `saffron-script` sits and why only the host drives it

@@ -5,19 +5,19 @@ weight = 2
 
 # Script components and the play runtime
 
-An entity runs gameplay logic by carrying a `ScriptComponent`: an ordered list of script slots,
+An entity runs gameplay logic by carrying a `Script` component: an ordered list of script slots,
 each naming a `.lua` file under the project's `src/`. The component is plain data — a path and a
 JSON overrides blob per slot — so it serializes like any other component and rides into the play
-duplicate for free. All Lua execution lives in the `Saffron.Script` runtime, which exists only
-while play is active.
+duplicate for free. All Luau execution lives in the `saffron-script` runtime (`ScriptHost`), which
+exists only while play is active.
 
 ## How it works
 
 A script file returns a class table with an `on_update(self, dt)` method (`on_create`,
-`on_destroy`, and the physics/message callbacks below run if present). On Play, the runtime creates
-one VM for the session and, for every slot of every scripted entity, instantiates
-`self = setmetatable({ entity = <handle> }, { __index = Class })` — classes are loaded once per
-path and shared. Methods are authored colon-style (`function Class:on_update(dt)`, with `self`
+`on_destroy`, and the physics/message callbacks below run if present). On Play, `start_scripts`
+creates one VM for the session and, for every slot of every scripted entity, `build_instance`
+instantiates `self = setmetatable({ entity = <handle> }, { __index = Class })` — classes are loaded
+once per path and shared. Methods are authored colon-style (`function Class:on_update(dt)`, with `self`
 implicit); the dot form (`function Class.on_update(self, dt)`) binds the identical field, so the two
 are interchangeable and the scaffold uses colons. Within an entity, instances run in slot order
 every tick; across entities the order is unspecified. `self.entity` is an opaque handle (the full
@@ -28,27 +28,28 @@ Beyond `on_update`, a class may define `on_create()`, `on_destroy()`, the physic
 `on_trigger_enter(other)` / `on_trigger_exit(other)` / `on_contact(other, point, normal)`, and any
 number of message handlers it names itself (see [messaging](#messaging) below).
 
-The lifecycle rides the existing play seams. `enterPlay` duplicates the authored scene by serde,
-so scripts always mutate the throwaway duplicate and Stop discards everything; the Host subscribes
-to `onPlayStateChanged` to create the VM on Edit→Playing and destroy it on →Edit (pause keeps it),
-and points the context's `simTick` hook at the runtime so `tickPlay` drives `on_update` with the
-clamped, fixed-step-aware dt.
+The lifecycle rides the existing play seams. The play edge duplicates the authored scene by a JSON
+round-trip, so scripts always mutate the throwaway duplicate and Stop discards everything; the host
+subscribes to `SceneEditContext::on_play_state_changed` to `start_scripts` on Edit→Playing and
+`stop_scripts` on →Edit (pause keeps the VM), and installs a `sim_tick` closure that drives
+`tick_scripts` with the clamped, fixed-step-aware dt.
 
-Errors are contained per instance: every callback runs under `lua_pcall` with a traceback handler.
-The first failing instance halts that tick, the error lands in a bounded ring on the edit context
-(drained over the control plane), and play flips to Paused one frame later — never from inside the
-tick, and never by crashing the host. A slot whose file is missing or fails to load is a logged
-skip. The VM survives an error, so Resume retries with state intact.
+Errors are contained per instance: every callback runs through `mlua` with the budget armed and the
+Luau traceback captured. The first failing instance halts that tick, the error lands as a
+`ScriptRunError` in a bounded ring on the edit context (`push_script_error`, drained over the
+control plane), and play flips to Paused one frame later — never from inside the tick, and never by
+crashing the host. A slot whose file is missing or fails to load is a logged skip. The VM survives
+an error, so Resume retries with state intact.
 
 ```mermaid
 flowchart LR
-    A[Edit] -->|enterPlay: duplicate scene| B[Playing]
-    B -->|onPlayStateChanged| C[startScripts: VM + instances]
-    B -->|tickPlay -> simTick| D["on_update(self, dt) per slot"]
+    A[Edit] -->|play edge: duplicate scene| B[Playing]
+    B -->|on_play_state_changed| C[start_scripts: VM + instances]
+    B -->|sim_tick -> tick_scripts| D["on_update(self, dt) per slot"]
     D -->|error: ring + pause| E[Paused]
     E -->|resume| B
-    B -->|stopPlay: discard duplicate| A
-    A -->|onPlayStateChanged| F[stopScripts: VM destroyed]
+    B -->|stop: discard duplicate| A
+    A -->|on_play_state_changed| F[stop_scripts: VM destroyed]
 ```
 
 ## Value types
@@ -221,20 +222,24 @@ on its own, so those annotations are what light them up.
 
 | What | File | Symbols |
 |---|---|---|
-| The data-only component | `scene.cppm` | `ScriptComponent`, `ScriptSlot` |
-| The per-entity runtime | `script_runtime.cpp` | `startScripts`, `tickScripts`, `stopScripts`, `ScriptHost` |
-| The entity facade + value types | `script_runtime.cpp` | `ScriptEntity`, `registerScriptValueTypes` (`sa.Vec3`) |
-| Deferred structural ops + messaging + scheduler | `script_runtime.cpp` | `flushStructuralOps`, `dispatchMessages`, `advanceScheduler`, `SchedulerPrelude` |
-| Input edges + the cross-module bridges | `scene.cppm`; `script.cppm` | `ScriptInputState`, `deriveScriptInputEdges`; `ScriptHost::sphereCast`/`applyImpulse`/`setRagdollEnabled` |
-| The bridge wiring (Host imports Physics + Script) | `host.cppm` | the `state->script.*` lambdas over `Saffron.Physics` |
-| The tick + lifecycle seams | `scene_edit_context.cppm` | `SceneEditContext::simTick`, `onPlayStateChanged`, `pushScriptError` |
-| Status, input, and error drain commands | `control_commands_scene.cpp` | `get-script-status`, `script-input`, `drain-script-errors` |
-| The Inspector slot UI | `ScriptSlots.tsx` | `ScriptSlots` |
-| The src/ scaffold + starter script | `assets.cppm` | `ensureScriptSrc`, `StarterScript` |
-| The `library/sa.lua` + `.luarc.json` scaffold | `assets.cppm` | `ensureScriptLibrary`, `SaLuaDefs`, `LuarcJson` |
+| The data-only component | `scene/src/component.rs` | `Script`, `ScriptSlot` |
+| The per-session runtime | `script/src/runtime.rs` | `ScriptHost`, `start_scripts`, `tick_scripts`, `stop_scripts`, `build_instance` |
+| The entity facade | `script/src/entity.rs` | `EntityHandle` (the `sa.Entity` `UserData` impl) |
+| The `sa.Vec3` value type | `script/src/value.rs` | `SaVec3`, `vec3`, `lerp`, `look_at` |
+| The declarative `sa.*` binding table | `script/src/bindings.rs` | `BINDINGS`, `register_no_scene_globals`, `register_scene_globals`, `register_value_types` |
+| Deferred structural ops + messaging + scheduler | `script/src/runtime.rs`; `script/src/scheduler.rs` | `flush_structural_ops`, `ScriptHost::dispatch_messages`, `ScriptHost::advance_scheduler`; `scheduler::install`, `SCHEDULER_PRELUDE` |
+| The session guard (live-scene invariant) | `script/src/session.rs` | `enter_session`, `ScopedSession`, `with_scene`, `queue_message`, `defer_destroy` |
+| Input edges (raw → derived) | `scene/src/script_input.rs` | `ScriptInputState`, `derive_script_input_edges` |
+| The physics/log bridge | `script/src/bridge.rs`; `host/src/script_bridge.rs` | `ScriptHostBridge`, `NoopBridge`; `HostScriptBridge` |
+| Host play-edge wiring | `host/src/layer.rs` | `start_scripts`/`tick_scripts`/`stop_scripts` calls, the `sim_tick` closure, `install_bridge` |
+| The tick + lifecycle seams | `sceneedit/src/context.rs`; `sceneedit/src/play.rs` | `SceneEditContext::sim_tick`, `on_play_state_changed`, `push_script_error` |
+| Status, input, and error drain commands | `control/src/commands_scene.rs` | `get-script-status`, `script-input`, `drain-script-errors` |
+| The Inspector slot UI | `editor/src/components/ScriptSlots.tsx` | `ScriptSlots` |
+| The src/ scaffold + starter script | `assets/src/project.rs` | `ensure_script_src`, `STARTER_SCRIPT` |
+| The `library/sa.lua` + `.luarc.json` scaffold | `assets/src/project.rs` | `ensure_script_library`, `LUARC_JSON` |
 | Generated `sa` Luau defs (API + per-component) | `xtask gen-protocol` → `schemas/control/sa.generated.luau` | `emit_api_defs`, `emit_component_defs`, `emit_defs` (from the `BINDINGS` table) |
-| New-script boilerplate (`create-script`) | `assets.cppm`; `control_commands_asset.cpp` | `createProjectScript` |
-| Error toasts during play | `scriptErrorToasts.ts` | `routeScriptErrorToasts` |
+| New-script boilerplate (`create-script`) | `assets/src/project.rs`; `control/src/commands_asset.rs` | `create_project_script` |
+| Error toasts during play | `editor/src/lib/scriptErrorToasts.ts` | `routeScriptErrorToasts` |
 | End-to-end coverage | `tests/e2e/script.test.ts` | component write / vectors / spawn-reparent-destroy / messaging / input edges / physics bindings |
 
 ## Related
