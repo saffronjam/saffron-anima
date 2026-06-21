@@ -4,17 +4,15 @@
 //! foot-IK (get/set).
 //!
 //! `get/set-debug-overlays` sit in this block per the frozen manifest order (between
-//! `set-skeleton-overlay` and `set-skeleton-highlight`); the C++ registers them in the scene
-//! file, but the manifest interleaves them with the skeleton-overlay group, so the port keeps
-//! them with the overlay commands. `set-asset-preview-options` likewise sits here per the
-//! manifest order (between `pick-skeleton-joint` and `get-foot-ik`), though the C++ registers
-//! it in the asset file; it reuses the preview-floor helpers from `commands_asset`.
+//! `set-skeleton-overlay` and `set-skeleton-highlight`), interleaved with the
+//! skeleton-overlay group. `set-asset-preview-options` likewise sits here per the
+//! manifest order (between `pick-skeleton-joint` and `get-foot-ik`); it reuses the
+//! preview-floor helpers from `commands_asset`.
 //!
 //! The handlers drive the per-rig [`AnimationPlayer`] and the overlay render state — a thin
-//! command surface over the animation-player runtime (`04-animation`). The editor selects a
-//! model by its container root; the player / foot-IK / state live on the rig descendant, so
-//! every transport command resolves to [`Scene::animatable_descendant`] first. Mirrors
-//! `registerAnimationCommands` (`control_commands_animation.cpp`).
+//! command surface over the animation-player runtime. The editor selects a model by its
+//! container root; the player / foot-IK / state live on the rig descendant, so every
+//! transport command resolves to [`Scene::animatable_descendant`] first.
 
 use saffron_protocol::{
     AnimationClipDto, AnimationStateParams, AnimationStateResult, AssetPreviewOptionsResult,
@@ -32,7 +30,7 @@ use crate::error::{Error, Result};
 use crate::registry::{CommandRegistry, EngineContext};
 use crate::selector::resolve_entity;
 
-/// The wire spelling of a clip wrap mode (the C++ `wrapName`).
+/// The wire spelling of a clip wrap mode.
 fn wrap_name(wrap: Wrap) -> &'static str {
     match wrap {
         Wrap::Once => "once",
@@ -41,8 +39,7 @@ fn wrap_name(wrap: Wrap) -> &'static str {
     }
 }
 
-/// A clip wrap mode parsed from its wire spelling (the C++ `wrapFromName`); anything but
-/// `once`/`pingpong` is `loop`.
+/// A clip wrap mode parsed from its wire spelling; anything but `once`/`pingpong` is `loop`.
 fn wrap_from_name(name: &str) -> Wrap {
     match name {
         "once" => Wrap::Once,
@@ -52,8 +49,8 @@ fn wrap_from_name(name: &str) -> Wrap {
 }
 
 /// The uuid a uuid-or-name selector names (an unsigned number, or a whole-string parse), and
-/// the name string (empty when the selector is not a string) — the C++ `resolveClip` /
-/// `resolveContainer` selector decode shared by both.
+/// the name string (empty when the selector is not a string), shared by the clip and
+/// container resolvers.
 fn asset_selector_parts(selector: &Value) -> (u64, String) {
     let name = selector.as_str().unwrap_or_default().to_owned();
     let by_id = selector
@@ -64,7 +61,7 @@ fn asset_selector_parts(selector: &Value) -> (u64, String) {
 }
 
 /// Resolves an [`AssetSelector`](saffron_protocol::AssetSelector) to an animation catalog
-/// entry id (the C++ `resolveClip`).
+/// entry id.
 fn resolve_clip(ctx: &EngineContext<'_>, selector: &Value) -> Result<saffron_core::Uuid> {
     let (by_id, name) = asset_selector_parts(selector);
     for entry in &ctx.assets.catalog.entries {
@@ -77,7 +74,7 @@ fn resolve_clip(ctx: &EngineContext<'_>, selector: &Value) -> Result<saffron_cor
 
 /// Resolves an [`AssetSelector`](saffron_protocol::AssetSelector) to its owning `.smodel`
 /// container id (the model's own id for a model, the container for a sub-asset, `0` for a
-/// standalone) — the C++ `resolveContainer`.
+/// standalone).
 fn resolve_container(ctx: &EngineContext<'_>, selector: &Value) -> Result<saffron_core::Uuid> {
     let (by_id, name) = asset_selector_parts(selector);
     for entry in &ctx.assets.catalog.entries {
@@ -92,7 +89,7 @@ fn resolve_container(ctx: &EngineContext<'_>, selector: &Value) -> Result<saffro
 }
 
 /// Resolves a selector to its rig descendant and ensures it carries an [`AnimationPlayer`],
-/// attaching a default one if absent (the C++ `playerOf`).
+/// attaching a default one if absent.
 fn player_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entity> {
     let entity = resolve_entity(ctx, selector)?;
     let scene = ctx.scene_edit.active_scene();
@@ -103,8 +100,8 @@ fn player_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entity
     Ok(target)
 }
 
-/// The animation state reply for a rig's player (the C++ `stateOf`): the clip + its catalog
-/// name/duration, the playhead, and the bumping `animation_version`.
+/// The animation state reply for a rig's player: the clip + its catalog name/duration, the
+/// playhead, and the bumping `animation_version`.
 fn state_of(ctx: &EngineContext<'_>, player: &AnimationPlayer) -> AnimationStateResult {
     let (clip_name, duration) = ctx
         .assets
@@ -134,7 +131,7 @@ fn state_for(ctx: &mut EngineContext<'_>, target: Entity) -> Result<AnimationSta
     Ok(state_of(ctx, &player))
 }
 
-/// The skeleton-overlay reply built from the live options (the C++ `skeletonOverlayState`).
+/// The skeleton-overlay reply built from the live options.
 fn skeleton_overlay_state(opts: &SkeletonOverlayOptions) -> SkeletonOverlayResult {
     SkeletonOverlayResult {
         show: opts.show,
@@ -144,7 +141,7 @@ fn skeleton_overlay_state(opts: &SkeletonOverlayOptions) -> SkeletonOverlayResul
     }
 }
 
-/// The debug-overlays reply built from the live options (the C++ `debugOverlaysState`).
+/// The debug-overlays reply built from the live options.
 fn debug_overlays_state(opts: &DebugOverlayOptions) -> DebugOverlaysResult {
     DebugOverlaysResult {
         bounds: opts.bounds,
@@ -156,7 +153,7 @@ fn debug_overlays_state(opts: &DebugOverlayOptions) -> DebugOverlaysResult {
 }
 
 /// Resolves a selector to its rig descendant and ensures it carries a [`FootIk`], attaching
-/// a default one if absent (the C++ `footIkOf`).
+/// a default one if absent.
 fn foot_ik_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entity> {
     let entity = resolve_entity(ctx, selector)?;
     let scene = ctx.scene_edit.active_scene();
@@ -167,7 +164,7 @@ fn foot_ik_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entit
     Ok(target)
 }
 
-/// The foot-IK reply built from the component (the C++ `footIkState`).
+/// The foot-IK reply built from the component.
 fn foot_ik_result(scene: &saffron_scene::Scene, target: Entity) -> FootIkResult {
     scene
         .with_component::<FootIk, _>(target, |ik| FootIkResult {

@@ -8,14 +8,12 @@
 //! This is the most `sceneEdit`-coupled domain: the handlers drive the
 //! [`SceneEditContext`] (selection, gizmo state, play machine, the active-scene
 //! resolution) and read the scene world through its component registry. `set-material` /
-//! `add-entity` / `pick` also touch `assets` and the renderer. Mirrors
-//! `registerSceneCommands` (`control_commands_scene.cpp`).
+//! `add-entity` / `pick` also touch `assets` and the renderer.
 //!
-//! The C++ scene file also registers `get/set-debug-overlays` (here in the animation
-//! domain — `commands_animation.rs`), `set-probes` / `recapture-probes` / `list-probes`
-//! (here in the render domain — `commands_render.rs`), and `quit` / `create-script` /
-//! `get-script-schema` (in the asset domain / host). The Rust port groups each command by
-//! its registration file, so those live elsewhere; this file is the remaining 42.
+//! The `get/set-debug-overlays` commands live in the animation domain
+//! (`commands_animation.rs`), `set-probes` / `recapture-probes` / `list-probes` in the
+//! render domain (`commands_render.rs`), and `quit` / `create-script` /
+//! `get-script-schema` in the asset domain / host. This file holds the remaining 42.
 
 use saffron_assets::{engine_asset_path, pick_entity};
 use saffron_geometry::glam::{Mat4, Vec2, Vec3 as GlamVec3, Vec4 as GlamVec4};
@@ -48,12 +46,12 @@ use crate::error::Error;
 use crate::registry::{CommandRegistry, EngineContext};
 use crate::selector::{entity_ref_dto, entity_uuid, fit_collider, resolve_entity};
 
-/// Converts a wire `Vec3` to glam (the C++ `toGlm`).
+/// Converts a wire `Vec3` to glam.
 fn to_glam3(v: Vec3) -> GlamVec3 {
     GlamVec3::new(v.x, v.y, v.z)
 }
 
-/// Converts a glam vector to the wire `Vec3` (the C++ `fromGlm`).
+/// Converts a glam vector to the wire `Vec3`.
 fn from_glam3(v: GlamVec3) -> Vec3 {
     Vec3 {
         x: v.x,
@@ -62,17 +60,17 @@ fn from_glam3(v: GlamVec3) -> Vec3 {
     }
 }
 
-/// A wire `Vec3` as its `{x,y,z}` JSON object (the C++ `vec3Json`).
+/// A wire `Vec3` as its `{x,y,z}` JSON object.
 fn vec3_json(v: &Vec3) -> Value {
     json!({ "x": v.x, "y": v.y, "z": v.z })
 }
 
-/// A wire `Vec4` as its `{x,y,z,w}` JSON object (the C++ `vec4Json`).
+/// A wire `Vec4` as its `{x,y,z,w}` JSON object.
 fn vec4_json(v: &Vec4) -> Value {
     json!({ "x": v.x, "y": v.y, "z": v.z, "w": v.w })
 }
 
-/// The editor fly-camera as its wire DTO (the C++ `cameraDto`).
+/// The editor fly-camera as its wire DTO.
 fn camera_dto(camera: &SceneEditCamera) -> EditorCamera {
     EditorCamera {
         position: from_glam3(camera.position),
@@ -86,14 +84,14 @@ fn camera_dto(camera: &SceneEditCamera) -> EditorCamera {
     }
 }
 
-/// The active scene's environment as its wire DTO (the C++ `environmentDto`).
+/// The active scene's environment as its wire DTO.
 fn environment_dto(ctx: &mut EngineContext<'_>) -> EnvironmentDto {
     EnvironmentDto {
         value: environment_to_json(&ctx.scene_edit.active_scene().environment),
     }
 }
 
-/// Maps the backend-neutral [`GizmoOp`] to its wire spelling (the C++ `gizmoOpDto`).
+/// Maps the backend-neutral [`GizmoOp`] to its wire spelling.
 fn gizmo_op_dto(op: GizmoOp) -> GizmoOpDto {
     match op {
         GizmoOp::Rotate => GizmoOpDto::Rotate,
@@ -102,7 +100,7 @@ fn gizmo_op_dto(op: GizmoOp) -> GizmoOpDto {
     }
 }
 
-/// Maps a wire op spelling to the backend-neutral [`GizmoOp`] (the C++ `gizmoOpFromDto`).
+/// Maps a wire op spelling to the backend-neutral [`GizmoOp`].
 fn gizmo_op_from_dto(op: GizmoOpDto) -> GizmoOp {
     match op {
         GizmoOpDto::Rotate => GizmoOp::Rotate,
@@ -111,7 +109,7 @@ fn gizmo_op_from_dto(op: GizmoOpDto) -> GizmoOp {
     }
 }
 
-/// Maps the backend-neutral [`GizmoSpace`] to its wire spelling (the C++ `gizmoSpaceDto`).
+/// Maps the backend-neutral [`GizmoSpace`] to its wire spelling.
 fn gizmo_space_dto(space: GizmoSpace) -> GizmoSpaceDto {
     match space {
         GizmoSpace::Local => GizmoSpaceDto::Local,
@@ -119,7 +117,7 @@ fn gizmo_space_dto(space: GizmoSpace) -> GizmoSpaceDto {
     }
 }
 
-/// Maps a wire space spelling to the backend-neutral [`GizmoSpace`] (the C++ `gizmoSpaceFromDto`).
+/// Maps a wire space spelling to the backend-neutral [`GizmoSpace`].
 fn gizmo_space_from_dto(space: GizmoSpaceDto) -> GizmoSpace {
     match space {
         GizmoSpaceDto::Local => GizmoSpace::Local,
@@ -127,7 +125,7 @@ fn gizmo_space_from_dto(space: GizmoSpaceDto) -> GizmoSpace {
     }
 }
 
-/// The overlay handle's wire name (the C++ `nativeGizmoHandleName`).
+/// The overlay handle's wire name.
 fn native_gizmo_handle_name(handle: NativeGizmoHandle) -> &'static str {
     match handle {
         NativeGizmoHandle::X => "x",
@@ -142,7 +140,7 @@ fn native_gizmo_handle_name(handle: NativeGizmoHandle) -> &'static str {
     }
 }
 
-/// The gizmo op/space/preserve-children as its wire DTO (the C++ `gizmoStateDto`).
+/// The gizmo op/space/preserve-children as its wire DTO.
 fn gizmo_state_dto(editor: &SceneEditContext) -> GizmoState {
     GizmoState {
         op: gizmo_op_dto(editor.gizmo_op),
@@ -151,7 +149,7 @@ fn gizmo_state_dto(editor: &SceneEditContext) -> GizmoState {
     }
 }
 
-/// The uniform play-state reply (the C++ `playStateResultDto`).
+/// The uniform play-state reply.
 fn play_state_result_dto(editor: &SceneEditContext) -> PlayStateResult {
     PlayStateResult {
         state: editor.play_state.name().to_owned(),
@@ -163,13 +161,13 @@ fn play_state_result_dto(editor: &SceneEditContext) -> PlayStateResult {
     }
 }
 
-/// Lowercases a script-input key/button (the C++ `normalizeScriptKey`).
+/// Lowercases a script-input key/button.
 fn normalize_script_key(key: &str) -> String {
     key.to_ascii_lowercase()
 }
 
-/// Whether a parent selector means "the scene root" — absent, `0`, `"0"`, or empty (the
-/// C++ `isRootSelector`): a detach never resolves entity 0.
+/// Whether a parent selector means "the scene root" — absent, `0`, `"0"`, or empty: a
+/// detach never resolves entity 0.
 fn is_root_selector(selector: &Value) -> bool {
     if selector.is_null() {
         return true;
@@ -184,7 +182,7 @@ fn is_root_selector(selector: &Value) -> bool {
 }
 
 /// Server-side billboard hit-test: the nearest meshless light/camera entity whose
-/// screen-space glyph contains `mouse` (viewport pixels) (the C++ `pickBillboard`).
+/// screen-space glyph contains `mouse` (viewport pixels).
 fn pick_billboard(
     ctx: &mut SceneEditContext,
     cam: &CameraView,
@@ -200,9 +198,8 @@ fn pick_billboard(
     let scene = ctx.active_scene();
 
     // Collect candidate entities first (a `for_each` borrows the scene mutably), then
-    // hit-test each — exactly the C++ light/camera billboard set: a meshless entity that
-    // is a point light, or a spot light that is not also a point light, or a camera that
-    // is neither.
+    // hit-test each — the light/camera billboard set: a meshless entity that is a point
+    // light, or a spot light that is not also a point light, or a camera that is neither.
     let mut candidates: Vec<Entity> = Vec::new();
     scene.for_each::<&PointLight, _>(|e, _| candidates.push(e));
     scene.for_each::<&SpotLight, _>(|e, _| candidates.push(e));
@@ -214,8 +211,8 @@ fn pick_billboard(
         if !scene.has_component::<Transform>(e) || scene.has_component::<Mesh>(e) {
             continue;
         }
-        // De-dupe per the C++ guards: a point light is tested via the PointLight pass; a
-        // spot light only when not also a point light; a camera only when neither.
+        // De-dupe: a point light is tested via the PointLight pass; a spot light only
+        // when not also a point light; a camera only when neither.
         let is_point = scene.has_component::<PointLight>(e);
         let is_spot = scene.has_component::<SpotLight>(e);
         let pos = scene.world_translation(e);
@@ -236,9 +233,9 @@ fn pick_billboard(
     hit
 }
 
-/// Registers the scene-domain commands in the frozen registration order (the C++
-/// `registerSceneCommands`, minus the commands the Rust port groups into other files:
-/// the debug-overlay pair (animation), the probe trio (render), and `quit` (asset)).
+/// Registers the scene-domain commands in the frozen registration order, minus the
+/// commands grouped into other files: the debug-overlay pair (animation), the probe
+/// trio (render), and `quit` (asset).
 pub fn register_scene_commands(reg: &mut CommandRegistry) {
     reg.register::<EmptyParams, EntityList>(
         "list-entities",

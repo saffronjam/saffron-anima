@@ -7,8 +7,7 @@
 //! and returns an inactive/empty result so the editor can poll unconditionally;
 //! mutation/query-on-world handlers return the typed "no physics world" error. The
 //! collider/bone-fit + kinematic/ragdoll-config handlers reach `sceneEdit` instead (they
-//! configure authored components and work in Edit). Mirrors `registerPhysicsCommands`
-//! (`control_commands_physics.cpp`).
+//! configure authored components and work in Edit).
 
 use saffron_physics::{ContactKind, MotionType, World};
 use saffron_protocol::{
@@ -26,7 +25,7 @@ use crate::error::Error;
 use crate::registry::CommandRegistry;
 use crate::selector::{entity_uuid, fit_collider, from_vec3, resolve_entity, to_vec3};
 
-/// The wire spelling of a Jolt motion type (the C++ `motionName` lambda).
+/// The wire spelling of a Jolt motion type.
 fn motion_name(motion: MotionType) -> &'static str {
     match motion {
         MotionType::Static => "static",
@@ -35,7 +34,7 @@ fn motion_name(motion: MotionType) -> &'static str {
     }
 }
 
-/// The wire spelling of a collider shape (the C++ `colliderShapeName`).
+/// The wire spelling of a collider shape.
 fn collider_shape_name(shape: Shape) -> &'static str {
     match shape {
         Shape::Box => "box",
@@ -47,7 +46,7 @@ fn collider_shape_name(shape: Shape) -> &'static str {
 }
 
 /// The rig's ragdoll reply: live presence/active/mean-weight from the world, plus the
-/// authored `BonePhysicsComponent` bone count (the C++ `ragdollResultFor`).
+/// authored `BonePhysicsComponent` bone count.
 fn ragdoll_result_for(world: &World, scene: &Scene, rig: Entity) -> RagdollResult {
     let uuid = entity_uuid(scene, rig);
     let state = world.ragdoll_state(saffron_core::Uuid(uuid));
@@ -469,8 +468,8 @@ mod tests {
         });
     }
 
-    /// `fit-collider` errors when the entity carries no Collider (the C++ guard), and
-    /// `raycast` defaults a missing `maxDist` without a deserialize error.
+    /// `fit-collider` errors when the entity carries no Collider, and `raycast` defaults
+    /// a missing `maxDist` without a deserialize error.
     #[test]
     fn fit_collider_without_collider_errors() {
         let reg = registry();

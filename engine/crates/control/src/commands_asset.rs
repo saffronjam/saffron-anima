@@ -9,8 +9,8 @@
 //! The highest-coupling domain: a handler holds `&mut` to [`AssetServer`][saffron_assets::AssetServer], the
 //! [`SceneEditContext`], and the renderer at once through the disjoint
 //! [`EngineContext`] fields. Heavy lifting (the importers, the node-graph→Slang codegen,
-//! the preview render) lives in `07-assets-and-materials`; these handlers stay thin
-//! orchestration. Mirrors `registerAssetCommands` (`control_commands_asset.cpp`).
+//! the preview render) lives in `saffron-assets`; these handlers stay thin
+//! orchestration.
 
 use std::path::{Path, PathBuf};
 
@@ -57,8 +57,8 @@ use crate::error::{Error, Result};
 use crate::registry::{CommandRegistry, ControlRenderer, EngineContext};
 use crate::selector::{entity_ref_dto, entity_uuid, resolve_entity};
 
-/// The `base64` standard encoder (the C++ `base64Encode`), used by `preview-render` and
-/// the thumbnail commands to ship PNG bytes inside a JSON string.
+/// The `base64` standard encoder, used by `preview-render` and the thumbnail commands to
+/// ship PNG bytes inside a JSON string.
 fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -83,7 +83,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// The wire `AssetTypeDto` for a catalog kind (the C++ `assetTypeDto`).
+/// The wire `AssetTypeDto` for a catalog kind.
 fn asset_type_dto(asset_type: AssetType) -> AssetTypeDto {
     match asset_type {
         AssetType::Texture => AssetTypeDto::Texture,
@@ -95,14 +95,12 @@ fn asset_type_dto(asset_type: AssetType) -> AssetTypeDto {
     }
 }
 
-/// Reads an id-or-name selector value as its string form, treating any non-string as empty
-/// (the C++ `selectorString`).
+/// Reads an id-or-name selector value as its string form, treating any non-string as empty.
 fn selector_string(selector: &Value) -> String {
     selector.as_str().unwrap_or_default().to_owned()
 }
 
-/// Wraps a folder path as an optional, mapping an empty path to `None` (the C++
-/// `optionalFolder`).
+/// Wraps a folder path as an optional, mapping an empty path to `None`.
 fn optional_folder(folder: &str) -> Option<String> {
     if folder.is_empty() {
         None
@@ -112,7 +110,7 @@ fn optional_folder(folder: &str) -> Option<String> {
 }
 
 /// The uuid an id-or-name selector resolves to: an unsigned number, a non-negative signed
-/// number, or a whole-string decimal parse (the C++ `resolveAsset`'s `byId` decode).
+/// number, or a whole-string decimal parse.
 fn selector_id(selector: &Value) -> u64 {
     if let Some(value) = selector.as_u64() {
         return value;
@@ -123,8 +121,8 @@ fn selector_id(selector: &Value) -> u64 {
     selector_string(selector).parse::<u64>().unwrap_or(0)
 }
 
-/// Resolves an [`AssetSelector`](saffron_protocol::AssetSelector) to a catalog entry id
-/// (the C++ `resolveAsset` — by id or name).
+/// Resolves an [`AssetSelector`](saffron_protocol::AssetSelector) to a catalog entry id,
+/// by id or name.
 fn resolve_asset(ctx: &EngineContext<'_>, selector: &Value) -> Result<Uuid> {
     let by_id = selector_id(selector);
     let name = selector_string(selector);
@@ -137,7 +135,7 @@ fn resolve_asset(ctx: &EngineContext<'_>, selector: &Value) -> Result<Uuid> {
 }
 
 /// Resolves an [`AssetSelector`](saffron_protocol::AssetSelector) to its index in the
-/// catalog `entries` (the C++ `resolveAssetIndex`).
+/// catalog `entries`.
 fn resolve_asset_index(ctx: &EngineContext<'_>, selector: &Value) -> Result<usize> {
     let by_id = selector_id(selector);
     let name = selector_string(selector);
@@ -149,8 +147,7 @@ fn resolve_asset_index(ctx: &EngineContext<'_>, selector: &Value) -> Result<usiz
     Err(Error::command(format!("no asset '{name}'")))
 }
 
-/// Rebuilds the catalog's `by_id` index after an in-place `entries` mutation (the C++
-/// `rebuildAssetIndex`).
+/// Rebuilds the catalog's `by_id` index after an in-place `entries` mutation.
 fn rebuild_asset_index(catalog: &mut saffron_scene::AssetCatalog) {
     catalog.by_id.clear();
     for (i, entry) in catalog.entries.iter().enumerate() {
@@ -158,7 +155,7 @@ fn rebuild_asset_index(catalog: &mut saffron_scene::AssetCatalog) {
     }
 }
 
-/// The wire DTO for one catalog entry (the C++ `assetDto`).
+/// The wire DTO for one catalog entry.
 fn asset_dto(entry: &AssetEntry) -> AssetEntryDto {
     AssetEntryDto {
         id: WireUuid(entry.id.value()),
@@ -172,7 +169,7 @@ fn asset_dto(entry: &AssetEntry) -> AssetEntryDto {
     }
 }
 
-/// The compact `{ id, name, folder? }` reply for a catalog entry (the C++ `assetRef`).
+/// The compact `{ id, name, folder? }` reply for a catalog entry.
 fn asset_ref(entry: &AssetEntry) -> AssetRef {
     AssetRef {
         id: WireUuid(entry.id.value()),
@@ -181,7 +178,7 @@ fn asset_ref(entry: &AssetEntry) -> AssetRef {
     }
 }
 
-/// The full catalog as an [`AssetList`] (the C++ `assetListDto`).
+/// The full catalog as an [`AssetList`].
 fn asset_list_dto(catalog: &saffron_scene::AssetCatalog) -> AssetList {
     AssetList {
         assets: catalog.entries.iter().map(asset_dto).collect(),
@@ -190,7 +187,7 @@ fn asset_list_dto(catalog: &saffron_scene::AssetCatalog) -> AssetList {
 }
 
 /// Whether a folder path is well-formed: non-empty, no leading/trailing `/`, no `\`, and no
-/// empty `//` segment (the C++ `validFolderPath`).
+/// empty `//` segment.
 fn valid_folder_path(folder: &str) -> bool {
     if folder.is_empty()
         || folder.starts_with('/')
@@ -203,20 +200,19 @@ fn valid_folder_path(folder: &str) -> bool {
     true
 }
 
-/// Whether the catalog already carries `folder` (the C++ `hasFolder`).
+/// Whether the catalog already carries `folder`.
 fn has_folder(catalog: &saffron_scene::AssetCatalog, folder: &str) -> bool {
     catalog.folders.iter().any(|existing| existing == folder)
 }
 
-/// Whether `candidate` is a strict descendant folder of `folder` (the C++
-/// `isFolderDescendant`).
+/// Whether `candidate` is a strict descendant folder of `folder`.
 fn is_folder_descendant(candidate: &str, folder: &str) -> bool {
     candidate.len() > folder.len()
         && candidate.starts_with(folder)
         && candidate.as_bytes()[folder.len()] == b'/'
 }
 
-/// Re-roots `value` from the `from` folder prefix onto `to` (the C++ `replaceFolderPrefix`).
+/// Re-roots `value` from the `from` folder prefix onto `to`.
 fn replace_folder_prefix(value: &str, from: &str, to: &str) -> String {
     if value == from {
         return to.to_owned();
@@ -227,14 +223,14 @@ fn replace_folder_prefix(value: &str, from: &str, to: &str) -> String {
     value.to_owned()
 }
 
-/// The entity's `Name`, or empty (the C++ `entityName`).
+/// The entity's `Name`, or empty.
 fn entity_name(scene: &Scene, entity: Entity) -> String {
     scene
         .with_component::<Name, _>(entity, |n| n.name.clone())
         .unwrap_or_default()
 }
 
-/// The entity's `IdComponent` uuid as an optional wire uuid (the C++ `entityId`).
+/// The entity's `IdComponent` uuid as an optional wire uuid.
 fn entity_id(scene: &Scene, entity: Entity) -> Option<WireUuid> {
     let id = entity_uuid(scene, entity);
     (id != 0).then_some(WireUuid(id))
@@ -275,8 +271,8 @@ fn usage_dto(scene: &Scene, entity: Entity, slot: &str) -> AssetUsageDto {
     }
 }
 
-/// Every place `asset` is referenced in the active scene (the C++ `collectAssetUsages`):
-/// mesh slots, material albedo / metallic-roughness slots, and the environment sky texture.
+/// Every place `asset` is referenced in the active scene: mesh slots, material albedo /
+/// metallic-roughness slots, and the environment sky texture.
 fn collect_asset_usages(scene: &mut Scene, asset: Uuid) -> Vec<AssetUsageDto> {
     let (refs, sky) = scan_asset_references(scene, asset);
     let mut usages: Vec<AssetUsageDto> = refs
@@ -293,9 +289,8 @@ fn collect_asset_usages(scene: &mut Scene, asset: Uuid) -> Vec<AssetUsageDto> {
     usages
 }
 
-/// Clears every reference to `asset` in the scene and returns the cleared usages (the C++
-/// `clearAssetUsages`, the `delete-asset` cascade). The DTOs are built (name/id read) before
-/// the slot is zeroed.
+/// Clears every reference to `asset` in the scene and returns the cleared usages (the
+/// `delete-asset` cascade). The DTOs are built (name/id read) before the slot is zeroed.
 fn clear_asset_usages(scene: &mut Scene, asset: Uuid) -> Vec<AssetUsageDto> {
     let (refs, sky) = scan_asset_references(scene, asset);
     let mut cleared: Vec<AssetUsageDto> = refs
@@ -329,7 +324,7 @@ fn clear_asset_usages(scene: &mut Scene, asset: Uuid) -> Vec<AssetUsageDto> {
     cleared
 }
 
-/// The current project's identity, read from the editor (the C++ `currentProjectInfo`).
+/// The current project's identity, read from the editor.
 fn current_project_info(ctx: &EngineContext<'_>) -> ProjectInfo {
     ProjectInfo {
         loaded: ctx.scene_edit.project_loaded,
@@ -340,8 +335,7 @@ fn current_project_info(ctx: &EngineContext<'_>) -> ProjectInfo {
     }
 }
 
-/// Writes a [`ProjectInfo`] back onto the editor, also resetting the scene path (the C++
-/// `applyProjectInfo`).
+/// Writes a [`ProjectInfo`] back onto the editor, also resetting the scene path.
 fn apply_project_info(ctx: &mut EngineContext<'_>, project: &ProjectInfo) {
     ctx.scene_edit.project_loaded = project.loaded;
     ctx.scene_edit.project_root = project.root.clone();
@@ -351,9 +345,9 @@ fn apply_project_info(ctx: &mut EngineContext<'_>, project: &ProjectInfo) {
     ctx.scene_edit.scene_path = project.path.clone();
 }
 
-/// Brings the host's project up from the editor-set environment at startup (the C++ host's
-/// `config.onCreate` project block, `host.cppm:1355`): `SAFFRON_PROJECT` selects a project
-/// to open (or create when the name is valid and unborn), else `SAFFRON_AUTO_EMPTY_PROJECT`
+/// Brings the host's project up from the editor-set environment at startup:
+/// `SAFFRON_PROJECT` selects a project to open (or create when the name is valid and
+/// unborn), else `SAFFRON_AUTO_EMPTY_PROJECT`
 /// makes a deterministic per-shell scratch project, else a `project.json` in the working
 /// directory is opened. With none of those set the host waits for the editor's project
 /// picker. Drives the same [`AssetServer`] + [`apply_project_info`] path the lifecycle
@@ -466,7 +460,7 @@ fn apply_loaded_project(
     ctx.scene_edit.set_selection(Entity::NULL);
 }
 
-/// The wire DTO for a [`ProjectInfo`] (the C++ `projectDto`).
+/// The wire DTO for a [`ProjectInfo`].
 fn project_dto(project: &ProjectInfo) -> ProjectInfoDto {
     ProjectInfoDto {
         loaded: project.loaded,
@@ -477,7 +471,7 @@ fn project_dto(project: &ProjectInfo) -> ProjectInfoDto {
     }
 }
 
-/// The "no project loaded" guard (the C++ `requireProjectLoaded`).
+/// The "no project loaded" guard.
 fn require_project_loaded(ctx: &EngineContext<'_>) -> Result<()> {
     if ctx.scene_edit.project_loaded {
         Ok(())
@@ -512,8 +506,8 @@ impl ProjectHost for RendererProjectHost<'_> {
 
 /// Resolves `{asset, size?}` to a base64-PNG thumbnail reply, driving
 /// [`request_thumbnail`] through the renderer's [`ThumbnailGpu`](saffron_assets::ThumbnailGpu)
-/// seam. A cache hit returns the PNG; a cold miss replies `pending` (the C++
-/// `thumbnailResult`). Shared by `get-thumbnail` (128) + `view-asset` (512).
+/// seam. A cache hit returns the PNG; a cold miss replies `pending`. Shared by
+/// `get-thumbnail` (128) + `view-asset` (512).
 fn thumbnail_result(
     ctx: &mut EngineContext<'_>,
     params: &ThumbnailParams,
@@ -549,8 +543,8 @@ fn thumbnail_result(
     })
 }
 
-/// Drops the asset preview and restores the authored edit state (the C++
-/// `leaveAssetPreview`). A no-op when no preview is alive.
+/// Drops the asset preview and restores the authored edit state. A no-op when no preview
+/// is alive.
 fn leave_asset_preview(ctx: &mut saffron_sceneedit::SceneEditContext) {
     if ctx.preview_scene.is_none() {
         return;
@@ -579,8 +573,7 @@ fn leave_asset_preview(ctx: &mut saffron_sceneedit::SceneEditContext) {
 }
 
 /// Parks the preview orbit and restores the authored fly-cam/overlay/selection so the scene
-/// view shows the authored scene (the C++ `deactivatePreviewView`). A no-op unless the
-/// preview is the active view.
+/// view shows the authored scene. A no-op unless the preview is the active view.
 fn deactivate_preview_view(ctx: &mut saffron_sceneedit::SceneEditContext) {
     if ctx.preview_scene.is_none() || !ctx.preview_active_view {
         return;
@@ -600,8 +593,7 @@ fn deactivate_preview_view(ctx: &mut saffron_sceneedit::SceneEditContext) {
 }
 
 /// Re-stashes the authored view and restores the parked preview orbit + overlay + selected
-/// root (the C++ `activatePreviewView`). A no-op unless a preview scene is alive but not
-/// currently active.
+/// root. A no-op unless a preview scene is alive but not currently active.
 fn activate_preview_view(ctx: &mut saffron_sceneedit::SceneEditContext) {
     if ctx.preview_scene.is_none() || ctx.preview_active_view {
         return;
@@ -619,7 +611,7 @@ fn activate_preview_view(ctx: &mut saffron_sceneedit::SceneEditContext) {
     ctx.animation_version += 1;
 }
 
-/// The flat parent-indexed bone tree for a skinned container's nodes (the C++
+/// The flat parent-indexed bone tree for a skinned container's nodes (the
 /// `get-asset-model` rig walk): the joints plus their ancestor chains bounded at the
 /// skeleton root, with node indices preserved.
 fn build_bone_tree(meta: &ContainerMetadata) -> Vec<BoneDto> {
@@ -692,7 +684,7 @@ fn build_bone_tree(meta: &ContainerMetadata) -> Vec<BoneDto> {
     bones
 }
 
-/// The animation sub-asset clips a container carries (the C++ `get-asset-model` clip walk).
+/// The animation sub-asset clips a container carries (the `get-asset-model` clip walk).
 fn container_clips(meta: &ContainerMetadata) -> Vec<AnimationClipDto> {
     meta.sub_assets
         .iter()
@@ -1691,8 +1683,7 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
             let size = params.size.unwrap_or(256);
             // A non-foldable graph (procedural nodes) renders through a codegen'd preview
             // shader; a foldable graph already folded into `loaded`, so the default studio
-            // preview shows it. Resolved here (the closure below borrows `assets`), matching
-            // the C++ `preview-render`'s `codegenSpv`.
+            // preview shows it. Resolved here because the closure below borrows `assets`.
             let codegen_spv = preview_codegen_spv(ctx.assets, id);
             let assets = &mut *ctx.assets;
             let mut png = None;
@@ -2044,9 +2035,8 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
 /// The codegen `_preview.spv` path for `preview-render`, or `None` for the default studio
 /// preview. A material whose raw graph is a non-empty object that *does not* fold into the
 /// flat params (a procedural node) gets a freshly compiled preview shader; a foldable or
-/// graph-less material renders through the cached default pipeline. The C++ `preview-render`
-/// `codegenSpv` block. A compile failure degrades to `None` (the default preview still
-/// renders the folded params), never an error.
+/// graph-less material renders through the cached default pipeline. A compile failure
+/// degrades to `None` (the default preview still renders the folded params), never an error.
 fn preview_codegen_spv(assets: &AssetServer, id: Uuid) -> Option<PathBuf> {
     let raw = load_material_asset_raw(assets, id).ok()?;
     let non_empty_graph = raw.graph.as_object().is_some_and(|obj| !obj.is_empty());
@@ -2060,9 +2050,7 @@ fn preview_codegen_spv(assets: &AssetServer, id: Uuid) -> Option<PathBuf> {
     assets.compile_material_preview_shader(&raw.graph, id).ok()
 }
 
-/// The `screenshot {target:window}` is the only command reaching `window`; the rest reach
-/// assets/sceneEdit/renderer. Ensures the entity carries a [`Material`] (the C++
-/// `addComponent<MaterialComponent>` guard) before an `assign-asset` texture slot write.
+/// Ensures the entity carries a [`Material`] before an `assign-asset` texture slot write.
 fn ensure_material(scene: &mut Scene, entity: Entity) {
     if !scene.has_component::<Material>(entity) {
         let _ = scene.add_component(entity, Material::default());
@@ -2070,7 +2058,7 @@ fn ensure_material(scene: &mut Scene, entity: Entity) {
 }
 
 /// The shared `load-project` / `reload-project` body: idle + reload the catalog + scene +
-/// sidecar, then reset the editor state (the C++ `loadProject` command bodies).
+/// sidecar, then reset the editor state.
 fn load_project_into(ctx: &mut EngineContext<'_>, path: &str) -> Result<ProjectInfo> {
     let defs = ctx.renderer.sa_lua_defs();
     let mut project = ProjectInfo::default();
@@ -2102,7 +2090,7 @@ fn load_project_into(ctx: &mut EngineContext<'_>, path: &str) -> Result<ProjectI
 
 /// The `enter-asset-preview` body: build an isolated preview scene, commit it, furnish it
 /// (floor / key light / procedural sky / framed fly-cam), and route the renderer + active
-/// view to it (the C++ `enter-asset-preview` handler).
+/// view to it.
 fn enter_asset_preview(
     ctx: &mut EngineContext<'_>,
     params: GetAssetModelParams,
@@ -2245,14 +2233,13 @@ fn enter_asset_preview(
 #[serde(transparent)]
 pub struct AssetPreviewResultWrap(saffron_protocol::AssetPreviewResult);
 
-/// The preview framing pivot + orbit distance (the C++ `PreviewFraming`).
+/// The preview framing pivot + orbit distance.
 struct PreviewFraming {
     target: saffron_geometry::glam::Vec3,
     distance: f32,
 }
 
-/// The previewed model's world-space bounding sphere from its mesh's rest-pose AABB (the
-/// C++ `computePreviewBounds`).
+/// The previewed model's world-space bounding sphere from its mesh's rest-pose AABB.
 pub(crate) struct PreviewBounds {
     center: saffron_geometry::glam::Vec3,
     radius: f32,
@@ -2260,8 +2247,7 @@ pub(crate) struct PreviewBounds {
 }
 
 /// Make the preview look like a preview: floor / key light / procedural sky / framed
-/// fly-cam; returns the orbit pivot + distance (the C++ `furnishPreviewScene`). Operates on
-/// the committed preview scene.
+/// fly-cam; returns the orbit pivot + distance. Operates on the committed preview scene.
 fn furnish_preview_scene(ctx: &mut EngineContext<'_>, root: Entity) -> PreviewFraming {
     use saffron_geometry::glam::Vec3 as GVec3;
 
@@ -2298,7 +2284,7 @@ fn furnish_preview_scene(ctx: &mut EngineContext<'_>, root: Entity) -> PreviewFr
     }
 }
 
-/// The previewed model's world-space bounding sphere (the C++ `computePreviewBounds`).
+/// The previewed model's world-space bounding sphere.
 pub(crate) fn compute_preview_bounds(ctx: &mut EngineContext<'_>, root: Entity) -> PreviewBounds {
     use saffron_geometry::glam::Vec3 as GVec3;
 
@@ -2354,7 +2340,7 @@ pub(crate) fn compute_preview_bounds(ctx: &mut EngineContext<'_>, root: Entity) 
 }
 
 /// The world-space AABB of a local box transformed by `world`, expanded over its eight
-/// corners (the C++ `worldAabbFromCorners`).
+/// corners.
 fn world_aabb_from_corners(
     world: saffron_geometry::glam::Mat4,
     lo: saffron_geometry::glam::Vec3,
@@ -2377,7 +2363,7 @@ fn world_aabb_from_corners(
     (out_lo, out_hi)
 }
 
-/// A thin floor slab centered under the model's feet (the C++ `spawnPreviewFloor`).
+/// A thin floor slab centered under the model's feet.
 pub(crate) fn spawn_preview_floor(ctx: &mut EngineContext<'_>, bounds: &PreviewBounds) -> Entity {
     use saffron_geometry::glam::{Vec3 as GVec3, Vec4 as GVec4};
 
@@ -2423,8 +2409,8 @@ pub(crate) fn spawn_preview_floor(ctx: &mut EngineContext<'_>, bounds: &PreviewB
     floor
 }
 
-/// Aim a fly-cam at the model: a 3/4 view fit to its bounding sphere (the C++
-/// `framePreviewCamera`). Starts from the current camera so the user's fov/near/far survive.
+/// Aim a fly-cam at the model: a 3/4 view fit to its bounding sphere. Starts from the
+/// current camera so the user's fov/near/far survive.
 fn frame_preview_camera(mut cam: SceneEditCamera, bounds: &PreviewBounds) -> SceneEditCamera {
     use saffron_geometry::glam::Vec3 as GVec3;
 
@@ -2440,7 +2426,7 @@ fn frame_preview_camera(mut cam: SceneEditCamera, bounds: &PreviewBounds) -> Sce
     cam
 }
 
-/// Builds the [`PlayStateResult`] from the editor state (the C++ `playStateResultDto`).
+/// Builds the [`PlayStateResult`] from the editor state.
 fn play_state_result(ctx: &EngineContext<'_>) -> PlayStateResult {
     let editor = &ctx.scene_edit;
     PlayStateResult {
@@ -2647,8 +2633,7 @@ mod tests {
         });
     }
 
-    /// `set-active-view` maps `scene` / `assetPreview` and errors on an unknown view (the
-    /// C++ `viewIdFromWire` `Err` message).
+    /// `set-active-view` maps `scene` / `assetPreview` and errors on an unknown view.
     #[test]
     fn set_active_view_maps_and_errors() {
         let reg = registry();

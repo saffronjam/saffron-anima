@@ -38,7 +38,7 @@ use crate::error::Error;
 use crate::registry::{CommandRegistry, ControlRenderer};
 use crate::server::control_socket_path;
 
-/// Converts a glam world vector into the wire `Vec3` (the C++ `fromGlm`).
+/// Converts a glam world vector into the wire `Vec3`.
 fn to_vec3(v: saffron_geometry::glam::Vec3) -> Vec3 {
     Vec3 {
         x: v.x,
@@ -47,7 +47,7 @@ fn to_vec3(v: saffron_geometry::glam::Vec3) -> Vec3 {
     }
 }
 
-/// Maps the wire AA mode to a `(samples, fxaa, taa)` selection (the C++ `applyAaMode`).
+/// Maps the wire AA mode to a `(samples, fxaa, taa)` selection.
 fn aa_selection(mode: AaModeDto) -> (u32, bool, bool) {
     match mode {
         AaModeDto::Off => (1, false, false),
@@ -59,8 +59,7 @@ fn aa_selection(mode: AaModeDto) -> (u32, bool, bool) {
     }
 }
 
-/// The AA mode read back from the renderer's mode name (the C++ `aaMode` string →
-/// `AaModeDto`).
+/// The AA mode read back from the renderer's mode name.
 fn aa_mode_from_name(name: &str) -> AaModeDto {
     match name {
         "fxaa" => AaModeDto::Fxaa,
@@ -153,7 +152,7 @@ fn alarm_severity_to_dto(severity: AlarmSeverity) -> AlarmSeverityDto {
 }
 
 /// Builds the `render-stats` DTO from the renderer's full snapshot plus its individual
-/// toggle queries (the C++ `renderStatsDto`).
+/// toggle queries.
 fn render_stats_dto(renderer: &dyn ControlRenderer) -> RenderStatsDto {
     let stats: RenderStatsFull = renderer.render_stats();
     RenderStatsDto {
@@ -352,7 +351,7 @@ fn profile_capture_dto(capture: &ProfileCapture) -> ProfileCaptureDto {
 
 /// Serializes a capture to Chrome Trace Event JSON: `M` (metadata) events name the two
 /// lanes, `X` (complete) events carry each span's microsecond ts/dur; the honesty flags
-/// + device facts ride in `otherData` (the C++ `toChromeTrace`).
+/// + device facts ride in `otherData`.
 fn to_chrome_trace(capture: &ProfileCapture) -> String {
     use serde_json::{Value, json};
 
@@ -419,7 +418,7 @@ fn to_chrome_trace(capture: &ProfileCapture) -> String {
     doc.to_string()
 }
 
-/// Registers the 29 render-domain commands, in the C++ registration order, onto `reg`.
+/// Registers the 29 render-domain commands, in registration order, onto `reg`.
 pub fn register_render_commands(reg: &mut CommandRegistry) {
     reg.register::<EmptyParams, RenderStatsDto>(
         "render-stats",

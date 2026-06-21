@@ -21,7 +21,7 @@ use clap_complete::Shell;
 use saffron_control_client::{self as wire, Client};
 use serde_json::{Map, Value};
 
-/// The human-readable vs raw-JSON presentation modes (the C++ `OutputMode`).
+/// The human-readable vs raw-JSON presentation modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum OutputMode {
     /// One-line, command-keyed formatting (default); falls through to UTF-8-unescaped pretty JSON.
@@ -122,13 +122,13 @@ fn generate_completions(shell: Shell) {
     clap_complete::generate(shell, &mut command, "sa", &mut io::stdout());
 }
 
-/// Maps a free-form arg list onto a params object (the C++ `buildParams`, `main.cpp:87`): bare
-/// tokens become `params["args"]` (added only when non-empty), and `--key value` / `--key=value` /
-/// a bare `--key` map to `params[key]`. Each value is run through [`coerce`].
+/// Maps a free-form arg list onto a params object: bare tokens become `params["args"]` (added only
+/// when non-empty), and `--key value` / `--key=value` / a bare `--key` map to `params[key]`. Each
+/// value is run through [`coerce`].
 ///
-/// The walk mirrors the C++ two-step advance: a `--` flag splits on its first `=` for the
-/// `--key=value` form; otherwise it consumes the next token as the value when that token is not
-/// itself a `--` flag, else it is a bare `--key = true`.
+/// The walk is a two-step advance: a `--` flag splits on its first `=` for the `--key=value` form;
+/// otherwise it consumes the next token as the value when that token is not itself a `--` flag, else
+/// it is a bare `--key = true`.
 fn build_params(args: &[String]) -> Value {
     let mut params = Map::new();
     let mut positional: Vec<Value> = Vec::new();
@@ -157,16 +157,15 @@ fn build_params(args: &[String]) -> Value {
     Value::Object(params)
 }
 
-/// Coerces one token to a JSON value by the fixed C++ precedence ladder (`coerce`, `main.cpp:40`):
-/// `true`/`false`/`null` literals → inline JSON when the token opens with `{`/`[`/`"` → unsigned
-/// integer (only if the token does not open with `-`) → signed integer → float → bare string.
+/// Coerces one token to a JSON value by a fixed precedence ladder: `true`/`false`/`null` literals →
+/// inline JSON when the token opens with `{`/`[`/`"` → unsigned integer (only if the token does not
+/// open with `-`) → signed integer → float → bare string.
 ///
 /// The ordering is load-bearing: unsigned-first keeps a large positive id (up to `u64::MAX`) an
 /// unsigned number rather than lossily widening it to a float, and the `-` guard routes a negative
 /// token straight to the signed parse. An inline-JSON parse failure falls through to the numeric
-/// ladder (the C++ `is_discarded()` check), where it then fails every numeric parse and ends as the
-/// bare string. Each numeric parse is whole-string (no trailing garbage), mirroring the C++
-/// `end == '\0'` guards on `strtoull`/`strtoll`/`strtod`.
+/// ladder, where it then fails every numeric parse and ends as the bare string. Each numeric parse
+/// is whole-string (no trailing garbage).
 fn coerce(token: &str) -> Value {
     match token {
         "true" => return Value::Bool(true),
@@ -215,9 +214,9 @@ impl Outcome {
     }
 }
 
-/// Routes the shared client's call outcome to the printer or the error path (the C++ `main` tail):
-/// a decoded `result` is printed in `mode`; an [`wire::Error`] becomes an `sa:`-prefixed message,
-/// gaining a nearest-name `did you mean…?` hint when the command is absent from the shared table.
+/// Routes the shared client's call outcome to the printer or the error path: a decoded `result` is
+/// printed in `mode`; an [`wire::Error`] becomes an `sa:`-prefixed message, gaining a nearest-name
+/// `did you mean…?` hint when the command is absent from the shared table.
 fn present_outcome(cmd: &str, outcome: wire::Result<Value>, mode: OutputMode) -> Outcome {
     match outcome {
         Ok(result) => {
@@ -270,8 +269,8 @@ fn did_you_mean(cmd: &str) -> Option<&'static str> {
     (distance <= threshold && distance > 0).then_some(name)
 }
 
-/// The Levenshtein edit distance between two strings (the classic two-row dynamic-programming
-/// table), used only by [`did_you_mean`]'s nearest-name search.
+/// The Levenshtein edit distance between two strings (a two-row dynamic-programming table), used
+/// only by [`did_you_mean`]'s nearest-name search.
 fn levenshtein(a: &str, b: &str) -> usize {
     let b_chars: Vec<char> = b.chars().collect();
     let mut previous: Vec<usize> = (0..=b_chars.len()).collect();
@@ -292,9 +291,8 @@ fn levenshtein(a: &str, b: &str) -> usize {
 /// Prints a successful result. `json` mode is pretty JSON; `text` mode runs the command-keyed
 /// `match`, falling through to UTF-8-unescaped pretty JSON for any unmatched command.
 ///
-/// This is the C++ `printResult` (`main.cpp:127`): a closed `match cmd` over the command name, each
-/// arm reading specific result fields with lenient defaults via the `field_*` readers (the
-/// `result.value(key, default)` analogue), so an arm never panics on a missing or mistyped field.
+/// A closed `match cmd` over the command name, each arm reading specific result fields with lenient
+/// defaults via the `field_*` readers, so an arm never panics on a missing or mistyped field.
 fn print_result(cmd: &str, result: &Value, mode: OutputMode) {
     if mode == OutputMode::Json {
         println!("{}", pretty(result));
@@ -305,10 +303,10 @@ fn print_result(cmd: &str, result: &Value, mode: OutputMode) {
     }
 }
 
-/// Renders the `text`-mode line(s) for a command, mirroring the C++ `printResult` arms. Returning a
-/// `Vec<String>` instead of writing to stdout keeps every formatter a pure function of `&Value`, so
-/// each arm is directly `#[test]`-coverable; the one side-effecting arm (`profiler.capture-stop`,
-/// which writes an inline trace to a temp file) does its I/O here before returning its line(s).
+/// Renders the `text`-mode line(s) for a command. Returning a `Vec<String>` instead of writing to
+/// stdout keeps every formatter a pure function of `&Value`, so each arm is directly
+/// `#[test]`-coverable; the one side-effecting arm (`profiler.capture-stop`, which writes an inline
+/// trace to a temp file) does its I/O here before returning its line(s).
 fn format_text(cmd: &str, result: &Value) -> Vec<String> {
     match cmd {
         "help" if result.get("commands").is_some() => format_help(result),
@@ -480,8 +478,8 @@ fn format_text(cmd: &str, result: &Value) -> Vec<String> {
     }
 }
 
-/// The `help` two-column table (`main.cpp:134`): each command name left-padded to 22 columns, then
-/// its summary, both indented two spaces.
+/// The `help` two-column table: each command name left-padded to 22 columns, then its summary, both
+/// indented two spaces.
 fn format_help(result: &Value) -> Vec<String> {
     field_array(result, "commands")
         .iter()
@@ -495,7 +493,7 @@ fn format_help(result: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The `list-entities` table (`main.cpp:148`): id, name, parent id, each in a 24-wide column.
+/// The `list-entities` table: id, name, parent id, each in a 24-wide column.
 fn format_list_entities(result: &Value) -> Vec<String> {
     field_array(result, "entities")
         .iter()
@@ -510,7 +508,7 @@ fn format_list_entities(result: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The `list-assets` table (`main.cpp:165`): type (8 wide), name (32 wide), id.
+/// The `list-assets` table: type (8 wide), name (32 wide), id.
 fn format_list_assets(result: &Value) -> Vec<String> {
     field_array(result, "assets")
         .iter()
@@ -525,9 +523,9 @@ fn format_list_assets(result: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The `get-asset-model` report (`main.cpp:174`): header, capability counts, the indented bone
-/// tree, then the clip list. The bone indent walks each bone's `parent` chain with a 256-iteration
-/// cycle guard so a malformed/cyclic parent index cannot hang.
+/// The `get-asset-model` report: header, capability counts, the indented bone tree, then the clip
+/// list. The bone indent walks each bone's `parent` chain with a 256-iteration cycle guard so a
+/// malformed/cyclic parent index cannot hang.
 fn format_asset_model(result: &Value) -> Vec<String> {
     let mut lines = vec![format!(
         "model {}  (mesh {})",
@@ -576,7 +574,7 @@ fn format_asset_model(result: &Value) -> Vec<String> {
 }
 
 /// One clip line shared by `list-clips` (no prefix, name width 32) and `get-asset-model` (a `clip `
-/// prefix, name width 28): `[prefix]name  duration.s  id` (`main.cpp:198`,`:207`).
+/// prefix, name width 28): `[prefix]name  duration.s  id`.
 fn format_clip(clip: &Value, prefix: &str, name_width: usize) -> String {
     format!(
         "  {prefix}{:<name_width$}  {:>8.3}s  {}",
@@ -586,7 +584,7 @@ fn format_clip(clip: &Value, prefix: &str, name_width: usize) -> String {
     )
 }
 
-/// The `render-stats` one-liner (`main.cpp:212`).
+/// The `render-stats` one-liner.
 fn format_render_stats(result: &Value) -> String {
     format!(
         "cpu={:.2}ms  gpu={:.2}ms  wait={:.2}ms  fps={:.0}  draws={}  tris={}  binds={}  pso+={}{}",
@@ -602,8 +600,7 @@ fn format_render_stats(result: &Value) -> String {
     )
 }
 
-/// The `pass-timings` table (`main.cpp:230`): an optional software-gpu note, one line per pass, then
-/// the span total.
+/// The `pass-timings` table: an optional software-gpu note, one line per pass, then the span total.
 fn format_pass_timings(result: &Value) -> Vec<String> {
     let mut lines = Vec::new();
     if field_bool(result, "softwareGpu") {
@@ -624,8 +621,8 @@ fn format_pass_timings(result: &Value) -> Vec<String> {
     lines
 }
 
-/// The `profiler.capture-stop` report (`main.cpp:249`): frame/span counts and a trace path. When the
-/// reply carries no `path` but an inline `chromeTrace` string, that trace is written to
+/// The `profiler.capture-stop` report: frame/span counts and a trace path. When the reply carries no
+/// `path` but an inline `chromeTrace` string, that trace is written to
 /// `<temp_dir>/saffron-profile.json` and that path is printed.
 fn format_capture_stop(result: &Value) -> Vec<String> {
     if !field_bool(result, "ready") {
@@ -670,7 +667,7 @@ fn format_capture_stop(result: &Value) -> Vec<String> {
     lines
 }
 
-/// The `frame-history` percentiles line (`main.cpp:279`).
+/// The `frame-history` percentiles line.
 fn format_frame_history(result: &Value) -> String {
     format!(
         "p50={:.2}  p95={:.2}  p99={:.2}  p99.9={:.2}  max={:.2}  stddev={:.2}  budget={:.2}ms  stutters={}  n={}",
@@ -686,8 +683,7 @@ fn format_frame_history(result: &Value) -> String {
     )
 }
 
-/// The `get-perf-config`/`set-perf-config` line (`main.cpp:288`); the vram fractions print as
-/// percentages.
+/// The `get-perf-config`/`set-perf-config` line; the vram fractions print as percentages.
 fn format_perf_config(result: &Value) -> String {
     format!(
         "targetFps={:.0}  budget={:.2}ms  green<{:.2}×budget  amber<{:.1}×median  frozen={:.0}ms  vram warn/crit={:.0}%/{:.0}%",
@@ -701,7 +697,7 @@ fn format_perf_config(result: &Value) -> String {
     )
 }
 
-/// The `drain-alarms` table (`main.cpp:298`): one line per event, then a summary footer.
+/// The `drain-alarms` table: one line per event, then a summary footer.
 fn format_drain_alarms(result: &Value) -> Vec<String> {
     let events = field_array(result, "events");
     let mut lines: Vec<String> = events
@@ -729,8 +725,8 @@ fn format_drain_alarms(result: &Value) -> Vec<String> {
     lines
 }
 
-/// The `list-active-alarms` table (`main.cpp:313`): a "no active alarms" line when empty, else one
-/// line per alarm with an optional `pass=` suffix.
+/// The `list-active-alarms` table: a "no active alarms" line when empty, else one line per alarm
+/// with an optional `pass=` suffix.
 fn format_active_alarms(result: &Value) -> Vec<String> {
     let alarms = field_array(result, "alarms");
     if alarms.is_empty() {
@@ -754,7 +750,7 @@ fn format_active_alarms(result: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The `fit-collider` line (`main.cpp:343`): the fitted shape, entity, half-extents, and offset.
+/// The `fit-collider` line: the fitted shape, entity, half-extents, and offset.
 fn format_fit_collider(result: &Value) -> String {
     let he = result.get("halfExtents");
     let off = result.get("offset");
@@ -771,7 +767,7 @@ fn format_fit_collider(result: &Value) -> String {
     )
 }
 
-/// The `raycast`/`shapecast` line (`main.cpp:353`): the hit detail or `no hit`.
+/// The `raycast`/`shapecast` line: the hit detail or `no hit`.
 fn format_raycast(result: &Value) -> String {
     if !field_bool(result, "hit") {
         return "no hit".to_owned();
@@ -791,7 +787,7 @@ fn format_raycast(result: &Value) -> String {
     )
 }
 
-/// The `drain-contacts` table (`main.cpp:391`): one line per event, then a summary footer.
+/// The `drain-contacts` table: one line per event, then a summary footer.
 fn format_drain_contacts(result: &Value) -> Vec<String> {
     let events = field_array(result, "events");
     let mut lines: Vec<String> = events
@@ -821,8 +817,8 @@ fn format_drain_contacts(result: &Value) -> Vec<String> {
     lines
 }
 
-/// The `get-selection` line (`main.cpp:417`): the selected entity name, or "no selection", with the
-/// selection/scene versions.
+/// The `get-selection` line: the selected entity name, or "no selection", with the selection/scene
+/// versions.
 fn format_selection(result: &Value) -> String {
     let sel_version = field_u64(result, "selectionVersion");
     let scene_version = field_u64(result, "sceneVersion");
@@ -835,13 +831,13 @@ fn format_selection(result: &Value) -> String {
     }
 }
 
-/// Pretty-prints a `Value` with UTF-8 left unescaped (`serde_json`'s default), matching the C++
-/// `dump(2, ' ', false)` so non-ASCII renders literally.
+/// Pretty-prints a `Value` with UTF-8 left unescaped (`serde_json`'s default) so non-ASCII renders
+/// literally.
 fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-/// `"yes"`/`"no"` for a bool flag (the C++ `? "yes" : "no"` idiom).
+/// `"yes"`/`"no"` for a bool flag.
 fn yes_no(flag: bool) -> &'static str {
     if flag { "yes" } else { "no" }
 }
@@ -855,7 +851,7 @@ fn software_gpu_suffix(result: &Value) -> &'static str {
     }
 }
 
-/// Reads a string field, defaulting to `""` (the C++ `result.value(key, "")` leniency).
+/// Reads a string field, defaulting to `""`.
 fn field_str<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
 }
@@ -890,8 +886,7 @@ fn field_array(value: &Value, key: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Reads an integer field from an optional nested object (the C++ `caps.value(key, 0)` where `caps`
-/// is itself `result.value("capabilities", json::object())`).
+/// Reads an integer field from an optional nested object, defaulting to `0`.
 fn nested_i64(parent: Option<&Value>, key: &str) -> i64 {
     parent
         .and_then(|p| p.get(key))
@@ -929,8 +924,7 @@ fn forward(tokens: &[String], mode: OutputMode) -> Outcome {
 }
 
 /// The toolbox container the engine host runs in, and the `cargo build` target / output path for
-/// the Rust present-only host — the `01-build-and-toolchain` contract `start` consumes (the C++
-/// `cmd/sa` shelled `toolbox run -c saffron-build <SaffronAnima>` and `cmake --build`).
+/// the present-only host that `start` consumes.
 const TOOLBOX_NAME: &str = "saffron-build";
 const ENGINE_BIN_TARGET: &str = "saffron-host";
 
@@ -958,9 +952,9 @@ impl StartOutcome {
     }
 }
 
-/// The `start` launcher (the folded-in `cmd/sa` `cmd_start`): optionally build the engine, skip if
-/// it is already up (unlinking a stale socket), then launch the host inside the toolbox — detached
-/// by default, foreground under `--attach` — and poll the socket for readiness.
+/// The `start` launcher: optionally build the engine, skip if it is already up (unlinking a stale
+/// socket), then launch the host inside the toolbox — detached by default, foreground under
+/// `--attach` — and poll the socket for readiness.
 fn start(attach: bool, build: bool) -> StartOutcome {
     if build {
         println!("sa: building…");
@@ -1000,8 +994,7 @@ fn start(attach: bool, build: bool) -> StartOutcome {
     }
 }
 
-/// Runs the Rust engine build inside the toolbox (`cargo build --bin saffron-host`), the
-/// `01-build-and-toolchain` recipe that replaces the C++ `cmake --build`.
+/// Runs the engine build inside the toolbox (`cargo build --bin saffron-host`).
 fn run_engine_build() -> Result<(), String> {
     let status = Command::new("toolbox")
         .args([
@@ -1024,7 +1017,7 @@ fn run_engine_build() -> Result<(), String> {
 
 /// The `target/<profile>/saffron-host` path the workspace build produces, resolved relative to this
 /// `sa` binary's own location (both are workspace targets under the same `target/<profile>/` dir),
-/// overridable by `SAFFRON_ANIMA_BIN` (the parallel-binary knob the editor and e2e already honor).
+/// overridable by `SAFFRON_ANIMA_BIN` (the parallel-binary knob the editor and e2e honor).
 fn engine_binary_path() -> String {
     if let Ok(override_bin) = std::env::var("SAFFRON_ANIMA_BIN") {
         return override_bin;
@@ -1039,8 +1032,7 @@ fn engine_binary_path() -> String {
 }
 
 /// Whether the engine is up: ask the shared client; if the path exists but refuses the connection
-/// it is a stale socket, which is unlinked so a fresh launch can re-bind (the `cmd/sa`
-/// `is_engine_running` behavior).
+/// it is a stale socket, which is unlinked so a fresh launch can re-bind.
 fn engine_running(path: &str) -> bool {
     if Client::new(path).is_up() {
         return true;
@@ -1051,8 +1043,8 @@ fn engine_running(path: &str) -> bool {
     false
 }
 
-/// Polls the socket for up to ~5s after a detached launch (20 × 250ms, the `cmd/sa` cadence),
-/// reporting readiness when a connection succeeds.
+/// Polls the socket for up to ~5s after a detached launch (20 × 250ms), reporting readiness when a
+/// connection succeeds.
 fn poll_for_readiness(path: &str) -> StartOutcome {
     let client = Client::new(path);
     for _ in 0..20 {
@@ -1061,7 +1053,7 @@ fn poll_for_readiness(path: &str) -> StartOutcome {
             return StartOutcome::Ready("engine started".to_owned());
         }
     }
-    // Not a failure: the engine may still be initialising (the C++ wrapper also exits 0 here).
+    // Not a failure: the engine may still be initialising, so this exits 0.
     StartOutcome::Ready(
         "engine launched but socket not yet ready — it may still be initialising".to_owned(),
     )
@@ -1185,7 +1177,7 @@ mod tests {
     #[test]
     fn coerce_malformed_json_falls_through_to_string() {
         // A leading `{` triggers the JSON branch, the parse fails, and the value falls through the
-        // numeric ladder to the bare string (the C++ `is_discarded()` fall-through).
+        // numeric ladder to the bare string.
         assert_eq!(coerce("{nope"), json!("{nope"));
     }
 
@@ -1197,7 +1189,7 @@ mod tests {
     #[test]
     fn coerce_empty_token_is_empty_string() {
         // An empty token opens with none of `{`/`[`/`"`, parses as no number, and stays the bare
-        // (empty) string — the C++ `token.empty()` guards keep it off the JSON and unsigned paths.
+        // (empty) string — the empty guards keep it off the JSON and unsigned paths.
         assert_eq!(coerce(""), json!(""));
     }
 
@@ -1466,7 +1458,7 @@ mod tests {
     }
 
     /// A socket path with no listener is *not* running, and a stale file at the path is unlinked so
-    /// a fresh launch can re-bind (the `cmd/sa` `is_engine_running` unlink-on-refuse behavior).
+    /// a fresh launch can re-bind.
     #[test]
     fn engine_running_unlinks_stale_socket() {
         let dir = std::env::temp_dir().join(format!("sa-stale-test-{}", std::process::id()));
@@ -1722,7 +1714,7 @@ mod tests {
 
     #[test]
     fn format_thumbnail_base64_byte_math() {
-        // 8 base64 chars → (8 / 4) * 3 = 6 bytes, mirroring the C++ length arithmetic.
+        // 8 base64 chars → (8 / 4) * 3 = 6 bytes.
         let result = json!({"format": "png", "width": 64, "height": 64, "base64": "AAAAAAAA"});
         assert_eq!(
             format_text("get-thumbnail", &result),
