@@ -1,10 +1,7 @@
-//! The seed e2e tests proving the native-Rust harness against the live engine: ping/help/quit, a
-//! typed `render-stats` round-trip into the protocol DTO, and a `validation_errors()`-empty
-//! assertion on a one-cube scene.
+//! Seed e2e tests against the live engine: ping/help/quit, a typed `render-stats` round-trip into
+//! the protocol DTO, and a `validation_errors()`-empty assertion on a one-cube scene.
 //!
-//! These deliberately do *not* duplicate bun coverage (the bun suite owns the bulk of behavioral
-//! e2e); they prove the Rust path works and give a template. Each test boots its own isolated
-//! engine, drives it over the shared wire client, and shuts down.
+//! Each test boots its own isolated engine, drives it over the shared wire client, and shuts down.
 
 use std::time::Duration;
 
@@ -39,8 +36,7 @@ fn ping_help_quit_round_trip() {
 }
 
 /// A typed `render-stats` round-trip: the engine's reply deserializes straight into the protocol
-/// `RenderStatsDto`, which is the whole reason this Rust harness exists (a strongly-typed DTO
-/// assertion the bun suite cannot make). A few frames settle first so timing fields are populated.
+/// `RenderStatsDto`. A few frames settle first so timing fields are populated.
 #[test]
 fn render_stats_deserializes_into_the_typed_dto() {
     let mut engine = TestEngine::boot(&[]).expect("boot engine");
@@ -71,8 +67,7 @@ fn render_stats_deserializes_into_the_typed_dto() {
 }
 
 /// A one-cube scene renders validation-clean: boot with an auto empty project, add a cube preset,
-/// let the engine render a handful of frames, and assert no Vulkan validation error surfaced. This
-/// is the per-test validation gate the bun suite also enforces, here in Rust.
+/// let the engine render a handful of frames, and assert no Vulkan validation error surfaced.
 #[test]
 fn one_cube_scene_renders_validation_clean() {
     let mut engine = TestEngine::boot(&[("SAFFRON_AUTO_EMPTY_PROJECT", "1")]).expect("boot engine");

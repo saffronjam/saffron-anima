@@ -5,8 +5,7 @@ rust-version.workspace = true
 version.workspace = true
 license.workspace = true
 authors.workspace = true
-# A native-Rust peer of the bun e2e suite: boots the host binary headless and drives the
-# control socket from Cargo. Dev/test only — never published, never an engine dependency.
+# Boots the host binary headless and drives the control socket from Cargo. Dev/test only.
 publish = false
 
 [lib]
@@ -16,9 +15,9 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
-# The harness links the shared wire client (the one socket implementation) + the protocol
-# DTOs (so seed tests deserialize a `render-stats` reply into its typed DTO). It spawns the
-# already-built `saffron-host` binary by path, so it does *not* depend on the host crate.
+# The harness links the shared wire client + the protocol DTOs (so seed tests deserialize a
+# `render-stats` reply into its typed DTO). It spawns the already-built `saffron-host` binary by
+# path, so it does not depend on the host crate.
 [dependencies]
 saffron-control-client = { path = "../control-client" }
 saffron-protocol = { path = "../protocol" }

@@ -1,11 +1,8 @@
-//! The decimal-string-u64 contract probe against the live Rust engine: drive id-returning
-//! commands and assert their raw reply bytes carry every id as a quoted decimal string, the same
-//! invariant the canonical TS gate (`tools/check-control-schema/check.ts:assertRawU64`) enforces.
+//! The decimal-string-u64 contract probe against the live engine: drive id-returning commands and
+//! assert their raw reply bytes carry every id as a quoted decimal string.
 //!
-//! This is the engine-side peer of that gate (phase 6): the TS check stays canonical (it also
-//! proves the editor's JSON path), but a Cargo-native mirror lets the engine crew catch a `Uuid`
-//! regression without leaving `cargo test`. The negative probe (a bare-number id is *caught*) lives
-//! as a unit test in `src/lib.rs`; this file proves the positive direction live.
+//! The negative probe (a bare-number id is *caught*) lives as a unit test in `src/lib.rs`; this
+//! file proves the positive direction live.
 
 use saffron_e2e::{TestEngine, assert_raw_u64};
 use serde_json::json;

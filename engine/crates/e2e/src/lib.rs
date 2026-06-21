@@ -1,19 +1,16 @@
-//! A native-Rust e2e harness: boots the `saffron-host` binary headless and drives its control
-//! socket from Cargo, mirroring `tests/e2e/harness.ts`'s `Engine` API in idiomatic Rust.
+//! An e2e harness: boots the `saffron-host` binary headless and drives its control socket from
+//! Cargo.
 //!
-//! It is a *peer* of the bun suite, not a replacement: the bun suite stays the canonical
-//! cross-engine parity harness and the only one that exercises `@saffron/protocol` as the editor
-//! does. This harness exists for engine-side regression tests awkward to express in TypeScript — a
-//! strongly-typed DTO assertion, or a test that shares a fixture with a unit test in the same crate.
+//! It exists for engine-side regression tests that want a strongly-typed DTO assertion or a fixture
+//! shared with a unit test in the same crate.
 //!
-//! The wire is the shared [`saffron_control_client::Client`] (the one socket implementation in the
-//! tree) and the DTOs are the shared `saffron-protocol` types, so this harness and the `sa` CLI can
-//! never drift on framing or the `Uuid` decimal-string encoding (NO LEGACY).
+//! The wire is the shared [`saffron_control_client::Client`] and the DTOs are the shared
+//! `saffron-protocol` types, so this harness and the `sa` CLI cannot drift on framing or the `Uuid`
+//! decimal-string encoding.
 //!
-//! Boot isolation copies `harness.ts` exactly: each [`TestEngine`] spawns its own headless weston on
-//! a per-run Wayland socket and launches the host pointed at a per-run control socket, so two
-//! harnesses never collide. It honors `SAFFRON_ANIMA_BIN` (the parallel-binary knob) so it can run
-//! against the C++ binary in the parity rig.
+//! Boot isolation: each [`TestEngine`] spawns its own headless weston on a per-run Wayland socket
+//! and launches the host pointed at a per-run control socket, so two harnesses never collide. It
+//! honors `SAFFRON_ANIMA_BIN` so it can run against an alternate host binary.
 
 #![deny(unsafe_code)]
 
@@ -29,13 +26,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 /// The substring the engine's debug messenger prefixes every validation-layer error with
-/// (`[saffron:vulkan] error: [validation] …`), matching `harness.ts`'s `validationErrors` filter.
+/// (`[saffron:vulkan] error: [validation] …`).
 const VALIDATION_ERROR_MARKER: &str = "[saffron:vulkan] error: [validation]";
 
-/// The id-bearing keys the decimal-string-u64 contract scans for, identical to the canonical TS
-/// gate (`tools/check-control-schema/check.ts:assertRawU64`). A value under any of these keys must
-/// be a quoted decimal string (or `null`), never a bare JSON number — JS cannot represent a u64
-/// past 2^53, so a number-encoded id corrupts silently in the editor.
+/// The id-bearing keys the decimal-string-u64 contract scans for. A value under any of these keys
+/// must be a quoted decimal string (or `null`), never a bare JSON number — JS cannot represent a
+/// u64 past 2^53, so a number-encoded id corrupts silently in the editor.
 const ID_KEYS: [&str; 9] = [
     "id",
     "mesh",
@@ -48,16 +44,13 @@ const ID_KEYS: [&str; 9] = [
     "rootBone",
 ];
 
-/// The Rust mirror of the canonical TS contract gate's `assertRawU64`
-/// (`tools/check-control-schema/check.ts:134`): scan a raw reply line's `result` region for the
-/// id-bearing keys and require each value to be a quoted decimal string that round-trips as a u64,
-/// or the literal `null`. Returns one message per offending token (empty = clean), the same
-/// `errors[]` shape the TS gate accumulates.
+/// Scans a raw reply line's `result` region for the id-bearing keys and requires each value to be a
+/// quoted decimal string that round-trips as a u64, or the literal `null`. Returns one message per
+/// offending token (empty = clean).
 ///
 /// It works on the *raw bytes* deliberately: a parsed [`Value`] coerces a JSON number into a
 /// `Number` before this could see it, erasing the quoted-vs-bare distinction this is built to
-/// catch. This is the engine-side convenience peer of the TS gate (phase 6); the TS check stays the
-/// canonical one the reproducible gate invokes, because it also proves the editor's JSON path.
+/// catch.
 #[must_use]
 pub fn assert_raw_u64(raw: &str, label: &str) -> Vec<String> {
     let mut errors = Vec::new();
@@ -101,8 +94,7 @@ pub fn assert_raw_u64(raw: &str, label: &str) -> Vec<String> {
 }
 
 /// The value token immediately following an id key's colon: a quoted string (through its closing
-/// quote) or a run up to the next `,`, `}`, `]`, or whitespace — matching the TS gate's
-/// `([^,}\s]+)` capture and its `^"(\d+)"$` quoted-string test.
+/// quote) or a run up to the next `,`, `}`, `]`, or whitespace.
 fn value_token(value: &str) -> &str {
     if let Some(rest) = value.strip_prefix('"') {
         // A quoted string: include the closing quote (ids carry no escapes).
@@ -218,8 +210,8 @@ pub struct TestEngine {
 
 impl TestEngine {
     /// Boots a headless engine with `env` merged over the boot defaults, returning a driver bound to
-    /// its control socket. Mirrors `harness.ts`'s `Engine.boot`: a per-run weston + a per-run control
-    /// socket, the engine pointed at both, stdout+stderr captured for [`validation_errors`].
+    /// its control socket: a per-run weston + a per-run control socket, the engine pointed at both,
+    /// stdout+stderr captured for [`validation_errors`].
     ///
     /// [`validation_errors`]: TestEngine::validation_errors
     pub fn boot(env: &[(&str, &str)]) -> Result<Self> {
@@ -334,8 +326,8 @@ impl TestEngine {
         current_log(&self.log)
     }
 
-    /// The validation-layer error lines (empty = clean), the same filter `harness.ts` applies: the
-    /// debug messenger prints them as `[saffron:vulkan] error: [validation] …`.
+    /// The validation-layer error lines (empty = clean): the debug messenger prints them as
+    /// `[saffron:vulkan] error: [validation] …`.
     #[must_use]
     pub fn validation_errors(&self) -> Vec<String> {
         current_log(&self.log)
@@ -345,8 +337,7 @@ impl TestEngine {
             .collect()
     }
 
-    /// Sends one control command and decodes its `result` into the typed DTO `R`. The typed-DTO
-    /// path the Rust harness exists for.
+    /// Sends one control command and decodes its `result` into the typed DTO `R`.
     pub fn call<R: DeserializeOwned>(&mut self, cmd: &str, params: Value) -> Result<R> {
         Ok(self.client.call(cmd, params)?)
     }
@@ -364,8 +355,7 @@ impl TestEngine {
         Ok(self.client.call_raw_text(cmd, params)?)
     }
 
-    /// Lets the engine run a few render frames so deferred GPU work + validation surface (the
-    /// `settle` of `harness.ts`).
+    /// Lets the engine run a few render frames so deferred GPU work + validation surface.
     pub fn settle(&self, duration: Duration) {
         std::thread::sleep(duration);
     }
@@ -396,14 +386,14 @@ impl Drop for TestEngine {
     }
 }
 
-/// `XDG_RUNTIME_DIR` if set, else `/run/user/<uid>` (the `harness.ts` fallback).
+/// `XDG_RUNTIME_DIR` if set, else `/run/user/<uid>`.
 fn runtime_dir() -> String {
     std::env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_| format!("/run/user/{}", rustix::process::getuid().as_raw()))
 }
 
-/// The host binary to spawn: `SAFFRON_ANIMA_BIN` if set (the parallel-binary / C++-parity knob),
-/// else the `saffron-host` sibling of this test binary under `target/<profile>/`.
+/// The host binary to spawn: `SAFFRON_ANIMA_BIN` if set, else the `saffron-host` sibling of this
+/// test binary under `target/<profile>/`.
 fn engine_binary() -> PathBuf {
     if let Ok(path) = std::env::var("SAFFRON_ANIMA_BIN") {
         return PathBuf::from(path);
@@ -446,8 +436,7 @@ mod tests {
 
     /// The decimal-string-u64 detector is live, not vacuous: it accepts a quoted decimal-string id
     /// (the encoding `saffron-protocol`'s `Uuid` adapter emits) and **bites** a number-encoded id
-    /// (what a plain serde `u64` would emit, the single most dangerous silent wire failure). This is
-    /// the committed negative probe phase 6 requires — it runs with `cargo test`, no display needed.
+    /// (what a plain serde `u64` would emit, the single most dangerous silent wire failure).
     #[test]
     fn assert_raw_u64_accepts_decimal_strings_and_bites_numbers() {
         // Positive: a u64 past 2^53 emitted as a quoted decimal string passes clean.
@@ -472,8 +461,7 @@ mod tests {
         );
     }
 
-    /// Every id-bearing key the canonical TS gate scans is mirrored, `null` is allowed, and a number
-    /// under any of them bites — so the Rust mirror cannot drift narrower than the TS gate.
+    /// Every id-bearing key is scanned, `null` is allowed, and a number under any of them bites.
     #[test]
     fn assert_raw_u64_covers_every_id_key_and_allows_null() {
         let clean = concat!(
@@ -501,7 +489,7 @@ mod tests {
     }
 
     /// The scan is anchored to the `result` region: an id-shaped token before `"result"` (in the
-    /// envelope's `id` request-echo, say) is ignored, matching the TS gate's `raw.slice(...)`.
+    /// envelope's `id` request-echo, say) is ignored.
     #[test]
     fn assert_raw_u64_ignores_tokens_before_result() {
         // A bare-number `id` in the pre-`result` region must not trip the detector.

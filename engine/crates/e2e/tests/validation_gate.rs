@@ -1,6 +1,6 @@
-//! The validation-clean gate's regression probe (13-testing phase-5): a planted Vulkan
-//! validation error must be *caught*, proving the detector is wired (the right messenger prefix,
-//! the validation layer actually enabled) rather than silently disabled.
+//! The validation-clean gate's regression probe: a planted Vulkan validation error must be
+//! *caught*, proving the detector is wired (the right messenger prefix, the validation layer
+//! actually enabled) rather than silently disabled.
 //!
 //! A gate that can never go red is worthless. Every other render-touching e2e asserts
 //! `validation_errors()` is empty; this one boots the host with `SAFFRON_VK_PLANT_VALIDATION_ERROR`

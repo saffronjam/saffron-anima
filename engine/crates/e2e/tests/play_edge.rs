@@ -1,8 +1,7 @@
-//! A native-Rust slice over the live play-edge runtime: a dynamic box dropped above a static floor
-//! falls under gravity during Play and the authored height is restored on Stop. This exercises the
-//! host's on-play-edge world build + the `sim_tick` step + the physics write-back + the
-//! drop-on-stop teardown — the same path `tests/e2e/physics-falling-box.test.ts` covers, here as a
-//! typed-DTO Rust regression test (the harness's reason to exist).
+//! A slice over the live play-edge runtime: a dynamic box dropped above a static floor falls under
+//! gravity during Play and the authored height is restored on Stop. This exercises the host's
+//! on-play-edge world build + the `sim_tick` step + the physics write-back + the drop-on-stop
+//! teardown.
 
 use std::time::Duration;
 
