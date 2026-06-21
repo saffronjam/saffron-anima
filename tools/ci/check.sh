@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# The single reproducible verification gate for the Saffron Anima (Rust) engine + Tauri editor —
-# the Cargo/xtask/bun successor of the C++ `tools/ci/check.sh`. It sequences every test layer in
-# dependency order, accumulates failures, and prints one ALL/SOME verdict.
+# The single reproducible verification gate for the Saffron Anima engine + Tauri editor. It
+# sequences every test layer in dependency order, accumulates failures, and prints one ALL/SOME
+# verdict.
 #
 # Run inside the saffron-build toolbox with the host bun on PATH, under a display (the engine
-# smoke, the schema contract test, the project smoke, and the e2e suite open a Vulkan swapchain →
-# need one):
+# smoke, the schema contract test, the project smoke, and the e2e suite open a swapchain → need
+# one):
 #
 #   toolbox run -c saffron-build bash -lc '
 #     export PATH="/var/home/saffronjam/.bun/bin:$PATH" XDG_RUNTIME_DIR=/run/user/$(id -u)
@@ -14,8 +14,7 @@
 #     tools/ci/check.sh
 #   '
 #
-# `just check` invokes this script the same way. The sequenced steps (mirroring the C++ gate's
-# `step` blocks, adapted to Cargo):
+# `just check` invokes this script the same way. The sequenced steps:
 #
 #   1. workspace build           cargo build --workspace
 #   2. codegen freshness         xtask gen-protocol + git diff over the generated wire/Luau artifacts
@@ -23,9 +22,9 @@
 #                                golden/snapshot tests and the physics determinism gate)
 #   4. self-test-removal grep    no run*SelfTest / SAFFRON_SELFTEST / fn *self_test outside #[cfg(test)]
 #   5. present-only smoke        SAFFRON_EXIT_AFTER_FRAMES=5 + validation-clean log grep
-#   6. control-schema contract   check-control-schema/check.ts against the live Rust host
-#   7. project startup smoke     check-projects/check.sh against the live Rust host
-#   8. e2e                       the tests/e2e bun suite against the Rust host
+#   6. control-schema contract   check-control-schema/check.ts against the live host
+#   7. project startup smoke     check-projects/check.sh against the live host
+#   8. e2e                       the tests/e2e bun suite against the host
 #   9. frontend                  editor/ bun run build + bun test
 #  10. lint                      cargo fmt --check + cargo clippy --workspace -- -D warnings
 #
@@ -59,14 +58,14 @@ pass_step() { results+=("PASS  $1"); }
 fail_step() { results+=("FAIL  $1"); fail "$2"; }
 defer_step() { results+=("DEFER $1"); defer "$2"; }
 
-# The Rust present-only host + control CLI built by `cargo build --workspace`.
+# The present-only host + control CLI built by `cargo build --workspace`.
 RUST_HOST="${SAFFRON_ANIMA_BIN:-$ENGINE/target/debug/saffron-host}"
 RUST_SA="${SAFFRON_SA_BIN:-$ENGINE/target/debug/sa}"
 
-# Does the Rust host boot far enough to answer a control `ping`? A per-run socket must appear and
+# Does the host boot far enough to answer a control `ping`? A per-run socket must appear and
 # `sa ping` must round-trip. Probed once and cached (steps 5–8 gate on it). A FALSE here is a
-# regression now that the host is real (NOT a defer): the build step produced the binary, so a
-# host that does not answer ping is a failure to surface, not a missing prerequisite.
+# regression (NOT a defer): the build step produced the binary, so a host that does not answer
+# ping is a failure to surface, not a missing prerequisite.
 host_ready_cache=""
 host_ready() {
   if [ -n "$host_ready_cache" ]; then return "$host_ready_cache"; fi
@@ -123,10 +122,10 @@ else
 fi
 
 step "4. self-test-removal assertion (no runtime run*SelfTest / SAFFRON_SELFTEST / fn *self_test)"
-# Phase 8's audit: no in-engine self-test mechanism survives. Any of the three patterns appearing
-# OUTSIDE a `#[cfg(test)]` module is a runtime self-test (the C++ `SAFFRON_SELFTEST` machinery
-# returning) and fails the gate. The `#[cfg(test)] mod tests` test functions that PORT a C++
-# oracle (e.g. `scene_hierarchy_self_test`) are the legitimate replacements and are not flagged.
+# No in-engine self-test mechanism survives. Any of the three patterns appearing OUTSIDE a
+# `#[cfg(test)]` module is a runtime self-test and fails the gate. The `#[cfg(test)] mod tests`
+# test functions (e.g. `scene_hierarchy_self_test`) are the legitimate place for these and are
+# not flagged.
 selftest_hits="$(
   find "$ENGINE" -name '*.rs' -not -path '*/target/*' -print0 | xargs -0 awk '
     /^#\[cfg\(test\)\]/ { intest = 1 }

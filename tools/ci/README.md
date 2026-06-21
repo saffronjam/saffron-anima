@@ -1,7 +1,7 @@
 # CI / reproducible gate
 
-`tools/ci/check.sh` is the single reproducible gate for the Rust engine + Tauri editor — the
-Cargo/xtask/bun successor of the C++ gate. It runs ten steps in dependency order, accumulates
+`tools/ci/check.sh` is the single reproducible gate for the engine + Tauri editor. It runs ten
+steps in dependency order, accumulates
 failures (a failure in any one turns the whole gate red), and prints a per-step pass/fail
 summary ending in a clear `ALL GATES PASSED` / `SOME GATES FAILED` verdict.
 
@@ -10,13 +10,13 @@ summary ending in a clear `ALL GATES PASSED` / `SOME GATES FAILED` verdict.
 2. **codegen freshness** — `cargo run -p xtask -- gen-protocol` then `git diff --exit-code`
    over the generated wire + Luau artifacts (`editor/src/protocol/sa-types.ts`, the OpenRPC
    schema, the command manifest, `schemas/control/sa.generated.luau`). A drift means the
-   committed artifacts no longer match the Rust DTO source.
+   committed artifacts no longer match the DTO source.
 3. **unit + crate tests** — `cargo test --workspace`: the inline `#[cfg(test)]` + crate `tests/`
-   suites, including every ported self-test oracle, the golden/snapshot byte-exact tests, and the
+   suites, including every self-test oracle, the golden/snapshot byte-exact tests, and the
    physics cross-arch determinism gate (its x86 half — see below).
-4. **self-test-removal assertion** — the phase-8 audit: no `run*SelfTest` / `SAFFRON_SELFTEST` /
+4. **self-test-removal assertion** — no `run*SelfTest` / `SAFFRON_SELFTEST` /
    `fn *self_test` appears *outside* a `#[cfg(test)]` module (i.e. no runtime self-test survives).
-5. **present-only smoke + validation-clean** — boots the Rust host bounded to 5 frames
+5. **present-only smoke + validation-clean** — boots the host bounded to 5 frames
    (`SAFFRON_EXIT_AFTER_FRAMES=5`) and greps the log for `[saffron:vulkan] error: [validation]`
    (the only automated detector for the silent GPU-state-bug class).
 6. **control-schema contract** — `tools/check-control-schema/check.ts` diffs the live host's
@@ -24,7 +24,7 @@ summary ending in a clear `ALL GATES PASSED` / `SOME GATES FAILED` verdict.
    `assertRawU64` tripwire.
 7. **project startup smoke** — `tools/check-projects/check.sh` boots the host on a project,
    imports a model + texture, saves, restarts, and re-reads — asserting the on-disk asset layout.
-8. **e2e** — the `tests/e2e` bun suite against the Rust host (`SAFFRON_ANIMA_BIN` repointed at
+8. **e2e** — the `tests/e2e` bun suite against the host (`SAFFRON_ANIMA_BIN` repointed at
    `engine/target/debug/saffron-host`).
 9. **frontend** — `editor/` `bun run build` (gen `@saffron/protocol` → `tsc` → `vite build`) +
    `bun test`.
@@ -66,14 +66,8 @@ and run on the self-hosted runner instead. They are documented, not silently ski
 
 - **The determinism gate's aarch64 leg.** Step 3 runs the determinism gate's x86 half (the trace
   hash is stable run-to-run and build-to-build, flags confirmed active). The non-negotiable
-  `Rust-x86 hash == Rust-aarch64 hash` assertion is owned by `physics/tests/determinism.rs` and is
+  `x86 hash == aarch64 hash` assertion is owned by `physics/tests/determinism.rs` and is
   `DEFERRED-NEEDS-HARDWARE` until the self-hosted aarch64 runner re-derives the trace.
-- **The cross-engine parity rig** (`tests/e2e/parity.test.ts`, phase 7) records two measured
-  tolerances rather than asserting byte-identity: the project-JSON raw-byte key order (data
-  round-trips correctly) and the studio-lit preview render under llvmpipe (a lighting/tonemap
-  delta, not geometry). The byte-exact preview match is meaningful only on the real GPU the editor
-  ships on (`DEFERRED-NEEDS-HARDWARE`). These are sign-off inputs for `14-migration`, not gate
-  failures.
 
 ## Honest CI story
 

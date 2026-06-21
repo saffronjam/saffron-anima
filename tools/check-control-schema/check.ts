@@ -398,7 +398,7 @@ async function main(): Promise<number> {
         await call("ping");
         up = true;
       } catch {
-        // not ready
+        /* not ready yet; keep polling */
       }
     }
     if (!up) {
