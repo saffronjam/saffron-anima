@@ -7,7 +7,7 @@ use base64::engine::general_purpose::STANDARD;
 /// alphabet with `=` padding).
 ///
 /// Used to carry small binary blobs (e.g. thumbnail PNGs) over the JSON control
-/// protocol. Byte-identical to the C++ `base64Encode`.
+/// protocol.
 #[must_use]
 pub fn base64_encode(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)

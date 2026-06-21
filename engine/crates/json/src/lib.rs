@@ -2,12 +2,6 @@
 //! the control-command handlers depend on, and the decimal-string-`u64` wire encoding
 //! the engine and the editor share byte-for-byte.
 //!
-//! In C++ `Saffron.Json` existed because nlohmann was built with `JSON_NOEXCEPTION`, so
-//! its own error path was `std::abort()` and every parse/dump/typed-read had to be wrapped
-//! to return a value instead of crashing. That firewall reason is gone here: `serde_json`
-//! returns `Result` natively. What remains is a deliberate API — the field-by-field lenient
-//! readers and the frozen `u64` wire encoding — not an abort guard.
-//!
 //! Depends on `saffron-core`.
 
 #![deny(unsafe_code)]
@@ -43,7 +37,7 @@ pub enum Error {
 /// The crate `Result` alias bound to the typed [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Parses text into a JSON value, or a typed error. Never aborts (the C++ `parseJson`).
+/// Parses text into a JSON value, or a typed error.
 ///
 /// # Errors
 ///
@@ -52,11 +46,10 @@ pub fn parse_json(text: &str) -> Result<Value> {
     serde_json::from_str(text).map_err(|e| Error::Parse(e.to_string()))
 }
 
-/// Serializes a JSON value to a string (the C++ `dumpJson`).
+/// Serializes a JSON value to a string.
 ///
 /// `indent < 0` produces compact output; `indent >= 0` pretty-prints with that many
-/// spaces per level. Rust `String`s are UTF-8 by construction, so the nlohmann
-/// invalid-UTF-8 `replace` handler has no analogue and no failure mode here.
+/// spaces per level.
 #[must_use]
 pub fn dump_json(value: &Value, indent: i32) -> String {
     if indent < 0 {
@@ -75,11 +68,11 @@ pub fn dump_json(value: &Value, indent: i32) -> String {
 }
 
 /// Serializes a JSON value with every object's keys in **lexicographically sorted** order,
-/// recursively — the `nlohmann::json` (`std::map`) sorted-key default the byte-frozen asset
-/// formats (`.smat`, the `.smodel` META chunk) depend on for a stable source hash.
+/// recursively — the byte-frozen asset formats (`.smat`, the `.smodel` META chunk) depend
+/// on this for a stable source hash.
 ///
 /// `serde_json` is built workspace-wide with `preserve_order` (the control wire needs
-/// insertion order = field order), so object keys no longer sort implicitly; the asset
+/// insertion order = field order), so object keys do not sort implicitly; the asset
 /// encoders call this instead of [`dump_json`] to keep their sorted byte shape. `indent`
 /// follows [`dump_json`]: `< 0` is compact, `>= 0` pretty-prints with that many spaces.
 #[must_use]
@@ -105,7 +98,7 @@ fn sort_keys(value: &Value) -> Value {
     }
 }
 
-/// Emits a `u64` id as a decimal JSON *string* (the C++ `uuidToJson`).
+/// Emits a `u64` id as a decimal JSON *string*.
 ///
 /// Ids span the full `u64` range, past JavaScript's `2^53` safe integer, so a JSON
 /// number would silently lose precision on a JS client. The matching read
@@ -157,12 +150,12 @@ fn wire_u64(value: &Value) -> Option<u64> {
 }
 
 /// Locates `object[key]`, returning `None` when `object` is not an object or the key
-/// is absent (the C++ `findField` end-iterator semantics).
+/// is absent.
 fn find_field<'a>(object: &'a Value, key: &str) -> Option<&'a Value> {
     object.as_object().and_then(|map| map.get(key))
 }
 
-/// Reads a `u64` field, accepting a number *or* a decimal string (the C++ `jsonU64`).
+/// Reads a `u64` field, accepting a number *or* a decimal string.
 ///
 /// The lenient union mirrors the frozen wire contract: an unsigned number, a
 /// non-negative integer, or a string whose entire content parses as a `u64`. A
@@ -180,7 +173,7 @@ pub fn json_u64(object: &Value, key: &str) -> Result<u64> {
     })
 }
 
-/// Reads a string field (the C++ `jsonString`).
+/// Reads a string field.
 ///
 /// # Errors
 ///
@@ -196,7 +189,7 @@ pub fn json_string(object: &Value, key: &str) -> Result<String> {
         })
 }
 
-/// Reads an `f64` field (the C++ `jsonF64`).
+/// Reads an `f64` field.
 ///
 /// # Errors
 ///
@@ -209,7 +202,7 @@ pub fn json_f64(object: &Value, key: &str) -> Result<f64> {
     })
 }
 
-/// Reads a boolean field (the C++ `jsonBool`).
+/// Reads a boolean field.
 ///
 /// # Errors
 ///
@@ -222,28 +215,28 @@ pub fn json_bool(object: &Value, key: &str) -> Result<bool> {
     })
 }
 
-/// Reads a `u64` field, returning `fallback` when absent or mistyped (the C++ `jsonU64Or`).
+/// Reads a `u64` field, returning `fallback` when absent or mistyped.
 #[must_use]
 pub fn json_u64_or(object: &Value, key: &str, fallback: u64) -> u64 {
     json_u64(object, key).unwrap_or(fallback)
 }
 
-/// Reads a string field, returning `fallback` when absent or mistyped (the C++ `jsonStringOr`).
+/// Reads a string field, returning `fallback` when absent or mistyped.
 #[must_use]
 pub fn json_string_or(object: &Value, key: &str, fallback: String) -> String {
     json_string(object, key).unwrap_or(fallback)
 }
 
-/// Reads a number field as `f32`, narrowing the `f64` wire value (the C++ `jsonF32Or`).
+/// Reads a number field as `f32`, narrowing the `f64` wire value.
 ///
 /// Returns `fallback` when absent or mistyped; otherwise reads the value as an `f64`
-/// (the wire numeric type) and narrows it to `f32`, matching the C++ read-then-cast.
+/// (the wire numeric type) and narrows it to `f32`.
 #[must_use]
 pub fn json_f32_or(object: &Value, key: &str, fallback: f32) -> f32 {
     json_f64(object, key).map_or(fallback, |value| value as f32)
 }
 
-/// Reads a boolean field, returning `fallback` when absent or mistyped (the C++ `jsonBoolOr`).
+/// Reads a boolean field, returning `fallback` when absent or mistyped.
 #[must_use]
 pub fn json_bool_or(object: &Value, key: &str, fallback: bool) -> bool {
     json_bool(object, key).unwrap_or(fallback)
@@ -384,8 +377,7 @@ mod tests {
 
     #[test]
     fn f32_or_narrows_f64_wire_value() {
-        // A wire f64 with no exact f32 representation narrows the same way the C++
-        // read-then-cast does.
+        // A wire f64 with no exact f32 representation narrows to the nearest f32.
         let object = serde_json::json!({ "f": 0.1f64 });
         assert!((json_f32_or(&object, "f", 0.0) - 0.1f32).abs() < f32::EPSILON);
     }

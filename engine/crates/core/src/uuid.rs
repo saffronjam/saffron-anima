@@ -47,9 +47,8 @@ impl Uuid {
     }
 }
 
-/// Renders the id as its decimal-string wire form (the C++ `uuidToJson`,
-/// `std::to_string(value)`). The `serde_with` field attribute in
-/// `saffron-protocol` reuses this `Display` to emit the JSON string.
+/// Renders the id as its decimal-string wire form. The `serde_with` field
+/// attribute in `saffron-protocol` reuses this `Display` to emit the JSON string.
 impl fmt::Display for Uuid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -68,9 +67,9 @@ impl FromStr for Uuid {
 
 /// A minimal deterministic-period `u64` PRNG used to mint ids.
 ///
-/// SplitMix64 keeps the crate free of an RNG dependency while matching the C++
-/// `mt19937_64` *role* (a per-thread generator seeded once from entropy); the
-/// exact bit-stream is irrelevant — ids only need to be unique, not reproducible.
+/// SplitMix64 keeps the crate free of an RNG dependency: a per-thread generator
+/// seeded once from entropy. The exact bit-stream is irrelevant — ids only need
+/// to be unique, not reproducible.
 struct SplitMix64 {
     state: u64,
 }

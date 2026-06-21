@@ -3,8 +3,8 @@
 //! (`on_resize`, `on_key_pressed`, `on_key_released`, `on_close`,
 //! `on_file_dropped`) downstream code subscribes to.
 //!
-//! The C++ `Saffron.Window` wrapped SDL3; this is `winit` + `raw-window-handle`
-//! 0.6, with the same five typed signals. Two construction modes exist:
+//! Built on `winit` + `raw-window-handle` 0.6, with five typed signals. Two
+//! construction modes exist:
 //!
 //! - [`Window::new`] builds a real winit window (the standalone present-only
 //!   host) and hands out a `raw-window-handle` / `raw-display-handle` pair that
@@ -44,17 +44,14 @@ pub use winit::window::WindowId;
 
 /// The keycode carried by [`Window::on_key_pressed`] / [`Window::on_key_released`].
 ///
-/// This is winit's location-stable physical key identity. The C++ window carried
-/// an opaque SDL `i32` keycode; with no SDL in the tree the typed
-/// [`PhysicalKey`] is the clean replacement — it is exhaustively matchable
-/// downstream (`PhysicalKey::Code(KeyCode::Escape)`) instead of an opaque int.
+/// This is winit's location-stable physical key identity, exhaustively matchable
+/// downstream (`PhysicalKey::Code(KeyCode::Escape)`).
 pub type KeyCode = PhysicalKey;
 
 /// Errors from windowed construction.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The OS failed to create the window (the typed form of the C++
-    /// `SDL_CreateWindow failed: …` string).
+    /// The OS failed to create the window.
     #[error("failed to create window: {0}")]
     Create(#[from] winit::error::OsError),
 }
@@ -64,8 +61,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// The window creation parameters.
 ///
-/// Mirrors the C++ `WindowConfig` aggregate; the [`Default`] field values match
-/// it exactly (`"Saffron"`, 1600×900, not hidden).
+/// The [`Default`] field values are `"Saffron"`, 1600×900, not hidden.
 #[derive(Debug, Clone)]
 pub struct WindowConfig {
     /// The window title bar text.
@@ -92,9 +88,9 @@ impl Default for WindowConfig {
 /// The OS window and its typed event signals.
 ///
 /// Holds the five typed [`SubscriberList`] signals downstream code subscribes
-/// to, a raw-event signal that mirrors the C++ `eventSinks` forwarding, the
-/// current pixel size, the `should_close` latch, and — when windowed — the winit
-/// window whose `raw-window-handle` pair is exposed for surface creation.
+/// to, a raw-event signal forwarding every winit event, the current pixel size,
+/// the `should_close` latch, and — when windowed — the winit window whose
+/// `raw-window-handle` pair is exposed for surface creation.
 ///
 /// In headless mode the winit window is absent: the signals are fully usable but
 /// the handle accessors yield `None` / an error, so no Vulkan surface is built on
@@ -105,20 +101,18 @@ pub struct Window {
     height: u32,
     should_close: bool,
 
-    /// Fires when the window is asked to close (the C++ `onClose`).
+    /// Fires when the window is asked to close.
     pub on_close: SubscriberList<()>,
-    /// Fires on a pixel-size change with the new `(width, height)` (the C++
-    /// `onResize`).
+    /// Fires on a pixel-size change with the new `(width, height)`.
     pub on_resize: SubscriberList<(u32, u32)>,
-    /// Fires on a key press with `(keycode, is_repeat)` (the C++ `onKeyPressed`).
+    /// Fires on a key press with `(keycode, is_repeat)`.
     pub on_key_pressed: SubscriberList<(KeyCode, bool)>,
-    /// Fires on a key release with the keycode (the C++ `onKeyReleased`).
+    /// Fires on a key release with the keycode.
     pub on_key_released: SubscriberList<KeyCode>,
-    /// Fires on a dropped file with its path (the C++ `onFileDropped`).
+    /// Fires on a dropped file with its path.
     pub on_file_dropped: SubscriberList<std::path::PathBuf>,
     /// Fires for every raw winit [`WindowEvent`] before typed dispatch — the
-    /// typed re-expression of the C++ raw-`SDL_Event` `eventSinks` the host used
-    /// to feed the gizmo + fly-camera input.
+    /// host feeds this into the gizmo + fly-camera input.
     pub on_raw_event: SubscriberList<WindowEvent>,
 }
 
@@ -184,7 +178,7 @@ impl Window {
         self.should_close
     }
 
-    /// Latches the close request programmatically (the C++ `window.shouldClose = true`).
+    /// Latches the close request programmatically.
     ///
     /// The host sets this from the Escape-key subscription in the standalone windowed
     /// path; the editor/headless path has no window and exits via the parent-death watch
@@ -204,8 +198,8 @@ impl Window {
     /// Translates a winit [`WindowEvent`] into the typed signals.
     ///
     /// This is the pure translation table the host's event loop feeds; it
-    /// publishes the raw event to [`on_raw_event`](Self::on_raw_event) first
-    /// (mirroring the C++ `eventSinks` firing before typed dispatch), then maps:
+    /// publishes the raw event to [`on_raw_event`](Self::on_raw_event) first,
+    /// then maps:
     ///
     /// - [`WindowEvent::CloseRequested`] → latch `should_close` + `on_close`;
     /// - [`WindowEvent::Resized`] → update size + `on_resize(w, h)`;

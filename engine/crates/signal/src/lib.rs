@@ -15,8 +15,6 @@
 //! `Arc<Mutex>` around the subscriber set. Interior mutability (`RefCell`/`Cell`)
 //! gives every operation a `&self` receiver, which is what lets a handler reach
 //! the list to subscribe/unsubscribe itself while a `publish` is in flight.
-//!
-//! DAG: depends on `saffron-core`.
 
 #![deny(unsafe_code)]
 
@@ -47,8 +45,8 @@ struct Entry<Args> {
 /// the next publish.
 ///
 /// `Args` is the published payload — a single value, or a tuple for several
-/// (the C++ `SubscriberList<u32, u32>` becomes `SubscriberList<(u32, u32)>`).
-/// `Args` must be `Clone` so each subscriber receives its own copy.
+/// (e.g. `SubscriberList<(u32, u32)>`). `Args` must be `Clone` so each
+/// subscriber receives its own copy.
 ///
 /// The list is single-thread: handlers need not be `Send`, and every method
 /// takes `&self` via interior mutability.
@@ -163,8 +161,8 @@ mod tests {
     use super::*;
     use std::rc::Rc;
 
-    /// Fan-out: two subscribers both fire and accumulate (the C++ `sum == 22`,
-    /// `calls == 2` case).
+    /// Fan-out: two subscribers both fire and accumulate (`sum == 22`,
+    /// `calls == 2`).
     #[test]
     fn fan_out_invokes_every_subscriber() {
         let sum = Rc::new(Cell::new(0));

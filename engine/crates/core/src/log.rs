@@ -4,9 +4,8 @@
 //! ahead of the message for the non-info levels). The format is grep-relied-upon
 //! and the validation-clean-log gate parses it, so it is frozen.
 //!
-//! The subsystem tag is derived idiomatically from the caller's `module_path!()`
-//! (the leading `saffron_<area>` crate segment → `<area>`), not by scraping a
-//! source file path as the C++ `logSubsystem` did.
+//! The subsystem tag is derived from the caller's `module_path!()` (the leading
+//! `saffron_<area>` crate segment → `<area>`).
 
 /// Severity of a log line. `Warn` and `Error` insert their level before the
 /// message.
@@ -44,8 +43,7 @@ fn format_line(level: LogLevel, subsystem: &str, message: &str) -> String {
 /// Maps a caller's `module_path!()` to its subsystem tag.
 ///
 /// `saffron_core::uuid` → `core`, `saffron_rendering` → `rendering`. A path that
-/// does not start with the `saffron_` crate prefix falls back to `engine`,
-/// mirroring the C++ default.
+/// does not start with the `saffron_` crate prefix falls back to `engine`.
 #[must_use]
 pub fn subsystem_of(module_path: &str) -> &str {
     let crate_segment = module_path.split("::").next().unwrap_or(module_path);

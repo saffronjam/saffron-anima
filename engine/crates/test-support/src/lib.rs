@@ -1,26 +1,18 @@
 //! Shared test comparators and the golden-byte diff helper.
 //!
-//! Pulled in under `[dev-dependencies]` by the crates whose oracles were ported from the
-//! C++ `run*SelfTest` functions (animation, geometry, physics, …). It exists so the float
-//! tolerances that *are* the contract live in one place rather than re-defined per test:
-//! the C++ self-tests each re-declared their own `expect`/`eps`/`quatClose` lambdas
-//! (`animation.cpp:769`, `scene.cppm:1714`, `geometry.cppm:2024`), and copying every one
-//! across would recreate that drift surface.
+//! Pulled in under `[dev-dependencies]` by the crates whose oracles assert against float
+//! tolerances (animation, geometry, physics, …). The tolerances that *are* the contract
+//! live in one place rather than re-defined per test.
 //!
-//! # The C++ epsilons (the ported tolerances)
+//! # Tolerances
 //!
-//! These are the exact tolerances the `runAnimationSelfTest` oracle (`animation.cpp:766`)
-//! asserts against, lifted verbatim so a Rust port that drifts a tolerance is visible here,
-//! not buried in a copied literal:
-//!
-//! - [`EPS`] = `1e-4` — the general "values are equal" tolerance (`eps`, `animation.cpp:782`):
-//!   sampled translations/scales, playhead times, applied-delta endpoints, `quatClose`'s
+//! - [`EPS`] = `1e-4` — the general "values are equal" tolerance: sampled
+//!   translations/scales, playhead times, applied-delta endpoints, `quat_close`'s
 //!   double-cover margin.
 //! - [`IK_REACH_EPS`] = `1e-3` — two-bone IK lands its end effector on an in-range target
-//!   this close (`animation.cpp:565,1160,1172`); also the bent-chain reach check.
+//!   this close; also the bent-chain reach check.
 //! - [`IK_OVER_REACH_EPS`] = `1e-2` — an over-extended chain straightens and clamps to its
-//!   max reach this close (`animation.cpp:1183,1185`); looser because the clamped solve only
-//!   approximately straightens.
+//!   max reach this close; looser because the clamped solve only approximately straightens.
 //!
 //! # Where the helpers live
 //!
@@ -29,17 +21,16 @@
 //!
 //! # The on-disk golden snapshot harness
 //!
-//! [`assert_bytes_match_golden`] is the phase-2 snapshot helper: it loads a committed
-//! fixture from `fixtures/golden/` (at the repo root), diffs `actual` against it with
-//! [`golden`], and on mismatch panics with the first-differing-offset hexdump. The
-//! fixtures are byte-exact reference artifacts generated *once* from the C++ engine's
-//! format owners (see `fixtures/golden/gen/`), then frozen — the detector for the silent
-//! byte-drift class (`.smesh`/`.smat`/`.sanim` byte shifts, std430 offset moves, shm
-//! header changes) that never throws and never fails validation.
+//! [`assert_bytes_match_golden`] loads a committed fixture from `fixtures/golden/` (at the
+//! repo root), diffs `actual` against it with [`golden`], and on mismatch panics with the
+//! first-differing-offset hexdump. The fixtures are byte-exact reference artifacts, frozen
+//! once seeded — the detector for the silent byte-drift class (`.smesh`/`.smat`/`.sanim`
+//! byte shifts, std430 offset moves, shm header changes) that never throws and never fails
+//! validation.
 //!
 //! Setting `UPDATE_GOLDEN=1` rewrites the fixture from `actual` instead of asserting — the
 //! seed/reseed path, for an *intentional* format change that updates the one writer and the
-//! one fixture together (NO LEGACY), never to mask a real Rust drift.
+//! one fixture together, never to mask a real drift.
 
 #![deny(unsafe_code)]
 
@@ -47,18 +38,17 @@ use std::path::{Path, PathBuf};
 
 use glam::Quat;
 
-/// The general float-equality tolerance the C++ animation oracle calls `eps`
-/// (`animation.cpp:782` — `constexpr f32 eps = 1e-4f`). The default for "these two values
-/// are the same value".
+/// The general float-equality tolerance, the default for "these two values are the same
+/// value".
 pub const EPS: f32 = 1e-4;
 
-/// Two-bone IK end-effector reach tolerance (`animation.cpp:565,1160` — `< 1e-3f`): a
-/// solved chain lands its end on an in-range target this close.
+/// Two-bone IK end-effector reach tolerance: a solved chain lands its end on an in-range
+/// target this close.
 pub const IK_REACH_EPS: f32 = 1e-3;
 
-/// Two-bone IK over-reach clamp tolerance (`animation.cpp:1183` — `< 1e-2f`): an
-/// over-extended chain straightens toward the target and lands at max reach this close.
-/// Looser than [`IK_REACH_EPS`] because the clamped solve only approximately straightens.
+/// Two-bone IK over-reach clamp tolerance: an over-extended chain straightens toward the
+/// target and lands at max reach this close. Looser than [`IK_REACH_EPS`] because the
+/// clamped solve only approximately straightens.
 pub const IK_OVER_REACH_EPS: f32 = 1e-2;
 
 /// Whether `a` and `b` are within `eps` of each other.
@@ -85,8 +75,7 @@ pub fn assert_close(a: f32, b: f32, eps: f32) {
 /// Whether `a` and `b` are the same orientation under the quaternion double cover.
 ///
 /// `q` and `-q` rotate identically, so equality is `|dot(a, b)| > 1 - 1e-4` rather than a
-/// component compare — the exact check the C++ oracle's `quatClose` lambda uses
-/// (`animation.cpp:780`). The `1e-4` margin is [`EPS`].
+/// component compare. The `1e-4` margin is [`EPS`].
 #[must_use]
 pub fn quat_close(a: Quat, b: Quat) -> bool {
     a.dot(b).abs() > 1.0 - EPS
@@ -109,9 +98,9 @@ pub fn assert_quat_close(a: Quat, b: Quat) {
 /// Returns `Ok(())` when the two byte slices are identical, else `Err` with the first
 /// differing offset and a windowed hexdump around it — the failure mode an implementer can
 /// act on (which byte drifted, in context), not a wall of bytes. Lengths that differ are
-/// reported with the shorter side's tail. This is the comparison core the phase-2 snapshot
-/// helper (`assert_bytes_match_golden`) wraps once it adds on-disk fixture loading and the
-/// `UPDATE_GOLDEN` reseed path.
+/// reported with the shorter side's tail. This is the comparison core
+/// [`assert_bytes_match_golden`] wraps with on-disk fixture loading and the `UPDATE_GOLDEN`
+/// reseed path.
 pub fn golden(actual: &[u8], expected: &[u8]) -> Result<(), String> {
     if actual == expected {
         return Ok(());
@@ -154,7 +143,7 @@ pub fn golden_dir() -> PathBuf {
 }
 
 /// Asserts `actual` matches the committed golden fixture named `name` under
-/// `fixtures/golden/`, the phase-2 snapshot contract.
+/// `fixtures/golden/`.
 ///
 /// On a match this is silent. On a mismatch it panics with [`golden`]'s
 /// first-differing-offset windowed hexdump — the byte an implementer must fix and its
@@ -162,10 +151,10 @@ pub fn golden_dir() -> PathBuf {
 /// the cause is obvious.
 ///
 /// When the `UPDATE_GOLDEN` env var is set (to any non-empty value), `actual` is *written*
-/// to the fixture instead of asserted — the seed/reseed path. This exists only to seed the
-/// fixtures from the C++ engine the first time, or to land an *intentional* format change
-/// (the one writer and the one fixture move together, NO LEGACY). It is never the way to
-/// quiet a real Rust drift: a drift is a finding, not a reseed.
+/// to the fixture instead of asserted — the seed/reseed path, for seeding a fixture the
+/// first time or landing an *intentional* format change (the one writer and the one fixture
+/// move together). It is never the way to quiet a real drift: a drift is a finding, not a
+/// reseed.
 #[track_caller]
 pub fn assert_bytes_match_golden(name: &str, actual: &[u8]) {
     let path = golden_path(name);
@@ -180,8 +169,8 @@ pub fn assert_bytes_match_golden(name: &str, actual: &[u8]) {
     }
     let expected = std::fs::read(&path).unwrap_or_else(|e| {
         panic!(
-            "golden fixture '{}' is missing ({e}); seed it with UPDATE_GOLDEN=1 from the C++ \
-             reference, then commit it",
+            "golden fixture '{}' is missing ({e}); seed it with UPDATE_GOLDEN=1 from the Rust \
+             host, then commit it",
             path.display()
         )
     });
@@ -310,7 +299,7 @@ mod tests {
     fn golden_dir_resolves_to_the_committed_fixtures() {
         let dir = golden_dir();
         assert!(dir.is_dir(), "golden dir must exist: {}", dir.display());
-        // The seeded fixtures the phase commits are present.
+        // The committed fixtures are present.
         for name in [
             "cube.smesh",
             "cube.sanim",
