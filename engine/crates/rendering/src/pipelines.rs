@@ -3,11 +3,8 @@
 //! [`Pipeline`]. [`Pipelines::request_mesh_pipeline`] builds-and-caches on first
 //! request and returns the shared [`Arc`].
 //!
-//! This ports `requestMeshPipeline` + `newMeshPipeline` (`renderer_pipelines.cpp:40`/
-//! `:205`/`:238`) and the `Pipelines` cache (`renderer_types.cppm:1227`). The C++
-//! cache keyed by a built-up string (`shader|unlit|skinned|wireframe`); the Rust port
-//! keys by a [`PsoKey`] struct so the key is matchable, not a stringly-typed concat —
-//! one cache, one key shape (the phase's NO-LEGACY note).
+//! The cache keys by a [`PsoKey`] struct so the key is matchable, not a stringly-typed
+//! concat — one cache, one key shape.
 //!
 //! # Variants
 //!
@@ -33,15 +30,14 @@ use crate::gpu_types::Material;
 use crate::resources::{DeviceResources, Pipeline};
 use crate::{Device, Error, Result, checked};
 
-/// The offscreen color attachment format every mesh PSO renders into — the C++
-/// `OffscreenColorFormat` (`renderer_types.cppm:54`).
+/// The offscreen color attachment format every mesh PSO renders into.
 pub const OFFSCREEN_COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
-/// The depth attachment format — the C++ `DepthFormat` (`renderer_types.cppm:49`).
+/// The depth attachment format.
 pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-/// Which screen-space compute PSO slot a request memoizes — the closed set the
-/// phase-9 chain owns, dispatched by [`Pipelines::request_screen_compute`].
+/// Which screen-space compute PSO slot a request memoizes — the closed set dispatched
+/// by [`Pipelines::request_screen_compute`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScreenCompute {
     Gtao,
@@ -62,7 +58,7 @@ enum ScreenCompute {
 }
 
 /// The typed mesh-PSO cache key. One übershader backs every renderable; this tuple is
-/// the full permutation set (the C++ string key, made matchable).
+/// the full permutation set.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PsoKey {
     /// The shader the PSO compiles (the übershader, or a codegen'd material `.spv`).
@@ -86,8 +82,7 @@ pub struct PsoKey {
 pub struct Pipelines {
     resources: Arc<DeviceResources>,
     shader_dir: PathBuf,
-    /// The set layouts every mesh PSO's pipeline layout binds (set 0/1/2 in this
-    /// phase; later phases extend the list as their sub-state lands).
+    /// The set layouts every mesh PSO's pipeline layout binds.
     set_layouts: Vec<vk::DescriptorSetLayout>,
     fill_mode_non_solid: bool,
     sample_count: vk::SampleCountFlags,
@@ -96,34 +91,31 @@ pub struct Pipelines {
     pipelines_created: u32,
 
     /// The vertex-only depth pre-pass PSO (binds sets 0/1/2, the viewProj push), built
-    /// lazily on the first request and reused. The C++ `Pipelines::depthPrepass`.
+    /// lazily on the first request and reused.
     depth_prepass: Option<Arc<Pipeline>>,
 
     /// The vertex-only, depth-biased shadow depth PSO (the directional + spot shadow
-    /// maps), built lazily. The C++ `Pipelines::shadowDepth`.
+    /// maps), built lazily.
     shadow_depth: Option<Arc<Pipeline>>,
 
-    /// The color (distance) + depth point-shadow cube-face PSO, built lazily. The C++
-    /// `Pipelines::pointShadow`.
+    /// The color (distance) + depth point-shadow cube-face PSO, built lazily.
     point_shadow: Option<Arc<Pipeline>>,
 
-    /// The clustered light-cull compute PSO, built lazily. The C++ `Pipelines::cull`.
+    /// The clustered light-cull compute PSO, built lazily.
     light_cull: Option<Arc<Pipeline>>,
 
-    /// The compute skinning PSO (skin set layout, a 16-byte push), built lazily. The C++
-    /// `Pipelines::skin`.
+    /// The compute skinning PSO (skin set layout, a 16-byte push), built lazily.
     skin: Option<Arc<Pipeline>>,
 
     /// The cluster compute set layout the cull PSO binds (set 0).
     cluster_set_layout: vk::DescriptorSetLayout,
 
     /// The thin G-buffer prepass PSO (view normal + view-Z), built lazily on the first
-    /// request and reused. The C++ `Pipelines::gbuffer`.
+    /// request and reused.
     gbuffer: Option<Arc<Pipeline>>,
 
     /// The screen-space compute PSOs (gtao / ao-blur / contact / ssgi / ssgi-blur /
-    /// ssgi-accum / copy-color), built lazily once their set layouts are known. The C++
-    /// `Pipelines::{gtao,aoBlur,contact,ssgi,ssgiBlur,ssgiAccum,copyColor}`.
+    /// ssgi-accum / copy-color), built lazily once their set layouts are known.
     gtao: Option<Arc<Pipeline>>,
     ao_blur: Option<Arc<Pipeline>>,
     contact: Option<Arc<Pipeline>>,
@@ -133,8 +125,7 @@ pub struct Pipelines {
     copy_color: Option<Arc<Pipeline>>,
 
     /// The five DDGI compute PSOs (voxelize / trace / blend-irradiance / blend-distance /
-    /// border), built lazily once the DDGI sub-state's set layouts are known. The C++
-    /// `Pipelines::{ddgiVoxelize,ddgiTrace,ddgiBlendIrr,ddgiBlendDist,ddgiBorder}`.
+    /// border), built lazily once the DDGI sub-state's set layouts are known.
     ddgi_voxelize: Option<Arc<Pipeline>>,
     ddgi_trace: Option<Arc<Pipeline>>,
     ddgi_blend_irr: Option<Arc<Pipeline>>,
@@ -143,43 +134,40 @@ pub struct Pipelines {
 
     /// The three ReSTIR DI compute PSOs (initial candidate sampling / temporal+spatial
     /// reuse / resolve incl. the TLAS visibility ray), built lazily once the device-shared
-    /// [`crate::Restir`] set layouts are known. RT-only (the resolve needs ray-query). The
-    /// C++ `Pipelines::{restirInitial,restirReuse,restirResolve}`.
+    /// [`crate::Restir`] set layouts are known. RT-only (the resolve needs ray-query).
     restir_initial: Option<Arc<Pipeline>>,
     restir_reuse: Option<Arc<Pipeline>>,
     restir_resolve: Option<Arc<Pipeline>>,
 
     /// The motion-vector prepass PSO (instanced, depth-tested, rg16f motion), built
-    /// lazily. The C++ `Pipelines::motion`.
+    /// lazily.
     motion: Option<Arc<Pipeline>>,
     /// The TAA resolve compute PSO (taa-shape set layout, a 16-byte push), built lazily.
-    /// The C++ `Pipelines::taa`.
     taa: Option<Arc<Pipeline>>,
-    /// The FXAA edge-blur compute PSO (fxaa set layout, no push), built lazily. The C++
-    /// `Pipelines::fxaa`.
+    /// The FXAA edge-blur compute PSO (fxaa set layout, no push), built lazily.
     fxaa: Option<Arc<Pipeline>>,
 
     /// The mandatory tonemap compute PSO (tonemap set layout, a 4-byte exposure push),
-    /// built lazily. The C++ `Pipelines::tonemap`.
+    /// built lazily.
     tonemap: Option<Arc<Pipeline>>,
     /// The tonemap compute set layout (one storage image) the tonemap PSO binds (set 0).
     tonemap_set_layout: vk::DescriptorSetLayout,
     /// The analytic ground-grid graphics PSO (fullscreen, depth-tested, alpha-blended,
-    /// a 2×mat4 push), built lazily. The C++ `Pipelines::grid`.
+    /// a 2×mat4 push), built lazily.
     grid: Option<Arc<Pipeline>>,
     /// The always-on-top editor-overlay graphics PSO (the [`crate::OverlayVertex`]
-    /// stream, alpha-blended, no depth test), built lazily. The C++ `Pipelines::overlay`.
+    /// stream, alpha-blended, no depth test), built lazily.
     overlay: Option<Arc<Pipeline>>,
     /// The depth-tested editor-overlay graphics PSO (same as `overlay` but depth-tested
-    /// so scene geometry occludes it), built lazily. The C++ `Pipelines::overlayDepth`.
+    /// so scene geometry occludes it), built lazily.
     overlay_depth: Option<Arc<Pipeline>>,
 }
 
 impl Pipelines {
     /// Builds the cache front door against the device-global descriptor layouts.
     ///
-    /// `sample_count` is the MSAA target sample count the mesh PSOs match (1× until
-    /// the AA phase lands); `descriptors` supplies the set layouts the pipeline layout
+    /// `sample_count` is the MSAA target sample count the mesh PSOs match;
+    /// `descriptors` supplies the set layouts the pipeline layout
     /// binds. The shader dir is resolved once (`SAFFRON_SHADER_DIR` override, else the
     /// `shaders/` dir beside the running binary) so a build-and-cache never re-walks it.
     pub fn new(
@@ -252,9 +240,7 @@ impl Pipelines {
     /// Re-targets the mesh + depth-prepass PSOs to a new MSAA sample count, clearing every
     /// sample-count-baked PSO so the next request rebuilds it. The mesh PSOs (cache),
     /// depth-prepass, and motion PSO bake the count; the screen-space + shadow PSOs are
-    /// always 1× and untouched. The caller has idled the GPU (an AA change). The C++
-    /// `setAa`'s `pipelines.cache.clear()` + depth-prepass/sky rebuild
-    /// (`renderer_aa.cpp:94`).
+    /// always 1× and untouched. The caller has idled the GPU (an AA change).
     pub fn set_sample_count(&mut self, sample_count: vk::SampleCountFlags) {
         if self.sample_count == sample_count {
             return;
@@ -265,8 +251,7 @@ impl Pipelines {
         self.cache.clear();
         // The depth-prepass PSO bakes the count too — drop it to rebuild lazily. The
         // G-buffer / shadow / motion PSOs are always 1× (they feed post-resolve targets),
-        // so they are untouched. The C++ `setAa` cleared the cache + rebuilt the depth
-        // prepass (`renderer_aa.cpp:94`).
+        // so they are untouched.
         self.depth_prepass = None;
     }
 
@@ -281,7 +266,7 @@ impl Pipelines {
     ///
     /// Wireframe is gated on `fill_mode_non_solid`: an unsupported device falls back
     /// to the fill PSO (so the key never names a permutation the device cannot make).
-    /// A build failure is logged and returns `None` (the C++ returned a null `Ref`).
+    /// A build failure is logged and returns `None`.
     pub fn request_mesh_pipeline(
         &mut self,
         material: &Material,
@@ -317,7 +302,7 @@ impl Pipelines {
     /// The vertex-only depth pre-pass PSO, built and cached on first request. It binds
     /// sets 0/1/2 (the same prefix as the mesh layout) and the viewProj push, writes no
     /// color, and depth-tests `LESS` with depth writes on. Returns `None` on a build
-    /// failure (logged). The C++ `makeDepthPrepassPipeline`.
+    /// failure (logged).
     pub fn request_depth_prepass(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.depth_prepass {
             return Some(Arc::clone(pipeline));
@@ -339,8 +324,7 @@ impl Pipelines {
     /// The vertex-only, depth-biased shadow depth PSO, built and cached on first request.
     /// Like the depth pre-pass but always single-sampled (the shadow map is 1×) and
     /// depth-biased (dynamic, set per shadow pass) to kill acne. Binds sets 0/1/2 + the
-    /// light-space viewProj push. Returns `None` on a build failure (logged). The C++
-    /// `makeShadowPipeline`.
+    /// light-space viewProj push. Returns `None` on a build failure (logged).
     pub fn request_shadow_depth(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.shadow_depth {
             return Some(Arc::clone(pipeline));
@@ -362,7 +346,7 @@ impl Pipelines {
     /// The point-shadow cube-face PSO (color distance + depth), built and cached on first
     /// request. Renders world distance-to-light into one cube face; the push carries the
     /// face viewProj (mat4) + the light world position (vec4), in the VERTEX|FRAGMENT
-    /// stages. Returns `None` on a build failure (logged). The C++ `makePointShadowPipeline`.
+    /// stages. Returns `None` on a build failure (logged).
     pub fn request_point_shadow(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.point_shadow {
             return Some(Arc::clone(pipeline));
@@ -383,8 +367,7 @@ impl Pipelines {
 
     /// The clustered light-cull compute PSO, built and cached on first request. Binds the
     /// cluster compute set (set 0: params UBO + light list + cluster lists) and dispatches
-    /// one invocation per froxel. Returns `None` on a build failure (logged). The C++
-    /// `newComputePipeline("shaders/light_cull.spv", clusterSetLayout)`.
+    /// one invocation per froxel. Returns `None` on a build failure (logged).
     pub fn request_light_cull(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.light_cull {
             return Some(Arc::clone(pipeline));
@@ -406,8 +389,7 @@ impl Pipelines {
     /// The compute skinning PSO, built and cached on first request. Binds the skin set
     /// layout (four storage buffers: static vertices, skin, palette, deformed output) +
     /// a 16-byte push, and deforms one vertex per invocation. `skin_set_layout` is owned
-    /// by [`crate::skinning::Skinning`]. Returns `None` on a build failure (logged). The
-    /// C++ `newComputePipeline("shaders/skin.spv", skinning.setLayout, 16)`.
+    /// by [`crate::skinning::Skinning`]. Returns `None` on a build failure (logged).
     pub fn request_skin(
         &mut self,
         skin_set_layout: vk::DescriptorSetLayout,
@@ -432,7 +414,7 @@ impl Pipelines {
     /// The thin G-buffer prepass PSO (view normal rgb + view-Z in .a), built and cached
     /// on first request. Instanced (sets 0/1/2), single-sampled (the G-buffer is
     /// post-resolve), depth `LESS` + write, the `viewProj + view` push. Returns `None`
-    /// on a build failure (logged). The C++ `makeGbufferPipeline`.
+    /// on a build failure (logged).
     pub fn request_gbuffer(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.gbuffer {
             return Some(Arc::clone(pipeline));
@@ -452,37 +434,32 @@ impl Pipelines {
     }
 
     /// The GTAO compute PSO (compute2 layout, an 80-byte push), built + cached on first
-    /// request. The C++ `newComputePipeline("shaders/gtao.spv", compute2Layout, 80)`.
+    /// request.
     pub fn request_gtao(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         self.request_screen_compute(ScreenCompute::Gtao, "shaders/gtao.spv", layout, 80)
     }
 
-    /// The AO bilateral-blur compute PSO (compute3 layout, no push). The C++
-    /// `newComputePipeline("shaders/ao_blur.spv", compute3Layout)`.
+    /// The AO bilateral-blur compute PSO (compute3 layout, no push).
     pub fn request_ao_blur(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         self.request_screen_compute(ScreenCompute::AoBlur, "shaders/ao_blur.spv", layout, 0)
     }
 
     /// The directional contact-shadow compute PSO (compute2 layout, a 160-byte push).
-    /// The C++ `newComputePipeline("shaders/contact.spv", compute2Layout, 160)`.
     pub fn request_contact(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         self.request_screen_compute(ScreenCompute::Contact, "shaders/contact.spv", layout, 160)
     }
 
-    /// The one-bounce SSGI trace compute PSO (compute3 layout, a 144-byte push). The
-    /// C++ `newComputePipeline("shaders/ssgi.spv", compute3Layout, 144)`.
+    /// The one-bounce SSGI trace compute PSO (compute3 layout, a 144-byte push).
     pub fn request_ssgi(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         self.request_screen_compute(ScreenCompute::Ssgi, "shaders/ssgi.spv", layout, 144)
     }
 
-    /// The SSGI bilateral-blur compute PSO (compute3 layout, no push). The C++
-    /// `newComputePipeline("shaders/ssgi_blur.spv", compute3Layout)`.
+    /// The SSGI bilateral-blur compute PSO (compute3 layout, no push).
     pub fn request_ssgi_blur(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         self.request_screen_compute(ScreenCompute::SsgiBlur, "shaders/ssgi_blur.spv", layout, 0)
     }
 
     /// The SSGI temporal-accumulation compute PSO (taa-shape layout, a 16-byte push).
-    /// The C++ `newComputePipeline("shaders/ssgi_accum.spv", taaSetLayout, 16)`.
     pub fn request_ssgi_accum(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         self.request_screen_compute(
             ScreenCompute::SsgiAccum,
@@ -492,8 +469,7 @@ impl Pipelines {
         )
     }
 
-    /// The SSGI prev-color history-copy compute PSO (compute2 layout, no push). The C++
-    /// `newComputePipeline("shaders/copy_color.spv", compute2Layout)`.
+    /// The SSGI prev-color history-copy compute PSO (compute2 layout, no push).
     pub fn request_copy_color(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         self.request_screen_compute(
             ScreenCompute::CopyColor,
@@ -503,8 +479,7 @@ impl Pipelines {
         )
     }
 
-    /// The DDGI voxelize compute PSO (its set layout, a 48-byte push). The C++
-    /// `newComputePipeline("shaders/ddgi_voxelize.spv", voxelLayout, 48)`.
+    /// The DDGI voxelize compute PSO (its set layout, a 48-byte push).
     pub fn request_ddgi_voxelize(
         &mut self,
         layout: vk::DescriptorSetLayout,
@@ -517,8 +492,7 @@ impl Pipelines {
         )
     }
 
-    /// The DDGI trace compute PSO (its set layout, a 112-byte push). The C++
-    /// `newComputePipeline("shaders/ddgi_trace.spv", traceLayout, 112)`.
+    /// The DDGI trace compute PSO (its set layout, a 112-byte push).
     pub fn request_ddgi_trace(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         self.request_screen_compute(
             ScreenCompute::DdgiTrace,
@@ -528,8 +502,7 @@ impl Pipelines {
         )
     }
 
-    /// The DDGI blend-irradiance compute PSO (its set layout, a 48-byte push). The C++
-    /// `newComputePipeline("shaders/ddgi_blend_irradiance.spv", blendIrrLayout, 48)`.
+    /// The DDGI blend-irradiance compute PSO (its set layout, a 48-byte push).
     pub fn request_ddgi_blend_irr(
         &mut self,
         layout: vk::DescriptorSetLayout,
@@ -542,8 +515,7 @@ impl Pipelines {
         )
     }
 
-    /// The DDGI blend-distance compute PSO (its set layout, a 48-byte push). The C++
-    /// `newComputePipeline("shaders/ddgi_blend_distance.spv", blendDistLayout, 48)`.
+    /// The DDGI blend-distance compute PSO (its set layout, a 48-byte push).
     pub fn request_ddgi_blend_dist(
         &mut self,
         layout: vk::DescriptorSetLayout,
@@ -556,8 +528,7 @@ impl Pipelines {
         )
     }
 
-    /// The DDGI octahedral-border compute PSO (its set layout, a 32-byte push). The C++
-    /// `newComputePipeline("shaders/ddgi_border.spv", borderLayout, 32)`.
+    /// The DDGI octahedral-border compute PSO (its set layout, a 32-byte push).
     pub fn request_ddgi_border(
         &mut self,
         layout: vk::DescriptorSetLayout,
@@ -571,7 +542,6 @@ impl Pipelines {
     }
 
     /// The ReSTIR initial-candidate-sampling compute PSO (its set layout, a 176-byte push).
-    /// The C++ `newComputePipeline("shaders/restir_initial.spv", initialLayout, 176)`.
     pub fn request_restir_initial(
         &mut self,
         layout: vk::DescriptorSetLayout,
@@ -584,8 +554,7 @@ impl Pipelines {
         )
     }
 
-    /// The ReSTIR temporal+spatial reuse compute PSO (its set layout, a 160-byte push). The
-    /// C++ `newComputePipeline("shaders/restir_reuse.spv", reuseLayout, 160)`.
+    /// The ReSTIR temporal+spatial reuse compute PSO (its set layout, a 160-byte push).
     pub fn request_restir_reuse(
         &mut self,
         layout: vk::DescriptorSetLayout,
@@ -599,8 +568,7 @@ impl Pipelines {
     }
 
     /// The ReSTIR resolve compute PSO (its set layout incl. the TLAS binding, a 160-byte
-    /// push). RT-only — the resolve traces one visibility ray via the TLAS. The C++
-    /// `newComputePipeline("shaders/restir_resolve.spv", resolveLayout, 160)`.
+    /// push). RT-only — the resolve traces one visibility ray via the TLAS.
     pub fn request_restir_resolve(
         &mut self,
         layout: vk::DescriptorSetLayout,
@@ -617,7 +585,7 @@ impl Pipelines {
     /// cur/prev camera reprojection), built and cached on first request. Two vertex
     /// bindings (cur + prev position), sets 0/1/2, a 2×mat4 push. Built single-sampled but
     /// re-dropped on a sample-count change so it tracks the active count. Returns `None` on
-    /// a build failure (logged). The C++ `makeMotionPipeline`.
+    /// a build failure (logged).
     pub fn request_motion(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.motion {
             return Some(Arc::clone(pipeline));
@@ -637,8 +605,7 @@ impl Pipelines {
     }
 
     /// The TAA resolve compute PSO (the taa-shape set layout: 3 samplers + 2 storage, a
-    /// 16-byte push), built and cached on first request. The C++
-    /// `newComputePipeline("shaders/taa.spv", taaSetLayout, 16)`.
+    /// 16-byte push), built and cached on first request.
     pub fn request_taa(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.taa {
             return Some(Arc::clone(pipeline));
@@ -658,8 +625,7 @@ impl Pipelines {
     }
 
     /// The FXAA edge-blur compute PSO (the fxaa set layout: source sampler + offscreen
-    /// storage, no push), built and cached on first request. The C++
-    /// `newComputePipeline("shaders/fxaa.spv", fxaaSetLayout)`.
+    /// storage, no push), built and cached on first request.
     pub fn request_fxaa(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.fxaa {
             return Some(Arc::clone(pipeline));
@@ -679,8 +645,7 @@ impl Pipelines {
     }
 
     /// The mandatory tonemap compute PSO (tonemap set layout, a 4-byte exposure push),
-    /// built and cached on first request. The C++
-    /// `newComputePipeline("shaders/tonemap.spv", tonemapSetLayout, 4)`. Returns `None`
+    /// built and cached on first request. Returns `None`
     /// only on a build failure (logged) — the tonemap is otherwise always present.
     pub fn request_tonemap(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.tonemap {
@@ -703,7 +668,7 @@ impl Pipelines {
     /// The analytic ground-grid graphics PSO (fullscreen triangle, depth-tested without
     /// writing, alpha-blended, a 2×mat4 vertex+fragment push), built and cached on first
     /// request. Single-sampled (the grid draws on the 1× resolved color after tonemap).
-    /// Returns `None` on a build failure (logged). The C++ `newGridPipeline`.
+    /// Returns `None` on a build failure (logged).
     pub fn request_grid(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.grid {
             return Some(Arc::clone(pipeline));
@@ -724,8 +689,7 @@ impl Pipelines {
 
     /// The always-on-top editor-overlay graphics PSO (the [`crate::OverlayVertex`]
     /// stream, alpha-blended, no depth test, single-sampled, no descriptor sets), built
-    /// and cached on first request. Returns `None` on a build failure (logged). The C++
-    /// `newOverlayPipeline(renderer, false)`.
+    /// and cached on first request. Returns `None` on a build failure (logged).
     pub fn request_overlay(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.overlay {
             return Some(Arc::clone(pipeline));
@@ -746,8 +710,7 @@ impl Pipelines {
 
     /// The depth-tested editor-overlay graphics PSO (same as `overlay` but depth-tested
     /// so scene geometry occludes it — camera frustums, etc.), built and cached on first
-    /// request. Returns `None` on a build failure (logged). The C++
-    /// `newOverlayPipeline(renderer, true)`.
+    /// request. Returns `None` on a build failure (logged).
     pub fn request_overlay_depth(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.overlay_depth {
             return Some(Arc::clone(pipeline));
@@ -834,28 +797,27 @@ impl Pipelines {
     }
 
     /// Number of distinct mesh PSOs the cache holds — inspectable to verify übershader
-    /// reuse (many materials, few PSOs). The C++ `pipelineCount`.
+    /// reuse (many materials, few PSOs).
     pub fn pipeline_count(&self) -> u32 {
         self.cache.len() as u32
     }
 
-    /// Total PSOs ever compiled (the cache only grows in this phase, so this equals
-    /// [`Pipelines::pipeline_count`]; it diverges once eviction lands). The C++
-    /// `stats.pipelinesCreated`.
+    /// Total PSOs ever compiled (the cache only grows, so this equals
+    /// [`Pipelines::pipeline_count`]).
     pub fn pipelines_created(&self) -> u32 {
         self.pipelines_created
     }
 
     /// Builds one mesh PSO for `key`: loads the shader, sets the unlit spec constant,
     /// selects the vertex entry/input for the skinned variant, the wireframe polygon
-    /// mode, and the dynamic-rendering color/depth formats. The C++ `newMeshPipeline`.
+    /// mode, and the dynamic-rendering color/depth formats.
     fn build_mesh_pipeline(&self, key: &PsoKey) -> Result<Pipeline> {
         let raw = self.resources.device();
         let module = self.load_shader_module(&key.shader)?;
         // Free the shader module however the rest of this function returns.
         let result = self.build_mesh_pipeline_with_module(raw, key, module);
         // SAFETY: the ash seam. The module is consumed by pipeline creation; freeing
-        // it after creation is valid and required (the C++ destroyed it post-create).
+        // it after creation is valid and required.
         unsafe { raw.destroy_shader_module(module, None) };
         result
     }
@@ -1028,7 +990,7 @@ impl Pipelines {
 
     /// Builds the vertex-only depth pre-pass PSO from the übershader's `vertexMain`:
     /// binding 0 = the base [`Vertex`] stream (position/normal/uv0), no color, depth
-    /// `LESS` + write, sets 0/1/2, the viewProj push. The C++ `makeDepthPrepassPipeline`.
+    /// `LESS` + write, sets 0/1/2, the viewProj push.
     fn build_depth_prepass(&self) -> Result<Pipeline> {
         let raw = self.resources.device();
         let module = self.load_shader_module("shaders/mesh.spv")?;
@@ -1133,7 +1095,7 @@ impl Pipelines {
     /// Builds the thin G-buffer prepass PSO from `gbuffer.slang`: binding 0 = the base
     /// [`Vertex`] stream, one `R16G16B16A16_SFLOAT` color (view normal rgb + view-Z),
     /// depth `LESS` + write, single-sampled (the G-buffer is post-resolve), sets 0/1/2,
-    /// the `viewProj + view` push. The C++ `makeGbufferPipeline`.
+    /// the `viewProj + view` push.
     fn build_gbuffer(&self) -> Result<Pipeline> {
         let raw = self.resources.device();
         let module = self.load_shader_module("shaders/gbuffer.spv")?;
@@ -1249,7 +1211,7 @@ impl Pipelines {
     /// Builds the motion-vector prepass PSO from `motion.slang`: two vertex bindings (cur
     /// position on binding 0, prev position on binding 1), instanced (sets 0/1/2),
     /// single-sampled (the motion target is 1×), depth `LESS` + write, rg16f color, the
-    /// cur/prev viewProj push. The C++ `makeMotionPipeline`.
+    /// cur/prev viewProj push.
     fn build_motion(&self) -> Result<Pipeline> {
         let raw = self.resources.device();
         let module = self.load_shader_module("shaders/motion.spv")?;
@@ -1395,7 +1357,6 @@ impl Pipelines {
     /// Builds the vertex-only, depth-biased shadow depth PSO from the übershader's
     /// `vertexMain`: binding 0 = the base [`Vertex`] stream, no color, depth `LESS` +
     /// write, dynamic depth-bias, single-sampled, sets 0/1/2, the light-viewProj push.
-    /// The C++ `makeShadowPipeline`.
     fn build_shadow_depth(&self) -> Result<Pipeline> {
         let raw = self.resources.device();
         let module = self.load_shader_module("shaders/mesh.spv")?;
@@ -1504,7 +1465,7 @@ impl Pipelines {
     /// Builds the point-shadow cube-face PSO from `point_shadow.slang`: binding 0 = the
     /// base [`Vertex`] stream, one `R32_SFLOAT` color (distance) + depth, depth `LESS` +
     /// write, single-sampled, sets 0/1/2, the (mat4 viewProj + vec4 lightPos) push in the
-    /// VERTEX|FRAGMENT stages. The C++ `makePointShadowPipeline`.
+    /// VERTEX|FRAGMENT stages.
     fn build_point_shadow(&self) -> Result<Pipeline> {
         let raw = self.resources.device();
         let module = self.load_shader_module("shaders/point_shadow.spv")?;
@@ -1620,7 +1581,6 @@ impl Pipelines {
 
     /// Builds a compute PSO from `shader` over `set_layout` with an optional
     /// compute-stage push of `push_size` bytes (0 = none). Entry point `computeMain`.
-    /// The C++ `newComputePipeline`.
     fn build_compute(
         &self,
         shader: &str,
@@ -1685,7 +1645,7 @@ impl Pipelines {
     /// vertex buffer), depth-tested `LESS_OR_EQUAL` without writing (it emits `SV_Depth`
     /// to occlude against the persisted 1× scene depth), alpha-blended over the resolved
     /// color, single-sampled, the `viewProj + invViewProj` push (vertex+fragment), no
-    /// descriptor sets. The C++ `newGridPipeline`.
+    /// descriptor sets.
     fn build_grid(&self) -> Result<Pipeline> {
         let raw = self.resources.device();
         let module = self.load_shader_module("shaders/grid.spv")?;
@@ -1793,7 +1753,7 @@ impl Pipelines {
     /// sets, alpha-blended, single-sampled, no depth write. `depth_test` selects the
     /// occluded variant (`LESS_OR_EQUAL` against the scene depth) vs the on-top variant
     /// (no test); both declare the depth format so the PSO stays render-pass compatible
-    /// with the overlay pass's depth attachment. The C++ `newOverlayPipeline`.
+    /// with the overlay pass's depth attachment.
     fn build_overlay(&self, depth_test: bool) -> Result<Pipeline> {
         let raw = self.resources.device();
         let module = self.load_shader_module("shaders/gizmo_overlay.spv")?;
@@ -1924,14 +1884,13 @@ impl Pipelines {
     }
 
     /// Loads a SPIR-V shader module from the runtime shader dir (or an absolute path
-    /// for a codegen'd material shader). The C++ `loadShaderModule` + `assetPath`.
+    /// for a codegen'd material shader).
     fn load_shader_module(&self, shader: &str) -> Result<vk::ShaderModule> {
         let path = if Path::new(shader).is_absolute() {
             PathBuf::from(shader)
         } else {
-            // `shaders/mesh.spv` → `<shader_dir>/mesh.spv` (the C++ kept the `shaders/`
-            // prefix because `assetPath` joined onto the exe dir; here the dir already
-            // *is* the shaders dir, so a `shaders/` prefix is stripped).
+            // `shaders/mesh.spv` → `<shader_dir>/mesh.spv`: the dir already *is* the
+            // shaders dir, so a `shaders/` prefix is stripped.
             self.shader_dir
                 .join(shader.strip_prefix("shaders/").unwrap_or(shader))
         };
@@ -1960,8 +1919,7 @@ impl Pipelines {
 }
 
 /// The straight-alpha over blend attachment the grid + overlay PSOs share
-/// (`srcAlpha`/`1-srcAlpha` color, `one`/`1-srcAlpha` alpha). The C++ grid/overlay
-/// `blendAttachment`.
+/// (`srcAlpha`/`1-srcAlpha` color, `one`/`1-srcAlpha` alpha).
 fn alpha_blend_attachment() -> vk::PipelineColorBlendAttachmentState {
     vk::PipelineColorBlendAttachmentState::default()
         .blend_enable(true)
@@ -2059,8 +2017,7 @@ mod tests {
     }
 
     /// A `PsoKey` is the matchable cache key: equal tuples are equal + hash equal, a
-    /// differing flag is a distinct key. Runs on any host (the key is GPU-free logic);
-    /// proves the C++ stringly key became a typed tuple with no behavior loss.
+    /// differing flag is a distinct key. Runs on any host (the key is GPU-free logic).
     #[test]
     fn pso_key_distinguishes_every_variant() {
         use std::collections::HashSet;
@@ -2169,7 +2126,7 @@ mod tests {
     /// The AA PSOs build on llvmpipe (motion graphics + TAA/FXAA compute), and
     /// `set_sample_count` clears the sample-count-baked cache + drops the depth-prepass so
     /// the next request rebuilds for the new count, while leaving the always-1× motion PSO
-    /// intact. The phase-10 PSO-cache-clear acceptance gate. Skips when no device.
+    /// intact. Skips when no device.
     #[test]
     fn aa_pipelines_build_and_sample_count_change_clears_the_baked_cache() {
         let Some((device, descriptors, mut pipelines)) = fixture_or_skip() else {

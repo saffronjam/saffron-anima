@@ -5,13 +5,11 @@
 //! [`crate::Instancing::submit_draw_list`] resolves each item's material to a cached
 //! PSO, buckets by (pipeline, mesh) into instanced draws, deduplicates the per-frame
 //! material table, and produces the [`SceneDrawList`] the scene + depth passes record.
-//! These are the Rust expression of the C++ `DrawItem` (`renderer_types.cppm:582`),
-//! `DrawBatch` (`:604`), `SceneDrawList` (`:644`), and `RenderStats` (`:710`).
 //!
 //! Skinned items carry a joint palette: [`crate::Instancing::submit_draw_list`] deforms
 //! each into its slice of the frame's deformed-vertex buffer (the [`SkinDispatch`] the
 //! `skin` compute pass replays), then draws it as a static instance reading that slice.
-//! The [`SkinnedRtInstance`] list rides for the RT refit BLAS (phase 13).
+//! The [`SkinnedRtInstance`] list rides for the RT refit BLAS.
 
 use std::sync::Arc;
 
@@ -25,8 +23,7 @@ use crate::resources::{GpuMesh, GpuTexture, Pipeline};
 /// the PBR factors that fold into the per-frame [`crate::MaterialParamsData`].
 ///
 /// A [`DrawItem`] carries one per mesh submesh, indexed by `Submesh::material_slot`
-/// order; a single entry applies to every submesh (clamped). The C++ `SubmeshMaterial`
-/// (`renderer_types.cppm:557`).
+/// order; a single entry applies to every submesh (clamped).
 #[derive(Clone)]
 pub struct SubmeshMaterial {
     /// Base-color / albedo texture (`None` → default white, factors unchanged).
@@ -68,7 +65,6 @@ pub struct SubmeshMaterial {
 impl SubmeshMaterial {
     /// The default glTF metallic-roughness defaults the draw path applies when an item
     /// carries no per-submesh material — white base color, dielectric, fully rough.
-    /// Matches the per-row defaults `submitDrawList` seeds before reading the material.
     pub fn defaults() -> Self {
         Self {
             albedo_texture: None,
@@ -102,7 +98,7 @@ impl Default for SubmeshMaterial {
 /// per-submesh materials, and the PSO-selecting [`Material`].
 ///
 /// `submit_draw_list` resolves the material to a cached PSO and batches by
-/// (pipeline, mesh) into instanced draws. The C++ `DrawItem` (`renderer_types.cppm:582`).
+/// (pipeline, mesh) into instanced draws.
 #[derive(Clone)]
 pub struct DrawItem {
     /// The mesh to draw.
@@ -154,8 +150,7 @@ pub fn normal_matrix(model: Mat4) -> Mat4 {
 /// A batch of instances sharing a pipeline + mesh, drawn as one instanced draw per
 /// submesh. Bindless means the per-instance texture indices live in the instance SSBO,
 /// not a per-batch descriptor — so texture differences never split a batch.
-/// `base_instance` offsets into the frame's instance buffer. The C++ `DrawBatch`
-/// (`renderer_types.cppm:604`).
+/// `base_instance` offsets into the frame's instance buffer.
 #[derive(Clone)]
 pub struct DrawBatch {
     /// The PSO resolved from the material via the cache.
@@ -178,7 +173,7 @@ pub struct DrawBatch {
 /// One skinned mesh-instance's compute work for the frame: the descriptor set wiring its
 /// static + skin streams, the joint palette, and the deformed output, plus the push the
 /// `skin` kernel reads. Built by [`crate::Instancing::submit_draw_list`] and replayed in
-/// the `skin` pass. The C++ `SkinDispatch` (`renderer_types.cppm:620`).
+/// the `skin` pass.
 #[derive(Clone, Copy)]
 pub struct SkinDispatch {
     /// The per-dispatch descriptor set (static vertices, skin, palette, deformed output).
@@ -193,8 +188,7 @@ pub struct SkinDispatch {
 
 /// One skinned mesh-instance the TLAS references via its own per-frame refit BLAS. The
 /// deformed vertices are already in world space (the palette is `worldBone * inverseBind`
-/// and the skin kernel omits the model matrix), so the TLAS transform is identity. The
-/// C++ `SkinnedRtInstance` (`renderer_types.cppm:638`); the AS build lands in phase 13.
+/// and the skin kernel omits the model matrix), so the TLAS transform is identity.
 #[derive(Clone)]
 pub struct SkinnedRtInstance {
     /// Keys the grow-only per-instance refit BLAS (built once, then updated).
@@ -210,8 +204,7 @@ pub struct SkinnedRtInstance {
 }
 
 /// The frame's structured draw list, built by `submit_draw_list` and recorded by the
-/// scene pass (shaded) and the optional depth pre-pass (depth only). The C++
-/// `SceneDrawList` (`renderer_types.cppm:644`).
+/// scene pass (shaded) and the optional depth pre-pass (depth only).
 #[derive(Default)]
 pub struct SceneDrawList {
     /// The camera view-projection (the per-frame vertex push constant).
@@ -224,13 +217,13 @@ pub struct SceneDrawList {
     /// The parallel dispatches that deform the previous pose into the prev-deformed
     /// buffer (previous palette + previous-deformed output), read only by the motion pass.
     pub prev_skin_dispatches: Vec<SkinDispatch>,
-    /// Per skinned instance: the entity + deformed offset the RT refit BLAS reads (phase
-    /// 13). Empty unless an RT consumer is armed.
+    /// Per skinned instance: the entity + deformed offset the RT refit BLAS reads. Empty
+    /// unless an RT consumer is armed.
     pub skinned_rt_instances: Vec<SkinnedRtInstance>,
     /// Textures pinned live for the frame (their bindless indices are referenced by
     /// the instance SSBO, so the `Arc`s must outlive the GPU read).
     pub live_textures: Vec<Arc<GpuTexture>>,
-    /// `true` once a draw list has been built this frame (the C++ `valid`).
+    /// `true` once a draw list has been built this frame.
     pub valid: bool,
 }
 
@@ -253,8 +246,7 @@ impl SceneDrawList {
 }
 
 /// Per-frame scene draw counters, refreshed each `submit_draw_list` and inspectable to
-/// verify the batching is not O(draws). The C++ `RenderStats` (`renderer_types.cppm:710`)
-/// reduced to the draw-path counters this phase produces.
+/// verify the batching is not O(draws).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RenderStats {
     /// `drawIndexed` calls (one per submesh per batch).
@@ -267,9 +259,9 @@ pub struct RenderStats {
     pub triangles: u32,
     /// Descriptor-set binds recorded in the scene pass.
     pub descriptor_binds: u32,
-    /// Primary command buffers submitted this frame (the C++ `commandBuffers`).
+    /// Primary command buffers submitted this frame.
     pub command_buffers: u32,
-    /// `vkQueueSubmit2` calls this frame (the C++ `queueSubmits`).
+    /// `vkQueueSubmit2` calls this frame.
     pub queue_submits: u32,
     /// PSOs compiled this frame (non-zero on a steady-state frame = a compile hitch).
     pub pipelines_created: u32,

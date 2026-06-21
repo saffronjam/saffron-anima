@@ -1,6 +1,6 @@
 //! The offscreen thumbnail + material-preview render primitives.
 //!
-//! Ports `renderer_thumbnail.cpp`: the minimal mesh-thumbnail render, the studio-lit
+//! The minimal mesh-thumbnail render, the studio-lit
 //! material-preview render (default pipeline or a codegen'd material `.spv`), the
 //! textured model render, and the downscale-and-read-back PNG encoders. Each render is
 //! a self-contained one-off submit — allocate a `size`×`size` (optionally MSAA-resolved)
@@ -8,9 +8,8 @@
 //! `SHADER_READ_ONLY_OPTIMAL`, and hand back an [`Arc`]`<`[`GpuTexture`]`>` the caller
 //! reads with [`ThumbnailRenderer::encode_texture_thumbnail_png`].
 //!
-//! The C++ ran these as free functions on the `Renderer&` and cached the
-//! thumbnail/preview PSOs + the unit sphere on the renderer; the Rust port gathers them
-//! into a [`ThumbnailRenderer`] sub-state the [`crate::Renderer`] owns and delegates to.
+//! The thumbnail/preview PSOs + the unit sphere are cached on a
+//! [`ThumbnailRenderer`] sub-state the [`crate::Renderer`] owns and delegates to.
 //! Keeping the sub-state separate from the swapchain-backed `Renderer` lets the render +
 //! read-back be exercised against a bare [`Device`] (the headless swapchain WSI crashes
 //! lavapipe, but the offscreen render does not).
@@ -34,7 +33,7 @@ use crate::thumbnail::{PngTransfer, format_pixel_bytes};
 use crate::{DEFAULT_WHITE_SLOT, Device, Error, GpuQueue, Result, Uploader, checked};
 
 /// Encoded PNG bytes plus the actual encoded pixel dimensions (so a reply reports the
-/// truthful width/height rather than the requested size). The C++ `ThumbnailPng`.
+/// truthful width/height rather than the requested size).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThumbnailPng {
     /// The encoded PNG bytes.
@@ -58,7 +57,7 @@ struct PreviewPush {
     pbr: Vec4,
 }
 
-/// The mesh-thumbnail push constant — `mvp` + `normalMatrix` (the C++ `ThumbnailPush`).
+/// The mesh-thumbnail push constant — `mvp` + `normalMatrix`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ThumbnailPush {
@@ -75,23 +74,21 @@ const FEATURE_NORMAL: u32 = 1;
 ///
 /// Holds an [`Arc`]`<`[`DeviceResources`]`>` so its cached resources free without a live
 /// `&Device`. The render entry points take the `&Device` + `&Descriptors` per call (the
-/// queue + physical-device probes + bindless set live there), exactly as the C++ free
-/// functions took the `Renderer&`. The C++ `Pipelines::thumbnail`/`preview` +
-/// `Renderer::previewSphere`, grouped.
+/// queue + physical-device probes + bindless set live there). The thumbnail/preview PSOs
+/// + the preview sphere are grouped here.
 pub struct ThumbnailRenderer {
     resources: Arc<DeviceResources>,
     /// The color attachment format the thumbnail/preview PSOs render into — the
     /// swapchain format (the editor reads thumbnails over the control plane, not the
-    /// swapchain, but matching it keeps the PSO render-pass-compatible with the C++).
+    /// swapchain, but matching it keeps the PSO render-pass-compatible).
     color_format: vk::Format,
     /// The minimal mesh-thumbnail PSO (vertex input + a 2×mat4 push, no descriptor sets),
-    /// built lazily on the first thumbnail render. The C++ `Pipelines::thumbnail`.
+    /// built lazily on the first thumbnail render.
     thumbnail_pipeline: Option<Arc<Pipeline>>,
     /// The studio-lit material-preview PSO (binds the bindless set, a 112-byte
-    /// `PreviewPush`), built lazily. The C++ `Pipelines::preview`.
+    /// `PreviewPush`), built lazily.
     preview_pipeline: Option<Arc<Pipeline>>,
-    /// The unit UV sphere the material preview renders, built lazily. The C++
-    /// `Renderer::previewSphere`.
+    /// The unit UV sphere the material preview renders, built lazily.
     preview_sphere: Option<Arc<GpuMesh>>,
 }
 
@@ -132,7 +129,6 @@ impl ThumbnailRenderer {
     /// The highest MSAA count (≤8) valid for the thumbnail targets: the device's supported
     /// counts intersected with the color format's own counts. Thumbnails are tiny and
     /// rendered once, so always taking the maximum is cheap and hides geometry aliasing.
-    /// The C++ `thumbnailSampleCount`.
     fn sample_count(&self, device: &Device) -> vk::SampleCountFlags {
         let mut supported = device.supported_sample_counts(self.color_format, crate::DEPTH_FORMAT);
         // SAFETY: the ash seam. The physical-device handle + format query are read-only.
@@ -164,8 +160,7 @@ impl ThumbnailRenderer {
     }
 
     /// Builds (and caches) the lazy thumbnail/preview PSOs + the preview sphere up front,
-    /// so a later render never initializes them on a contended path. The C++
-    /// `prewarmThumbnailResources`.
+    /// so a later render never initializes them on a contended path.
     ///
     /// # Errors
     ///
@@ -231,7 +226,7 @@ impl ThumbnailRenderer {
     }
 
     /// Renders `mesh` framed by its AABB under a fixed directional light (flat neutral
-    /// albedo) into a `size`×`size` texture. The C++ `renderMeshThumbnail`.
+    /// albedo) into a `size`×`size` texture.
     ///
     /// # Errors
     ///
@@ -275,8 +270,7 @@ impl ThumbnailRenderer {
 
     /// Renders a unit sphere with `material` under studio lighting into a `size`×`size`
     /// texture. `shader_spv` of `None` uses the cached default preview pipeline; a codegen
-    /// material passes its compiled `.spv` path and gets a fresh per-call pipeline. The
-    /// C++ `renderMaterialPreview`.
+    /// material passes its compiled `.spv` path and gets a fresh per-call pipeline.
     ///
     /// # Errors
     ///
@@ -342,7 +336,7 @@ impl ThumbnailRenderer {
 
     /// Renders `mesh` shaded per-submesh with its own material from `submesh_materials`
     /// (indexed by `Submesh::material_slot`, clamped) under the studio preview lighting,
-    /// framed by the mesh bounds — the textured asset tile. The C++ `renderModelThumbnail`.
+    /// framed by the mesh bounds — the textured asset tile.
     ///
     /// # Errors
     ///
@@ -418,7 +412,6 @@ impl ThumbnailRenderer {
     }
 
     /// Renders the framed mesh to a `size`×`size` texture, then reads it back to a PNG.
-    /// The C++ `encodeAssetThumbnailPng`.
     ///
     /// # Errors
     ///
@@ -435,7 +428,7 @@ impl ThumbnailRenderer {
     }
 
     /// Renders the framed, textured model to a `size`×`size` texture, then reads it back
-    /// to a PNG. The C++ `encodeModelThumbnailPng`.
+    /// to a PNG.
     ///
     /// # Errors
     ///
@@ -649,7 +642,7 @@ impl ThumbnailRenderer {
     }
 
     /// Builds the minimal mesh-thumbnail PSO from `thumbnail.spv` (vertex input + a
-    /// 2×mat4 vertex push, no descriptor sets). The C++ `newThumbnailPipeline`.
+    /// 2×mat4 vertex push, no descriptor sets).
     fn build_thumbnail_pipeline(
         &self,
         device: &Device,
@@ -682,7 +675,7 @@ impl ThumbnailRenderer {
     }
 
     /// Builds the studio material-preview PSO from `spv_path` (binds the bindless set 0,
-    /// a 112-byte vertex+fragment `PreviewPush`). The C++ `newPreviewPipeline`.
+    /// a 112-byte vertex+fragment `PreviewPush`).
     fn build_preview_pipeline(
         &self,
         device: &Device,
@@ -832,8 +825,8 @@ impl ThumbnailRenderer {
 
     /// Renders `texture` (downscaled to fit `size`×`size`) and reads the result back as a
     /// PNG. A texture larger than `size` is reduced by a chained 2× linear-blit pyramid
-    /// (matching the C++ `encodeTextureThumbnailPng`'s undersampling fix); a texture at or
-    /// below `size`, or a format without linear-blit support, reads back at native extent.
+    /// (the undersampling fix); a texture at or below `size`, or a format without
+    /// linear-blit support, reads back at native extent.
     ///
     /// # Errors
     ///
@@ -939,8 +932,7 @@ impl ThumbnailRenderer {
     }
 
     /// A transient 1× image for the thumbnail downscale chain (`TRANSFER_DST |
-    /// TRANSFER_SRC` only). The C++ `newBlitImage`. The view is null (blit/copy take
-    /// images).
+    /// TRANSFER_SRC` only). The view is null (blit/copy take images).
     fn new_blit_image(
         &self,
         device: &Device,
@@ -1250,8 +1242,7 @@ fn record_downscale_and_read(
     result
 }
 
-/// Whether `format` supports linear-filtered blits (src + dst) in optimal tiling. The
-/// C++ `formatSupportsLinearBlit`.
+/// Whether `format` supports linear-filtered blits (src + dst) in optimal tiling.
 fn format_supports_linear_blit(device: &Device, format: vk::Format) -> bool {
     // SAFETY: the ash seam. The format-property query is read-only.
     let props = unsafe {
@@ -1266,7 +1257,7 @@ fn format_supports_linear_blit(device: &Device, format: vk::Format) -> bool {
 }
 
 /// Builds + uploads a unit UV sphere (origin-centered, radius 1; normals == positions)
-/// for material previews. The C++ `makePreviewSphere`.
+/// for material previews.
 fn make_preview_sphere(device: &Device) -> Result<Arc<GpuMesh>> {
     const RINGS: u32 = 32;
     const SECTORS: u32 = 48;
@@ -1333,7 +1324,7 @@ fn load_thumbnail_shader(device: &Device, shader: &str) -> Result<vk::ShaderModu
 }
 
 /// The `PreviewPush` for one material: the resolved bindless indices (or the default
-/// white slot when a texture is absent) + the PBR factors. The C++ `idx`/`features`.
+/// white slot when a texture is absent) + the PBR factors.
 fn preview_push(material: &SubmeshMaterial, view_proj: Mat4) -> PreviewPush {
     let idx = |tex: &Option<Arc<GpuTexture>>| -> u32 {
         tex.as_ref()
@@ -1362,7 +1353,7 @@ fn preview_push(material: &SubmeshMaterial, view_proj: Mat4) -> PreviewPush {
 }
 
 /// The mesh-bounds center + radius the framing uses (radius floored so a degenerate AABB
-/// still frames). The C++ `renderMeshThumbnail` framing.
+/// still frames).
 fn mesh_bounds(mesh: &GpuMesh) -> (Vec3, f32) {
     let center = (mesh.bounds_min + mesh.bounds_max) * 0.5;
     let mut radius = (mesh.bounds_max - mesh.bounds_min).length() * 0.5;
@@ -1374,7 +1365,7 @@ fn mesh_bounds(mesh: &GpuMesh) -> (Vec3, f32) {
 
 /// A 3/4-view `proj * view` framing a sphere of `radius` at `center`, viewed from `dir`
 /// (normalized) at a distance that fits the bounds. The Vulkan-clip Y flip matches the
-/// viewport so the thumbnail is upright. The C++ framing in each render function.
+/// viewport so the thumbnail is upright.
 fn framed_view_proj(center: Vec3, radius: f32, dir: Vec3) -> Mat4 {
     let fovy = 45.0_f32.to_radians();
     let distance = radius / (fovy * 0.5).tan() * 1.3;
@@ -1386,8 +1377,8 @@ fn framed_view_proj(center: Vec3, radius: f32, dir: Vec3) -> Mat4 {
         0.01_f32.max(distance - radius * 2.0),
         distance + radius * 2.0,
     );
-    // glam's `perspective_rh` targets Vulkan [0,1] depth; the C++ used GLM ([-1,1]) and
-    // flipped Y by hand. Match the C++ upright framing by flipping the projected Y here.
+    // glam's `perspective_rh` targets Vulkan [0,1] depth; flip the projected Y so the
+    // framing is upright in the Vulkan-clip viewport.
     proj.y_axis.y *= -1.0;
     proj * view
 }
@@ -1586,7 +1577,6 @@ unsafe fn record_blit_chain(
 }
 
 /// Copies `image` (in `src_layout`) into `buffer`, transitioning in/out around the copy.
-/// The C++ `captureImageToBuffer`.
 ///
 /// # Safety
 ///
@@ -1718,7 +1708,7 @@ mod tests {
     /// The render fixture: a bare headless device + descriptors + the thumbnail sub-state,
     /// plus the production default-white texture seeded into the bindless table. A material
     /// with no textures samples [`DEFAULT_WHITE_SLOT`], so it must hold a valid view or
-    /// lavapipe faults sampling an unwritten descriptor (the C++ `Renderer::defaultWhiteTexture`).
+    /// lavapipe faults sampling an unwritten descriptor.
     /// The fields' drop order tears the GPU resources down before the device.
     struct Fixture {
         thumb: ThumbnailRenderer,

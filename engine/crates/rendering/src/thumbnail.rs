@@ -2,10 +2,7 @@
 //! and the PNG encode, plus the thumbnail worker thread's command pool + queue
 //! discipline.
 //!
-//! Ports the format-independent half of `renderer_detail.cppm`'s capture encoders
-//! (`formatPixelBytes`/`convertToRgb`/`writeBufferToPng`/`encodeBufferToPng`,
-//! `:1272`–`:1373`) and the worker-thread shape from `renderer_thumbnail.cpp`
-//! (`bindThumbnailWorkerThread`, `:1125`): the worker owns its own one-off command
+//! The worker owns its own one-off command
 //! pool (Vulkan command pools are not thread-safe — README §5) and submits on the
 //! shared [`crate::GpuQueue`], holding the queue mutex for the submit and the bindless
 //! mutex for any upload.
@@ -31,7 +28,7 @@ pub enum PngTransfer {
 }
 
 /// Bytes per pixel for a captured framebuffer format: `RGBA16F` is 8, every other
-/// supported capture format is 4 (the C++ `formatPixelBytes`).
+/// supported capture format is 4.
 pub fn format_pixel_bytes(format: vk::Format) -> u32 {
     if format == vk::Format::R16G16B16A16_SFLOAT {
         8

@@ -12,9 +12,7 @@
 //! `vkQueueSubmit2` and the VMA FFI are all `unsafe`. The unsafe is confined to
 //! the [`device`] / [`swapchain`] / [`renderer`] modules and wrapped in safe
 //! methods ([`Device::new`], [`Swapchain::new`], [`Renderer::render_frame`]), so
-//! no caller of this crate ever touches a raw handle. This is the ash equivalent
-//! of the C++ `VULKAN_HPP_NO_EXCEPTIONS` seam, where every `vk::` call returned a
-//! checked `Result` rather than throwing.
+//! no caller of this crate ever touches a raw handle.
 #![allow(unsafe_code)]
 
 mod aa;
@@ -140,11 +138,9 @@ use ash::vk;
 
 /// Errors from the Vulkan bring-up and per-frame paths.
 ///
-/// The C++ renderer carried a stringly `Result<T> = std::expected<T, std::string>`
-/// and wrapped every `vk::` call through a `checked(...)` helper. Here the typed
-/// [`Error::Vk`] variant carries the raw [`vk::Result`] so callers can `match` on
-/// the exact failure, and `?` over an ash call *is* the check — there is no
-/// separate check-then-propagate step.
+/// The typed [`Error::Vk`] variant carries the raw [`vk::Result`] so callers can
+/// `match` on the exact failure, and `?` over an ash call *is* the check — there is
+/// no separate check-then-propagate step.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The Vulkan loader could not be initialized (no ICD / no `libvulkan`).
@@ -201,7 +197,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Wraps an ash `VkResult<T>` into this crate's typed [`Error::Vk`], tagging the
 /// failing operation. This is the single point that maps the ash seam onto the
-/// engine error model — the Rust expression of the C++ `checked(...)` helper.
+/// engine error model.
 pub(crate) fn checked<T>(
     result: std::result::Result<T, vk::Result>,
     context: &'static str,

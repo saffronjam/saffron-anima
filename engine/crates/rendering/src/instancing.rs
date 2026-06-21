@@ -8,9 +8,7 @@
 //! table by raw bytes, uploads both SSBOs, and returns the [`SceneDrawList`] +
 //! [`RenderStats`].
 //!
-//! This ports `submitDrawList` + `ensureInstanceCapacity` / `ensureMaterialCapacity`
-//! (`renderer_drawlist.cpp:235`/`:308`/`:439`) and the `Instancing` sub-state
-//! (`renderer_types.cppm:1182`). The current joint palette is uploaded to set 2,
+//! The current joint palette is uploaded to set 2,
 //! binding 1; the prev-joint palette feeds the prev skin dispatch directly (it is not
 //! bound). The deformed buffers + dispatch pool live in [`crate::skinning::Skinning`].
 //!
@@ -55,20 +53,17 @@ pub struct DrawListInputs {
     /// The default white bindless slot used for any absent material texture.
     pub default_texture_index: u32,
     /// Whether an RT consumer is armed this frame — gates building the skinned RT-instance
-    /// list (a non-RT scene pays nothing). The AS build itself lands in phase 13.
+    /// list (a non-RT scene pays nothing).
     pub rt_skinned: bool,
 }
 
-/// Initial instance-buffer capacity (in [`InstanceData`] elements) — the C++
-/// `ensureInstanceCapacity` seed.
+/// Initial instance-buffer capacity (in [`InstanceData`] elements).
 const INITIAL_INSTANCE_CAPACITY: u32 = 256;
 
-/// Initial material-buffer capacity (in [`MaterialParamsData`] entries) — the C++
-/// `ensureMaterialCapacity` seed.
+/// Initial material-buffer capacity (in [`MaterialParamsData`] entries).
 const INITIAL_MATERIAL_CAPACITY: u32 = 64;
 
-/// Initial joint-palette capacity (in [`Mat4`] matrices) — the C++ `ensureJointCapacity`
-/// seed.
+/// Initial joint-palette capacity (in [`Mat4`] matrices).
 const INITIAL_JOINT_CAPACITY: u32 = 128;
 
 /// One frame-in-flight's grow-only storage: the instance + material SSBOs, the current +
@@ -103,7 +98,7 @@ pub struct Instancing {
 impl Instancing {
     /// Allocates one instance descriptor set per frame-in-flight from the shared pool.
     /// The SSBOs are created lazily on the first [`Instancing::submit_draw_list`] that
-    /// needs them (the C++ buffers start null and grow on demand).
+    /// needs them (the buffers start null and grow on demand).
     ///
     /// # Errors
     ///
@@ -181,8 +176,7 @@ impl Instancing {
         let mut material_dedup: HashMap<MaterialParamsData, u32> = HashMap::new();
 
         for item in items {
-            // A skinned draw needs the mesh's skin stream; without it the draw is dropped
-            // exactly as the C++ guard drops it.
+            // A skinned draw needs the mesh's skin stream; without it the draw is dropped.
             if item.skinned && item.mesh.skin_buffer().is_none() {
                 continue;
             }
@@ -431,7 +425,7 @@ impl Instancing {
 
     /// Ensures the frame's instance SSBO holds at least `count` [`InstanceData`]
     /// elements, growing to the next power of two (never shrinking) and rewriting its
-    /// descriptor (set 2, binding 0). The C++ `ensureInstanceCapacity`.
+    /// descriptor (set 2, binding 0).
     fn ensure_instance_capacity(
         &mut self,
         descriptors: &Descriptors,
@@ -456,7 +450,6 @@ impl Instancing {
 
     /// Ensures the frame's material SSBO holds at least `count` [`MaterialParamsData`]
     /// entries (same grow-only policy), rewriting its descriptor (set 2, binding 2).
-    /// The C++ `ensureMaterialCapacity`.
     fn ensure_material_capacity(
         &mut self,
         descriptors: &Descriptors,
@@ -480,8 +473,7 @@ impl Instancing {
     }
 
     /// Ensures the frame's joint palette holds at least `count` [`Mat4`] matrices (same
-    /// grow-only policy), rewriting its descriptor (set 2, binding 1). The C++
-    /// `ensureJointCapacity`.
+    /// grow-only policy), rewriting its descriptor (set 2, binding 1).
     fn ensure_joint_capacity(
         &mut self,
         descriptors: &Descriptors,
@@ -506,7 +498,7 @@ impl Instancing {
 
     /// The prev-joint sibling of [`Instancing::ensure_joint_capacity`]: same grow-only
     /// policy, NOT bound to set 2 (only the current palette feeds the scene shader); the
-    /// prev skin dispatch reads it directly. The C++ `ensurePrevJointCapacity`.
+    /// prev skin dispatch reads it directly.
     fn ensure_prev_joint_capacity(&mut self, frame: usize, count: u32) -> Result<()> {
         if self.frames[frame].prev_joints.is_some()
             && self.frames[frame].prev_joint_capacity >= count
@@ -544,7 +536,7 @@ struct Bucket {
 
 /// Builds one draw item's per-submesh [`InstanceData`] rows, interning each submesh's
 /// [`MaterialParamsData`] into the frame's deduplicated table and pinning every sampled
-/// texture into `live_textures`. The C++ inner loop of `submitDrawList`.
+/// texture into `live_textures`.
 fn build_instance_rows(
     item: &DrawItem,
     prev_model: Mat4,
@@ -673,7 +665,7 @@ fn intern_material(
 }
 
 /// Grows `current` (an element capacity) to the next power of two that holds `count`,
-/// seeding from `initial` when empty and never shrinking. The C++ doubling policy.
+/// seeding from `initial` when empty and never shrinking.
 fn grow_capacity(current: u32, initial: u32, count: u32) -> u32 {
     let mut capacity = if current == 0 { initial } else { current };
     while capacity < count {
@@ -692,7 +684,7 @@ fn upload_into(buffer: &mut Buffer, bytes: &[u8]) {
 }
 
 /// Allocates a host-visible, persistently-mapped storage buffer of `size` bytes — the
-/// backing for the per-frame instance / material SSBOs. The C++ `makeMappedStorageBuffer`.
+/// backing for the per-frame instance / material SSBOs.
 fn make_mapped_storage_buffer(
     resources: &Arc<DeviceResources>,
     size: vk::DeviceSize,
@@ -712,8 +704,7 @@ fn make_mapped_storage_buffer(
 }
 
 /// Tallies the per-frame draw counters from the batch list — one `drawIndexed` per
-/// submesh per batch, the instance + triangle totals. The C++ stats loop in
-/// `submitDrawList`.
+/// submesh per batch, the instance + triangle totals.
 fn compute_stats(batches: &[DrawBatch], pipelines_created: u32) -> RenderStats {
     let mut stats = RenderStats {
         batches: batches.len() as u32,
@@ -994,7 +985,7 @@ mod tests {
 
     /// Interning byte-identical materials collapses to one entry; a differing field is
     /// a distinct entry. This is the per-frame dedup the instance row's `.texture.w`
-    /// indexes — the C++ `internMaterial`.
+    /// indexes.
     #[test]
     fn intern_material_dedups_by_bytes() {
         let mut table = Vec::new();

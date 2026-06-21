@@ -4,8 +4,7 @@
 //! albedo array on set 0 and the per-instance + material storage on set 2), pushes the
 //! viewProj, then per batch binds the PSO + vertex/index streams and issues one
 //! instanced `drawIndexed` per submesh. [`record_depth_prepass`] is the vertex-only
-//! sibling that lays down depth first. Both consume the same [`SceneDrawList`] (the C++
-//! `recordSceneDrawList` / `recordDepthPrepass`, `renderer_drawlist.cpp:913`/`:1022`).
+//! sibling that lays down depth first. Both consume the same [`SceneDrawList`].
 //!
 //! # Submesh draws + `firstInstance`
 //!
@@ -79,7 +78,7 @@ fn bind_batch_vertices(
 }
 
 /// The number of descriptor-set bind operations the scene pass records this frame — constant
-/// in the batch count (the C++ `descriptorBinds`).
+/// in the batch count.
 ///
 /// Sets 0, {1,2}, 3, 4, 5 are five bind operations that hold regardless of batch count
 /// (bindless textures + per-instance indices keep the path O(1) in draws); the RT sets 6 + 7
@@ -108,7 +107,7 @@ pub fn scene_draw_list_bind_count(
 /// Records the shaded scene geometry: bind the bindless set (0), the light set (1), and
 /// the instance/material set (2) once, push the viewProj, then per batch bind its PSO +
 /// streams and draw. Returns the number of descriptor-set binds recorded (for
-/// [`crate::RenderStats`]) — constant in the batch count (the C++ `descriptorBinds`).
+/// [`crate::RenderStats`]) — constant in the batch count.
 ///
 /// `bindless_set` is set 0, `light_set` set 1 (directional + punctual + cluster lists +
 /// shadow maps), `instance_set` set 2, `ibl_set` set 3, `ssao_mesh_set` set 4 (AO +
@@ -141,10 +140,10 @@ pub fn record_scene_draw_list(
     let view_proj = bytemuck::bytes_of(&list.view_proj);
     // SAFETY: the ash seam. The sets/layout belong to this frame; the push spans the
     // declared vertex range; the draws below reference pinned meshes. Sets 1 + 2 bind in
-    // one call (consecutive sets), as the C++ scene pass binds light + instance together.
+    // one call (consecutive sets), binding light + instance together.
     // Set 3 = IBL (irradiance + prefiltered + BRDF LUT, bindings 0-2) plus the reflection
     // probes (bindings 3-5); baked once, always valid (probes are gated in-shader by the
-    // probe count). The screen-space (4) / DDGI (5) / RT (6-7) sets arrive in later phases.
+    // probe count).
     unsafe {
         raw.cmd_bind_descriptor_sets(
             cmd,
@@ -243,7 +242,7 @@ pub fn record_scene_draw_list(
 /// Records the vertex-only shadow depth pass: bind the shadow PSO (depth-biased) + the
 /// instance set (2), push the LIGHT's viewProj, and draw every batch's submeshes into the
 /// shadow map. Shared by the directional and spot passes (only the push transform + the
-/// target map differ). The C++ `recordShadowDepth`.
+/// target map differ).
 #[allow(clippy::too_many_arguments)]
 pub fn record_shadow_depth(
     raw: &ash::Device,
@@ -338,8 +337,7 @@ pub fn record_depth_prepass(
 
 /// Records the thin G-buffer prepass: bind the instance set (2) + the `viewProj + view`
 /// push, then draw every batch's static submeshes with the G-buffer PSO. Writes the
-/// view-space normal (rgb) + view-Z (.a) the screen-space chain reads. The C++
-/// `recordGbuffer` (`renderer_drawlist.cpp:1064`).
+/// view-space normal (rgb) + view-Z (.a) the screen-space chain reads.
 #[allow(clippy::too_many_arguments)]
 pub fn record_gbuffer(
     raw: &ash::Device,
@@ -406,7 +404,7 @@ pub struct PointShadowTarget {
 /// directly: the cube's 6 layers exceed the graph's single-layer barrier. It transitions
 /// all 6 layers `ShaderReadOnly → ColorAttachment`, renders each face (clearing the depth
 /// scratch + the color to a beyond-far distance), then transitions back to
-/// `ShaderReadOnly` for the scene sample. The C++ `recordPointShadow`.
+/// `ShaderReadOnly` for the scene sample.
 #[allow(clippy::too_many_arguments)]
 pub fn record_point_shadow(
     raw: &ash::Device,

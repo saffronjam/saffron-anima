@@ -4,17 +4,16 @@
 //!
 //! - **Tonemap** is mandatory: an in-place compute pass on the offscreen color
 //!   (`StorageImageRwCompute`, GENERAL layout) that maps the scene's linear HDR
-//!   radiance to display range. Exposure is `exp2(exposure_ev)` (the C++
-//!   `addTonemapPass`, `renderer.cppm:2296`).
+//!   radiance to display range. Exposure is `exp2(exposure_ev)`.
 //! - **Grid** is an optional fullscreen depth-tested debug overlay drawn on the 1×
 //!   resolved color after tonemap; its fragment reconstructs the world ray from a
 //!   push-constant `inv_view_proj` and writes `SV_Depth` so scene geometry occludes
-//!   it (the C++ `recordGrid` + `newGridPipeline`).
+//!   it.
 //! - **Overlay** is the editor gizmo (handles + entity billboards): a plain
 //!   [`OverlayVertex`] CPU stream uploaded into a grow-only per-frame vertex buffer
 //!   and drawn in two ranges — a depth-tested range (camera frustums, occluded) then
 //!   an always-on-top range (handles). Composited into the post-tonemap color so the
-//!   present-only blit embeds it too (the C++ overlay pass + `submitOverlay`).
+//!   present-only blit embeds it too.
 //!
 //! The geometry itself is the host's native gizmo builder (PP-10); this module owns
 //! the vertex contract, the per-frame upload buffer, the pushes, and the recorders.
@@ -36,9 +35,9 @@ use crate::resources::{Buffer, DeviceResources};
 /// that direction — lines feather one way, filled quads both). `depth` is the NDC z
 /// ([0,1]); only the depth-tested range uses it, the on-top range leaves it 0.
 ///
-/// `#[repr(C)]` + [`bytemuck::Pod`]: the byte layout matches the C++ `OverlayVertex`
-/// (`renderer_types.cppm:993`) the host fills — `glm::vec2` + `glm::vec4` align the
-/// color to offset 16, so [`Vec4`]'s 16-byte alignment reproduces the layout exactly.
+/// `#[repr(C)]` + [`bytemuck::Pod`]: the host fills this vertex with a `vec2` position +
+/// a `vec4` color that aligns the color to offset 16, so [`Vec4`]'s 16-byte alignment
+/// reproduces the layout exactly.
 /// The attribute offsets the PSO declares come from [`std::mem::offset_of`] on this
 /// struct, so the upload and the bindings are self-consistent.
 #[repr(C)]
@@ -46,7 +45,7 @@ use crate::resources::{Buffer, DeviceResources};
 pub struct OverlayVertex {
     /// Clip-space NDC position ([-1, 1]).
     pub position: Vec2,
-    /// Padding to align `color` to offset 16 (matching the C++ `glm::vec4` alignment).
+    /// Padding to align `color` to offset 16.
     _pad: [f32; 2],
     /// RGBA color (straight alpha; the pass alpha-blends).
     pub color: Vec4,
@@ -55,7 +54,7 @@ pub struct OverlayVertex {
     /// NDC z ([0, 1]); 0 = on the near plane (on top). Only the depth-tested range
     /// reads it.
     pub depth: f32,
-    /// Tail padding to the 16-byte struct alignment (matching the C++ `sizeof`).
+    /// Tail padding to the 16-byte struct alignment.
     _pad_tail: [f32; 3],
 }
 
@@ -92,8 +91,7 @@ pub struct TonemapPush {
 const _: () = assert!(size_of::<TonemapPush>() == 4);
 
 impl TonemapPush {
-    /// The tonemap push for `exposure_ev` stops: `exposure = exp2(exposure_ev)` (the
-    /// C++ `std::exp2(renderer.exposureEv)`, `renderer.cppm:2307`).
+    /// The tonemap push for `exposure_ev` stops: `exposure = exp2(exposure_ev)`.
     pub fn from_ev(exposure_ev: f32) -> Self {
         Self {
             exposure: exposure_ev.exp2(),
@@ -118,7 +116,7 @@ const _: () = assert!(size_of::<GridPush>() == 128);
 
 impl GridPush {
     /// The grid push for `view_proj`, computing the inverse for the view-ray
-    /// reconstruction (the C++ `recordGrid`'s `glm::inverse(viewProj)`).
+    /// reconstruction.
     pub fn new(view_proj: Mat4) -> Self {
         Self {
             view_proj,
@@ -130,21 +128,19 @@ impl GridPush {
 /// Per-frame editor-overlay geometry: the vertex list (depth-tested range first, then
 /// the always-on-top range) and a grow-only mapped vertex buffer per frame-in-flight.
 ///
-/// The C++ `OverlayState` (`renderer_types.cppm:1006`) lived on the renderer and grew
-/// its buffer inside the pass body (capturing `Renderer&`). The Rust pass body cannot
-/// hold `&mut Renderer`, so the buffer is prepared (grown + uploaded) *before* the
-/// graph build via [`OverlayState::prepare`]; the pass then captures only the resolved
-/// [`vk::Buffer`] handle + the counts (README §2). Single-thread state — only the
-/// render thread touches it.
+/// The pass body cannot hold `&mut Renderer`, so the buffer is prepared (grown +
+/// uploaded) *before* the graph build via [`OverlayState::prepare`]; the pass then
+/// captures only the resolved [`vk::Buffer`] handle + the counts (README §2).
+/// Single-thread state — only the render thread touches it.
 pub struct OverlayState {
     resources: Arc<DeviceResources>,
     /// The combined vertex list: `[0, depth_tested_count)` then the on-top range.
     vertices: Vec<OverlayVertex>,
     /// How many leading vertices are the depth-tested (occluded) range.
     depth_tested_count: u32,
-    /// Grow-only mapped vertex buffer per frame-in-flight (the C++ `buffers`).
+    /// Grow-only mapped vertex buffer per frame-in-flight.
     buffers: [Option<Buffer>; MAX_FRAMES_IN_FLIGHT],
-    /// Current capacity (in vertices) of each per-frame buffer (the C++ `capacity`).
+    /// Current capacity (in vertices) of each per-frame buffer.
     capacity: [u32; MAX_FRAMES_IN_FLIGHT],
 }
 
@@ -177,7 +173,6 @@ impl OverlayState {
     /// Replaces this frame's overlay geometry: the `depth_tested` range (occluded by
     /// scene geometry) followed by the `on_top` range (always drawn). The
     /// `depth_tested_count` is recorded so the pass draws each range with its own PSO.
-    /// The C++ `submitOverlay` (`renderer.cppm:2345`).
     pub fn submit(&mut self, mut depth_tested: Vec<OverlayVertex>, on_top: Vec<OverlayVertex>) {
         self.depth_tested_count = depth_tested.len() as u32;
         depth_tested.extend(on_top);
@@ -242,9 +237,7 @@ impl OverlayState {
 /// the overlay only when geometry is queued. Pure gate logic so the phase's
 /// "tonemap-always / grid-overlay-conditional" acceptance test runs without a device —
 /// it mirrors the `if let Some(..)` guards in [`crate::Renderer::add_tonemap_pass`] /
-/// [`crate::Renderer::add_grid_overlay_passes`]. The C++ `addTonemapPass`
-/// (unconditional) + the `showGrid` / `!overlay.empty()` gates (`renderer.cppm:2200`/
-/// `:2205`/`:2221`).
+/// [`crate::Renderer::add_grid_overlay_passes`].
 #[cfg(test)]
 pub(crate) fn final_post_pass_names(
     tonemap_built: bool,
@@ -268,8 +261,7 @@ pub(crate) fn final_post_pass_names(
 
 /// Records the ground-grid draw: bind the grid PSO + the `view_proj`/`inv_view_proj`
 /// push, draw the fullscreen triangle (no vertex buffer). The graph opened the
-/// rendering scope + set the viewport/scissor. The C++ `recordGrid`
-/// (`renderer_drawlist.cpp:1002`).
+/// rendering scope + set the viewport/scissor.
 pub fn record_grid(
     raw: &ash::Device,
     cmd: vk::CommandBuffer,
@@ -295,7 +287,7 @@ pub fn record_grid(
 /// Records the editor overlay: bind the uploaded vertex buffer, then draw the
 /// depth-tested range (occluded, `overlay_depth` PSO) followed by the on-top range
 /// (always drawn, `overlay` PSO). The graph opened the rendering scope + set the
-/// viewport/scissor. The C++ overlay pass body (`renderer.cppm:2235`).
+/// viewport/scissor.
 pub fn record_overlay(
     raw: &ash::Device,
     cmd: vk::CommandBuffer,
@@ -328,8 +320,8 @@ pub fn record_overlay(
 mod tests {
     use super::*;
 
-    /// The `OverlayVertex` byte layout matches the C++ `glm`-aligned struct the host
-    /// fills: position@0, color@16, edge@32, depth@48, size 64. A wrong offset is a
+    /// The `OverlayVertex` byte layout the host fills: position@0, color@16,
+    /// edge@32, depth@48, size 64. A wrong offset is a
     /// silently corrupted vertex stream, so pin each. Pure layout logic, any host.
     #[test]
     fn overlay_vertex_layout_matches_the_host_contract() {
@@ -341,8 +333,8 @@ mod tests {
         assert_eq!(offset_of!(OverlayVertex, depth), 48);
     }
 
-    /// The tonemap push is `exp2(ev)`: 0 EV → 1.0×, +1 EV → 2.0×, -1 EV → 0.5× (the C++
-    /// `std::exp2(exposureEv)`). The phase-11 acceptance gate. Pure math, any host.
+    /// The tonemap push is `exp2(ev)`: 0 EV → 1.0×, +1 EV → 2.0×, -1 EV → 0.5×. Pure math,
+    /// any host.
     #[test]
     fn tonemap_push_is_exp2_of_the_ev() {
         assert!((TonemapPush::from_ev(0.0).exposure - 1.0).abs() < 1e-6);
@@ -374,8 +366,8 @@ mod tests {
     }
 
     /// The tonemap is always in the graph (mandatory); the grid arms only when shown +
-    /// built; the overlay only when geometry is queued + built — in that graph order. The
-    /// phase-11 acceptance gate. Pure gate logic, any host.
+    /// built; the overlay only when geometry is queued + built — in that graph order. Pure
+    /// gate logic, any host.
     #[test]
     fn final_post_chain_arms_tonemap_always_grid_and_overlay_conditionally() {
         // Tonemap only: nothing else armed.
@@ -412,8 +404,8 @@ mod tests {
 
     /// `submit` lays the depth-tested range first then the on-top range and records the
     /// split count, so one buffer drives both draws, and [`OverlayState::prepare`] grows +
-    /// uploads the per-frame buffer. The C++ `submitOverlay` layout + buffer grow. Needs a
-    /// device (the per-frame buffer is VMA-allocated); skips when none is present.
+    /// uploads the per-frame buffer. Needs a device (the per-frame buffer is
+    /// VMA-allocated); skips when none is present.
     #[test]
     fn submit_lays_depth_tested_first_then_uploads() {
         let device = match crate::device::Device::new(&crate::device::SurfaceSource::Offscreen) {

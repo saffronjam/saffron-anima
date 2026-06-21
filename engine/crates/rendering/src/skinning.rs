@@ -13,11 +13,7 @@
 //! reads back current == previous, so its first frame emits zero motion (no velocity
 //! flash). These are single-threaded host state mutated through [`Skinning`]'s methods.
 //!
-//! This ports the `Skinning` sub-state (`renderer_types.cppm:1206`), `setLayout` +
-//! `pools` + the deformed/prev-deformed buffers, the `ensureDeformedCapacity` /
-//! `ensurePrevDeformedCapacity` grow paths, and the per-dispatch set wiring from
-//! `submitDrawList` (`renderer_drawlist.cpp:800`–`:855`). The joint + prev-joint palettes
-//! live in [`crate::Instancing`] (set 2, binding 1).
+//! The joint + prev-joint palettes live in [`crate::Instancing`] (set 2, binding 1).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,11 +31,10 @@ use crate::{Device, Result, checked};
 
 /// Per-frame ceiling on compute-skinning descriptor sets — one per skinned mesh-instance.
 /// The skin pool is reset and re-allocated each frame; instances past this are skipped
-/// (logged), not an error. The C++ `SkinMaxSetsPerFrame` (`renderer_types.cppm:78`).
+/// (logged), not an error.
 pub const SKIN_MAX_SETS_PER_FRAME: u32 = 64;
 
-/// Initial deformed-vertex-buffer capacity in [`Vertex`] (32-byte) elements — the C++
-/// `ensureDeformedCapacity` seed.
+/// Initial deformed-vertex-buffer capacity in [`Vertex`] (32-byte) elements.
 const INITIAL_DEFORMED_CAPACITY: u32 = 4096;
 
 /// The descriptor-set capacity of each per-frame skin pool. Each skinned instance takes
@@ -103,8 +98,7 @@ pub struct Skinning {
     /// instance reprojects against itself (zero object motion on the first frame).
     prev_model_by_entity: HashMap<u64, Mat4>,
     /// Whether RT is supported — when set, the deformed buffer also feeds the per-frame
-    /// skinned BLAS refit, so it carries shader-device-address + AS-build-input usage (the
-    /// C++ `makeDeviceVertexStorageBuffer` RT branch).
+    /// skinned BLAS refit, so it carries shader-device-address + AS-build-input usage.
     rt_supported: bool,
 }
 
@@ -209,8 +203,8 @@ impl Skinning {
     ///
     /// On success the `set` field of each [`SkinDispatch`] in `dispatches` /
     /// `prev_dispatches` (which run parallel to `buckets`) is filled. A wiring failure
-    /// clears both lists (so the `skin` pass is skipped) and returns `Ok` — the C++ drops
-    /// the dispatches rather than failing the frame.
+    /// clears both lists (so the `skin` pass is skipped) and returns `Ok` — the
+    /// dispatches are dropped rather than failing the frame.
     ///
     /// # Errors
     ///
@@ -340,8 +334,7 @@ impl Skinning {
     /// Replays the frame's skin dispatches on `cmd`: bind the skin PSO, then per dispatch
     /// bind its set + push (vertexCount / jointOffset / deformedOffset) and dispatch one
     /// group of 64 invocations per vertex. The current pose into the deformed buffer, the
-    /// previous pose into the prev-deformed buffer (the kernel is identical). The C++
-    /// `skin` pass body (`renderer.cppm:1237`).
+    /// previous pose into the prev-deformed buffer (the kernel is identical).
     pub fn record_skin(
         raw: &ash::Device,
         cmd: vk::CommandBuffer,
@@ -499,9 +492,8 @@ fn grow_capacity(current: u32, count: u32) -> u32 {
 }
 
 /// Allocates a device-local deformed-vertex buffer of `capacity` [`Vertex`] elements with
-/// `STORAGE|VERTEX` usage — the C++ `makeDeviceVertexStorageBuffer`. When `rt_supported`,
-/// the buffer also feeds the per-frame skinned BLAS refit, so it adds shader-device-address
-/// + AS-build-input usage (the C++ RT branch).
+/// `STORAGE|VERTEX` usage. When `rt_supported`, the buffer also feeds the per-frame
+/// skinned BLAS refit, so it adds shader-device-address + AS-build-input usage.
 fn make_deformed_buffer(
     resources: &Arc<DeviceResources>,
     capacity: u32,

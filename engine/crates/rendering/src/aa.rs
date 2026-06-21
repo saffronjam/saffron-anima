@@ -8,10 +8,8 @@
 //! formats actually support. There is one AA state, not three independent toggles that can
 //! contradict (the phase's NO-LEGACY note).
 //!
-//! This ports the C++ `Targets` AA cap/toggle slice (`renderer_types.cppm:1339`) + `setAa`
-//! / `clampSampleCount` (`renderer_aa.cpp:67`/`:43`). The motion prepass push + recorder
-//! (`MotionPush`, `recordMotion`, `renderer_drawlist.cpp:1092`) live here too, since the
-//! motion vectors are the temporal AA's (and SSGI's) shared dependency.
+//! The motion prepass push + recorder ([`MotionPush`], [`record_motion`]) live here
+//! too, since the motion vectors are the temporal AA's (and SSGI's) shared dependency.
 
 use ash::vk;
 use saffron_geometry::glam::Mat4;
@@ -20,12 +18,10 @@ use crate::draw_list::SceneDrawList;
 use crate::scene_pass::record_batch_submeshes;
 
 /// The screen-space motion-vector target format (rg16f): the per-pixel `prevUv - curUv`
-/// offset TAA / SSGI reproject through. The C++ `MotionFormat`
-/// (`renderer_detail.cppm:1409`).
+/// offset TAA / SSGI reproject through.
 pub const MOTION_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
 
 /// The TAA history exponential-moving-average weight (the history's share of the resolve).
-/// The C++ `TaaHistoryWeight` (`renderer_detail.cppm:1410`).
 pub const TAA_HISTORY_WEIGHT: f32 = 0.9;
 
 /// The anti-aliasing selection: the device's supported sample counts (a fact), the chosen
@@ -33,9 +29,7 @@ pub const TAA_HISTORY_WEIGHT: f32 = 0.9;
 /// [`Aa::set`] mutates it, and it never leaves more than one mode active.
 ///
 /// Plain data — the GPU targets the modes drive live on [`crate::ViewTarget`]; this is the
-/// selector the frame-graph build reads to branch the scene output. The C++ `Targets` AA
-/// slice (`sampleCount` / `maxSampleCount` / `supportedSampleCounts` / `fxaaEnabled` /
-/// `taaEnabled`).
+/// selector the frame-graph build reads to branch the scene output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Aa {
     /// The chosen MSAA sample count (`TYPE_1` = MSAA off).
@@ -66,8 +60,7 @@ impl Aa {
     /// Selects the AA mode, enforcing mutual exclusivity in one place: MSAA wins if
     /// `msaa_samples >= 2` (the count clamped to what the formats support), else FXAA if
     /// requested, else TAA if requested, else off. Returns `true` if the *MSAA sample
-    /// count* changed — the caller then clears the sample-count-baked PSO cache. The C++
-    /// `setAa` (`renderer_aa.cpp:67`).
+    /// count* changed — the caller then clears the sample-count-baked PSO cache.
     pub fn set(&mut self, msaa_samples: u32, fxaa: bool, taa: bool) -> bool {
         let requested = if msaa_samples >= 8 {
             vk::SampleCountFlags::TYPE_8
@@ -91,7 +84,6 @@ impl Aa {
 
     /// Selects the AA mode by name (the `sa` CLI / control wire): `"off"`, `"fxaa"`,
     /// `"taa"`, `"msaa2"`, `"msaa4"`, `"msaa8"`. Returns whether the sample count changed.
-    /// The C++ `setAaMode`.
     pub fn set_mode(&mut self, mode: &str) -> bool {
         let (samples, fxaa, taa) = match mode {
             "fxaa" => (1, true, false),
@@ -104,8 +96,7 @@ impl Aa {
         self.set(samples, fxaa, taa)
     }
 
-    /// The current mode as a name (`"off"` / `"fxaa"` / `"taa"` / `"msaaN"`). The C++
-    /// `aaMode`.
+    /// The current mode as a name (`"off"` / `"fxaa"` / `"taa"` / `"msaaN"`).
     pub fn mode(&self) -> String {
         if self.fxaa {
             return "fxaa".to_string();
@@ -147,8 +138,7 @@ impl Aa {
 
 /// The largest MSAA sample count not exceeding `requested` that `supported` accepts (`1×`
 /// if none) — a count valid as a framebuffer limit can still be unsupported for a specific
-/// format, and creating an image with it is invalid. The C++ `clampSampleCount`
-/// (`renderer_aa.cpp:43`).
+/// format, and creating an image with it is invalid.
 pub fn clamp_sample_count(
     supported: vk::SampleCountFlags,
     requested: vk::SampleCountFlags,
@@ -224,9 +214,8 @@ const _: () = assert!(size_of::<TaaPush>() == 16);
 /// Records the motion-vector prepass: bind the instance set (2) + the cur/prev camera
 /// viewProj push, then draw every batch's submeshes with both vertex bindings pointing at
 /// the same static stream (so `prevPosition == position` and object motion comes from
-/// `inst.prevModel`). The skinned deform-motion path (distinct cur/prev deformed buffers)
-/// lands with the skinning prepass (phase 12). The C++ `recordMotion`
-/// (`renderer_drawlist.cpp:1092`), static-batch branch.
+/// `inst.prevModel`). The skinned deform-motion path uses distinct cur/prev deformed
+/// buffers.
 #[allow(clippy::too_many_arguments)]
 pub fn record_motion(
     raw: &ash::Device,
@@ -289,7 +278,7 @@ mod tests {
     use super::*;
 
     /// `clamp_sample_count` returns the largest supported count ≤ requested, `TYPE_1` when
-    /// none. Pure logic, runs on any host. The phase-10 acceptance gate.
+    /// none. Pure logic, runs on any host.
     #[test]
     fn clamp_sample_count_picks_largest_supported_le_requested() {
         let all = vk::SampleCountFlags::TYPE_1
@@ -326,7 +315,7 @@ mod tests {
 
     /// Requesting MSAA + FXAA + TAA together yields MSAA only (MSAA wins); `set(0, true,
     /// true)` yields FXAA only (FXAA beats TAA when no MSAA); `set(0, false, true)` yields
-    /// TAA. Mutual exclusivity in one place. The phase-10 acceptance gate.
+    /// TAA. Mutual exclusivity in one place.
     #[test]
     fn set_aa_enforces_mutual_exclusivity() {
         let all = vk::SampleCountFlags::TYPE_1
@@ -388,7 +377,7 @@ mod tests {
         );
     }
 
-    /// The C++ `MotionFormat` (rg16f) and the std430 push sizes are pinned.
+    /// The motion format (rg16f) and the std430 push sizes are pinned.
     #[test]
     fn push_layouts_match_shaders() {
         assert_eq!(MOTION_FORMAT, vk::Format::R16G16_SFLOAT);
