@@ -12,46 +12,47 @@ ray comes nowhere near, then a ray-vs-triangle **narrow phase** finds the true s
 narrow phase is what makes a click land on the silhouette and not on the empty air inside a loose
 bounding box.
 
-`pickEntity` lives in `Saffron.Assets` because it needs the cached meshes the asset server owns. It
-covers both static `MeshComponent` and skinned `SkinnedMeshComponent` meshes, so rigged imports are
-selectable too.
+`pick_entity` lives in the assets crate because it needs the cached meshes the asset server owns. It
+covers both static `Mesh` and skinned `SkinnedMesh` renderables, so rigged imports are selectable
+too. The leaf intersection math (`ray_triangle`, `ray_aabb_slab`, `world_aabb_from_corners`) lives in
+the geometry crate, with no ownership or I/O.
 
 ## From click to ray
 
 The click arrives as a point in normalized device coordinates, `[-1, 1]`, already matching the
 rendered image — y-down, like the flipped clip space the renderer draws with, so the top of the
 viewport is `y = -1`. The `pick` command produces it from viewport UV (origin top-left) as
-`(u*2-1, v*2-1)`. `pickEntity` rebuilds the same view-projection the renderer used — including the
-Vulkan Y-flip that `cameraProjection` leaves out — and inverts it to unproject the click:
+`(u*2-1, v*2-1)`. `pick_entity` rebuilds the same view-projection the renderer used — including the
+Vulkan Y-flip that `camera_projection` leaves out — and inverts it to unproject the click:
 
-```cpp
-glm::mat4 proj = cameraProjection(camera, aspect);
-proj[1][1] *= -1.0f;  // match the renderer's clip space
-const glm::mat4 invViewProj = glm::inverse(proj * camera.view);
-const glm::vec4 nearH = invViewProj * glm::vec4(ndc.x, ndc.y, 0.0f, 1.0f);  // GLM 0..1 depth: near = 0
-const glm::vec4 farH  = invViewProj * glm::vec4(ndc.x, ndc.y, 1.0f, 1.0f);
-const glm::vec3 origin = glm::vec3(nearH) / nearH.w;
-const glm::vec3 dir    = glm::normalize(glm::vec3(farH) / farH.w - origin);
+```rust
+let mut proj = camera_projection(camera, aspect);
+proj.y_axis.y *= -1.0;                              // match the renderer's clip space
+let inv_view_proj = (proj * camera.view).inverse();
+let near_h = inv_view_proj * Vec4::new(ndc.x, ndc.y, 0.0, 1.0);  // 0..1 depth: near = 0
+let far_h  = inv_view_proj * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
+let origin = near_h.truncate() / near_h.w;
+let ray = Ray { origin, dir: (far_h.truncate() / far_h.w - origin).normalize() };
 ```
 
-Two clip-space points share the same xy: one on the near plane (depth 0, the engine's
-`GLM_FORCE_DEPTH_ZERO_TO_ONE` convention) and one on the far plane (depth 1). They unproject to a
-world-space origin and direction. Reusing the renderer's flip and depth range is what makes the ray
-land where the pixel was drawn.
+Two clip-space points share the same xy: one on the near plane (depth 0, the renderer's `[0, 1]`
+depth convention) and one on the far plane (depth 1). They unproject to a world-space origin and
+direction. Reusing the renderer's flip and depth range is what makes the ray land where the pixel was
+drawn.
 
 ## Broad phase: world AABB
 
-For each candidate `pickEntity` builds a world-space AABB from the mesh's eight local-AABB corners
-(`worldAabbFromCorners`) and runs the standard ray-AABB slab test (`rayAabbSlab`). Both live in
-`Saffron.Geometry`; the same corner helper feeds the renderer's scene-bounds fit and the debug
-overlay boxes, so there is one definition of "world AABB of a mesh".
+For each candidate `pick_entity` builds a world-space AABB from the mesh's eight local-AABB corners
+(`world_aabb_from_corners`) and runs the standard ray-AABB slab test (`ray_aabb_slab`). The same
+corner helper feeds the renderer's scene-bounds fit, so there is one definition of "world AABB of a
+mesh".
 
-```cpp
-glm::vec3 worldMin{ FLT_MAX };
-glm::vec3 worldMax{ -FLT_MAX };
-worldAabbFromCorners(model, meshRef->boundsMin, meshRef->boundsMax, worldMin, worldMax);
-f32 tEnter, tExit;
-if (!rayAabbSlab(ray, worldMin, worldMax, tEnter, tExit)) return;  // ray misses the box → skip
+```rust
+world_aabb_from_corners(&model, mesh_ref.bounds_min, mesh_ref.bounds_max,
+                        &mut world_min, &mut world_max);
+if ray_aabb_slab(&ray, world_min, world_max).is_none() {
+    continue;                                       // ray misses the box → skip
+}
 ```
 
 The box is re-axis-aligned in world space, so a rotated mesh gets a fat, loose fit — a long diagonal
@@ -61,49 +62,41 @@ that looseness costs nothing but a few extra narrow-phase tests.
 ## Narrow phase: ray vs. triangle
 
 A mesh whose AABB the ray crosses is tested triangle by triangle. The mesh keeps a CPU copy of its
-positions and indices (`GpuMesh::cpuPositions` / `cpuIndices`, filled once at upload), so picking
+positions and indices (`GpuMesh::cpu_positions` / `cpu_indices`, filled once at upload), so picking
 never reads back from the GPU. Each triangle's three vertices are transformed to world space and run
-through a two-sided Möller–Trumbore test (`rayTriangle`):
-
-```cpp
-for (triangle in cpuIndices)
-{
-    f32 t;
-    if (rayTriangle(ray, v0, v1, v2, t) && t < best) best = t;  // nearest forward surface
-}
-```
-
-`rayTriangle` is winding-agnostic (a back face hit counts) and only accepts hits in front of the
-origin, so a ray starting inside a mesh reports the surface ahead, not one behind it. The nearest
-triangle hit across all meshes wins; a miss everywhere returns `Entity{ entt::null }` and the caller
+through a two-sided Möller–Trumbore test (`ray_triangle`), and `nearest_triangle` keeps the closest
+forward hit. `ray_triangle` is winding-agnostic (a back face hit counts) and rejects hits at or
+behind the origin, so a ray starting inside a mesh reports the surface ahead, not one behind it. The
+nearest triangle hit across all meshes wins; a miss everywhere returns `Entity::NULL` and the caller
 clears the selection.
 
 ## Skinned meshes
 
-A second pass handles `SkinnedMeshComponent`. Its vertices are deformed on the GPU, so picking
-reproduces the same skin on the CPU: it builds the joint palette with `jointMatrices`
-(`worldMatrix(bone) * inverseBind`) and blends each vertex, `Σ wₖ · (palette[jointₖ] · restPos)`,
-exactly as `skin.slang` does. Because the joints already place the vertices in world space, the
-deformed positions feed `rayTriangle` directly with no model matrix. The broad-phase AABB unions the
+A second pass handles `SkinnedMesh`. Its vertices are deformed on the GPU, so picking reproduces the
+same skin on the CPU: it builds the joint palette with `joint_matrices` (`world_matrix(bone) *
+inverse_bind`) and blends each vertex, $\sum_k w_k \cdot (palette[joint_k] \cdot restPos)$, exactly
+as `skin.slang` does. Because the joints already place the vertices in world space, the deformed
+positions feed `ray_triangle` directly with no model matrix. The broad-phase AABB unions the
 bind-pose box through every joint, mirroring the renderer's skinned scene-bounds fit. Without this
 pass rigged models drew but could never be clicked.
 
 > [!TIP]
-> Picking depends on the AABB matching the flipped projection. The renderer applies
-> `proj[1][1] *= -1` for drawing; `pickEntity` repeats it. The un-flipped
-> [`cameraProjection`](../transform-and-matrices/) exists so the gizmo is not mirrored, but
-> picking must re-apply the flip or every click would land on the vertically-mirrored object.
+> Picking depends on the AABB matching the flipped projection. The renderer applies `proj.y_axis.y *=
+> -1.0` for drawing; `pick_entity` repeats it. The un-flipped
+> [`camera_projection`](../transform-and-matrices/) exists so the gizmo is not mirrored, but picking
+> must re-apply the flip or every click would land on the vertically-mirrored object.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The pick (both phases, both mesh kinds) | `assets.cppm` | `pickEntity` |
-| Ray + intersection math | `geometry.cppm` | `Ray`, `rayTriangle`, `rayAabbSlab`, `worldAabbFromCorners` |
-| CPU pick geometry | `renderer_types.cppm` | `GpuMesh::cpuPositions`, `cpuIndices`, `cpuSkin` |
-| Mesh resolve + local bounds | `assets.cppm` | `loadMeshAsset`, `boundsMin`, `boundsMax` |
-| Skinned deform palette | `scene.cppm` | `jointMatrices` |
-| Matched projection | `scene.cppm` | `cameraProjection`, `CameraView` |
+| The pick (both phases, both mesh kinds) | `assets/src/render_scene.rs` | `pick_entity`, `nearest_triangle` |
+| Ray + intersection math | `geometry/src/picking.rs` · `geometry/src/types.rs` | `Ray`, `ray_triangle`, `ray_aabb_slab`, `world_aabb_from_corners` |
+| CPU pick geometry | `rendering/src/resources.rs` | `GpuMesh::cpu_positions`, `cpu_indices`, `cpu_skin`, `bounds_min`, `bounds_max` |
+| Mesh resolve | `assets/src/load.rs` | `load_mesh_asset` |
+| Skinned deform palette | `scene/src/hierarchy.rs` | `joint_matrices` |
+| Matched projection | `scene/src/hierarchy.rs` | `camera_projection`, `CameraView` |
+| The `pick` command | `control/src/commands_scene.rs` | `pick` |
 
 ## Related
 - [Transforms](../transform-and-matrices/) — the un-flipped projection picking re-flips

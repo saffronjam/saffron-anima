@@ -6,20 +6,20 @@ bookCollapseSection = true
 
 # Scene & ECS
 
-The scene is the game world, modelled as an entt registry of value components. At its centre is the
-component registry, a struct-of-closures table that describes a component to the serializer and the
-editor through one `registerComponent` call. No central switch needs editing when a component is
-added.
+The scene is the game world, modelled as a `hecs` ECS of value components wrapped behind a fixed
+`Scene` access surface. At its centre is the component registry, a struct-of-fn-pointers table that
+describes a component to the serializer through one `register_component!` line. No central switch
+needs editing when a component is added.
 
 ## Pages
 
 | Page | Covers | Code |
 |---|---|---|
-| `ecs-architecture` | entt `Scene`/`Entity`, value components, `forEach` | `scene.cppm` |
-| `built-in-components` | Id, Name, Transform, Mesh, Material, Camera, the three light types | `scene.cppm` |
-| `transform-and-matrices` | `TransformComponent` (Euler XYZ radians), matrix composition | `scene.cppm` · `transformMatrix` |
-| `scene-hierarchy` | parent/child via `RelationshipComponent`, cached world transforms, reparent + subtree destroy | `scene.cppm` · `setParent` |
-| `component-registry` | the closures itable, `registerComponent<C>`, lookup by name/id | `scene.cppm` · `ComponentRegistry` |
-| `scene-serialization` | registry-driven JSON save/load, UUID stability | `scene.cppm` |
-| `asset-catalog-in-scene` | `AssetCatalog` lives here; `Scene` borrows a `const AssetCatalog*` | `scene.cppm` · `AssetCatalog` |
-| `picking` | ray vs. mesh triangles (AABB broad-phase), static + skinned, click-to-select | `assets.cppm` · `pickEntity` |
+| `ecs-architecture` | `hecs`-backed `Scene`/`Entity`, component-access methods, `for_each` | `scene/src/scene.rs` |
+| `built-in-components` | Id, Name, Transform, Mesh, Material, Camera, the three light types | `scene/src/component.rs` |
+| `transform-and-matrices` | `Transform` (Euler XYZ radians), `T·R·S` composition, the stable Euler extraction | `scene/src/hierarchy.rs` · `transform_matrix` |
+| `scene-hierarchy` | parent/child via `Relationship`, cached world transforms, reparent + subtree destroy | `scene/src/hierarchy.rs` · `set_parent` |
+| `component-registry` | the fn-pointer itable, `register_component!`, lookup by name/type | `scene/src/registry.rs` · `ComponentRegistry` |
+| `scene-serialization` | registry-driven JSON save/load, uuid stability, version migration | `scene/src/document.rs` |
+| `asset-catalog-in-scene` | `AssetCatalog` lives here; `Scene` holds an `Arc<AssetCatalog>` handle | `scene/src/environment.rs` · `AssetCatalog` |
+| `picking` | ray vs. mesh triangles (AABB broad-phase), static + skinned, click-to-select | `assets/src/render_scene.rs` · `pick_entity` |

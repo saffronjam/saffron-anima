@@ -6,82 +6,87 @@ math = true
 
 # Transforms
 
-A transform places an object in the world by combining a translation, a rotation, and a scale into
-a single 4x4 model matrix. Every renderable and the camera share the same representation, so one
+A transform places an object in the world by combining a translation, a rotation, and a scale into a
+single 4x4 model matrix. Every renderable and the camera share the same representation, so one
 function builds the matrix they all use.
 
-In Saffron a `TransformComponent` holds three vectors: translation, scale, and rotation stored as
-Euler XYZ angles in radians. `transformMatrix` composes them into the model matrix. The result is
-local to the entity's parent; the [scene hierarchy](../scene-hierarchy/) composes the parent chain
-into the cached world matrix that rendering, picking, and the gizmo actually consume.
+A `Transform` holds three vectors: translation, scale, and rotation stored as Euler XYZ angles in
+radians. `transform_matrix` composes them into the local model matrix. The result is local to the
+entity's parent; the [scene hierarchy](../scene-hierarchy/) composes the parent chain into the
+cached world matrix that rendering, picking, and the gizmo actually consume.
 
 ## The composition
 
-The composition follows the standard TRS order. Read right to left, a point is scaled, then
-rotated, then translated:
+The composition follows the standard TRS order. Read right to left, a point is scaled, then rotated,
+then translated:
 
 $$
 M = T \cdot R \cdot S
 $$
 
-```cpp
-auto transformMatrix(const TransformComponent& transform) -> glm::mat4
-{
-    glm::mat4 translation = glm::translate(glm::mat4(1.0f), transform.translation);
-    glm::mat4 rotation = glm::mat4_cast(glm::quat(transform.rotation));
-    glm::mat4 scale = glm::scale(glm::mat4(1.0f), transform.scale);
-    return translation * rotation * scale;
+```rust
+pub fn transform_matrix(transform: &Transform) -> Mat4 {
+    Mat4::from_translation(transform.translation)
+        * Mat4::from_quat(quat_from_euler_xyz(transform.rotation))
+        * Mat4::from_scale(transform.scale)
 }
 ```
 
-The Euler vector becomes a quaternion via `glm::quat`, and `glm::mat4_cast` turns that into the
-rotation block. Routing through a quaternion keeps the intermediate orthonormal, rather than
-multiplying three separate axis matrices.
+The Euler vector becomes a quaternion via `quat_from_euler_xyz`, the engine's own half-angle
+product. The conversion is hand-rolled rather than delegated to `glam::Quat::from_euler`, whose
+`EulerRot` conventions do not match the engine's for a generic rotation. This is the single place an
+authored Euler becomes a rotation, so the convention here is load-bearing across the whole engine.
 
 ## Why rotation is stored as Euler radians
 
 Rotation could be stored as a quaternion. Euler angles are a deliberate authoring choice: a
-quaternion edited through a UI must be decomposed back to angles, and that decomposition is
-ambiguous and clips at $\pm 90°$ on the middle axis. The inspector edits the stored Euler vector
-directly, converting to degrees only for display, which avoids the clip.
+quaternion edited through a UI must be decomposed back to angles, and that decomposition is ambiguous
+and clips at $\pm 90°$ on the middle axis. The inspector edits the stored Euler vector directly,
+converting to degrees only for display, which avoids the clip.
 
 The trade is a known one. Euler angles can gimbal-lock, but for hand-authored scene transforms the
 clip-free editing is worth more. The conversion to a quaternion happens once, at matrix-build time,
-away from the UI.
+away from the UI. The inverse, `quat_to_euler_zyx`, is the stable $R_z \cdot R_y \cdot R_x$ matrix
+extraction the reparent rebase uses; `glam`'s `Quat::to_euler` is numerically unstable at yaw
+$\pm 90°$, so the scene owns its own extraction.
 
 ## The camera is the same data, inverted
 
-A camera entity has no separate orientation. `primaryCamera` builds the camera's model matrix from
-its `TransformComponent` — translation times rotation, no scale — and inverts it to get the view
-matrix:
+A camera entity has no separate orientation. `primary_camera` finds the first entity with a
+`Transform` and a primary `Camera`, takes its cached **world** matrix, and inverts it to get the
+view matrix:
 
-```cpp
-const glm::mat4 model =
-    glm::translate(glm::mat4(1.0f), transform.translation) * glm::mat4_cast(glm::quat(transform.rotation));
-result.view = glm::inverse(model);
+```rust
+Some(CameraView {
+    view: self.world_matrix(entity).inverse(),
+    fov: camera.fov,
+    near_plane: camera.near_plane,
+    far_plane: camera.far_plane,
+})
 ```
 
-A camera is positioned and aimed with the same transform component as any object. The view matrix
-is the inverse of that model matrix.
+A camera is positioned and aimed with the same transform component as any object, and a parented
+camera views from its world placement. The view matrix is the inverse of that world matrix.
 
 ## The projection lives un-flipped
 
-`cameraProjection` returns a plain `glm::perspective` in the GL clip convention. The Vulkan Y-flip
-is not baked in, so the projection has one source of truth. The renderer applies `proj[1][1] *=
--1.0f` where it samples for the actual draw and for [picking](../picking/); the editor gizmo
-consumes the un-flipped matrix as-is, so it is not mirrored. A flip baked into `cameraProjection`
-would draw the gizmo backwards.
+`camera_projection` returns a plain right-handed GL-clip perspective (`Mat4::perspective_rh_gl`).
+The Vulkan Y-flip is not baked in, so the projection has one source of truth. The renderer and
+[picking](../picking/) apply `proj.y_axis.y *= -1.0` where they build the actual draw / pick matrix;
+the editor gizmo consumes the un-flipped matrix as-is, so it is not mirrored. A flip baked into
+`camera_projection` would draw the gizmo backwards.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The component | `scene.cppm` | `TransformComponent` |
-| TRS composition | `scene.cppm` | `transformMatrix` |
-| Camera view from transform | `scene.cppm` | `primaryCamera`, `CameraView` |
-| Un-flipped projection | `scene.cppm` | `cameraProjection` |
-| Where the Y-flip is applied | `assets.cppm` | `renderScene`, `pickEntity` |
-| Degree/radian edit | `editor/src/components/fieldRenderer.tsx` | `Transform.rotation` `convertRadians`, `RAD_TO_DEG` |
+| The component | `scene/src/component.rs` | `Transform` |
+| TRS composition | `scene/src/hierarchy.rs` | `transform_matrix`, `quat_from_euler_xyz` |
+| Stable Euler extraction | `scene/src/hierarchy.rs` | `quat_to_euler_zyx`, `set_local_from_matrix` |
+| Camera view from transform | `scene/src/hierarchy.rs` | `primary_camera`, `CameraView` |
+| Un-flipped projection | `scene/src/hierarchy.rs` | `camera_projection` |
+| Where the Y-flip is applied | `assets/src/render_scene.rs` | `render_scene`, `pick_entity` |
+| Degree/radian edit | `editor/src/components/fieldRenderer.tsx` | `Transform.rotation`, `RAD_TO_DEG` |
 
 ## Related
 - [Components](../built-in-components/) — the rest of the value structs

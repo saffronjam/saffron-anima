@@ -5,100 +5,100 @@ weight = 4
 
 # Component registry
 
-A component registry is a runtime table that pairs each component type with the operations
-cross-cutting features perform on it: serialize, deserialize, add, remove, clone, and draw. Each
-entry is a row of closures, so a feature dispatches on a component without naming its type.
+A component registry is a runtime table that pairs each component type with the structural
+operations cross-cutting features perform on it: serialize, deserialize, add, remove, and clone.
+Each entry is a row of function pointers, so a feature dispatches on a component without naming its
+type.
 
 Several subsystems need per-component knowledge. The serializer converts a component to and from
-JSON, the editor draws, adds, and removes it, and entity cloning copies it. A registry holds that
-knowledge in one place. Registering a component is a single call, and no central code changes when
-a new component is added.
+JSON, the editor adds and removes it over the control plane, and the play-mode duplicate copies it
+across worlds. A registry holds that knowledge in one place. Registering a component is one macro
+line, and no central code changes when a new component is added.
 
 ## The itable
 
-`ComponentTraits` is a struct of `std::function` fields — a Go-interface vtable built by hand,
-one field per operation a cross-cutting feature needs:
+`ComponentTraits` is a struct of plain `fn` pointers — a Go-interface itable built by hand, one
+field per operation a cross-cutting feature needs. Each pointer is monomorphic over the component
+type and captures nothing, so the whole row is `Copy`:
 
-```cpp
-struct ComponentTraits
-{
-    entt::id_type id = 0;   // == entt::type_hash<C>::value(); the storage() join key
-    std::string name;       // stable JSON key + UI header, e.g. "Transform"
-    bool removable = true;
-    std::function<bool(Scene&, Entity)> has;
-    std::function<void(Scene&, Entity)> addDefault;
-    std::function<void(Scene&, Entity)> remove;
-    std::function<void(Scene&, Entity, Scene&, Entity)> copyTo;        // clone src -> dst
-    std::function<nlohmann::json(Scene&, Entity)> serialize;
-    std::function<Result<void>(Scene&, Entity, const nlohmann::json&)> deserialize;
-    std::function<void(Scene&, Entity)> drawInspector;  // opaque hook; the engine renders no UI
-};
+```rust
+pub struct ComponentTraits {
+    pub name: &'static str,                                   // stable JSON key + UI header
+    pub removable: bool,
+    pub has: fn(&Scene, Entity) -> bool,
+    pub add_default: fn(&mut Scene, Entity),
+    pub remove: fn(&mut Scene, Entity),
+    pub copy_to: fn(&Scene, Entity, &mut Scene, Entity),      // clone src -> dst
+    pub serialize: fn(&Scene, Entity) -> Value,
+    pub deserialize: fn(&mut Scene, Entity, &Value) -> Result<()>,
+}
 ```
 
-The `ComponentRegistry` is a vector of these rows plus two indexes: `byId` (keyed by the entt
-type hash, the same id entt's `storage()` iteration yields) and `byName` (keyed by the stable
-JSON string). Both map to the same row.
+The `ComponentRegistry` is a vector of these rows plus two indexes: `by_id` (keyed by
+`TypeId::of::<C>()`, Rust's stable in-process type identity) and `by_name` (keyed by the stable JSON
+string). Both map to the same row. There is no per-type draw hook — the inspector is the React
+editor, which builds each field from the DTO catalog over the control plane.
 
-## Registering is one call
+## Registering is one macro line
 
-`registerComponent<C>` takes the type, a name, and three closures: a draw function, a to-JSON, and
-a from-JSON. It synthesizes everything else from the generic component functions. `has`,
-`addDefault`, `remove`, `copyTo`, and the `Scene/Entity` adapters around `serialize`/`deserialize`
-are all generated.
+`ComponentRegistry::register::<C>` synthesizes the structural pointers (`has`, `add_default`,
+`remove`, `copy_to`) from the generic component access and takes the two serde trampolines as bare
+`fn` pointers. The `register_component!` macro is the one-line registration *surface* over it: it
+expands to a single `register` call, building the serde trampolines from the supplied (or defaulted)
+`to_json` / `from_json` paths.
 
-```cpp
-template <typename C>
-void registerComponent(ComponentRegistry& reg, std::string name,
-                       std::function<void(Scene&, Entity)> drawFn,
-                       std::function<nlohmann::json(const C&)> toJson,
-                       std::function<Result<void>(C&, const nlohmann::json&)> fromJson,
-                       bool removable = true);
+```rust
+register_component!(reg, Transform, "Transform", false);   // serde defaults to the SceneSerialize impl
+register_component!(reg, Mesh, "Mesh");                     // removable defaults to true
 ```
 
-The caller writes only the genuinely per-component part: how its fields map to JSON. The draw
-closure is an empty stub since the engine renders no UI. The `deserialize` closure adds the
-component with defaults before calling `fromJson`, so a load never assumes the component already
-exists. Every built-in component is registered this way in `scene_edit_components.cpp`, one call
-each.
+When the serde paths are omitted they default to the type's `SceneSerialize` impl, the
+byte-compatible body every built-in component carries. The deserialize trampoline default-constructs
+the component if absent, then fills it in place, so a load never assumes the component already
+exists. Every built-in is registered this way in `register_builtin_components`, one line each.
 
 ## Lookup feeds both directions
 
-```cpp
-auto findById(const ComponentRegistry&, entt::id_type) -> const ComponentTraits*;
-auto findByName(const ComponentRegistry&, const std::string&) -> const ComponentTraits*;
+```rust
+pub fn find_by_id(&self, id: TypeId) -> Option<&ComponentTraits>;
+pub fn find_by_type<C: Component>(&self) -> Option<&ComponentTraits>;
+pub fn find_by_name(&self, name: &str) -> Option<&ComponentTraits>;
 ```
 
-Serialization walks `scene.registry.storage()`, takes each storage's id, and calls `findById` to
-discover what to write. Loading reads JSON keys and calls `findByName`. The two indexes let one
-table drive both the type-keyed and string-keyed paths.
+`serialize_entity` walks the registry rows, asks each `has(scene, entity)`, and writes
+`{ name: serialize(...) }` for every present row. Loading reads JSON keys and calls `find_by_name`.
+The two indexes let one table drive both the type-keyed and string-keyed paths.
 
-## Why closures, not entt::meta
+## Why fn pointers, not a derive
 
-entt ships a reflection system, `entt::meta`, that could carry this data. The engine uses a
-hand-built struct-of-closures for the reason the rest of the codebase avoids heavy machinery. A
-`std::function` table is plain, debuggable data read top to bottom, and it keeps the per-component
-JSON code next to the registration call rather than scattered across reflection attributes.
-The `drawInspector` field stays opaque at the scene layer, but the engine renders no UI, so its
-closure is an empty stub and the real inspector is the React frontend, which builds each field from
-the DTO catalog over the control plane.
+The serde could ride a `#[derive]` or a reflection crate. The registry uses a hand-built
+struct-of-fn-pointers for the reason the rest of the codebase avoids heavy machinery: it is plain,
+debuggable data read top to bottom, and it keeps the per-component JSON body (one `SceneSerialize`
+impl) next to the registration line rather than scattered across attributes. Because every pointer
+captures nothing, the row stays `Copy` with no `Box<dyn Fn>` allocation.
+
+The registration list is a deliberate explicit sequence, not a link-time collection: registration
+order is the canonical `component_order` and the OpenRPC/manifest emit order, so
+`register_builtin_components` is one function listing the calls in a fixed order, and a
+`registry_is_complete` test pins the row set to `BUILTIN_COMPONENT_NAMES`.
 
 > [!TIP]
-> The `name` string is a stable contract, not a display nicety. It is the JSON key on disk and
-> the editor's component header. Renaming it silently breaks every saved scene that used the old
-> name (the loader logs `unknown component '<old>', skipping`). Treat it like a serialization
-> version.
+> The `name` string is a stable contract, not a display nicety. It is the JSON key on disk and the
+> editor's component header. Renaming it silently breaks every saved scene that used the old name
+> (the loader logs `unknown component '<old>', skipping`). Treat it like a serialization version.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The itable | `scene.cppm` | `ComponentTraits`, `ComponentRegistry` |
-| One-call registration | `scene.cppm` | `registerComponent` |
-| Lookup | `scene.cppm` | `findById`, `findByName` |
-| The built-in registrations | `scene_edit_components.cpp` | `registerComponent<...>` |
+| The itable + table | `scene/src/registry.rs` | `ComponentTraits`, `ComponentRegistry` |
+| One-line registration | `scene/src/registry.rs` · `scene/src/macros.rs` | `ComponentRegistry::register`, `register_component!` |
+| Lookup | `scene/src/registry.rs` | `find_by_id`, `find_by_type`, `find_by_name` |
+| Per-entity serde walk | `scene/src/registry.rs` | `serialize_entity`, `deserialize_entity` |
+| The built-in registrations | `scene/src/registry.rs` | `register_builtin_components`, `BUILTIN_COMPONENT_NAMES` |
+| Per-component serde bodies | `scene/src/serde.rs` | `SceneSerialize` |
 
 ## Related
 - [Components](../built-in-components/) — the structs registered here
 - [Serialization](../scene-serialization/) — the registry driving save/load
-- [Inspector](../../ui-and-editor/inspector/) — the `drawInspector` closures in action
-- [Go-flavored design](../../core-and-conventions/go-flavored-design/) — struct-of-closures as an itable
+- [Go-flavored design](../../core-and-conventions/go-flavored-design/) — struct-of-fn-pointers as an itable
