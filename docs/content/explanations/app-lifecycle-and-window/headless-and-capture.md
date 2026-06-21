@@ -5,91 +5,86 @@ weight = 5
 
 # Headless runs
 
-A headless run is an instance of the loop that terminates on its own and records its output
-without a person at the window. Two environment variables drive it: one bounds the run to a
-fixed number of frames, the other writes the final viewport image to a PNG.
+A headless run is an instance of the loop that terminates on its own, without a person at the
+window, so a script can boot the engine, render a known number of frames, and exit. A normal
+run continues until the window closes, which automated verification cannot wait for. Two
+environment variables bound and pace the loop; capture of the result is a separate, control-plane
+concern.
 
-A normal run continues until the window closes, which automated verification cannot wait for.
-The two variables together let a script start the engine, render a known number of frames,
-exit, and diff the result against a reference image.
+## Two host modes
+
+`run` already serves a windowless mode: when `SAFFRON_EDITOR_NATIVE_VIEWPORT` is set,
+`HostMode::from_env` selects `Headless`, which builds a no-surface offscreen device
+(`SurfaceSource::Offscreen`) with no window and drives the plain `while` loop (`drive`). That is
+the mode the editor spawns the host in. The frame-bounding knobs below apply to either mode.
 
 ## Exit after N frames
 
-`SAFFRON_EXIT_AFTER_FRAMES=N` makes the loop count its iterations and stop after `N`. The
-value is parsed once at startup, and the whole-string check rejects trailing junk like `5x`:
-a typo is logged and ignored rather than parsed as its leading digits. A limit of 0 (unset
+`SAFFRON_EXIT_AFTER_FRAMES=N` makes the loop count its iterations and stop after `N`. The value
+is parsed strictly by `frame_limit_from_env`: the whole string must be a base-10 `u64`, so a typo
+like `10x` is logged and ignored rather than parsed as its leading digits. A limit of `0` (unset
 or malformed) means run forever.
 
-```cpp
-auto frameLimitFromEnv() -> u64
-{
-    const char* raw = std::getenv("SAFFRON_EXIT_AFTER_FRAMES");
-    if (raw == nullptr) { return 0; }
-    std::string_view text{ raw };
-    u64 parsed = 0;
-    auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
-    if (result.ec != std::errc{} || result.ptr != text.data() + text.size())
-    {
-        logError(std::format("invalid SAFFRON_EXIT_AFTER_FRAMES='{}', ignoring", text));
-        return 0;
+```rust
+fn parse_strict_u64(text: &str, reject_zero: bool) -> Option<u64> {
+    match text.parse::<u64>() {
+        Ok(value) if !(reject_zero && value == 0) => Some(value),
+        _ => None,
     }
-    return parsed;
 }
 ```
 
-When `frameCount` reaches the limit, `run` sets `app.running = false` and exits through the
-normal teardown path: the same `waitGpuIdle` → `onDetach` → `onExit` ordering as a manual
-close. A frame counts whether or not it rendered, so a minimized window still advances the
-count.
+When `frame_count` reaches the limit, `step_frame` sets `app.running = false` and the loop exits
+through the normal teardown path: the same `wait_gpu_idle` → `on_detach` → `on_exit` ordering as
+a manual close. A frame counts whether or not it rendered, so a minimized window (a zero viewport
+axis) still advances the count even though its frame body is skipped.
 
-## Capture the viewport
+## Pace the loop
 
-`SAFFRON_CAPTURE=path` writes the offscreen viewport image to a file after the loop ends,
-during teardown. `captureViewport` reads the last rendered offscreen back to the host and
-encodes it as a PNG in four steps:
-
-1. `device.waitIdle()` — the offscreen may still be sampled by an in-flight frame, so idle
-   first or the capture's layout transition races that read.
-2. Allocate a host-visible buffer sized `width × height × formatPixelBytes(format)`.
-3. Record a one-time command buffer that transitions the image, copies it to the buffer, and
-   transitions it **back to `ShaderReadOnly`** — leaving the image in the layout the next
-   frame's producer barrier expects, so capture does not desync the cross-frame layout.
-4. Submit, `waitIdle` again, invalidate the mapping, and write the PNG.
-
-The offscreen is `rgba16f` HDR. `writeBufferToPng` unpacks the half-floats and clamps each
-channel to `[0, 1]`, so the PNG holds the tonemapped display image, not the raw HDR values.
-On failure `run` logs the error and exits normally.
+`SAFFRON_MAX_FPS=N` caps the loop rate. `max_fps_from_env` parses it strictly and rejects a
+literal `0` (no cap). `pace_loop` sleeps to the next-frame deadline each iteration, catching up
+without accumulating debt after a slow frame, so an unbounded headless run does not spin a core
+flat out. Both knobs are read once into `LoopLimits` and threaded through `step_frame`, so the
+loop body never touches the environment itself — which keeps the loop's unit tests free of
+process-global env mutation.
 
 ```mermaid
 flowchart TD
-    L[loop ends: frame limit or window close] --> WI[waitGpuIdle]
-    WI --> D[layers onDetach → config onExit]
-    D --> C{SAFFRON_CAPTURE set?}
-    C -- yes --> CV[captureViewport → PNG]
-    C -- no --> T[destroy renderer / window]
-    CV --> T
+    S[step_frame] --> C{frame_count >= frame_limit?}
+    C -- yes --> R["running = false"]
+    C -- no --> P[pace_loop honors SAFFRON_MAX_FPS]
+    R --> WI[wait_gpu_idle]
+    WI --> D[on_detach → on_exit]
 ```
 
-The control plane has its own live `sa screenshot` command for grabbing the viewport or
-window while the editor runs. `SAFFRON_CAPTURE` is the no-socket path: a single end-of-run
-write driven entirely by the environment, used by the headless pixel checks.
+## Capturing the result
+
+The loop itself writes no image. A capture is requested over the control plane: the `screenshot`
+command grabs either the viewport (`Renderer::capture_viewport`, a synchronous offscreen
+read-back to a PNG) or the window (`Renderer::request_window_capture`, deferred to the next
+present). The headless pixel checks combine `SAFFRON_EXIT_AFTER_FRAMES` to bound the run with a
+`screenshot` request to dump the frame. See
+[screenshots and capture](../../tooling-and-control/screenshots-and-capture/) for the read-back
+mechanics.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Frame-limit parse | `app.cppm` | `detail::frameLimitFromEnv` |
-| Counting + exit | `app.cppm` | `run` — `frameCount`, `frameLimit` |
-| Capture trigger | `app.cppm` | `run` — `SAFFRON_CAPTURE` block |
-| Readback + PNG | `renderer_capture.cpp` | `captureViewport`, `writeBufferToPng`, `formatPixelBytes` |
-| Live screenshot | `renderer_capture.cpp` | `requestWindowCapture`, `captureSupported` |
+| Frame-limit parse | `app/src/lib.rs` | `frame_limit_from_env`, `parse_strict_u64` |
+| FPS cap parse | `app/src/lib.rs` | `max_fps_from_env`, `LoopLimits` |
+| Counting + exit | `app/src/lib.rs` | `step_frame` — `frame_count`, `frame_limit` |
+| Pacing | `app/src/lib.rs` | `pace_loop` |
+| Headless mode | `app/src/lib.rs` | `HostMode::Headless`, `run_inner` |
+| Viewport / window capture | `rendering/src/renderer.rs` | `capture_viewport`, `request_window_capture` |
+| PNG encode | `rendering/src/thumbnail.rs` | `write_png_file`, `encode_to_png`, `format_pixel_bytes` |
 
 > [!TIP]
-> `captureViewport` calls `device.waitIdle()` itself, so it is safe to invoke during teardown
-> after the loop has stopped. It captures the *offscreen* (the viewport contents), not the
-> swapchain, so the PNG is the scene exactly as the viewport panel showed it.
+> A minimized frame (a zero viewport axis) skips its render body but still counts toward
+> `SAFFRON_EXIT_AFTER_FRAMES`, so a headless run always terminates on schedule even if the host
+> never produces a visible frame.
 
 ## Related
 
-- [Main loop](../main-loop-and-run/) — where both env vars are read and applied
-- [Tonemapping and exposure](../../screen-space-and-post/tonemap-and-exposure/) — why the PNG is the tonemapped display image
+- [Main loop](../main-loop-and-run/) — where both env knobs are read and applied
+- [Screenshots and capture](../../tooling-and-control/screenshots-and-capture/) — the control-plane viewport/window grab

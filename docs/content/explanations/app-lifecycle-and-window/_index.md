@@ -6,16 +6,16 @@ bookCollapseSection = true
 
 # App lifecycle & window
 
-The application lifecycle is the path a Saffron Anima program follows from start to shutdown:
-the `run` loop, the layers a client extends, and the SDL3 window with its typed event signals.
-Every feature hangs off a layer callback.
+The application lifecycle is the path a Saffron Anima host follows from start to shutdown:
+the `run` loop, the layers a client attaches, and the winit window with its typed event
+signals. Every feature hangs off a layer hook.
 
 ## Pages
 
 | Page | Covers | Code |
 |---|---|---|
-| [main-loop-and-run](main-loop-and-run/) | `AppConfig`, `sa::run`, the per-frame sequence, `onCreate`/`onExit` | `app.cppm` · `run` |
-| `layer-system` | `Layer` as a struct of closures, `attachLayer`, the callback set | `app.cppm` · `Layer`, `attachLayer` |
-| `the-submit-and-rendergraph-seams` | `onRender` submit seam vs. `onRenderGraph` pass authoring | `app.cppm` · `frameGraph`; `renderer.cppm` · `submit` |
-| `window-and-events` | SDL3 window, typed signals (`onResize`/`onKeyPressed`/…), raw event sinks | `window.cppm` |
-| `headless-and-capture` | `SAFFRON_EXIT_AFTER_FRAMES`, `SAFFRON_CAPTURE` | `app.cppm` · `frameLimitFromEnv`, `captureViewport` |
+| [main-loop-and-run](main-loop-and-run/) | `AppConfig`, `run`, the per-frame sequence, windowed vs headless modes, `on_create`/`on_exit` | `app/src/lib.rs` · `run`, `step_frame` |
+| [layer-system](layer-system/) | `Layer` as a trait of default-empty hooks, `attach_layer`, the hook set | `app/src/lib.rs` · `Layer`, `attach_layer`, `run_hook` |
+| [the-submit-and-rendergraph-seams](the-submit-and-rendergraph-seams/) | `on_render` submit seam vs. `on_render_graph` pass authoring | `rendering/src/renderer.rs` · `submit`; `rendering/src/render_graph.rs` · `add_pass` |
+| [window-and-events](window-and-events/) | winit window, typed signals (`on_resize`/`on_key_pressed`/…), raw event sink | `window/src/lib.rs` · `Window`, `dispatch_window_event` |
+| [headless-and-capture](headless-and-capture/) | `SAFFRON_EXIT_AFTER_FRAMES`, `SAFFRON_MAX_FPS`, headless mode, control-plane capture | `app/src/lib.rs` · `frame_limit_from_env`, `pace_loop` |
