@@ -13,36 +13,41 @@ into the lighting set the fragment shader reads.
 
 ## The three components
 
-All three are plain value structs in `Saffron.Scene`. Position comes from the entity's
-`TransformComponent`; the light itself only carries radiometric and shape parameters.
+All three are plain `Copy` structs in `saffron_scene` (the `component` module), attached to a
+hecs entity. Position comes from the entity's `Transform`; the light itself only carries
+radiometric and shape parameters.
 
-```cpp
-struct DirectionalLightComponent
-{
-    glm::vec3 direction{ -0.5f, -1.0f, -0.3f };  // the way the light travels
-    glm::vec3 color{ 1.0f };
-    f32 intensity = 1.0f;
-    f32 ambient = 0.15f;
-};
+```rust
+pub struct DirectionalLight {
+    pub direction: Vec3,  // the way the light travels
+    pub color: Vec3,
+    pub intensity: f32,
+    pub ambient: f32,
+}
 
-struct PointLightComponent  { glm::vec3 color; f32 intensity; f32 range; };
+pub struct PointLight {
+    pub color: Vec3,
+    pub intensity: f32,
+    pub range: f32,
+}
 
-struct SpotLightComponent
-{
-    glm::vec3 direction{ 0.0f, -1.0f, 0.0f };
-    glm::vec3 color{ 1.0f };
-    f32 intensity = 5.0f;
-    f32 range = 10.0f;
-    f32 innerAngle = 20.0f;  // full intensity inside this half-angle (degrees)
-    f32 outerAngle = 30.0f;  // zero past this half-angle
-};
+pub struct SpotLight {
+    pub direction: Vec3,
+    pub color: Vec3,
+    pub intensity: f32,
+    pub range: f32,
+    pub inner_angle: f32,  // full intensity inside this half-angle (degrees)
+    pub outer_angle: f32,  // zero past this half-angle
+}
 ```
 
-The scene shades through the first directional light it finds and ignores the rest. It is the
-only light carrying an `ambient` scalar, which feeds the flat-ambient fallback when
-[IBL](../ibl-ambient-term/) is off. Point and spot lights are the punctual lights: a position
-and an inverse-square falloff with a hard `range`. A spot adds a cone aimed by `direction`, with
-a soft edge between `innerAngle` and `outerAngle`.
+`DirectionalLight::default()` aims at `(-0.5, -1.0, -0.3)` with `ambient = 0.15`; `SpotLight`
+defaults to a `20°`/`30°` cone with `range = 10.0`. The scene shades through the first
+directional light it finds and ignores the rest. It is the only light carrying an `ambient`
+scalar, which feeds the flat-ambient fallback when [IBL](../ibl-ambient-term/) is off. Point and
+spot lights are the punctual lights: a position and an inverse-square falloff with a hard
+`range`. A spot adds a cone aimed by `direction`, with a soft edge between `inner_angle` and
+`outer_angle`.
 
 ## Two GPU shapes
 
@@ -51,42 +56,44 @@ evaluated differently. The directional light is a handful of scalars folded into
 UBO (set 1, binding 0). The punctual lights become a variable-length array, one `GpuLight` per
 point or spot light:
 
-```cpp
-struct GpuLight
-{
-    glm::vec4 positionRange;   // xyz = world position, w = range
-    glm::vec4 colorIntensity;  // rgb = color, a = intensity
-    glm::vec4 directionType;   // xyz = world direction (spot), w = type (0 = point, 1 = spot)
-    glm::vec4 spotCos;         // x = cos(innerAngle), y = cos(outerAngle)
-};
+```rust
+#[repr(C)]
+pub struct GpuLight {
+    pub position_range: Vec4,   // xyz = world position, w = range
+    pub color_intensity: Vec4,  // rgb = color, a = intensity
+    pub direction_type: Vec4,   // xyz = world direction (spot), w = type (0 = point, 1 = spot)
+    pub spot_cos: Vec4,         // x = cos(inner_angle), y = cos(outer_angle)
+}
 ```
 
-Four `vec4`s keep the struct naturally aligned for std430. A point light leaves `directionType`
-zeroed; a spot writes its normalized direction with type `1` in `.w` and pre-computes the
-cosines of its two half-angles into `spotCos`. The shader compares against cosines, so converting
-degrees to cosine once on the CPU costs less than a `cos` per fragment. `renderScene` builds the
-array with two `forEach` loops over the point and spot components.
+Four `Vec4`s, `#[repr(C)]` + `bytemuck::Pod`, keep the struct naturally aligned for std430 (a
+pinned `assert!(size_of::<GpuLight>() == 64)` holds the contract). A point light leaves
+`direction_type` zeroed; a spot writes its normalized direction with type `1` in `.w` and
+pre-computes the cosines of its two half-angles into `spot_cos`. The shader compares against
+cosines, so converting degrees to cosine once on the CPU costs less than a `cos` per fragment.
+`gather_punctual_lights` builds the array by querying the scene's `PointLight` and `SpotLight`
+components.
 
 ## The upload
 
-`setSceneLighting` writes the current frame's copies. Writing directly is safe because
-`beginFrame` already waited on this frame's fence, so no in-flight frame is reading them.
+`Lighting::set_scene_lighting` writes the current frame's copies. Writing directly is safe
+because the frame's fence was already waited, so no in-flight frame is reading them.
 
-The punctual array goes into a mapped storage buffer (set 1, binding 1) whose capacity grows to
-the next power of two on demand and never shrinks. The same buffer is bound twice, into the
-fragment lighting set and into the compute cull set, so growing it rewrites both descriptors.
-The directional light and the punctual count land in the `LightUbo`, where `counts.x` is the
-count the brute-force loop reads and the other lanes are feature flags
-([directional shadow](../directional-light/), IBL, SSAO).
+The punctual array goes into a host-mapped storage buffer (set 1, binding 1) whose capacity
+grows to the next power of two on demand and never shrinks (`ensure_light_capacity`). The same
+buffer is bound twice, into the fragment lighting set and into the compute cull set, so growing
+it rewrites both descriptors. The directional light and the punctual count land in the
+`LightUbo`, where `counts.x` is the count the brute-force loop reads and the other lanes are
+feature flags ([directional shadow](../directional-light/), IBL, SSAO).
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The components | `scene.cppm` | `DirectionalLightComponent`, `PointLightComponent`, `SpotLightComponent` |
-| Gather + pack | `assets.cppm` | `renderScene` |
-| The GPU struct | `renderer_types.cppm` | `GpuLight` |
-| The upload | `renderer_lighting.cpp` | `setSceneLighting`, `ensureLightCapacity`, `LightUbo` |
+| The components | `engine/crates/scene/src/component.rs` | `DirectionalLight`, `PointLight`, `SpotLight` |
+| Gather + pack | `engine/crates/assets/src/render_scene.rs` | `gather_directional_light`, `gather_punctual_lights` |
+| The GPU struct | `engine/crates/rendering/src/gpu_types.rs` | `GpuLight` |
+| The upload | `engine/crates/rendering/src/lighting.rs` | `Lighting::set_scene_lighting`, `Lighting::ensure_light_capacity`, `LightUbo` |
 
 > [!NOTE]
 > Only the first directional light shades the scene; extra ones are silently ignored. The light

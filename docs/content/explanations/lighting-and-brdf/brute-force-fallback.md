@@ -12,9 +12,10 @@ path is validated against. `sa set-clustered 0` selects it at runtime.
 
 ## One flag, two loops
 
-The flag rides in the cluster params (`screenSize.z`), set from `useClustered` in
-`setClusterCamera`. When it is zero there is no cluster lookup, and the loop runs over the full
-light count from the lighting UBO:
+The flag rides in the cluster params (`screen_size.z`, read in the shader as
+`clusterParams.screenSize.z`), set from `use_clustered` in `Lighting::set_cluster_camera`. When
+it is zero there is no cluster lookup, and the loop runs over the full light count from the
+lighting UBO:
 
 ```hlsl
 else
@@ -27,8 +28,9 @@ else
 ```
 
 The body is the same `punctual(...)` call the clustered loop makes; only the iteration set
-differs. When the flag is off, `clusterDispatchPending` is never set, so the
-[cull pass](../clustered-forward/) is not added to the render graph that frame.
+differs. When the flag is off, no cull dispatch is armed
+(`take_cluster_dispatch_pending` returns false), so the [cull pass](../clustered-forward/) is not
+added to the render graph that frame.
 
 ## Why the two paths match
 
@@ -53,10 +55,11 @@ the light count is small enough that culling is not worth the compute dispatch.
 
 | What | File | Symbols |
 |---|---|---|
-| The two loops | `mesh.slang` | `fragmentMain` — `clusterParams.screenSize.z` branch |
-| Shared per-light body | `mesh.slang` | `punctual`, `brdf` |
-| The flag | `renderer_lighting.cpp` | `setClustered`, `clusteredEnabled` |
-| Skipping the cull pass | `renderer_lighting.cpp` | `clusterDispatchPending` |
+| The two loops | `engine/assets/shaders/lighting.slang` | `evalLighting` — `clusterParams.screenSize.z` branch |
+| Shared per-light body | `engine/assets/shaders/lighting.slang` | `punctual`, `brdf` |
+| The flag | `engine/crates/rendering/src/renderer.rs` | `Renderer::set_clustered`, `Renderer::clustered_enabled` |
+| Skipping the cull pass | `engine/crates/rendering/src/lighting.rs` | `Lighting::use_clustered`, `take_cluster_dispatch_pending` |
+| `set-clustered` control command | `engine/crates/control/src/commands_render.rs` | the `set-clustered` registration |
 
 > [!TIP]
 > The brute-force loop reads `globals.counts.x` (the full count); the clustered loop reads a

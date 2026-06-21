@@ -87,7 +87,7 @@ from what remains available to scatter diffusely.
 
 ## Putting it together
 
-The body of `brdf` is exactly these terms:
+The body of `brdf` in `lighting.slang` is exactly these terms:
 
 ```hlsl
 float3 h    = normalize(v + l);
@@ -119,12 +119,12 @@ two paths are pixel-identical by construction.
 
 | What | File | Symbols |
 |---|---|---|
-| Combined BRDF | `mesh.slang` | `brdf` |
-| Normal distribution | `mesh.slang` | `distributionGGX` |
-| Visibility | `mesh.slang` | `visibilitySmithGGX` |
-| Fresnel | `mesh.slang` | `fresnelSchlick`, `fresnelSchlickRoughness` |
-| Where it's called | `mesh.slang` | `fragmentMain`, `punctual` |
-| Roughness/metallic clamps | `mesh.slang` | `fragmentMain` |
+| Combined BRDF | `engine/assets/shaders/lighting.slang` | `brdf` |
+| Normal distribution | `engine/assets/shaders/lighting.slang` | `distributionGGX` |
+| Visibility | `engine/assets/shaders/lighting.slang` | `visibilitySmithGGX` |
+| Fresnel | `engine/assets/shaders/lighting.slang` | `fresnelSchlick`, `fresnelSchlickRoughness` |
+| Where it's called | `engine/assets/shaders/lighting.slang` | `evalLighting`, `punctual` |
+| Fragment entry | `engine/assets/shaders/mesh.slang` | `fragmentMain` |
 
 ## Related
 

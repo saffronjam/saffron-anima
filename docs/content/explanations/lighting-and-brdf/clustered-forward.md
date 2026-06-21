@@ -33,7 +33,7 @@ the fragment shader inverts the same mapping with a `log` — see [cluster index
 ## The cull pass
 
 `light_cull.slang` runs one invocation per cluster (a flat `[numthreads(64,1,1)]` dispatch of
-`(ClusterCount + 63) / 64` groups). Each invocation unpacks its `(x, y, z)` grid coordinate and
+`ceil(CLUSTER_COUNT / 64)` groups). Each invocation unpacks its `(x, y, z)` grid coordinate and
 builds the cluster's view-space AABB by back-projecting the screen tile's corners onto the near
 plane, then intersecting those eye rays with the slice's two Z planes. It then tests every light
 as a sphere-vs-box check:
@@ -54,7 +54,9 @@ if (dot(delta, delta) <= radius * radius)            // sphere overlaps box
 The light's bounding radius is its `range`. This is exact because punctual
 [attenuation](../punctual-lights-and-attenuation/) is windowed to reach zero at `range`, so a
 light contributes nothing outside its sphere. The result per froxel is a `Cluster`: a `count`
-plus a fixed array of light indices.
+plus a fixed array of light indices. The same froxel-assignment math is mirrored as pure CPU
+functions in `lighting.rs` (`cluster_aabb`, `light_intersects_cluster`, `cull_clusters_cpu`) so
+the cull is unit-testable with no device.
 
 ```mermaid
 flowchart LR
@@ -67,11 +69,12 @@ flowchart LR
 ## How it slots into the frame
 
 The cull pass is added to the [render graph](../../frame-and-render-graph/render-graph-overview/)
-in `beginFrameGraph`, before the scene pass, when `clusterDispatchPending` is set (clustered
-mode on and at least one light). It declares the cluster buffer as `StorageWriteCompute`; the
-scene pass declares it as `StorageReadFragment`. The graph derives the compute→fragment barrier
-from those two declarations, no hand-written `pipelineBarrier2`. The same light SSBO is bound
-into both the cull set and the fragment lighting set, so growing it rewrites both.
+in `record_scene_graph`, before the scene pass, when a cull dispatch is armed (clustered mode on
+and at least one light — `take_cluster_dispatch_pending`). It declares the cluster buffer with
+`RgUsage::StorageWriteCompute`; the scene pass declares it as a sampled storage read. The graph
+derives the compute→fragment barrier from those two declarations, no hand-written pipeline
+barrier. The same light SSBO is bound into both the cull set and the fragment lighting set, so
+growing it rewrites both.
 
 ## Why it stays correct
 
@@ -81,21 +84,24 @@ iterates, never how a light is shaded; both this loop and the
 is added to a cluster only when its `range` sphere overlaps the froxel, and that same `range`
 makes its contribution zero everywhere else, so a fragment never misses a light that would have
 lit it. The two paths are therefore pixel-identical, and `sa set-clustered 0` is a verified A/B.
+A GPU-runtime test cross-checks the dispatch against the `cull_clusters_cpu` oracle.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Cull kernel | `light_cull.slang` | `computeMain`, `screenToView`, `rayToZ` |
-| Grid + cap constants | `renderer_detail.cppm` | `ClusterGridX/Y/Z`, `ClusterCount`, `MaxLightsPerCluster` |
-| Cluster params upload | `renderer_lighting.cpp` | `setClusterCamera`, `ClusterParams`, `clusterDispatchPending` |
-| Pass scheduling + barrier | `renderer.cppm` | `beginFrameGraph` — the `light-cull` pass |
-| Fragment-side loop | `mesh.slang` | `fragmentMain` — `clusterParams.screenSize.z` branch |
+| Cull kernel | `engine/assets/shaders/light_cull.slang` | `computeMain`, `screenToView`, `rayToZ` |
+| Grid + cap constants | `engine/crates/rendering/src/lighting.rs` | `CLUSTER_GRID_X`/`_Y`/`_Z`, `CLUSTER_COUNT`, `MAX_LIGHTS_PER_CLUSTER` |
+| CPU mirror of the cull | `engine/crates/rendering/src/lighting.rs` | `cluster_aabb`, `light_intersects_cluster`, `cull_clusters_cpu` |
+| Cluster params upload | `engine/crates/rendering/src/lighting.rs` | `Lighting::set_cluster_camera`, `ClusterParams`, `take_cluster_dispatch_pending` |
+| Pass scheduling + barrier | `engine/crates/rendering/src/renderer.rs` | `Renderer::record_scene_graph` — the `light-cull` `RgPass::compute` |
+| Fragment-side loop | `engine/assets/shaders/lighting.slang` | `evalLighting` — `clusterParams.screenSize.z` branch |
 
 > [!TIP]
 > The grid dims and `MAX_LIGHTS_PER_CLUSTER` are duplicated in `light_cull.slang`,
-> `mesh.slang`, and `renderer_detail.cppm`. They must stay in lockstep — the cluster index
-> encoding $x + y\,G_x + z\,G_x G_y$ only matches across passes if all three agree.
+> `lighting.slang`, and `lighting.rs`. They must stay in lockstep — the cluster index
+> encoding $x + y\,G_x + z\,G_x G_y$ only matches across passes if all three agree. A unit
+> test (`cluster_grid_matches_shader`) pins the Rust constants to the shader.
 
 ## Related
 

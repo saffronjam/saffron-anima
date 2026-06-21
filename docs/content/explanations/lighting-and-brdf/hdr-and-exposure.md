@@ -37,14 +37,14 @@ $$
 L_o = \sum_{\text{lights}} \big(f_\text{diffuse} + f_\text{specular}\big)\,L_i\,(n\cdot l) \;+\; \text{ambient} \;+\; \text{emissive}
 $$
 
-`mesh.slang` applies no gamma, no clamp, and no tonemap. Summing light contributions is plain
+The shading half in `lighting.slang` applies no gamma, no clamp, and no tonemap. Summing light contributions is plain
 addition, which is physically meaningful only in linear space. Encoding (gamma) and range
 compression (tonemap) both belong to the display step, not the shading step.
 
 ## Exposure in EV stops
 
 Before tonemapping, the HDR value is scaled by a single linear exposure multiplier. The editor
-and control plane work in EV stops, and the engine raises 2 to that stop:
+and control plane work in EV stops, and the engine raises 2 to that stop (`exposure_ev.exp2()`):
 
 $$
 \text{exposure} = 2^{EV}
@@ -74,10 +74,12 @@ produces unbounded linear radiance and relies on that step to land it on screen.
 
 | What | File | Symbols |
 |---|---|---|
-| HDR offscreen format | `renderer_types.cppm` | `OffscreenColorFormat` (`eR16G16B16A16Sfloat`) |
-| Linear radiance accumulation | `mesh.slang` | `fragmentMain` — `lo + ambient + emissive` |
-| Exposure + tone curve | `tonemap.slang` | `computeMain`, `Push.exposure` |
-| EV → $2^{EV}$ | `control_commands_render.cpp` | the exposure setter |
+| HDR offscreen format | `engine/crates/rendering/src/pipelines.rs` | `OFFSCREEN_COLOR_FORMAT` (`R16G16B16A16_SFLOAT`) |
+| Linear radiance accumulation | `engine/assets/shaders/lighting.slang` | `evalLighting` — `lo + ambient + emissive` |
+| Exposure + tone curve | `engine/assets/shaders/tonemap.slang` | `computeMain`, `Push.exposure` |
+| EV → $2^{EV}$ | `engine/crates/rendering/src/overlay.rs` | `TonemapPush::from_ev` (`exposure_ev.exp2()`) |
+| Exposure setter + state | `engine/crates/rendering/src/renderer.rs` | `Renderer::set_exposure`, `Renderer::exposure_ev` |
+| `set-exposure` control command | `engine/crates/control/src/commands_render.rs` | the `set-exposure` registration |
 
 > [!TIP]
 > Exposure is a plain multiply applied before the Reinhard curve, so it shifts which part of

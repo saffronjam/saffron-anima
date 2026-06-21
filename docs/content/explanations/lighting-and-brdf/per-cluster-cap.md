@@ -15,8 +15,8 @@ cannot be stored.
 
 ## A fixed array per cluster
 
-The cap is `MAX_LIGHTS_PER_CLUSTER = 64`, declared in `light_cull.slang`, `mesh.slang`, and
-`renderer_detail.cppm` (as `MaxLightsPerCluster`). The cluster struct is a `count` plus a fixed
+The cap is `MAX_LIGHTS_PER_CLUSTER = 64`, declared in `light_cull.slang`, `lighting.slang`, and
+`lighting.rs` (as `MAX_LIGHTS_PER_CLUSTER`). The cluster struct is a `count` plus a fixed
 array of that many indices:
 
 ```hlsl
@@ -27,9 +27,9 @@ struct Cluster
 };
 ```
 
-The whole cluster buffer is sized `ClusterCount * ClusterStride`, where
-`ClusterStride = sizeof(u32) * (1 + MaxLightsPerCluster)` — one count word plus 64 index words
-per froxel. The fixed stride lets a froxel's data be reached by a single multiply, with no
+The whole cluster buffer is sized `CLUSTER_COUNT * CLUSTER_STRIDE`, where
+`CLUSTER_STRIDE = (1 + MAX_LIGHTS_PER_CLUSTER) * size_of::<u32>()` — one count word plus 64 index
+words per froxel. The fixed stride lets a froxel's data be reached by a single multiply, with no
 per-cluster offset table.
 
 ## The silent drop
@@ -69,14 +69,14 @@ forces the brute-force path and reveals the difference.
 
 | What | File | Symbols |
 |---|---|---|
-| Cap + array | `light_cull.slang` | `MAX_LIGHTS_PER_CLUSTER`, `Cluster`, the `count <` guard |
-| Matching shader-side cap | `mesh.slang` | `MAX_LIGHTS_PER_CLUSTER`, `Cluster` |
-| Buffer sizing | `renderer_detail.cppm` | `MaxLightsPerCluster`, `ClusterStride`, `ClusterCount` |
+| Cap + array | `engine/assets/shaders/light_cull.slang` | `MAX_LIGHTS_PER_CLUSTER`, `Cluster`, the `count <` guard |
+| Matching shader-side cap | `engine/assets/shaders/lighting.slang` | `MAX_LIGHTS_PER_CLUSTER`, `Cluster` |
+| Buffer sizing | `engine/crates/rendering/src/lighting.rs` | `MAX_LIGHTS_PER_CLUSTER`, `CLUSTER_STRIDE`, `CLUSTER_COUNT` |
 
 > [!TIP]
-> Raising the cap means changing `MAX_LIGHTS_PER_CLUSTER` in both shaders and
-> `MaxLightsPerCluster` in `renderer_detail.cppm` together. The cluster buffer is
-> `ClusterStride`-sized off the C++ constant, so a mismatch corrupts the per-froxel stride.
+> Raising the cap means changing `MAX_LIGHTS_PER_CLUSTER` in both shaders and in `lighting.rs`
+> together. The cluster buffer is `CLUSTER_STRIDE`-sized off the Rust constant, so a mismatch
+> corrupts the per-froxel stride; `cluster_grid_matches_shader` pins the constants in a test.
 
 ## Related
 

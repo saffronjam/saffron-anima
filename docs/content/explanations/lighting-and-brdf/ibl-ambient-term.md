@@ -81,11 +81,12 @@ emission, all in linear HDR.
 
 | What | File | Symbols |
 |---|---|---|
-| Ambient branch | `mesh.slang` | `fragmentMain` — `globals.counts.z` |
-| Split-sum specular | `mesh.slang` | `prefilteredMap`, `brdfLut`, `IblPrefilterMaxMip` |
-| Roughness Fresnel | `mesh.slang` | `fresnelSchlickRoughness` |
-| Flat fallback | `mesh.slang` | `directionAmbient.w` |
-| Indirect modulation | `mesh.slang` | `aoMap`, `ssgiMap`, `ddgiSampleIrradiance` |
+| Ambient branch | `engine/assets/shaders/lighting.slang` | `evalLighting` — `globals.counts.z` |
+| Split-sum specular | `engine/assets/shaders/lighting.slang` | `prefilteredMap`, `brdfLut`, `IblPrefilterMaxMip` |
+| Roughness Fresnel | `engine/assets/shaders/lighting.slang` | `fresnelSchlickRoughness` |
+| Flat fallback | `engine/assets/shaders/lighting.slang` | `directionAmbient.w` |
+| Indirect modulation | `engine/assets/shaders/lighting.slang` | `aoMap`, `ssgiMap`, `ddgiSampleIrradiance` |
+| IBL/DDGI flags into the UBO | `engine/crates/rendering/src/lighting.rs` | `Lighting::set_frame_ibl`, `Lighting::set_frame_ddgi` |
 
 > [!TIP]
 > AO, SSGI, and DDGI modulate only the ambient term; they never touch the direct lights.

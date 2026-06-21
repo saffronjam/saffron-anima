@@ -64,10 +64,11 @@ direct term above; it is added later with the rest of the ambient.
 
 | What | File | Symbols |
 |---|---|---|
-| Direct term | `mesh.slang` | `fragmentMain` — `lDir`, the `brdf` call |
-| Shadow map PCF | `mesh.slang` | `pcfShadow`, `globals.shadowViewProj` |
-| Contact + RT shadow | `mesh.slang` | `contactMap`, `rayQueryShadow` |
-| Direction + ambient upload | `renderer_lighting.cpp` | `setSceneLighting` — `directionAmbient`, `colorIntensity` |
+| Direct term | `engine/assets/shaders/lighting.slang` | `evalLighting` — `lDir`, the `brdf` call |
+| Shadow map PCF | `engine/assets/shaders/lighting.slang` | `pcfShadow`, `globals.shadowViewProj` |
+| Contact + RT shadow | `engine/assets/shaders/lighting.slang` | `contactMap`, `rayQueryShadow` |
+| Direction + ambient upload | `engine/crates/rendering/src/lighting.rs` | `Lighting::set_scene_lighting` — `LightUbo::direction_ambient`, `LightUbo::color_intensity` |
+| Gather the sun from the scene | `engine/crates/assets/src/render_scene.rs` | `gather_directional_light` |
 
 > [!TIP]
 > `globals.directionAmbient.xyz` is the direction the light travels, not the direction toward

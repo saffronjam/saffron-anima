@@ -95,11 +95,11 @@ In v1 the map paths shadow exactly one spot and one point light; the RT path sha
 
 | What | File | Symbols |
 |---|---|---|
-| One light's contribution | `mesh.slang` | `punctual` |
-| Distance falloff | `mesh.slang` | `distanceAttenuation` |
-| Spot cone | `mesh.slang` | `punctual` — `smoothstep`, `spotCos` |
-| Spot / point shadow | `mesh.slang` | `pcfShadow`, `pointShadow` |
-| Cosines packed on the CPU | `assets.cppm` | `renderScene` — `glm::cos(glm::radians(...))` into `spotCos` |
+| One light's contribution | `engine/assets/shaders/lighting.slang` | `punctual` |
+| Distance falloff | `engine/assets/shaders/lighting.slang` | `distanceAttenuation` |
+| Spot cone | `engine/assets/shaders/lighting.slang` | `punctual` — `smoothstep`, `spotCos` |
+| Spot / point shadow | `engine/assets/shaders/lighting.slang` | `pcfShadow`, `pointShadow` |
+| Cosines packed on the CPU | `engine/crates/assets/src/render_scene.rs` | `gather_punctual_lights` — `inner_angle.to_radians().cos()` into `spot_cos` |
 
 > [!TIP]
 > `range` is a hard cutoff, not just a falloff knob. The window forces attenuation to zero at

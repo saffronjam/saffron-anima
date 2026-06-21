@@ -13,7 +13,7 @@ right list.
 
 The mapping must invert exactly the slicing the [cull pass](../clustered-forward/) used. A fragment
 that resolves to a different froxel than the cull assigned reads a light list built for another
-region of the frustum. Saffron implements the mapping as `clusterIndexFor` in `mesh.slang`.
+region of the frustum. Saffron implements the mapping as `clusterIndexFor` in `lighting.slang`.
 
 ## The three coordinates
 
@@ -63,10 +63,10 @@ for (uint i = 0; i < count; i = i + 1)
 
 | What | File | Symbols |
 |---|---|---|
-| Pixel + view-Z → flat index | `mesh.slang` | `clusterIndexFor` |
-| View-Z transform + the loop | `mesh.slang` | `fragmentMain` — `clusterParams.view`, `clusters[...]` |
-| Matching forward slicing | `light_cull.slang` | `computeMain` — `tileNear`/`tileFar` `pow` |
-| Grid dims + z planes upload | `renderer_lighting.cpp` | `setClusterCamera` — `gridSize`, `zPlanes` |
+| Pixel + view-Z → flat index | `engine/assets/shaders/lighting.slang` | `clusterIndexFor` |
+| View-Z transform + the loop | `engine/assets/shaders/lighting.slang` | `evalLighting` — `clusterParams.view`, `clusters[...]` |
+| Matching forward slicing | `engine/assets/shaders/light_cull.slang` | `computeMain` — `tileNear`/`tileFar` `pow` |
+| Grid dims + z planes upload | `engine/crates/rendering/src/lighting.rs` | `Lighting::set_cluster_camera` — `ClusterParams::grid_size`, `ClusterParams::z_planes` |
 
 > [!TIP]
 > The Z slice uses view-space depth, not the rasterizer's NDC depth. The $\log$/$\text{pow}$
