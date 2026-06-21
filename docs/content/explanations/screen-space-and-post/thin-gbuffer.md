@@ -51,7 +51,7 @@ A full deferred G-buffer stores albedo, metallic-roughness, world position, and 
 attachments. These effects need only orientation and distance, so normal + Z in one `rgba16f` is the
 whole bill. The MRT machinery in the render graph would let it grow, but targets nothing reads cost
 memory and bandwidth for no benefit. The prepass runs only when at least one screen-space effect is
-enabled — the renderer gates it on `doScreen` (GTAO, contact, SSGI, or ReSTIR).
+enabled — the renderer gates it through `wants_gbuffer_prepass` (GTAO, contact, SSGI, or ReSTIR).
 
 ## In the code
 
@@ -59,8 +59,9 @@ enabled — the renderer gates it on `doScreen` (GTAO, contact, SSGI, or ReSTIR)
 |---|---|---|
 | Prepass shader | `gbuffer.slang` | `vertexMain`, `fragmentMain` |
 | Position reconstruction | `gtao.slang`, `contact.slang`, `ssgi.slang` | `viewPosFromUv` |
-| Pass declaration + gating | `renderer.cppm` | `gbuffer` pass, `doScreen`, `recordGbuffer` |
-| Where it's sampled | `mesh.slang` | `aoMap`, `contactMap`, `ssgiMap` (set 4) |
+| Recorder + gating | `scene_pass.rs`, `ssao.rs` | `record_gbuffer`, `wants_gbuffer_prepass`, `GbufferPush` |
+| Pass declaration | `renderer.rs` | the `gbuffer` pass |
+| Where it's sampled | `lighting.slang` | `aoMap`, `contactMap`, `ssgiMap` (set 4) |
 
 > [!NOTE]
 > The background test is a sign test on view-Z (`viewZ > -1e-4`), not a comparison against a far-plane

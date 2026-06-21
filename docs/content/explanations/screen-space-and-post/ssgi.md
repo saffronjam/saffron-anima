@@ -88,15 +88,16 @@ diffuse response. The whole contribution is gated by `screenFlags.y`.
 
 SSGI reads last frame's color, so each frame must save it before the in-place tonemap turns it
 display-referred. A `ssgi-history` compute pass copies the scene's resolved linear-HDR color into
-`prevColor` right after the scene pass, then a barrier-only pass restores `prevColor` to its resting
-`ShaderReadOnly` layout for next frame. The renderer imports the `prevColor` handle once and tracks its
-layout across both the read (this frame's gather) and the write (this frame's capture).
+`prev_color` right after the scene pass, then a barrier-only `ssgi-history-restore` pass returns
+`prev_color` to its resting `SHADER_READ_ONLY_OPTIMAL` layout for next frame. The renderer imports the
+`prev_color` handle once and tracks its layout across both the read (this frame's gather) and the write
+(this frame's capture).
 
 ```mermaid
 flowchart LR
-    A[frame N scene] --> B[ssgi-history copy<br/>scene → prevColor]
-    B --> C[prevColor rests<br/>ShaderReadOnly]
-    C --> D[frame N+1 SSGI<br/>gathers prevColor]
+    A[frame N scene] --> B[ssgi-history copy<br/>scene → prev_color]
+    B --> C[prev_color rests<br/>ShaderReadOnly]
+    C --> D[frame N+1 SSGI<br/>gathers prev_color]
     D --> E[frame N+1 scene<br/>adds gi to ambient]
 ```
 
@@ -106,8 +107,9 @@ flowchart LR
 |---|---|---|
 | The gather | `ssgi.slang` | `computeMain`, cosine-hemisphere sampling, interleaved gradient noise |
 | Denoise + accumulate | `ssgi_blur.slang`, `ssgi_accum.slang` | bilateral blur, motion-reprojected EMA + neighborhood clamp |
-| Passes + prev-color import | `renderer.cppm` | `ssgi` / `ssgi-blur` / `ssgi-accum` passes, `ssgi-history` copy |
-| Where GI is added | `mesh.slang` | `ssgiMap`, `screenFlags.y` |
+| Push + frame seed | `ssao.rs` | `SsgiPush`, `SsgiAccumPush`, `Ssao::next_ssgi_push` |
+| Passes + prev-color import | `renderer.rs` | `ssgi` / `ssgi-blur` / `ssgi-accum` passes, `ssgi-history` copy, `prev_color` |
+| Where GI is added | `lighting.slang` | `ssgiMap`, `screenFlags.y` |
 
 > [!NOTE]
 > SSGI sees only what is on screen. A bounce off a surface that is off-screen or hidden behind nearer

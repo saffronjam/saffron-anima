@@ -30,12 +30,12 @@ float3 delta = posView - closest;
 if (dot(delta, delta) <= radius * radius) { /* append index */ }
 ```
 
-The renderer dispatches `(ClusterCount + 63) / 64` groups as a Compute-kind graph pass that writes the cluster buffer (`StorageWriteCompute`); the scene fragment reads it. The [render graph](../../frame-and-render-graph/render-graph-overview/) derives the compute-to-fragment barrier from those declared usages.
+The renderer dispatches `CLUSTER_COUNT.div_ceil(64)` groups as a `RgPassKind::Compute` graph pass (`"light-cull"`) that writes the cluster buffer (`RgUsage::StorageWriteCompute`); the scene fragment reads it. The [render graph](../../frame-and-render-graph/render-graph-overview/) derives the compute-to-fragment barrier from those declared usages.
 
 ```mermaid
 flowchart LR
     A[light-cull pass<br/>1 invocation / froxel] -->|StorageWriteCompute| B[cluster buffer]
-    B -->|StorageReadFragment| C[scene pass<br/>loop cluster's lights]
+    B -->|read in scene pass| C[scene pass<br/>loop cluster's lights]
 ```
 
 ## Reading it in the fragment
@@ -46,21 +46,22 @@ The mesh fragment finds its cluster from pixel position and view-space Z, then l
 
 The cluster AABBs are rebuilt every frame in the compute pass rather than cached. This keeps the code simple and correct under any camera, and the grid is small enough to make it cheap. Two hard limits are fixed-size:
 
-- Each cluster holds at most `MaxLightsPerCluster` = 64 lights; excess past that is dropped silently.
+- Each cluster holds at most `MAX_LIGHTS_PER_CLUSTER` = 64 lights; excess past that is dropped silently.
 - The grid is single-resolution, with no hierarchy.
 
-These caps suit the engine's scene scale, and the cluster buffer and dispatch are left as the seam for a larger grid or a tighter cull. The grid dimensions and cap are duplicated across `renderer_detail.cppm`, `light_cull.slang`, and `mesh.slang`, so they must change together.
+These caps suit the engine's scene scale, and the cluster buffer and dispatch are left as the seam for a larger grid or a tighter cull. The grid dimensions and cap are mirrored between `lighting.rs` and the `light_cull.slang` / `lighting.slang` shaders, so they must change together. A CPU mirror of the same test (`cull_clusters_cpu`) backs the rendering crate's unit tests.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The cull kernel | `light_cull.slang` | `computeMain` |
-| Exponential Z slices | `light_cull.slang` | `tileNear` / `tileFar` |
-| Grid dims + cap | `renderer_detail.cppm` | `ClusterGridX/Y/Z`, `ClusterCount`, `MaxLightsPerCluster` |
-| Dispatch + buffer usage | `renderer.cppm` | `beginFrameGraph` (`doCull`), `cull.dispatch` |
-| Cluster-params upload | `renderer_lighting.cpp` | `ClusterParams` |
-| Fragment lookup + loop | `mesh.slang` | `clusterIndexFor`, `fragmentMain` (clustered branch) |
+| The cull kernel | `assets/shaders/light_cull.slang` | `computeMain` |
+| Exponential Z slices | `assets/shaders/light_cull.slang` | `tileNear`, `tileFar` |
+| Grid dims + cap | `crates/rendering/src/lighting.rs` | `CLUSTER_GRID_X/Y/Z`, `CLUSTER_COUNT`, `MAX_LIGHTS_PER_CLUSTER` |
+| Dispatch + buffer usage | `crates/rendering/src/renderer.rs` | `"light-cull"` pass (`cmd_dispatch`) |
+| Cluster-params upload | `crates/rendering/src/lighting.rs` | `ClusterParams`, `ClusterCamera`, `Lighting::set_cluster_camera` |
+| CPU mirror for tests | `crates/rendering/src/lighting.rs` | `cull_clusters_cpu`, `light_intersects_cluster` |
+| Fragment lookup + loop | `assets/shaders/lighting.slang` | `clusterIndexFor`, `evalLighting` (clustered branch) |
 
 ## Related
 

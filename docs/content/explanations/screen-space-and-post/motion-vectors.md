@@ -18,10 +18,12 @@ velocity into an `rg16f` target.
 ## How it works
 
 The pass renders the instanced scene depth-tested, the same way the other prepasses do. A push constant
-carries the current and previous camera `viewProj` matrices. The vertex stage transforms each world
-position by both, handing the fragment stage two clip-space positions. The fragment stage performs the
-perspective divide on both, turning clip space into NDC, and outputs the difference scaled into UV
-space:
+carries the current and previous camera `viewProj` matrices, and each instance carries its current and
+previous world matrix (`model` / `prevModel`). The vertex stage builds two clip-space positions — the
+current one from `curViewProj · model · position`, the previous one from
+`prevViewProj · prevModel · prevPosition` — so both camera and object motion reproject together. The
+fragment stage performs the perspective divide on both, turning clip space into NDC, and outputs the
+difference scaled into UV space:
 
 $$
 \text{motionUv} = \big(\text{ndc}_\text{prev} - \text{ndc}_\text{cur}\big) \cdot 0.5,
@@ -38,18 +40,18 @@ with, so the Y sign matches the images TAA samples, and no separate flip is need
 
 | What | File | Symbols |
 |---|---|---|
-| The reprojection | `motion.slang` | `vertexMain`, `fragmentMain`, `curViewProj`/`prevViewProj` |
-| Pass declaration | `renderer.cppm` | `motion` pass, `recordMotion`, `motionDepth` |
+| The reprojection | `motion.slang` | `vertexMain`, `fragmentMain`, the `Push` cur/prev viewProj |
+| Recorder + push | `aa.rs` | `record_motion`, `MotionPush`, `MOTION_FORMAT` |
+| Pass declaration | `renderer.rs` | the `motion` pass, `motion_depth` |
 | The consumers | `taa.slang`, `ssgi_accum.slang` | `motion` sampler, `histUv = uv + mv` |
 
 > [!NOTE]
-> The pass tracks camera motion only. Geometry is treated as static: the same world position feeds both
-> matrices, and only the camera's view-projection differs. A moving object reports the wrong velocity
-> because its world position also changed, but no previous-model matrix is tracked. Per-instance
-> previous-model tracking is a planned addition.
+> The pass tracks camera motion through the cur/prev viewProj, and a moving object's per-instance
+> previous-model transform (`inst.prevModel`) gives it the correct velocity; the skinned deform-motion
+> path supplies distinct cur/prev deformed vertex buffers so animated geometry reprojects too.
 
 > [!NOTE]
-> The motion pass has its own depth attachment (`motionDepth`) and runs before the scene pass, so both
+> The motion pass has its own depth attachment (`motion_depth`) and runs before the scene pass, so both
 > consumers can sample it: SSGI temporal accumulation (before the scene) and the TAA resolve (after).
 > It is a dedicated prepass rather than a reuse of the scene depth, because the scene's depth target may
 > be multisampled or otherwise shaped by the active AA mode. The pass runs whenever TAA *or* SSGI is on,

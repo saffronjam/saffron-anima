@@ -12,7 +12,7 @@ The 2D shadow maps (directional and spot) use a 3×3 grid of hardware comparison
 
 ## How it works
 
-The maps are bound as `Sampler2DShadow`, a comparison sampler. Each tap returns whether the stored depth passes the test against a reference, not the stored depth itself. `pcfShadow` projects the world position into the light's clip space, takes `ndc.z` as the reference depth, and averages nine `SampleCmp` taps stepped one texel apart (`texel = 1/2048`, matching `ShadowMapSize`):
+The maps are bound as `Sampler2DShadow`, a comparison sampler. Each tap returns whether the stored depth passes the test against a reference, not the stored depth itself. `pcfShadow` projects the world position into the light's clip space, takes `ndc.z` as the reference depth, and averages nine `SampleCmp` taps stepped one texel apart (`texel = 1/2048`, matching `SHADOW_MAP_SIZE`):
 
 ```hlsl
 sum += map.SampleCmp(uv + float2(x, y) * texel, ndc.z);
@@ -40,11 +40,11 @@ A fixed 3×3 kernel is the cheapest filter that visibly helps. It hides the texe
 
 | What | File | Symbols |
 |---|---|---|
-| The 3×3 comparison filter | `mesh.slang` | `pcfShadow` |
-| Comparison samplers | `mesh.slang` | `shadowMap`, `spotShadowMap` (`Sampler2DShadow`) |
-| Where it's called | `mesh.slang` | `fragmentMain`, `punctual` |
-| Map size (texel step) | `renderer_detail.cppm` | `ShadowMapSize` |
-| The compare sampler object | `renderer_detail.cppm` | `descriptors.shadowSampler` |
+| The 3×3 comparison filter | `assets/shaders/lighting.slang` | `pcfShadow` |
+| Comparison samplers | `assets/shaders/lighting.slang` | `shadowMap`, `spotShadowMap` (`Sampler2DShadow`) |
+| Where it's called | `assets/shaders/lighting.slang` | `evalLighting`, `punctual` |
+| Map size (texel step) | `crates/rendering/src/lighting.rs` | `SHADOW_MAP_SIZE` |
+| The compare sampler object | `crates/rendering/src/descriptors.rs` | `shadow_sampler`, `create_shadow_sampler` |
 
 ## Related
 

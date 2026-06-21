@@ -43,10 +43,10 @@ $$
 \text{result} = \operatorname{lerp}(\text{cur},\ \text{hist}',\ w)
 $$
 
-The weight is the history weight from the push constant (`TaaHistoryWeight`). It is forced to zero —
-taking the current frame whole — in two cases: the first frame, when no valid history exists yet
-(`params.y < 0.5`), and when the reprojected UV lands off-screen, a disocclusion. Both are cases with
-no trustworthy history to blend.
+The weight is the history weight from the push constant (`TAA_HISTORY_WEIGHT`, carried in `TaaPush`). It
+is forced to zero — taking the current frame whole — in two cases: the first frame, when no valid
+history exists yet (`params.y < 0.5`), and when the reprojected UV lands off-screen, a disocclusion.
+Both are cases with no trustworthy history to blend.
 
 The result is written to both the offscreen image (read by the UI and tonemap) and the next frame's
 history. The blend feeds itself: this frame's resolved color becomes next frame's history, so each
@@ -66,9 +66,9 @@ flowchart LR
     H1 -. next frame .-> H0
 ```
 
-The renderer tracks `historyIndex` and `historyValid`, flipping the index and marking history valid
-after each resolve. Reading and writing distinct images keeps the resolve well-defined; a single
-in-place history would be a read-write hazard on its own data.
+Each view tracks `history_index` and `history_valid`, flipping the index (`flip_history`) and marking
+history valid after each resolve. Reading and writing distinct images keeps the resolve well-defined; a
+single in-place history would be a read-write hazard on its own data.
 
 ## In the code
 
@@ -76,7 +76,8 @@ in-place history would be a read-write hazard on its own data.
 |---|---|---|
 | Reproject + clamp + blend | `taa.slang` | `computeMain`, the 3×3 min/max, `histUv`, `lerp` |
 | Validity gate | `taa.slang` | `params.y`, the off-screen `histUv` check |
-| Pass + ping-pong | `renderer.cppm` | `taa` pass, `historyIndex`, `historyValid`, `TaaHistoryWeight` |
+| Push + weight | `aa.rs` | `TaaPush`, `TAA_HISTORY_WEIGHT` |
+| Pass + ping-pong | `renderer.rs`, `view_target.rs` | the `taa` pass, `history_index`, `history_valid`, `flip_history` |
 
 > [!NOTE]
 > The resolve reads and writes linear HDR, not display color. It runs before the

@@ -47,18 +47,19 @@ flowchart TD
 
 ## Design and trade-offs
 
-The box is a loose fit. The near quad is smaller than the far quad, so the axis-aligned box that encloses all four corners is slightly larger than the true truncated pyramid. The over-estimate means a light can be added to a froxel it does not strictly overlap, so the cull keeps a few extra lights and never misses one. For a visibility cull this is the right bias: a missed light is a visible artifact, while an extra light costs only a little wasted shading. Testing the actual froxel planes would trade more compute for shorter light lists; the AABB is the cheap choice that is correct by over-inclusion.
+The box is a loose fit. The near quad is smaller than the far quad, so the axis-aligned box that encloses all four corners is slightly larger than the true truncated pyramid. The over-estimate means a light can be added to a froxel it does not strictly overlap, so the cull keeps a few extra lights and never misses one. For a visibility cull this is the right bias: a missed light is a visible artifact, while an extra light costs only a little wasted shading. Testing the actual froxel planes would trade more compute for shorter light lists; the AABB is the cheap choice that is correct by over-inclusion. The CPU-side `cluster_aabb` mirrors the same box for the rendering crate's unit tests.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Unpack index → grid coords | `light_cull.slang` | `computeMain` (`gx`/`gy`/`gz`) |
-| Screen tile corners | `light_cull.slang` | `computeMain` (`tileSize`, `minSS`/`maxSS`) |
-| Unproject to view space | `light_cull.slang` | `screenToView` |
-| Slice rays at Z planes | `light_cull.slang` | `rayToZ`, `tileNear`/`tileFar` |
-| The view-space AABB | `light_cull.slang` | `aabbMin`/`aabbMax` |
-| view + inverseProjection inputs | `renderer_lighting.cpp` | `ClusterParams` |
+| Unpack index → grid coords | `assets/shaders/light_cull.slang` | `computeMain` (`gx`/`gy`/`gz`) |
+| Screen tile corners | `assets/shaders/light_cull.slang` | `computeMain` (`tileSize`, `minSS`/`maxSS`) |
+| Unproject to view space | `assets/shaders/light_cull.slang` | `screenToView` |
+| Slice rays at Z planes | `assets/shaders/light_cull.slang` | `rayToZ`, `tileNear`/`tileFar` |
+| The view-space AABB | `assets/shaders/light_cull.slang` | `aabbMin`/`aabbMax` |
+| view + inverse_projection inputs | `crates/rendering/src/lighting.rs` | `ClusterParams` (`view`, `inverse_projection`) |
+| CPU mirror for tests | `crates/rendering/src/lighting.rs` | `cluster_aabb` |
 
 ## Related
 

@@ -23,20 +23,20 @@ The 2D maps store clip-space depth, which is meaningful only relative to one pro
 light has six projections, and a fragment does not know which face it lands on until it picks a
 sample direction. Linear world distance avoids that: whatever face the light-to-fragment ray hits,
 the value there is the distance to the nearest occluder along that ray, directly comparable to the
-fragment's own distance to the light. The shadow-pass fragment is `length(worldPos - lightPos)`. The
-cube is an `R32Sfloat` color image, 512 per face, with six color attachment views plus one cube view
+fragment's own distance to the light. The shadow-pass fragment is `length(input.worldPos - pc.lightPos.xyz)`. The
+cube is an `R32_SFLOAT` color image, 512 per face, with six color attachment views plus one cube view
 for sampling.
 
 ## Rendering the six faces
 
-`pointShadowFaceMatrices` builds six world-to-clip matrices, one per face, with a 90° vertical FOV
+`point_shadow_face_matrices` builds six world-to-clip matrices, one per face, with a 90° vertical FOV
 and aspect 1 — exactly enough to tile the full sphere with no gaps or overlap. The projection's Y is
-flipped so the rendered faces round-trip with a `TextureCube` sampled by world direction. Each face
-clears its color to `farPlane * 2`, so any texel no triangle covers reads as "no occluder."
+flipped so the rendered faces round-trip with a `SamplerCube` sampled by world direction. Each face
+clears its color to `far_plane * 2`, so any texel no triangle covers reads as "no occluder."
 
 The cube cannot be a single graph attachment, because its six array layers exceed the graph's
-single-layer image barrier. The point-shadow pass is therefore declared as a Compute-kind pass — the
-graph opens no rendering scope — and its body (`recordPointShadow`) opens six per-face
+single-layer image barrier. The point-shadow pass is therefore declared as a `RgPassKind::Compute` pass — the
+graph opens no rendering scope — and its body (`record_point_shadow`) opens six per-face
 dynamic-rendering scopes and manages the cube's layout transitions by hand.
 
 ```mermaid
@@ -59,7 +59,7 @@ return dist - bias <= stored ? 1.0 : 0.0;
 ```
 
 If the fragment is at most `stored + bias` away, nothing nearer blocked the light along that ray, so
-it is lit. The constant `bias` matches `PointShadowDistanceBias` and is in world units, not depth
+it is lit. The constant `bias` is `0.08` world units, not depth
 units — see [shadow bias](../shadow-bias/). As with the spot light, this applies only to the one
 shadowed point light, gated by `pointShadowMeta.x` (its index) and `.y` (enabled).
 
@@ -75,15 +75,15 @@ stable for the modest scenes the engine targets.
 
 | What | File | Symbols |
 |---|---|---|
-| Write distance per face | `point_shadow.slang` | `fragmentMain` |
-| Six face matrices | `renderer_detail.cppm` | `pointShadowFaceMatrices` |
-| Cube + face views | `renderer_detail.cppm` | `newColorCubeImage`, `PointShadowSize` |
-| Render the six faces | `renderer_drawlist.cpp` | `recordPointShadow` |
-| Add the Compute-kind pass | `renderer.cppm` | `beginFrameGraph` (`doPointShadow`) |
-| Sample + compare distance | `mesh.slang` | `pointShadow`, `PointShadowDistanceBias` |
+| Write distance per face | `assets/shaders/point_shadow.slang` | `fragmentMain` |
+| Six face matrices | `crates/rendering/src/lighting.rs` | `point_shadow_face_matrices` |
+| Cube + face views + clear | `crates/rendering/src/scene_pass.rs` | `PointShadowTarget`, `record_point_shadow` (`far_plane * 2.0`) |
+| Cube format + size | `crates/rendering/src/lighting.rs` | `POINT_SHADOW_SIZE`, `POINT_SHADOW_COLOR_FORMAT` |
+| Add the compute-kind pass | `crates/rendering/src/renderer.rs` | `"point-shadow"` pass |
+| Sample + compare distance | `assets/shaders/lighting.slang` | `pointShadow` |
 
 ## Related
 
 - [Shadow bias](../shadow-bias/) — the world-space distance bias used here
 - [Directional shadows](../directional-shadows/) — the 2D depth-map alternative
-- [Render graph](../../frame-and-render-graph/render-graph-overview/) — why this is a Compute-kind pass
+- [Render graph](../../frame-and-render-graph/render-graph-overview/) — why this is a compute-kind pass

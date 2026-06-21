@@ -11,7 +11,7 @@ is rendered in linear high dynamic range, so a bright light can push a pixel wel
 anything a display reproduces. The tonemap stage compresses that range, encodes the result for the
 display, and produces the final viewable image.
 
-In Saffron Anima it runs on the `rgba16f` offscreen — where the [BRDF](../../lighting-and-brdf/cook-torrance-brdf/)
+It runs on the `rgba16f` offscreen — where the [BRDF](../../lighting-and-brdf/cook-torrance-brdf/)
 accumulates radiance with no ceiling — before the present blit samples it. It is a single compute pass, one
 invocation per pixel, that applies exposure, tonemaps, gamma-corrects, and writes the result back in
 place.
@@ -48,19 +48,21 @@ binding 0), reads each texel, and writes the mapped value back to the same texel
 
 Writing in place means the [render graph](../../frame-and-render-graph/render-graph-overview/) moves
 the offscreen through two layouts around the pass, both derived from the declared usage: **Color →
-General** before (a storage image is written in `GENERAL`, declared `StorageImageRWCompute`), then
+General** before (a storage image is written in `GENERAL`, declared `StorageImageRwCompute`), then
 **General → ShaderReadOnly** after, so the present blit can sample it as the viewport image. Neither transition
 is written by hand. This pass is the template every other [compute post-process](../compute-post-process-pattern/)
-follows; FXAA and the demonstrator tonemap layer use the same read-modify-write shape.
+follows; FXAA uses the same read-modify-write shape.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
 | The shader | `tonemap.slang` | `computeMain`, `Push.exposure`, the `target` RWTexture2D |
-| HDR offscreen format | `renderer_types.cppm` | the `rgba16f` offscreen color format |
-| Layout transitions | `render_graph.cppm` | `RgUsage::StorageImageRWCompute`, `SampledRead` |
-| Exposure control | `control_commands_render.cpp` | the exposure setter (EV stops → $2^{EV}$) |
+| Push + EV→multiplier | `overlay.rs` | `TonemapPush`, `TonemapPush::from_ev` |
+| Pass + exposure state | `renderer.rs` | the `tonemap` pass, `Renderer::set_exposure`, `exposure_ev` |
+| HDR offscreen format | `pipelines.rs` | `OFFSCREEN_COLOR_FORMAT` (`R16G16B16A16_SFLOAT`) |
+| Layout transitions | `render_graph.rs` | `RgUsage::StorageImageRwCompute`, `RgUsage::SampledRead` |
+| Exposure control command | `commands_render.rs` | the `set-exposure` command (EV stops → $2^{EV}$) |
 
 ## Related
 

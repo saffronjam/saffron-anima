@@ -14,15 +14,15 @@ A shadow map stores depth at finite resolution. A surface compared against its o
 
 Saffron applies bias in two places, each matched to what the map stores. The 2D maps for directional and spot lights are biased in the rasterizer during the depth pass; the point cube is biased in the shader.
 
-The 2D maps are biased by `recordShadowDepth`:
+The 2D maps are biased by `record_shadow_depth`:
 
-```cpp
-cmd.setDepthBias(ShadowDepthBiasConstant, 0.0f, ShadowDepthBiasSlope);
+```rust
+raw.cmd_set_depth_bias(cmd, SHADOW_DEPTH_BIAS_CONSTANT, 0.0, SHADOW_DEPTH_BIAS_SLOPE);
 ```
 
 with constant `1.25` and slope `2.0`. The constant term shifts every depth value by a fixed amount. The slope term scales with the polygon's gradient relative to the light, which is what acne needs: a surface seen edge-on by the light spans more depth per texel and needs proportionally more bias. Because the bias is baked into the stored depth, the comparison in `pcfShadow` is a plain `SampleCmp` with no extra offset.
 
-The point cube stores world distance rather than depth, so a rasterizer depth bias would carry the wrong units. It biases in the shader, in world-space distance: a fragment counts as lit when it falls within `PointShadowDistanceBias` (0.08 world units) of the nearest stored occluder.
+The point cube stores world distance rather than depth, so a rasterizer depth bias would carry the wrong units. It biases in the shader, in world-space distance: a fragment counts as lit when it falls within `0.08` world units of the nearest stored occluder.
 
 ## The acne–peter-panning trade
 
@@ -40,19 +40,18 @@ No single value is correct; bias lives in a tuning band. Saffron's constants are
 A normal-offset bias, which pushes the sample along the surface normal, is gentler on contact shadows, but it requires the normal in the shadow lookup and a per-light tuned distance. The rasterizer's built-in constant-plus-slope bias is free, since the hardware applies it during the depth pass, and it self-adjusts with polygon slope, covering the common case with two scalars. For the point cube, a flat world-space constant is the matching simple choice; its ideal value drifts with the light's range.
 
 > [!TIP]
-> If you see acne, raise `ShadowDepthBiasSlope` before the constant — acne is slope-driven. If shadows look detached, the constant is usually the culprit. For point lights there's only `PointShadowDistanceBias`, kept in sync between `mesh.slang` and `renderer_detail.cppm`.
+> If you see acne, raise `SHADOW_DEPTH_BIAS_SLOPE` before the constant — acne is slope-driven. If shadows look detached, the constant is usually the culprit. For point lights there's only the `0.08` world-space bias inside `pointShadow`.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| 2D rasterizer bias values | `renderer_detail.cppm` | `ShadowDepthBiasConstant`, `ShadowDepthBiasSlope` |
-| Where the 2D bias is set | `renderer_drawlist.cpp` | `recordShadowDepth` (`setDepthBias`) |
-| Point-cube world-space bias | `renderer_detail.cppm` | `PointShadowDistanceBias` |
-| Where the point bias is applied | `mesh.slang` | `pointShadow` |
+| 2D rasterizer bias values | `crates/rendering/src/lighting.rs` | `SHADOW_DEPTH_BIAS_CONSTANT`, `SHADOW_DEPTH_BIAS_SLOPE` |
+| Where the 2D bias is set | `crates/rendering/src/scene_pass.rs` | `record_shadow_depth` (`cmd_set_depth_bias`) |
+| Point-cube world-space bias | `assets/shaders/lighting.slang` | `pointShadow` (`bias = 0.08`) |
 
 ## Related
 
 - [PCF filtering](../pcf-filtering/) — the comparison the 2D bias feeds into
-- [Directional shadows](../directional-shadows/) — where `recordShadowDepth` sets the bias
+- [Directional shadows](../directional-shadows/) — where `record_shadow_depth` sets the bias
 - [Point shadows](../point-light-cube-shadows/) — the distance comparison the cube bias guards

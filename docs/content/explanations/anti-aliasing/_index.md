@@ -19,6 +19,6 @@ switchable at runtime with `sa set-aa`:
 
 | Page | Covers | Code |
 |---|---|---|
-| `msaa` | sample count baked into PSOs, the graph resolve attachment | `renderer_aa.cpp`; `render_graph.cppm` · `RgAttachment.resolve` |
-| `fxaa` | luma edge detection on a 1× scratch → offscreen | `fxaa.slang`; `renderer_aa.cpp` |
-| `aa-modes` | `setAa(off\|fxaa\|msaa2\|4\|8)`, mutual exclusivity, PSO rebuild | `renderer_aa.cpp` · `setAa` |
+| `msaa` | sample count baked into PSOs, the graph resolve attachment | `aa.rs`, `view_target.rs`, `render_graph.rs` · `Aa::sample_count`, `RgAttachment.resolve` |
+| `fxaa` | luma edge detection on a 1× scratch → offscreen | `fxaa.slang`, `renderer.rs` · `add_fxaa_pass` |
+| `aa-modes` | `Aa::set(off\|fxaa\|msaa2\|4\|8)`, mutual exclusivity, PSO rebuild | `aa.rs` · `Aa::set`, `Aa::mode` |

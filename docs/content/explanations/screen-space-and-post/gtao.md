@@ -52,9 +52,9 @@ $$
 ### Denoise pass
 
 Four slices of six steps is noisy, and the per-pixel rotation trades banding for grain. GTAO writes its
-raw factor to an intermediate `aoRaw` target; a second compute pass (`ao-blur`) reads `aoRaw` plus the
-G-buffer normal and writes the final `aoMap`. The blur is bilateral: it smooths across the noise but
-respects normal discontinuities, so AO does not bleed across edges.
+raw factor to an intermediate `ao_raw` target; a second compute pass (`ao-blur`) reads `ao_raw` plus the
+G-buffer normal and writes the final `ao_map` (sampled in the shader as `aoMap`). The blur is bilateral:
+it smooths across the noise but respects normal discontinuities, so AO does not bleed across edges.
 
 ### Where the AO lands
 
@@ -68,8 +68,9 @@ direction and its own shadow term, so applying AO there would double-darken.
 | What | File | Symbols |
 |---|---|---|
 | AO pass | `gtao.slang` | `computeMain`, `viewPosFromUv`, `sliceCount`, `stepCount`, `bias` |
-| Pass + denoise wiring | `renderer.cppm` | `gtao` pass, `ao-blur` pass, `aoRaw`, `aoMap` |
-| Where AO is applied | `mesh.slang` | `aoMap` (set 4), `counts.w` gate |
+| Pass + denoise wiring | `renderer.rs` | the `gtao` + `ao-blur` passes, `ao_raw`, `ao_map` |
+| Push + camera setup | `ssao.rs` | `GtaoPush`, `Ssao::gtao_push`, `Ssao::set_camera` |
+| Where AO is applied | `lighting.slang` | `aoMap` (set 4), `counts.w` gate |
 
 > [!NOTE]
 > The AO factor is `r8` (one 8-bit channel). It is a visibility scalar, not a color, so an `rgba16f`

@@ -11,7 +11,7 @@ its own cost and quality.
 
 Saffron offers three approaches and treats them as mutually exclusive: at most one is active at a
 time. A single configuration call selects the active mode, and a CLI command fronts it for scripting
-and inspection. The host starts at MSAA 4× (clamped to what the device supports); a loaded
+and inspection. The host starts with anti-aliasing off (1×); a loaded
 project's saved [render settings](../../geometry-and-assets/project-serialization/) override it.
 
 The editor gizmo overlay is unaffected by the active mode — it draws after the resolve and
@@ -30,41 +30,53 @@ The three approaches differ in where they sample and how they combine:
 
 ## Selecting a mode
 
-`setAa(renderer, msaaSamples, fxaa, taa)` takes a sample count plus FXAA and TAA flags and resolves
-them into one active mode. MSAA wins if a sample count above 1 is requested; otherwise FXAA, then
-TAA. The count maps to a `vk::SampleCountFlagBits` and clamps to the device's `maxSampleCount`, so
-asking for `msaa8` on hardware that tops out at 4× yields 4×.
+`Aa::set(msaa_samples, fxaa, taa)` takes a sample count plus FXAA and TAA flags and resolves
+them into one active mode. MSAA wins if a sample count of 2 or more is requested; otherwise FXAA,
+then TAA. The count maps to a `vk::SampleCountFlags` value and clamps to the largest count the
+color and depth formats both support, so asking for `msaa8` on hardware that tops out at 4× yields
+4×.
 
-The `sa set-aa` command parses a mode string into those three arguments:
+The `sa set-aa` command parses a mode string into those three arguments. `Aa::set_mode` does the
+same folding from a name:
 
-| String | `msaaSamples` | `fxaa` | `taa` |
+| String | `msaa_samples` | `fxaa` | `taa` |
 |---|---|---|---|
 | `off` | 1 | false | false |
 | `msaa2` / `msaa4` / `msaa8` | 2 / 4 / 8 | false | false |
 | `fxaa` | 1 | true | false |
 | `taa` | 1 | false | true |
 
+`Aa` is the single selector that holds the AA state: only `Aa::set` mutates it, and it never leaves
+more than one mode active. That keeps the three modes from contradicting — there is one AA state, not
+three independent toggles.
+
 ## What a switch does
 
-Switching modes is a full reconfigure, not a flag flip. `setAa` waits for the GPU to go idle, since
-the targets and pipeline state objects are about to be destroyed. It stores the new sample count and
-flags, then recreates three target sets: the multisampled MSAA pair, the 1× scratch that FXAA and
-TAA share, and the TAA motion + history pair. Finally it clears the PSO cache and rebuilds the
-depth-prepass pipeline, because the mesh and prepass PSOs bake the sample count.
+Switching modes is a full reconfigure, not a flag flip. `Renderer::set_aa` waits for the GPU to go
+idle, since the targets and pipeline state objects are about to be destroyed. It stores the new
+sample count and flags through `Aa::set`, then rebuilds each view's AA targets
+(`ViewTarget::build_aa_targets`): the multisampled MSAA pair, the 1× scratch that FXAA and TAA
+share, and the TAA motion + history pair.
+
+`Aa::set` returns `true` when the *MSAA sample count* changed. On that signal the renderer clears the
+sample-count-baked PSO cache via `Pipelines::set_sample_count` and rebuilds the depth-prepass
+pipeline, because the mesh and prepass PSOs bake the sample count.
 
 ## Reading back the active mode
 
-`aaMode(renderer)` reports the current mode as a string, and `sa render-stats` exposes it as the
-`aa` field. FXAA and TAA report by their flag; otherwise the sample count decides — `"off"` at 1,
-`"msaaN"` above.
+`Aa::mode` (surfaced by `Renderer::aa_mode`) reports the current mode as a string, and
+`sa render-stats` exposes it as the `aa` field. FXAA and TAA report by their flag; otherwise the
+sample count decides — `"off"` at 1, `"msaaN"` above.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Configure + clamp + rebuild | `renderer_aa.cpp` | `setAa`, `setAaMode`, `aaMode` |
-| CLI front | `control_commands_render.cpp` | `set-aa`, `render-stats` · `aa` |
-| Mode flags | `renderer_types.cppm` | `sampleCount`, `maxSampleCount`, `fxaaEnabled`, `taaEnabled` |
+| Selector + clamp + exclusivity | `aa.rs` | `Aa::set`, `Aa::set_mode`, `Aa::mode`, `clamp_sample_count` |
+| Reconfigure + PSO rebuild | `renderer.rs` | `Renderer::set_aa`, `Renderer::set_aa_mode`, `Renderer::aa_mode` |
+| Target rebuild | `view_target.rs` | `ViewTarget::build_aa_targets` |
+| Sample-count PSO cache | `pipelines.rs` | `Pipelines::set_sample_count` |
+| CLI front | `commands_render.rs` | `set-aa`, `render-stats`, `aa_mode_from_name` |
 
 ## Related
 

@@ -17,7 +17,7 @@ wherever it fires.
 
 ## How it works
 
-The shader works in luma — perceived brightness, `dot(c, vec3(0.299, 0.587, 0.114))`. Each
+The shader works in luma — perceived brightness, `dot(c, float3(0.299, 0.587, 0.114))`. Each
 invocation handles one pixel through four steps:
 
 1. **Sample a cross.** Read the center pixel and its four diagonal neighbours, take each luma,
@@ -47,19 +47,23 @@ into the offscreen as a storage image. This is a read-from-A, write-to-B variant
 rather than an in-place pass like tonemap. The scratch matches the offscreen format and is
 shared with TAA, since both consume the scene's pre-AA result.
 
-The graph derives the transitions: the scratch goes to a sampled-in-compute layout, the
-offscreen to `GENERAL` for the storage write, then on to shader-read-only for the present blit. None of
-that is written by hand. The shader, `fxaa.slang`, is the FXAA 3 console variant.
+`add_fxaa_pass` declares the dispatch's two resource uses: `SampledReadCompute` on the scratch
+(`scene_output`) and `StorageImageRwCompute` on the offscreen (`color`). The graph derives the
+transitions from those: the scratch goes to a sampled-in-compute layout, the offscreen to
+`GENERAL` for the storage write, then on to shader-read-only for the present blit. None of that
+is written by hand. The shader, `fxaa.slang`, is the FXAA 3 console variant; it compiles to
+`shaders/fxaa.spv` and the PSO is requested through `Pipelines::request_fxaa`.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Mode switch | `renderer_aa.cpp` | `setAa` · `fxaaEnabled` |
-| Scratch target (shared with TAA) | `renderer_detail.cppm` | `recreateFxaaTarget`, `scratch` |
-| Descriptor set (scratch → offscreen) | `renderer_detail.cppm` | `updateFxaaSet`, `fxaaSetLayout` |
-| Pass + dispatch in the graph | `renderer.cppm` | `beginFrameGraph` · `fxaa` pass |
-| The shader | `fxaa.slang` | `computeMain`, `luma`, `EDGE_THRESHOLD_*` |
+| Mode switch | `aa.rs` | `Aa::set`, `Aa::fxaa` |
+| Scratch target (shared with TAA) | `view_target.rs` | `ViewTarget::build_aa_targets`, `scratch` |
+| Descriptor set (scratch → offscreen) | `view_target.rs`, `descriptors.rs` | `write_aa_sets`, `fxaa_set`, `Descriptors::fxaa_set_layout` |
+| Pass + dispatch in the graph | `renderer.rs` | `add_fxaa_pass` |
+| PSO | `pipelines.rs` | `Pipelines::request_fxaa` |
+| The shader | `fxaa.slang` | `computeMain`, `luma`, `EDGE_THRESHOLD_MIN`, `EDGE_THRESHOLD_MAX` |
 
 > [!NOTE]
 > FXAA treats luma contrast as "an edge" and can't tell a real geometry edge from a sharp

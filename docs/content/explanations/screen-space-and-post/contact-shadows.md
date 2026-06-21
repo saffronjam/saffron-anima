@@ -60,13 +60,14 @@ the directional light only, gated by `screenFlags.x`.
 | What | File | Symbols |
 |---|---|---|
 | The march | `contact.slang` | `computeMain`, `viewPosFromUv`, `diff`, `thickness` |
-| Pass wiring + params | `renderer.cppm` | `contact-shadows` pass, `sunDirView`, the `params` push |
-| Where it's applied | `mesh.slang` | `contactMap`, `screenFlags.x` |
+| Pass wiring | `renderer.rs` | the `contact-shadows` pass, `contact_map` |
+| Push + view-space sun | `ssao.rs` | `ContactPush`, `Ssao::contact_push`, `Ssao::set_camera`, `sun_dir_view` |
+| Where it's applied | `lighting.slang` | `contactMap`, `screenFlags.x` |
 
 > [!NOTE]
 > The light direction is supplied in view space, not world space, because the whole march happens in
 > view space against the G-buffer's view-space depth. The renderer transforms the sun direction once on
-> the CPU (`sunDirView`) rather than the shader doing it per pixel.
+> the CPU (`Ssao::set_camera` stores `sun_dir_view`) rather than the shader doing it per pixel.
 
 ## Related
 

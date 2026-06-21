@@ -12,10 +12,10 @@ Shadows and culling are the two visibility computations a forward renderer perfo
 
 | Page | Covers | Code |
 |---|---|---|
-| `directional-shadows` | orthographic light view, 2D depth map, 3×3 PCF | `renderer_detail.cppm`; `mesh.slang` · `pcfShadow` |
-| `spot-light-shadows` | perspective light view, one shadowed spot, same PCF path | `renderer.cppm`; `mesh.slang` · `pcfShadow` |
-| `point-light-cube-shadows` | 6-face cube of distance-to-light, distance comparison | `point_shadow.slang`; `mesh.slang` · `pointShadow` |
-| `pcf-filtering` | comparison sampler, 3×3 kernel, off-map and beyond-far handling | `mesh.slang` · `pcfShadow` |
-| `shadow-bias` | constant + slope bias, acne vs. peter-panning | `renderer_drawlist.cpp`; `mesh.slang` · `pointShadow` bias |
+| `directional-shadows` | orthographic light view, 2D depth map, 3×3 PCF | `lighting.rs` · `set_directional_shadow`; `lighting.slang` · `pcfShadow` |
+| `spot-light-shadows` | perspective light view, one shadowed spot, same PCF path | `lighting.rs` · `set_spot_shadow`; `lighting.slang` · `pcfShadow` |
+| `point-light-cube-shadows` | 6-face cube of distance-to-light, distance comparison | `point_shadow.slang`; `lighting.slang` · `pointShadow` |
+| `pcf-filtering` | comparison sampler, 3×3 kernel, off-map and beyond-far handling | `lighting.slang` · `pcfShadow` |
+| `shadow-bias` | constant + slope bias, acne vs. peter-panning | `scene_pass.rs` · `record_shadow_depth`; `lighting.slang` · `pointShadow` bias |
 | `clustered-light-culling` | the froxel grid, exponential Z, sphere-vs-AABB cull dispatch | `light_cull.slang` · `computeMain` |
-| `froxel-bounds` | screen-tile bounds → view-space AABB per froxel | `light_cull.slang` |
+| `froxel-bounds` | screen-tile bounds → view-space AABB per froxel | `light_cull.slang` · `screenToView`/`rayToZ` |
