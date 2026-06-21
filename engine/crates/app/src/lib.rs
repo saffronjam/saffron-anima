@@ -1,9 +1,8 @@
 //! The run loop and the `Layer` lifecycle — the bare runnable spine of a Saffron
 //! Anima host.
 //!
-//! Ports `app.cppm`: the [`Layer`] trait (the C++ six-`std::function` struct
-//! becomes a trait whose default methods are empty), the [`App`] / [`AppConfig`]
-//! types, and [`run`] — the
+//! Provides the [`Layer`] trait (a set of optional lifecycle hooks), the [`App`] /
+//! [`AppConfig`] types, and [`run`] — the
 //! `poll → on_update → begin_frame → on_render → on_ui → begin_frame_graph →
 //! on_render_graph → end_frame` loop with the `SAFFRON_EXIT_AFTER_FRAMES` /
 //! `SAFFRON_MAX_FPS` env knobs and the `wait_gpu_idle`-before-teardown ordering.
@@ -20,14 +19,13 @@
 //!
 //! ## Why a [`FrameHost`] trait
 //!
-//! The C++ loop calls `beginFrame`/`endFrame`/`waitGpuIdle` directly on the
-//! concrete `Renderer`. The Rust loop drives those through the [`FrameHost`]
-//! trait so the loop's hook-dispatch order and frame-limit/fps logic are testable
-//! without a GPU (the verification gate runs on software llvmpipe, or on no device
-//! at all in the unit tests). The real [`saffron_rendering::Renderer`] implements
-//! it; the loop holds it as `Box<dyn FrameHost>` so [`App`] stays a concrete type
-//! and [`Layer`] stays object-safe (`Box<dyn Layer>`). This is the same "device
-//! selection is a parameter, not a fork" principle the renderer's
+//! The loop drives `begin_frame`/`end_frame`/`wait_gpu_idle` through the
+//! [`FrameHost`] trait so the loop's hook-dispatch order and frame-limit/fps logic
+//! are testable without a GPU (the verification gate runs on software llvmpipe, or
+//! on no device at all in the unit tests). The real [`saffron_rendering::Renderer`]
+//! implements it; the loop holds it as `Box<dyn FrameHost>` so [`App`] stays a
+//! concrete type and [`Layer`] stays object-safe (`Box<dyn Layer>`). This is the
+//! same "device selection is a parameter, not a fork" principle the renderer's
 //! [`SurfaceSource`] follows — one [`run`], the host swapped behind a trait.
 //!
 //! DAG: depends on `saffron-core`, `saffron-window`, `saffron-rendering`.
@@ -45,9 +43,8 @@ use saffron_window::{
 
 /// Errors from host bring-up and the run loop.
 ///
-/// The C++ `run` returned `int` and logged a stringly `Result` on failure; here
-/// the failures are typed so a caller can `match`, and [`run`] still collapses
-/// them to a process exit code at the top of the stack.
+/// The failures are typed so a caller can `match`; [`run`] collapses them to a
+/// process exit code at the top of the stack.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The OS window could not be created (windowed mode only).
@@ -68,16 +65,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// The per-frame GPU host the loop drives.
 ///
-/// The faithful port of the renderer free functions the C++ run loop called
-/// (`beginFrame`, `beginFrameGraph`, `endFrame`, `waitGpuIdle`). Abstracting them
-/// behind a trait keeps [`run`] GPU-free-testable: the real [`Renderer`]
-/// implements it, and a no-op host drives the loop in unit tests. There is exactly
-/// one loop; only the host behind it differs.
+/// Abstracting the renderer's frame entry points behind a trait keeps [`run`]
+/// GPU-free-testable: the real [`Renderer`] implements it, and a no-op host drives
+/// the loop in unit tests. There is exactly one loop; only the host behind it
+/// differs.
 pub trait FrameHost {
     /// Begins a frame: acquires the swapchain image (or, in publish mode, the
     /// staging slot) and prepares per-frame state. Returns `false` when the frame
-    /// must be skipped (e.g. the swapchain went out of date), matching the C++
-    /// `beginFrame` boolean.
+    /// must be skipped (e.g. the swapchain went out of date).
     ///
     /// # Errors
     ///
@@ -85,13 +80,12 @@ pub trait FrameHost {
     fn begin_frame(&mut self) -> Result<bool>;
 
     /// Builds the frame graph (cull + scene passes) into `graph` so layers may add
-    /// passes against it in [`Layer::on_render_graph`]. The C++ `beginFrameGraph`
-    /// seam — the loop owns the graph for the hook pass and hands it to
-    /// [`Self::end_frame`].
+    /// passes against it in [`Layer::on_render_graph`]. The loop owns the graph for
+    /// the hook pass and hands it to [`Self::end_frame`].
     fn begin_frame_graph(&mut self, graph: &mut RenderGraph);
 
     /// Finishes the frame: executes the graph (deriving every barrier) and
-    /// presents or publishes the result. The C++ `endFrame`.
+    /// presents or publishes the result.
     ///
     /// # Errors
     ///
@@ -99,14 +93,12 @@ pub trait FrameHost {
     fn end_frame(&mut self, graph: RenderGraph) -> Result<()>;
 
     /// The current viewport size in pixels. A zero in either axis means the host
-    /// is minimized and the frame is skipped (the C++ `width == 0 || height == 0`
-    /// minimized guard).
+    /// is minimized and the frame is skipped.
     fn viewport_size(&self) -> (u32, u32);
 
     /// Blocks until the GPU is idle. Called once before any teardown so no
     /// in-flight command buffer references a resource about to drop — the single
-    /// most load-bearing teardown ordering fact (the C++ `waitGpuIdle` at
-    /// `app.cppm:209`).
+    /// most load-bearing teardown ordering fact.
     ///
     /// # Errors
     ///
@@ -116,29 +108,26 @@ pub trait FrameHost {
     /// Exposes the concrete [`Renderer`] when this host is the real GPU renderer,
     /// `None` for the GPU-free test host.
     ///
-    /// The C++ run loop called the renderer's free functions directly on the
-    /// concrete `Renderer&`; the host (`saffron-host`) reaches it the same way to
-    /// drive `render_scene` / `submit_overlay` / `set_viewport_size` and to build
-    /// the per-frame control + scene-render seams, which live above this crate in
-    /// the DAG (so they cannot be folded into [`FrameHost`]). The provided default
-    /// is `None`, so a non-renderer host (the unit-test stubs) opts out for free.
+    /// The host (`saffron-host`) reaches it to drive `render_scene` /
+    /// `submit_overlay` / `set_viewport_size` and to build the per-frame control +
+    /// scene-render seams, which live above this crate in the DAG (so they cannot
+    /// be folded into [`FrameHost`]). The provided default is `None`, so a
+    /// non-renderer host (the unit-test stubs) opts out for free.
     fn renderer_mut(&mut self) -> Option<&mut Renderer> {
         None
     }
 
     /// Records this frame's wall-clock delta (seconds) so the host's `render-stats` reports
-    /// live frame timing + fps (the C++ `endFrame` per-frame `frameMs` EMA). The default is a
-    /// no-op for the GPU-free test host; the real [`Renderer`] folds it into its smoothed
-    /// frame time.
+    /// live frame timing + fps. The default is a no-op for the GPU-free test host; the real
+    /// [`Renderer`] folds it into its smoothed frame time.
     fn record_frame_timing(&mut self, _dt_seconds: f32) {}
 
-    /// Finalizes this frame's telemetry once the frame is rendered — the C++ `endFrame` perf
-    /// tail: folds the CPU busy/wait split (seconds; the loop's update+render window minus the
-    /// GPU fence-wait) into the smoothed `cpuFrameMs`/`cpuWaitMs`, pushes the raw frame into the
-    /// history ring, runs the perf-alarm detectors, and advances the profiler-capture state
-    /// machine. `dt_seconds` is the wall-clock delta since the prior frame (drives the alarm
-    /// EMA). The default is a no-op for the GPU-free test host; the real [`Renderer`] folds it
-    /// all in.
+    /// Finalizes this frame's telemetry once the frame is rendered: folds the CPU busy/wait
+    /// split (seconds; the loop's update+render window minus the GPU fence-wait) into the
+    /// smoothed `cpuFrameMs`/`cpuWaitMs`, pushes the raw frame into the history ring, runs the
+    /// perf-alarm detectors, and advances the profiler-capture state machine. `dt_seconds` is
+    /// the wall-clock delta since the prior frame (drives the alarm EMA). The default is a
+    /// no-op for the GPU-free test host; the real [`Renderer`] folds it all in.
     fn finalize_frame_telemetry(
         &mut self,
         _busy_seconds: f32,
@@ -152,11 +141,9 @@ impl FrameHost for Renderer {
     fn begin_frame(&mut self) -> Result<bool> {
         // Two modes share one loop. The standalone windowed host acquires the swapchain image
         // here, lets the host render the scene offscreen in `on_ui`, and blits that offscreen
-        // onto the acquired image at `end_frame` (the C++ `presentViewportOnly` path). The
-        // editor / headless host has no swapchain — it renders offscreen and publishes the
-        // read-back to shared memory — so `begin_frame` only waits the slot fence and signals
-        // the loop to run its hooks. The C++ `beginFrame` made the same branch on
-        // `activeShmPublish(renderer).enabled`.
+        // onto the acquired image at `end_frame`. The editor / headless host has no swapchain —
+        // it renders offscreen and publishes the read-back to shared memory — so `begin_frame`
+        // only waits the slot fence and signals the loop to run its hooks.
         if self.swapchain().is_some() {
             // Wait the slot fence + acquire the swapchain image; the offscreen render in the
             // host's `on_ui` then records + submits without re-waiting, and `end_frame` blits +
@@ -165,8 +152,7 @@ impl FrameHost for Renderer {
         } else {
             // Wait the frame slot's fence now, before the host's `on_render`/`on_ui` hooks
             // reset any per-frame GPU state (the skinning descriptor pool), so the slot is
-            // idle first — the C++ `beginFrame` fence-wait ordering. `render_scene_offscreen`
-            // then records + submits without re-waiting.
+            // idle first. `render_scene_offscreen` then records + submits without re-waiting.
             self.begin_offscreen_frame()?;
             Ok(true)
         }
@@ -176,9 +162,8 @@ impl FrameHost for Renderer {
 
     fn end_frame(&mut self, _graph: RenderGraph) -> Result<()> {
         // The windowed standalone host blits the offscreen the host rendered in `on_ui` onto
-        // the swapchain image acquired in `begin_frame`, then presents (the C++ `endFrame`
-        // `presentViewportToSwapchain`). The editor / headless host published its frame to
-        // shared memory in `on_ui` and has no swapchain to present.
+        // the swapchain image acquired in `begin_frame`, then presents. The editor / headless
+        // host published its frame to shared memory in `on_ui` and has no swapchain to present.
         if self.swapchain().is_some() {
             self.present_active_view_to_swapchain()?;
         }
@@ -212,10 +197,9 @@ impl FrameHost for Renderer {
 /// The running application state the loop and the [`Layer`] hooks share.
 ///
 /// Field order encodes teardown: [`Self::frame_host`] (the renderer) drops before
-/// [`Self::window`], matching the C++ `destroyRenderer` then `destroyWindow`
-/// order. The layer vec rides on `App` but the loop `mem::take`s it for the
-/// duration of each hook pass, so a hook borrows `&mut App` (window + frame host)
-/// without aliasing the list being iterated (the locked PP-1 resolution).
+/// [`Self::window`]. The layer vec rides on `App` but the loop `mem::take`s it for
+/// the duration of each hook pass, so a hook borrows `&mut App` (window + frame
+/// host) without aliasing the list being iterated.
 pub struct App {
     /// The per-frame GPU host (the renderer), behind a trait so the loop is
     /// GPU-free-testable.
@@ -226,8 +210,7 @@ pub struct App {
     /// The loop's run latch; a layer or signal handler sets it `false` to exit.
     pub running: bool,
     /// The attached layers. `attach_layer` pushes here; the loop `mem::take`s the
-    /// vec out for each hook pass and restores it, so it is empty *during* a hook
-    /// (the alias-free PP-1 form).
+    /// vec out for each hook pass and restores it, so it is empty *during* a hook.
     layers: Vec<Box<dyn Layer>>,
 }
 
@@ -244,17 +227,15 @@ impl App {
     }
 }
 
-/// A set of lifecycle hooks — the runtime "interface" the C++ expressed as a
-/// struct of optional `std::function`s, ported to a trait with provided
-/// (default-empty) methods.
+/// A set of lifecycle hooks — the runtime "interface" a client implements as a
+/// trait with provided (default-empty) methods.
 ///
 /// A client implements only the hooks it needs; the empties cost nothing. Stored
 /// as `Box<dyn Layer>` because the layer set is open and client-extensible (the
 /// host is itself one [`Layer`]). Each hook takes `&mut App` rather than capturing
 /// it, so a layer never aliases the app it runs inside.
 pub trait Layer {
-    /// The layer's name, for logs. Defaults to `"Layer"` (the C++ `std::string
-    /// name` field).
+    /// The layer's name, for logs. Defaults to `"Layer"`.
     fn name(&self) -> &str {
         "Layer"
     }
@@ -282,8 +263,8 @@ pub trait Layer {
 /// Client-provided configuration handed to [`run`].
 ///
 /// `on_create` runs once the window + renderer exist (attach layers, wire signals
-/// there); `on_exit` runs during teardown after `wait_gpu_idle`. Mirrors the C++
-/// `AppConfig`. The closures are boxed so the config is a plain owned value.
+/// there); `on_exit` runs during teardown after `wait_gpu_idle`. The closures are
+/// boxed so the config is a plain owned value.
 pub struct AppConfig {
     /// The window parameters for the standalone windowed mode (ignored in
     /// headless editor mode).
@@ -329,9 +310,8 @@ impl HostMode {
     }
 
     /// Maps the presence of `SAFFRON_EDITOR_NATIVE_VIEWPORT` to a mode: present
-    /// (any value, including empty) → headless, absent → windowed. The C++ checked
-    /// the pointer, not the value, so an empty value still selects headless. Split
-    /// out pure so it is testable without env mutation.
+    /// (any value, including empty) → headless, absent → windowed. Split out pure
+    /// so it is testable without env mutation.
     #[must_use]
     fn from_present(present: bool) -> Self {
         if present {
@@ -343,7 +323,7 @@ impl HostMode {
 }
 
 /// Owns the main loop. Returns a process exit code (`0` on a clean exit, `1` on a
-/// bring-up failure), exactly as the C++ `run`.
+/// bring-up failure).
 ///
 /// The mode (windowed vs headless) is read from the environment. A creation
 /// failure logs via `saffron-core` and returns `1`; everything else runs the loop
@@ -455,15 +435,14 @@ fn finish(app: &mut App, config: &mut AppConfig) {
 /// Runs one frame: the timing record, the `on_update` pass, the (non-minimized)
 /// `begin_frame` + render passes, the telemetry finalize, the frame-limit check, and
 /// the FPS pacing. Sets `app.running = false` when the frame limit is hit or a frame
-/// fails. The C++ `run` loop body; shared by both drivers so the hook order,
-/// minimized guard, telemetry split, and pacing are one implementation.
+/// fails. Shared by both drivers so the hook order, minimized guard, telemetry
+/// split, and pacing are one implementation.
 fn step_frame(app: &mut App, limits: LoopLimits, clock: &mut FrameClock) {
     let now = Instant::now();
     let dt = TimeSpan::from_seconds((now - clock.last).as_secs_f32());
     clock.last = now;
-    // Feed the frame delta to the GPU host so `render-stats` reports live frame timing
-    // (the C++ `endFrame` frameMs EMA). The first frame's delta is the time since loop
-    // start, which the EMA seeds on.
+    // Feed the frame delta to the GPU host so `render-stats` reports live frame timing.
+    // The first frame's delta is the time since loop start, which the EMA seeds on.
     app.frame_host.record_frame_timing(dt.seconds);
 
     // The CPU busy window opens here (update + render) and closes after `run_frame`; the
@@ -492,9 +471,9 @@ fn step_frame(app: &mut App, limits: LoopLimits, clock: &mut FrameClock) {
     }
     // Busy = the whole update+render span minus the fence-wait; never negative.
     let busy_seconds = (busy_start.elapsed().as_secs_f32() - wait_seconds).max(0.0);
-    // Finalize the frame's telemetry (CPU EMA + history ring + alarms + capture advance) —
-    // the C++ `endFrame` perf tail. Skipped on a minimized frame (no render happened), so
-    // the history + capture only see real frames.
+    // Finalize the frame's telemetry (CPU EMA + history ring + alarms + capture advance).
+    // Skipped on a minimized frame (no render happened), so the history + capture only see
+    // real frames.
     if !minimized {
         app.frame_host
             .finalize_frame_telemetry(busy_seconds, wait_seconds, dt.seconds);
@@ -658,8 +637,8 @@ impl ApplicationHandler for WindowedApp {
 /// The render/ui/graph hook pass for one accepted frame: `on_render`, `on_ui`,
 /// then `begin_frame_graph` + per-layer `on_render_graph`, then `end_frame`.
 ///
-/// The render graph is owned here for the pass and moved into `end_frame` (the C++
-/// `frameGraph(renderer)` the loop hands to each layer, then `endFrame` executes).
+/// The render graph is owned here for the pass and moved into `end_frame`: the loop
+/// hands it to each layer, then `end_frame` executes it.
 fn run_frame(app: &mut App) {
     run_hook(app, |layer, app| layer.on_render(app));
     run_hook(app, |layer, app| layer.on_ui(app));
@@ -676,10 +655,9 @@ fn run_frame(app: &mut App) {
 /// Dispatches one hook across every attached layer.
 ///
 /// Moves the layer vec out of `app` for the pass so `f` can borrow `&mut App`
-/// (window + frame host + `running`) without aliasing the list, then restores it —
-/// the locked PP-1 alias resolution. A hook that itself attaches a layer (via
-/// `attach_layer` on the moved-out-then-restored vec) is picked up next pass, not
-/// mid-pass, matching the C++ snapshot-on-entry iteration.
+/// (window + frame host + `running`) without aliasing the list, then restores it. A
+/// hook that itself attaches a layer (via `attach_layer` on the
+/// moved-out-then-restored vec) is picked up next pass, not mid-pass.
 fn run_hook(app: &mut App, mut f: impl FnMut(&mut Box<dyn Layer>, &mut App)) {
     let mut layers = std::mem::take(&mut app.layers);
     for layer in &mut layers {
@@ -692,7 +670,7 @@ fn run_hook(app: &mut App, mut f: impl FnMut(&mut Box<dyn Layer>, &mut App)) {
 }
 
 /// Sleeps to honor `SAFFRON_MAX_FPS`, catching up without accumulating debt after
-/// a slow frame (the C++ pacing block). A zero `max_fps` disables pacing.
+/// a slow frame. A zero `max_fps` disables pacing.
 fn pace_loop(max_fps: u64, next_frame: &mut Instant) {
     if max_fps == 0 {
         return;
@@ -708,21 +686,18 @@ fn pace_loop(max_fps: u64, next_frame: &mut Instant) {
 
 /// Attaches a layer to the app.
 ///
-/// Called from `AppConfig::on_create` (and legitimately from inside a hook). The
-/// C++ `attachLayer(app, layer)` pushed onto `app.layers`; this is the direct
-/// port. A layer attached during a hook pass first runs its `on_attach`-less self
-/// on the *next* pass (the running loop never replays `on_attach` mid-loop), which
-/// matches the C++ behavior where `attachLayer` after the attach phase only joins
-/// the per-frame iteration.
+/// Called from `AppConfig::on_create` (and legitimately from inside a hook). A
+/// layer attached during a hook pass first runs its `on_attach`-less self on the
+/// *next* pass (the running loop never replays `on_attach` mid-loop), so it only
+/// joins the per-frame iteration after the attach phase.
 pub fn attach_layer(app: &mut App, layer: Box<dyn Layer>) {
     app.layers.push(layer);
 }
 
 /// Parses `SAFFRON_EXIT_AFTER_FRAMES` strictly: a valid `u64` count, else `0`.
 ///
-/// Matches the C++ `from_chars` strictness — trailing garbage (`"10x"`) is
-/// rejected (logged + ignored as `0`), and an unset var is `0`. `0` means "no
-/// frame limit".
+/// Trailing garbage (`"10x"`) is rejected (logged + ignored as `0`), and an unset
+/// var is `0`. `0` means "no frame limit".
 #[must_use]
 pub fn frame_limit_from_env() -> u64 {
     parse_u64_env("SAFFRON_EXIT_AFTER_FRAMES", false)
@@ -730,8 +705,7 @@ pub fn frame_limit_from_env() -> u64 {
 
 /// Parses `SAFFRON_MAX_FPS` strictly: a valid non-zero `u64`, else `0` (no cap).
 ///
-/// Matches the C++ `from_chars` strictness plus the explicit `== 0` reject:
-/// trailing garbage and a literal `0` are both rejected (logged + ignored).
+/// Trailing garbage and a literal `0` are both rejected (logged + ignored).
 #[must_use]
 pub fn max_fps_from_env() -> u64 {
     parse_u64_env("SAFFRON_MAX_FPS", true)
@@ -756,11 +730,11 @@ fn parse_u64_env(name: &str, reject_zero: bool) -> u64 {
     }
 }
 
-/// Parses `text` as a strict `u64`, matching the C++ `from_chars` semantics:
-/// the whole string must be a base-10 `u64` (no trailing garbage, no sign, no
-/// whitespace). Returns `None` on any rejection. `reject_zero` additionally
-/// rejects a parsed `0` (the `SAFFRON_MAX_FPS` `== 0` ignore rule); for
-/// `SAFFRON_EXIT_AFTER_FRAMES`, `0` is a valid value meaning "no limit".
+/// Parses `text` as a strict `u64`: the whole string must be a base-10 `u64` (no
+/// trailing garbage, no sign, no whitespace). Returns `None` on any rejection.
+/// `reject_zero` additionally rejects a parsed `0` (the `SAFFRON_MAX_FPS` `== 0`
+/// ignore rule); for `SAFFRON_EXIT_AFTER_FRAMES`, `0` is a valid value meaning "no
+/// limit".
 fn parse_strict_u64(text: &str, reject_zero: bool) -> Option<u64> {
     match text.parse::<u64>() {
         Ok(value) if !(reject_zero && value == 0) => Some(value),
@@ -885,8 +859,7 @@ mod tests {
             HostMode::Windowed,
             "absent → windowed"
         );
-        // Presence (any value, including empty) selects headless — the C++ checked
-        // the pointer, not the value.
+        // Presence (any value, including empty) selects headless.
         assert_eq!(
             HostMode::from_present(true),
             HostMode::Headless,
@@ -1083,5 +1056,5 @@ mod tests {
     // crate's own offscreen tests validate the device / allocator / sync2 path via an
     // offscreen clear+readback. The loop's hook order, frame-limit exit, minimized
     // skip, and teardown ordering are fully proven above on the GPU-free `FrameHost`
-    // stub; the real-swapchain end-to-end needs a hardware GPU.
+    // stub.
 }
