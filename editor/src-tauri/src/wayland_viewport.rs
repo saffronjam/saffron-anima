@@ -102,7 +102,7 @@ impl ViewportShared {
 }
 
 /// The two per-view shared handles, indexed by `View`. Both panes get their own state so a
-/// tab switch parks/unparks rather than re-binding a shared surface (the stale-frame bug).
+/// tab switch parks/unparks rather than re-binding a shared surface.
 #[derive(Default)]
 pub struct Viewports {
     views: [Arc<ViewportShared>; 2],
@@ -122,9 +122,9 @@ fn unpack_pair(packed: u64) -> (i32, i32) {
     ((packed >> 32) as i32, (packed & 0xffff_ffff) as i32)
 }
 
-// Ground truth for "is the viewport really updating": frame callbacks only pace commits,
-// while wp_presentation says what the compositor DID with each one — displayed (presented,
-// with the vblank seq it hit) or superseded by a later commit (discarded).
+/// Ground truth for "is the viewport really updating": frame callbacks only pace commits,
+/// while wp_presentation says what the compositor DID with each one — displayed (presented,
+/// with the vblank seq it hit) or superseded by a later commit (discarded).
 #[derive(Default)]
 struct PresentationStats {
     presented: u32,
@@ -242,7 +242,7 @@ impl Dispatch<WpPresentationFeedback, ()> for State {
                 }
             }
             wp_presentation_feedback::Event::Discarded => state.stats.discarded += 1,
-            _ => {} // sync_output: which wl_output the timing is for
+            _ => {}
         }
     }
 }
@@ -383,10 +383,10 @@ pub fn install(
     Ok(())
 }
 
-// One view's compositor objects + the per-view state the loop carries between ticks. Each
-// view owns a subsurface permanently glued to its pane (set from its `ViewportShared`
-// geometry), its own shm mapping, and its own buffer ring — so a tab switch parks/unparks
-// rather than re-binding a shared surface.
+/// One view's compositor objects + the per-view state the loop carries between ticks. Each
+/// view owns a subsurface permanently glued to its pane (set from its `ViewportShared`
+/// geometry), its own shm mapping, and its own buffer ring — so a tab switch parks/unparks
+/// rather than re-binding a shared surface.
 struct ViewSurface {
     view: View,
     shared: Arc<ViewportShared>,
@@ -619,9 +619,9 @@ fn run(
     }
 }
 
-// Advances one view by one tick: remaps a recreated segment, applies geometry, parks/unparks
-// per its shared flag, and attaches+commits the next seqlock frame if one arrived and the
-// view is unthrottled. Returns true when this view committed a new frame this tick.
+/// Advances one view by one tick: remaps a recreated segment, applies geometry, parks/unparks
+/// per its shared flag, and attaches+commits the next seqlock frame if one arrived and the
+/// view is unthrottled. Returns true when this view committed a new frame this tick.
 fn step_view(
     vs: &mut ViewSurface, state: &mut State, conn: &Connection, queue: &mut wayland_client::EventQueue<State>,
     qh: &QueueHandle<State>, wl_shm: &WlShm, presentation: &Option<WpPresentation>,

@@ -185,7 +185,7 @@ fn viewport_shm_name(view: &str) -> String {
 fn engine_binary() -> String {
     std::env::var("SAFFRON_ANIMA_BIN").unwrap_or_else(|_| {
         repo_root()
-            .join("build/debug/bin/SaffronAnima")
+            .join("engine/target/debug/saffron-host")
             .to_string_lossy()
             .into_owned()
     })
