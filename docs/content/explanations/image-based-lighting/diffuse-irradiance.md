@@ -22,7 +22,7 @@ The Lambertian BRDF turns irradiance into outgoing diffuse radiance by $\rho/\pi
 
 ## How the convolution samples the hemisphere
 
-Each output texel corresponds to a normal $n$. The shader builds a tangent frame around it, then walks a regular grid in spherical coordinates: 64 steps in azimuth $\phi$, 16 in zenith $\theta$. Each sample is weighted by `cos(theta) * sin(theta)`.
+Each output texel corresponds to a normal $n$. The shader builds a tangent frame around it, then walks a regular grid in spherical coordinates: 64 steps in azimuth $\phi$ (`phiSteps`), 16 in zenith $\theta$ (`thetaSteps`). Each sample is weighted by `cos(theta) * sin(theta)`.
 
 ```hlsl
 float3 sampleDir = tangent.x * right + tangent.y * up + tangent.z * n;
@@ -61,10 +61,10 @@ The cosine convolution is a heavy low-pass filter. It removes all high-frequency
 
 | What | File | Symbols |
 |---|---|---|
-| Convolution + tangent frame | `ibl_irradiance.slang` | `computeMain`, `phiSteps`/`thetaSteps`, `PI / samples` normalize, `up`/`right` |
-| Bindings | `ibl_irradiance.slang` | `envCube` (sampler), `outCube` (rgba16f storage) |
-| Cube size | `renderer_detail.cppm` | `IblIrradianceSize` (32) |
-| Consumed as diffuse | `mesh.slang` | `fragmentMain` — `kd * irradiance * albedo` |
+| Convolution + tangent frame | `engine/assets/shaders/ibl_irradiance.slang` | `computeMain`, `phiSteps`/`thetaSteps`, `PI / samples` normalize, `up`/`right` |
+| Bindings | `engine/assets/shaders/ibl_irradiance.slang` | `envCube` (sampler), `outCube` (storage) |
+| Cube size | `engine/crates/rendering/src/ibl.rs` | `IBL_IRRADIANCE_SIZE` (32) |
+| Consumed as diffuse | `engine/assets/shaders/lighting.slang` | ambient block — `kd * irradiance * albedo` |
 
 ## Related
 

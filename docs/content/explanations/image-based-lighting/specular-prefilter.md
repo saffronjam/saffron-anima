@@ -25,7 +25,7 @@ The split-sum makes one simplifying assumption: view equals normal equals reflec
 Uniform sampling of the environment would spend nearly all samples on directions the GGX lobe barely weights. Instead the prefilter draws half-vectors $h$ from the GGX distribution itself, so samples concentrate where the lobe carries energy. Each sample is a low-discrepancy [Hammersley](../brdf-lut/) pair turned into a half-vector and reflected to a light direction:
 
 ```hlsl
-float2 xi = hammersley(i, 64);
+float2 xi = hammersley(i, sampleCount);
 float3 h  = importanceSampleGGX(xi, n, push.roughness);
 float3 l  = normalize(2.0 * dot(v, h) * h - v);   // reflect v about h
 if (dot(n, l) > 0.0) { prefiltered += envCube.SampleLevel(l, 0.0).rgb * ndotl; totalWeight += ndotl; }
@@ -43,11 +43,11 @@ then rotates it into the normal's tangent frame. Samples below the horizon ($n\c
 
 Roughness is a push constant, set per mip by the [bake](../ibl-bake-pass/), not a value the shader holds internally. The renderer dispatches the shader once per mip level, binding that mip's storage view and pushing the matching roughness:
 
-```cpp
-for (u32 m = 0; m < preMips; ++m) {
-    f32 roughness = preMips > 1 ? float(m) / float(preMips - 1) : 0.0f;
-    cmd.pushConstants(/* ... */, &roughness);
-    cmd.dispatch(group(IblPrefilterSize >> m), group(IblPrefilterSize >> m), 6);
+```rust
+for m in 0..mips {
+    let roughness = if mips > 1 { m as f32 / (mips - 1) as f32 } else { 0.0 };
+    raw.cmd_push_constants(/* ... */, bytemuck::bytes_of(&roughness));
+    raw.cmd_dispatch(scratch.cmd, group(mip_size), group(mip_size), 6);
 }
 ```
 
@@ -58,7 +58,7 @@ Mip 0 bakes at roughness 0 over the full `128²`. Each coarser mip halves resolu
 The fragment samples the prefiltered cube along the reflection vector, choosing the mip from roughness, then applies the BRDF LUT scale and bias. Trilinear filtering between mips blends a roughness that falls between two baked levels smoothly.
 
 ```hlsl
-float3 prefiltered = prefilteredMap.SampleLevel(reflect(-v, n), roughness * IblPrefilterMaxMip).rgb;
+float3 prefiltered = prefilteredMap.SampleLevel(R, roughness * IblPrefilterMaxMip).rgb;
 float2 ab          = brdfLut.SampleLevel(float2(ndotv, roughness), 0.0).rg;
 float3 specularIBL = prefiltered * (F0 * ab.x + ab.y);
 ```
@@ -67,10 +67,10 @@ float3 specularIBL = prefiltered * (F0 * ab.x + ab.y);
 
 | What | File | Symbols |
 |---|---|---|
-| Prefilter + GGX sampling | `ibl_prefilter.slang` | `computeMain` (`view = normal = reflection`), `importanceSampleGGX`, `hammersley`, `radicalInverseVdC` |
-| Per-mip dispatch | `renderer_detail.cppm` | `bakeEnvironment` — prefilter mip loop, `roughness` push constant |
-| Mip count / size | `renderer_detail.cppm` | `IblPrefilterMips` (5), `IblPrefilterSize` (128) |
-| Consumed as specular | `mesh.slang` | `fragmentMain` — `prefiltered * (F0*ab.x + ab.y)` |
+| Prefilter + GGX sampling | `engine/assets/shaders/ibl_prefilter.slang` | `computeMain` (`view = normal = reflection`), `importanceSampleGGX`, `hammersley`, `radicalInverseVdC` |
+| Per-mip dispatch | `engine/crates/rendering/src/ibl.rs` | `Ibl::bake` — prefilter mip loop, `roughness` push constant, `group` |
+| Mip count / size | `engine/crates/rendering/src/ibl.rs` | `IBL_PREFILTER_MIPS` (5), `IBL_PREFILTER_SIZE` (128) |
+| Consumed as specular | `engine/assets/shaders/lighting.slang` | ambient block — `prefiltered * (F0*ab.x + ab.y)` |
 
 ## Related
 

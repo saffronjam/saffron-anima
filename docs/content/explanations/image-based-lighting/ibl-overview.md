@@ -8,7 +8,7 @@ math = true
 
 Image-based lighting computes a surface's indirect, or *ambient*, illumination by treating an environment as a light source and integrating the [Cook-Torrance BRDF](../../lighting-and-brdf/cook-torrance-brdf/) against it.
 
-[Direct lighting](../../lighting-and-brdf/cook-torrance-brdf/) accounts only for the sun and the punctual lights. Everything else a surface sees — the sky, the bounce off nearby geometry, the general fill of a room — is the ambient term. The defining integral is too expensive to evaluate per pixel per frame, so the engine precomputes three small textures from the environment once at startup and the mesh shader samples them.
+[Direct lighting](../../lighting-and-brdf/cook-torrance-brdf/) accounts only for the sun and the punctual lights. Everything else a surface sees — the sky, the bounce off nearby geometry, the general fill of a room — is the ambient term. The defining integral is too expensive to evaluate per pixel per frame, so the engine precomputes three small textures from the environment once at startup and the mesh fragment shader samples them.
 
 ## Split-sum approximation
 
@@ -31,7 +31,7 @@ The first factor is the environment prefiltered by roughness: a cubemap whose mi
 
 ## Three baked textures
 
-The engine bakes one environment (a procedural sky) into:
+The engine bakes one environment (a procedural sky by default) into:
 
 | Texture | What it holds | Page |
 |---|---|---|
@@ -39,14 +39,14 @@ The engine bakes one environment (a procedural sky) into:
 | Prefiltered cube | GGX-blurred specular, one mip per roughness | [Specular prefilter](../specular-prefilter/) |
 | BRDF LUT | the Fresnel scale/bias split-sum factor | [BRDF LUT](../brdf-lut/) |
 
-All three are baked once by [the bake pass](../ibl-bake-pass/) and bound as set 3 in the mesh pipeline.
+All three are baked once by [the bake](../ibl-bake-pass/) and bound as descriptor set 3 in the mesh pipeline.
 
 ## How the mesh shader uses them
 
-The ambient block in `fragmentMain` reads all three and assembles diffuse plus specular. Diffuse samples the irradiance cube along the normal $n$ and scales by the energy-conservation factor $k_d$, computed with `fresnelSchlickRoughness` so rough surfaces do not over-reflect at grazing angles. Specular samples the prefiltered cube along the reflection vector $R$ at a mip chosen by roughness, then applies the LUT, where `F0 * ab.x + ab.y` is the split-sum scale and bias.
+The ambient block in `lighting.slang` (imported by `mesh.slang`) reads all three and assembles diffuse plus specular. Diffuse samples the irradiance cube along the normal $n$ and scales by the energy-conservation factor $k_d$, computed with `fresnelSchlickRoughness` so rough surfaces do not over-reflect at grazing angles. Specular samples the prefiltered cube along the reflection vector $R$ at a mip chosen by roughness, then applies the LUT, where `F0 * ab.x + ab.y` is the split-sum scale and bias.
 
 ```hlsl
-float3 diffuseIBL  = kd * irradianceMap.SampleLevel(n, 0.0).rgb * albedo;
+float3 diffuseIBL  = kd * irradiance * albedo;
 float3 prefiltered = prefilteredMap.SampleLevel(R, roughness * IblPrefilterMaxMip).rgb;
 float2 ab          = brdfLut.SampleLevel(float2(ndotv, roughness), 0.0).rg;
 ambient = diffuseIBL + prefiltered * (F0 * ab.x + ab.y);
@@ -54,16 +54,16 @@ ambient = diffuseIBL + prefiltered * (F0 * ab.x + ab.y);
 
 ## When it replaces flat ambient
 
-IBL is the default. It runs whenever `globals.counts.z != 0`, which is `useIbl && ibl.ready`. Disabling it (`sa set-ibl 0`) falls back to a flat scalar — `albedo * (1 - metallic) * ambient` — that the directional-light setup carries. The flat version has no directionality and no specular reflection, the two qualities IBL adds.
+IBL is the default. It runs whenever `globals.counts.z != 0`, which is `use_ibl && Ibl::ready`. Disabling it (`sa set-ibl 0`) falls back to a flat scalar — `albedo * (1 - metallic) * ambientColor` — that the scene's ambient carries. The flat version has no directionality and no specular reflection, the two qualities IBL adds.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Ambient assembly + set-3 bindings | `mesh.slang` | `fragmentMain` ambient block, `irradianceMap`, `prefilteredMap`, `brdfLut`, `IblPrefilterMaxMip` |
-| IBL-on flag | `renderer_lighting.cpp` | `iblFlag` → `counts.z` |
-| Toggle + default | `renderer.cppm` | `setIbl`, `useIbl` (default `true`) |
-| Control command | `control_commands_render.cpp` | `set-ibl` |
+| Ambient assembly + set-3 bindings | `engine/assets/shaders/lighting.slang` | ambient block, `irradianceMap`, `prefilteredMap`, `brdfLut`, `IblPrefilterMaxMip` |
+| IBL-on flag | `engine/crates/rendering/src/lighting.rs` | `set_frame_ibl`, `frame_ibl_flag` → `counts` |
+| Toggle + default | `engine/crates/rendering/src/ibl.rs` | `Ibl::use_ibl` (default `true`), `Ibl::ready` |
+| Control command | `engine/crates/control/src/commands_render.rs` | `set-ibl` |
 
 ## Related
 

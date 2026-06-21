@@ -41,7 +41,7 @@ a += (1.0 - fc) * gVis;                // scale
 b += fc * gVis;                        // bias
 ```
 
-`fc` is the Schlick exponent term. The scale accumulates `(1 - fc) * gVis` and the bias accumulates `fc * gVis`, exactly the two split integrals above. `gVis` folds the Smith geometry term together with the importance-sampling weight $\tfrac{v\cdot h}{(n\cdot h)(n\cdot v)}$, so no separate PDF division is needed.
+`fc` is the Schlick exponent term. The scale `a` accumulates `(1 - fc) * gVis` and the bias `b` accumulates `fc * gVis`, exactly the two split integrals above. `gVis` folds the Smith geometry term together with the importance-sampling weight $\tfrac{v\cdot h}{(n\cdot h)(n\cdot v)}$, so no separate PDF division is needed.
 
 The geometry term uses the IBL-specific Smith remap $k = \alpha^2/2$, distinct from the direct-lighting $k$ and the standard choice for environment integration.
 
@@ -55,16 +55,16 @@ float2 hammersley(uint i, uint n) { return float2(float(i) / float(n), radicalIn
 
 ## The output table
 
-The LUT is a `256²` `rgba16f` 2D image with only R and G written. The compute shader maps each texel to $(n\cdot v, \text{roughness})$ over $[0, 1]$, both floored at `1e-3` to avoid the degenerate edge, and stores the integral. The mesh fragment samples it with `brdfLut.SampleLevel(float2(ndotv, roughness), 0.0).rg`.
+The LUT is a `256²` `R16G16B16A16_SFLOAT` 2D image with only R and G written. The compute shader maps each texel to $(n\cdot v, \text{roughness})$ over $[0, 1]$, both floored to avoid the degenerate edge, and stores the integral into `outLut`. The mesh fragment samples it with `brdfLut.SampleLevel(float2(ndotv, roughness), 0.0).rg`.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Integral + geometry term | `ibl_brdf.slang` | `integrateBRDF` (scale `a`, bias `b`), `geometrySchlickGGX` (IBL $k = \alpha^2/2$) |
-| Sampling + output | `ibl_brdf.slang` | `importanceSampleGGX`, `hammersley`, `radicalInverseVdC`, `computeMain`, `outLut` |
-| LUT size | `renderer_detail.cppm` | `IblLutSize` (256) |
-| Applied at runtime | `mesh.slang` | `fragmentMain` — `F0 * ab.x + ab.y` |
+| Integral + geometry term | `engine/assets/shaders/ibl_brdf.slang` | `integrateBRDF` (scale `a`, bias `b`), `geometrySchlickGGX` (IBL $k = \alpha^2/2$) |
+| Sampling + output | `engine/assets/shaders/ibl_brdf.slang` | `importanceSampleGGX`, `hammersley`, `radicalInverseVdC`, `computeMain`, `outLut` |
+| LUT format + size | `engine/crates/rendering/src/ibl.rs` | `IBL_LUT_SIZE` (256), `IBL_COLOR_FORMAT` |
+| Applied at runtime | `engine/assets/shaders/lighting.slang` | ambient block — `F0 * ab.x + ab.y` |
 
 ## Related
 
