@@ -1,11 +1,10 @@
 //! The control-plane DTO crate: the single source of truth for the wire types, shared by
 //! the engine, the `sa` CLI, and the protocol codegen (`serde`/`schemars`/`ts-rs` derives).
 //!
-//! These types transcribe `control_dto.cppm` (the 236 structs + 17 enums + the wire-helpers)
-//! verbatim, field declaration order preserved — that order is the positional-CLI-argument
-//! order and the OpenRPC `required` order. There is no parser: the struct *is* the model and
-//! `derive` reads it at compile time, so the C++ `gen.ts` regex parser and the hand-generated
-//! serde collapse to zero code here.
+//! The crate defines 236 structs + 17 enums + the wire-helpers, with field declaration order
+//! preserved — that order is the positional-CLI-argument order and the OpenRPC `required`
+//! order. There is no parser: the struct *is* the model and `derive` reads it at compile time,
+//! so the serde and schema codegen carry no hand-written serialization code.
 //!
 //! Depends only on `saffron-core` so the `sa` CLI links the DTOs without the engine.
 

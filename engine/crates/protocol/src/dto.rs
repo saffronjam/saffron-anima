@@ -1,12 +1,11 @@
-//! The control-plane DTOs: 236 structs + 17 enums transcribed from `control_dto.cppm` in
-//! field declaration order (the positional-CLI-argument / OpenRPC-`required` order).
+//! The control-plane DTOs: 236 structs + 17 enums, in field declaration order (the
+//! positional-CLI-argument / OpenRPC-`required` order).
 //!
 //! Conventions, applied uniformly:
-//! - `#[serde(rename_all = "camelCase")]` on every struct — the C++ field names are already
-//!   camelCase, so the wire keys match verbatim; this only normalizes the Rust `snake_case`
-//!   fields back to the frozen wire spelling.
+//! - `#[serde(rename_all = "camelCase")]` on every struct — the wire keys are camelCase, so this
+//!   only normalizes the Rust `snake_case` fields back to the frozen wire spelling.
 //! - `Option<T>` fields carry `skip_serializing_if = "Option::is_none"` so an absent value is
-//!   a *missing key*, not `null` (the C++ `optionalField` behavior).
+//!   a *missing key*, not `null`.
 //! - The 17 enums are kebab-case strings; an unknown value is a `Deserialize` error.
 //! - The wire-helpers `EntitySelector` / `AssetSelector` and every `Json`-typed field are
 //!   opaque `serde_json::Value` — their shape is owned by the scene component registry, not
@@ -19,7 +18,7 @@ use ts_rs::TS;
 
 use crate::Uuid;
 
-/// Coercing readers for the wire-contract bool fields (the C++ `readBool`): a bool field on the
+/// Coercing readers for the wire-contract bool fields: a bool field on the
 /// wire accepts a JSON bool, a number (`!= 0`), or a string (everything but `"0"`/`"false"`/`"off"`
 /// is true). The `sa` CLI and the editor pass `1`/`0` and `"on"`/`"off"` for toggles, so an
 /// input bool param must accept those forms or the toggle silently no-ops. Applied via
@@ -28,7 +27,8 @@ use crate::Uuid;
 mod coerce {
     use super::{Deserialize, Deserializer, Value};
 
-    /// Coerce one JSON value to a bool, matching the C++ `readBool`.
+    /// Coerce one JSON value to a bool: a bool, a number (`!= 0`), or a string
+    /// (anything but `"0"`/`"false"`/`"off"` is true).
     fn from_value<E: serde::de::Error>(value: &Value) -> Result<bool, E> {
         match value {
             Value::Bool(b) => Ok(*b),
@@ -1982,8 +1982,8 @@ pub struct InspectResult {
     pub component_order: Vec<String>,
 }
 
-/// The scene environment block on the wire — the bare environment object (the C++ `EnvironmentDto`
-/// whose schema is `$ref Environment`), not a wrapper. `#[serde(transparent)]` so the single
+/// The scene environment block on the wire — the bare environment object (its schema is
+/// `$ref Environment`), not a wrapper. `#[serde(transparent)]` so the single
 /// `value` field serializes as the object itself: `set-environment`/`get-environment`/
 /// `set-atmosphere` reply with `{ skyMode, …, atmosphere: {…} }`, never `{ value: {…} }`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -2692,7 +2692,7 @@ mod coerce_tests {
 
     #[test]
     fn toggle_enabled_coerces_number_string_and_bool() {
-        // The C++ `readBool` contract: a bool param accepts a JSON bool, a number (`!= 0`),
+        // The bool-coercion contract: a bool param accepts a JSON bool, a number (`!= 0`),
         // or a string (anything but `"0"`/`"false"`/`"off"` is true). This is the form the
         // `sa` CLI / e2e harness send via positional `args` (`{ "enabled": 1 }`).
         let one: ToggleParams =

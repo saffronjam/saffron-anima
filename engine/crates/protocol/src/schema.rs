@@ -1,14 +1,14 @@
 //! JSON Schema (draft 2020-12) fragments for the OpenRPC document.
 //!
-//! Each DTO emits a fragment shaped exactly like the C++ `gen.ts` `schemaFor` output —
+//! Each DTO emits a fragment shaped as
 //! `{ type: "object", additionalProperties: false, properties, required }` with `required`
-//! listing the non-`Option` fields in declaration order — so the contract-test schema oracle
-//! (`tools/check-control-schema/check.ts`) validates a Rust host's results unchanged. The
-//! `properties` map carries `schemars`'s alphabetical key order (object-key order is
-//! validation-irrelevant); phase-5 sorts the assembled document into the byte-frozen order.
+//! listing the non-`Option` fields in declaration order, so the contract-test schema oracle
+//! (`tools/check-control-schema/check.ts`) validates the host's results. The `properties` map
+//! carries `schemars`'s alphabetical key order (object-key order is validation-irrelevant); the
+//! assembled document is later sorted into the byte-frozen order.
 //!
 //! `schemars` is the per-DTO fragment source: [`fragment_for`] reads `schema_for!(T)` and
-//! normalizes it into the C++ shape (drop the `$schema`/`title`/`format` noise, unwrap the
+//! normalizes it into the wire shape (drop the `$schema`/`title`/`format` noise, unwrap the
 //! `Option` nullable unions, inline the enum `$defs`, and re-point struct `$ref`s at
 //! `#/components/schemas/`). Two kinds of fact `schemars` cannot see cross DTO boundaries and
 //! are applied as a small override table keyed by `(struct, field)`:
@@ -17,16 +17,17 @@
 //!   the runtime), so `schemars` reports `true` (any). The wire shape is
 //!   `oneOf:[{type:string},{type:integer}]` (a uuid string or a raw id), so each selector field
 //!   is listed in [`SELECTOR_FIELDS`]. A `Value` field with no entry is a `Json` blob and emits
-//!   `{}` (any), matching `jsonSchemaFor`'s `Json` case.
-//! - **The four cross-boundary special-cases** (`gen.ts:2153/2162/2165/2168`): `EnvironmentDto`
-//!   is the bare `$ref Environment`; `SelectionResult.entity` is `oneOf:[$ref EntityRef, null]`;
-//!   `InspectResult.components` is `$ref Components`; `SetComponentParams.json` is
-//!   `$ref ComponentBody`. These reference shapes the [`component_schemas`] block defines.
+//!   `{}` (any).
+//! - **The four cross-boundary special-cases**: `EnvironmentDto` is the bare `$ref Environment`;
+//!   `SelectionResult.entity` is `oneOf:[$ref EntityRef, null]`; `InspectResult.components` is
+//!   `$ref Components`; `SetComponentParams.json` is `$ref ComponentBody`. These reference shapes
+//!   the [`component_schemas`] block defines, and they hold opaque/cross-boundary shapes a derive
+//!   cannot read.
 //!
 //! The hand-authored [`component_schemas`] block (the 21 component shapes + `Vec3`/`Vec4`/`BVec3`
 //! via inline objects + `Components`/`ComponentBody`/`Environment`/`AtmosphereSettingsDto`)
 //! describes the *opaque component blobs* the contract test validates — they are not protocol
-//! DTOs with a derive to read, so they stay hand-authored exactly as `gen.ts:2178` writes them.
+//! DTOs with a derive to read, so they stay hand-authored.
 
 use schemars::JsonSchema;
 use serde_json::{Map, Value, json};
@@ -37,7 +38,7 @@ fn selector_schema() -> Value {
 }
 
 /// The `(struct, field)` pairs whose `serde_json::Value` field is a selector, not a `Json`
-/// blob. Every other `Value` field emits `{}` (the `jsonSchemaFor` `Json` case).
+/// blob. Every other `Value` field emits `{}` (the `Json` case).
 pub const SELECTOR_FIELDS: &[(&str, &str)] = &[
     ("FitColliderParams", "entity"),
     ("ApplyImpulseParams", "entity"),
@@ -94,7 +95,7 @@ pub const SELECTOR_FIELDS: &[(&str, &str)] = &[
     ("SetComponentFieldParams", "entity"),
 ];
 
-/// The four cross-boundary special-cases (`gen.ts:2153/2162/2165/2168`). `EnvironmentDto`
+/// The four cross-boundary special-cases. `EnvironmentDto`
 /// replaces its whole fragment; the others override one field's schema.
 fn special_field(struct_name: &str, field: &str) -> Option<Value> {
     match (struct_name, field) {
@@ -113,11 +114,9 @@ fn special_field(struct_name: &str, field: &str) -> Option<Value> {
 
 /// The wire field names of DTO `T` in declaration order — the positional-argument order.
 ///
-/// This is the C++ per-field positional index made explicit: `args[i]` on the wire fills the
-/// `i`-th declared field. The C++ generated serde assigns each field its declaration index and
-/// reads it from `params.args[index]` when the named key is absent (`requiredField`/
-/// `optionalField` with `positional = true`, uniform across all 260 fields). The Rust runtime
-/// reads the same order from `schemars` (`required` is declaration-ordered, and `properties`
+/// This is the per-field positional index made explicit: `args[i]` on the wire fills the
+/// `i`-th declared field, when the named key is absent, uniformly across every field. The runtime
+/// reads this order from `schemars` (`required` is declaration-ordered, and `properties`
 /// preserves declaration order under `serde_json`'s `preserve_order`), so a typed command can
 /// fold positional args onto named keys before deserializing — see `saffron_control`'s
 /// `register`.
@@ -131,7 +130,7 @@ pub fn positional_field_order<T: JsonSchema>() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The C++-shaped JSON Schema fragment for DTO `T`, named `struct_name` (its OpenRPC schema
+/// The frozen-wire JSON Schema fragment for DTO `T`, named `struct_name` (its OpenRPC schema
 /// key). `EnvironmentDto` is the one whole-struct special-case (`$ref Environment`).
 #[must_use]
 pub fn fragment_for<T: JsonSchema>(struct_name: &str) -> Value {
@@ -183,7 +182,7 @@ fn is_any(schema: &Value) -> bool {
     }
 }
 
-/// Rewrite one schemars property schema into the C++ `jsonSchemaFor` shape: unwrap the
+/// Rewrite one schemars property schema into the frozen-wire shape: unwrap the
 /// `Option` nullable, strip `format`, inline enum `$defs`, re-point struct `$ref`s, and recurse
 /// into array `items`.
 fn normalize(schema: &Value, defs: Option<&Map<String, Value>>) -> Value {
@@ -206,9 +205,9 @@ fn normalize(schema: &Value, defs: Option<&Map<String, Value>>) -> Value {
     let mut out = Map::new();
     for (key, value) in map {
         match key.as_str() {
-            // `jsonSchemaFor` emits a bare `{type:integer}`/`{type:number}` for every numeric
+            // The wire shape is a bare `{type:integer}`/`{type:number}` for every numeric
             // field: the `format` tag (`float`/`int32`/`int64`) and the unsigned `minimum`/
-            // `maximum` range bounds `schemars` derives have no analogue there.
+            // `maximum` range bounds `schemars` derives have no place there.
             "format" | "minimum" | "maximum" | "description" | "title" | "$schema" => {}
             // `type:[X,"null"]` is an `Option<X>`; keep just `X`.
             "type" => {
@@ -225,8 +224,8 @@ fn normalize(schema: &Value, defs: Option<&Map<String, Value>>) -> Value {
     Value::Object(out)
 }
 
-/// Resolve a `#/$defs/X` reference: an enum inlines to `{type:string, enum:[...]}` (the
-/// `jsonSchemaFor` enum case), a struct re-points to `#/components/schemas/X`.
+/// Resolve a `#/$defs/X` reference: an enum inlines to `{type:string, enum:[...]}` (the wire
+/// enum shape), a struct re-points to `#/components/schemas/X`.
 fn resolve_ref(reference: &str, defs: Option<&Map<String, Value>>) -> Value {
     let name = reference.rsplit('/').next().unwrap_or(reference);
     if let Some(def) = defs.and_then(|d| d.get(name)) {
@@ -257,7 +256,7 @@ fn strip_null(type_value: &Value) -> Value {
 
 /// The hand-authored component-schema block: the 21 scene-component shapes + `Vec3`/`Vec4` +
 /// the `Components` aggregate, the `ComponentBody` union, `AtmosphereSettingsDto`, and the
-/// `Environment` shape. Transcribed verbatim from `gen.ts:2178` — these describe the opaque
+/// `Environment` shape. These describe the opaque
 /// component blobs the contract test validates, not protocol DTOs.
 #[must_use]
 pub fn component_schemas() -> Map<String, Value> {

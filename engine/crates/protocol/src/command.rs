@@ -1,8 +1,7 @@
 //! The shared command table — the single ordered source the runtime dispatch and the codegen
-//! emitters both read. It is the `commands: CommandDef[]` analogue from the C++ `gen.ts`
-//! (`gen.ts:138`), lifted out of the generator into the protocol crate so there is no second
-//! hand-synced list: `saffron-control`'s `register_*_commands` joins this table to handler fns by
-//! name to dispatch, and the OpenRPC/manifest emitters read the same slice to emit `methods`.
+//! emitters both read. There is no second hand-synced list: `saffron-control`'s
+//! `register_*_commands` joins this table to handler fns by name to dispatch, and the
+//! OpenRPC/manifest emitters read the same slice to emit `methods`.
 //!
 //! [`COMMANDS`] holds exactly the **153 typed commands** in the frozen wire order (the committed
 //! `schemas/control/command-manifest.generated.json` order, `ping` first, `quit` last) — the order
@@ -11,10 +10,10 @@
 //! `help` is **not** in this table; it is registered untyped in the runtime and recorded as the
 //! manifest's single top-level skip (`{ name: "help", reason: "reflective registry" }`).
 //!
-//! [`COMMAND_FIXTURES`] and [`COMMAND_SKIPS`] are e2e wire-contract metadata transcribed verbatim
-//! from `gen.ts:1005`/`:1107`, fed only to the manifest emitter (the runtime does not need them).
-//! Every command carries **exactly one** of a fixture or a skip — the `gen.ts:2602` invariant a
-//! `#[test]` reproduces here, so a new command without metadata fails the build.
+//! [`COMMAND_FIXTURES`] and [`COMMAND_SKIPS`] are e2e wire-contract metadata, fed only to the
+//! manifest emitter (the runtime does not need them). Every command carries **exactly one** of a
+//! fixture or a skip — an invariant a `#[test]` enforces here, so a new command without metadata
+//! fails the build.
 
 /// One row of the command table: a wire command name, its one-line `help` summary, and the type
 /// *names* of its params/result DTOs. `params`/`result` are bare type-name strings (not types):
@@ -961,8 +960,8 @@ pub const HELP_COMMAND: &str = "help";
 /// The reason recorded for the `help` skip in the manifest's top-level `skips` list.
 pub const HELP_SKIP_REASON: &str = "reflective registry";
 
-/// The e2e contract-test fixture name for each command that has one (the `gen.ts` `commandFixtures`
-/// map, verbatim). Looked up by command name; fed only to the manifest emitter.
+/// The e2e contract-test fixture name for each command that has one. Looked up by command name;
+/// fed only to the manifest emitter.
 pub static COMMAND_FIXTURES: &[(&str, &str)] = &[
     ("ping", "empty"),
     ("render-stats", "empty"),
@@ -1065,9 +1064,9 @@ pub static COMMAND_FIXTURES: &[(&str, &str)] = &[
     ("clean-assets", "empty"),
 ];
 
-/// The skip reason for each command the e2e cannot fixture (the `gen.ts` `commandSkips` map,
-/// verbatim — external-input, destructive, side-effecting, or stateful commands). Looked up by
-/// command name; fed only to the manifest emitter.
+/// The skip reason for each command the e2e cannot fixture (external-input, destructive,
+/// side-effecting, or stateful commands). Looked up by command name; fed only to the manifest
+/// emitter.
 pub static COMMAND_SKIPS: &[(&str, &str)] = &[
     ("import-model", "requires an external model fixture path"),
     (
@@ -1544,7 +1543,7 @@ mod tests {
         }
     }
 
-    /// The per-domain first/last names, in the order the five C++ `register_*_commands` files
+    /// The per-domain first/last names, in the order the five `register_*_commands` files
     /// register them — the registration domains the catalog groups by. Each command in the table
     /// belongs to exactly one domain, and the domain endpoints match the catalog.
     #[test]
@@ -1555,7 +1554,7 @@ mod tests {
         let animation = animation_domain();
         let physics = physics_domain();
 
-        // The five domains partition the 153 typed commands: render 28 (the C++ render file's 29
+        // The five domains partition the 153 typed commands: render 28 (the render file's 29
         // includes the untyped `help`, dropped here), scene 48 (the 47 in `register_scene_commands`
         // plus `get-script-schema`, which the host registers separately but the catalog groups with
         // the script commands), asset 52, animation 13, physics 12 = 153.
@@ -1587,8 +1586,8 @@ mod tests {
         assert_eq!(*physics.last().unwrap(), "get-ragdoll");
     }
 
-    /// The `gen.ts:2602` invariant: every command has exactly one of a fixture or a skip, so a new
-    /// command without contract-test metadata fails the build (and none has both).
+    /// Every command has exactly one of a fixture or a skip, so a new command without
+    /// contract-test metadata fails the build (and none has both).
     #[test]
     fn every_command_has_exactly_one_of_fixture_or_skip() {
         for c in COMMANDS {

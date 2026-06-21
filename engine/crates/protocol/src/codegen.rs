@@ -6,7 +6,7 @@
 //! source) and every struct's `schemars` OpenRPC fragment. Both lists are the same ordered DTO
 //! universe the `inventory` test pins, so a dropped or added type fails to compile here too.
 //!
-//! The three C++ wire-helpers (`WireUuid`, `EntitySelector`, `AssetSelector`) are not Rust
+//! The three wire-helpers (`WireUuid`, `EntitySelector`, `AssetSelector`) are not Rust
 //! structs (`Uuid` is a string alias; the selectors are opaque `Value`), so their OpenRPC
 //! object fragments are hand-emitted by the xtask, not produced here.
 

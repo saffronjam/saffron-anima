@@ -1,13 +1,12 @@
 //! Wire-contract tests: the frozen JSON spellings the editor and the contract test depend on.
-//! These assert the byte-exact enum spellings (the C++ `enumWireNames` table), the
-//! unknown-value error, the `Option` missing-key behavior, and a representative struct
-//! round-trip.
+//! These assert the byte-exact enum spellings, the unknown-value error, the `Option`
+//! missing-key behavior, and a representative struct round-trip.
 
 use saffron_protocol::*;
 
-/// Every variant of every enum serializes to its exact C++ `enumWireNames` kebab spelling,
-/// and that string deserializes back to the same variant. A drift here silently breaks the
-/// editor's typed client.
+/// Every variant of every enum serializes to its exact kebab-case wire spelling, and that
+/// string deserializes back to the same variant. A drift here silently breaks the editor's
+/// typed client.
 #[test]
 fn enum_wire_spellings_match_cpp_table() {
     macro_rules! check {
@@ -103,8 +102,7 @@ fn enum_wire_spellings_match_cpp_table() {
     check!(AlarmStateDto::Resolved, "resolved");
 }
 
-/// An unknown enum value is a `Deserialize` error, not a silent default (the C++ `read*`
-/// behavior the catalog pins).
+/// An unknown enum value is a `Deserialize` error, not a silent default.
 #[test]
 fn unknown_enum_value_is_an_error() {
     assert!(serde_json::from_str::<AaModeDto>("\"bogus\"").is_err());
@@ -112,8 +110,8 @@ fn unknown_enum_value_is_an_error() {
     assert!(serde_json::from_str::<AssetSlotDto>("\"roughness\"").is_err());
 }
 
-/// An absent `Option<T>` field is a **missing key**, not `null` — matching the C++
-/// `optionalField` emit. `RaycastParams.maxDist` is the representative case.
+/// An absent `Option<T>` field is a **missing key**, not `null`. `RaycastParams.maxDist`
+/// is the representative case.
 #[test]
 fn absent_option_omits_the_key() {
     let params = RaycastParams {
@@ -174,8 +172,8 @@ fn representative_result_round_trips() {
     assert_eq!(back, result);
 }
 
-/// `f32` fields accept an `f64`-shaped wire number (the C++ `readF32` narrowing) — a JS
-/// client emits all numbers as doubles.
+/// `f32` fields accept an `f64`-shaped wire number, narrowing on read — a JS client emits
+/// all numbers as doubles.
 #[test]
 fn f32_field_accepts_a_double_wire_number() {
     let object = serde_json::json!({

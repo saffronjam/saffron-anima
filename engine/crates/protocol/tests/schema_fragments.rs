@@ -1,6 +1,6 @@
 //! The exhaustive schema-fragment oracle: every DTO's `fragment_for` output must equal the
 //! committed `openrpc.generated.json` `components.schemas` entry (after a canonical deep key
-//! sort, since `schemars` orders properties alphabetically while the C++ emitter uses
+//! sort, since `schemars` orders properties alphabetically while the committed schema uses
 //! declaration order — a difference phase-5 resolves, irrelevant to the validation shape).
 //!
 //! This proves the normalizer + selector/special-case override table reproduces the frozen

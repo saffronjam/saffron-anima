@@ -3,9 +3,8 @@
 //! not silently. Each type is referenced by name with a `JsonSchema + TS + Serialize +
 //! DeserializeOwned` bound check; removing a type from `dto.rs` breaks compilation here.
 //!
-//! The C++ `DtoTag` template-dispatch tag is intentionally absent (PP-3: `P: Deserialize`
-//! resolves by type parameter), so the Rust inventory is the 236 C++ structs minus `DtoTag`
-//! plus the `Uuid` newtype — 236 wire types total.
+//! There is no `DtoTag` dispatch tag (PP-3: `P: Deserialize` resolves by type parameter), so
+//! the inventory is the 235 wire structs plus the `Uuid` newtype — 236 wire types total.
 
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -34,8 +33,8 @@ fn every_catalog_dto_exists_and_derives() {
     use saffron_protocol::*;
 
     let count = inventory![
-        // Wire-helpers + Vec3/Vec4 + EntityRef (the `Uuid` newtype replaces `WireUuid`;
-        // `EntitySelector`/`AssetSelector` are `serde_json::Value` aliases, counted below).
+        // Wire-helpers + Vec3/Vec4 + EntityRef. `EntitySelector`/`AssetSelector` are
+        // `serde_json::Value` aliases, counted below.
         Uuid,
         EntityRef,
         Vec3,
@@ -290,10 +289,10 @@ fn every_catalog_dto_exists_and_derives() {
         SetExposureResult,
     ];
 
-    // The catalog declares 236 C++ structs (incl. `DtoTag` + the 4 wire-helpers + Vec3/Vec4)
-    // and 17 enums. The Rust inventory drops `DtoTag` (no analogue), models `EntitySelector`
+    // The catalog declares 236 structs (incl. `DtoTag` + the 4 wire-helpers + Vec3/Vec4)
+    // and 17 enums. This inventory has no `DtoTag` analogue, models `EntitySelector`
     // and `AssetSelector` as `serde_json::Value` aliases (not standalone derive types), and
-    // replaces `WireUuid` with the `Uuid` newtype. So the standalone derive types are:
+    // carries `WireUuid` as the `Uuid` newtype. So the standalone derive types are:
     //   236 structs - DtoTag - EntitySelector - AssetSelector - WireUuid + Uuid = 233
     //   + 17 enums = 250.
     assert_eq!(count, 250, "DTO inventory count drifted from the catalog");

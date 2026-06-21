@@ -11,8 +11,7 @@ use ts_rs::TS;
 /// Every id serializes to JSON as a **decimal string**, not a number, because ids span the
 /// full `u64` range past JavaScript's `2^53` safe-integer limit; a bare `u64` would emit a
 /// JSON number and silently corrupt the id on a JS client. On read the wire accepts a string
-/// *or* a number (`PickFirst` tries the string form first, then the raw `u64`), reproducing
-/// the C++ `WireUuid` (`uuidToJson` emit / `readWireUuid` accept) byte-for-byte.
+/// *or* a number (`PickFirst` tries the string form first, then the raw `u64`).
 ///
 /// This wraps the same `u64` as [`saffron_core::Uuid`]; conversions to and from the core type
 /// are free (`From`), so engine handlers move between the minting newtype and the wire newtype
@@ -52,9 +51,9 @@ impl From<u64> for Uuid {
     }
 }
 
-/// The wire schema is a JSON **string** (matching the C++ `jsonSchemaFor` WireUuid case),
-/// not an integer — the `serde_as` attribute emits a decimal string, so the schema must say
-/// so or the contract test's schema oracle would reject every id.
+/// The wire schema is a JSON **string**, not an integer — the `serde_as` attribute emits a
+/// decimal string, so the schema must say so or the contract test's schema oracle would reject
+/// every id.
 impl JsonSchema for Uuid {
     fn schema_name() -> Cow<'static, str> {
         Cow::Borrowed("Uuid")
@@ -87,7 +86,7 @@ mod tests {
 
     #[test]
     fn accepts_string_or_number_on_read() {
-        // `readWireUuid` leniency: a string *or* a number both decode to the same id.
+        // Read leniency: a string *or* a number both decode to the same id.
         assert_eq!(serde_json::from_str::<Uuid>("\"42\"").unwrap(), Uuid(42));
         assert_eq!(serde_json::from_str::<Uuid>("42").unwrap(), Uuid(42));
     }
@@ -142,8 +141,7 @@ mod tests {
     #[test]
     fn ts_binding_is_string_alias() {
         // `#[ts(type = "string")]` declares `Uuid` as a `string` alias, so the editor's
-        // `WireUuid = string` alias (`sa-types.ts:7`) matches and every `Uuid`-typed field
-        // resolves to a `string`.
+        // `WireUuid = string` alias matches and every `Uuid`-typed field resolves to a `string`.
         assert_eq!(<Uuid as TS>::inline(), "string");
         assert_eq!(<Uuid as TS>::decl(), "type Uuid = string;");
     }
