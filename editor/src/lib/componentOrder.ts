@@ -1,7 +1,7 @@
 /// Canonical component order + hidden set, shared by the Inspector sections and the hierarchy's
-/// component subrows so the tree leaves and the Inspector stay in lockstep (mirrors the C++
-/// registry order / the `Components` schema key order). Ordering only — never a per-component
-/// render switch. A regenerated schema with new components extends COMPONENT_ORDER.
+/// component subrows so the tree leaves and the Inspector stay in lockstep (the `Components` schema
+/// key order). Ordering only — never a per-component render switch. A regenerated schema with new
+/// components extends COMPONENT_ORDER.
 
 export const COMPONENT_ORDER = [
   "Name",

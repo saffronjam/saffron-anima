@@ -1,6 +1,6 @@
 // The input row of AnimaSearchbar: renders committed chips as badges + a live token that becomes a
-// `keyword:` chip as you type a configured verb, with an anchored suggestion popover. Ported from
-// saffron-hive's HiveSearchField (Svelte) to React/Radix. Keyword + value chip modes only.
+// `keyword:` chip as you type a configured verb, with an anchored suggestion popover. Keyword + value
+// chip modes only.
 import * as React from "react";
 import { useMemo, useState } from "react";
 import { X } from "lucide-react";

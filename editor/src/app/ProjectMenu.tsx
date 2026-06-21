@@ -36,7 +36,7 @@ export function ProjectMenu() {
   const label = project?.displayName ?? "No project";
 
   // "New Project" reuses the startup project picker (the one create/open flow); it is dismissable
-  // now that a project is already loaded.
+  // because a project is already loaded.
   const newProject = (): void => {
     setProjectModalOpen(true);
   };

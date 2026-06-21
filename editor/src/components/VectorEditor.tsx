@@ -1,5 +1,4 @@
-/// Multi-axis vector editor (ported from the worktree `VectorEditor`, generalized
-/// from a fixed Vec3 to N named axes). Each axis label is a pointer-capture
+/// Multi-axis vector editor over N named axes. Each axis label is a pointer-capture
 /// drag-scrub handle (clientX delta * step); each value is a `NumericInput` that
 /// swallows its own pointer so typing never starts a scrub and only commits a parsed
 /// value on blur. Used for `vec3`/`vec4` fields. Unit conversion (degrees) is handled

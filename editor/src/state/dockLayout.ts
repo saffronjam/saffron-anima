@@ -896,9 +896,8 @@ export function knownPanelIds(kind: DockSpaceKind): ReadonlySet<string> {
 }
 
 /// The panels a kind's tree must always carry — the structural (non-closable) ones, plus the
-/// locked subsurface leaf. A loaded layout missing any is from an incompatible build (e.g. one
-/// saved before these panels joined the tree); it is discarded for the default factory, since
-/// there is no layout migration — start fresh.
+/// locked subsurface leaf. A loaded layout missing any is incompatible; it is discarded for the
+/// default factory, since there is no layout migration.
 const REQUIRED_PANELS: Record<DockSpaceKind, DockPanelId[]> = {
   scene: ["inspector", "environment", "render", "hierarchy", "viewport"],
   assetEditor: ["preview"],

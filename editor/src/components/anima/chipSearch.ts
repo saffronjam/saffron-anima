@@ -1,5 +1,5 @@
-// Chip-search model: a query is a set of typed-verb chips (`keyword:value`) plus free text. Ported from
-// saffron-hive's HiveSearchbar — pure, framework-agnostic logic shared by AnimaSearchField/AnimaSearchbar.
+// Chip-search model: a query is a set of typed-verb chips (`keyword:value`) plus free text. Pure,
+// framework-agnostic logic shared by AnimaSearchField/AnimaSearchbar.
 import type { VariantProps } from "class-variance-authority";
 
 import type { badgeVariants } from "@/components/ui/badge";

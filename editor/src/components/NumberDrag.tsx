@@ -1,5 +1,4 @@
-/// A single-axis drag-scrub number field (ported from the worktree `VectorEditor`
-/// drag math, generalized to one axis). Pointer-capture on the wrapper scrubs the
+/// A single-axis drag-scrub number field. Pointer-capture on the wrapper scrubs the
 /// value by `clientX` delta * step; the `NumericInput` swallows its own pointer so
 /// typing in the box never starts a scrub, and only commits a parsed value on blur
 /// (never per-keystroke). Optional `track` renders a 0..1-style slider fill behind

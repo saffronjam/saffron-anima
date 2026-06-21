@@ -1,5 +1,5 @@
 // Controlled chip-search bar: `value`/`onChange` over a SearchState, configured by `chips` (typed verbs).
-// Renders the chip-input field + a clear button. Ported from saffron-hive's HiveSearchbar (Svelte).
+// Renders the chip-input field + a clear button.
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";

@@ -1,6 +1,5 @@
 /// Color field for Vec3 (color3) / Vec4 (color4) float channels. Channels are
-/// LINEAR floats in 0..1 on the wire (matching the C++ `ColorEdit3`/`ColorEdit4`
-/// linear behavior the inspector ports). The swatch opens a Popover with a
+/// LINEAR floats in 0..1 on the wire. The swatch opens a Popover with a
 /// saturation/hue (and alpha) canvas; per-channel numeric inputs keep HDR-range and
 /// alpha editable beyond the 0..1 the canvas exposes. Renders drag-local state
 /// (useScrubValue) so the canvas tracks the pointer exactly — the round trip

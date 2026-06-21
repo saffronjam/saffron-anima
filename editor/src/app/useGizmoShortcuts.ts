@@ -1,6 +1,5 @@
 /// Global viewport keyboard shortcuts. W/E/R map to the gizmo operation (translate
-/// / rotate / scale), matching the C++ editor's W/E/R cycle (editor_gizmo.cpp); F
-/// focuses the editor camera on the selection; Escape deselects.
+/// / rotate / scale); F focuses the editor camera on the selection; Escape deselects.
 ///
 /// INPUT MODEL: the editor input is **control-command-driven** — the webview owns
 /// the DOM and forwards intent to the engine over the control socket. The engine

@@ -3,7 +3,7 @@
 // Wire format (what the engine's emitGraphSurface / lowerGraphToParams consume, and what
 // material-get / material-set-graph carry):
 //   { nodes: [{ id, type, props? }], edges: [{ from: [nodeId, pin], to: [nodeId, pin] }] }
-// The node `type` strings match the engine emitter's switch (assets.cppm). Editor-only data (node
+// The node `type` strings match the engine emitter's switch. Editor-only data (node
 // canvas position) rides along in `props.editorPos`; the engine ignores unknown props.
 
 import type { Edge, Node } from "@xyflow/react";
@@ -36,7 +36,7 @@ export interface NodeSpec {
 }
 
 /// The palette: every node type the engine codegen emitter understands, with its pins. Keep this in
-/// sync with emitGraphSurface in engine/source/saffron/assets/assets.cppm.
+/// sync with the engine's emitGraphSurface.
 export const NODE_SPECS: Record<string, NodeSpec> = {
   constant: {
     type: "constant",
@@ -119,9 +119,8 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
 };
 
-/// The texture slots a `textureSlot` node can sample, matching the engine emitter's slot switch
-/// (emitGraphSurface in assets.cppm). The editor offers exactly these so a graph can't name an
-/// unknown slot.
+/// The texture slots a `textureSlot` node can sample, matching the engine emitter's slot switch.
+/// The editor offers exactly these so a graph can't name an unknown slot.
 export const TEXTURE_SLOTS = [
   "albedo",
   "metallicRoughness",

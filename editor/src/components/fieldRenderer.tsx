@@ -51,7 +51,7 @@ export interface FieldHint {
   /// only). `unit:"deg"` is a display label/clamp with NO conversion (spot angles).
   unit?: "deg";
   convertRadians?: boolean;
-  /// For `uuid` fields: which asset catalog the phase-7 picker filters to.
+  /// For `uuid` fields: which asset catalog the picker filters to.
   asset?: AssetKind;
   /// For `enum` fields: the wire-string → Sentence-case-label option list.
   options?: readonly EnumOption[];
@@ -64,8 +64,7 @@ export interface FieldHint {
   fields?: Record<string, FieldHint>;
 }
 
-/// The explicit parity contract mirroring the C++ widgets in
-/// `registerBuiltinComponents` (editor_components.cpp). Keyed `Component.field`.
+/// Per-field widget overrides for the built-in components. Keyed `Component.field`.
 /// Anything not listed falls back to value-shape inference.
 export const FIELD_HINTS: Record<string, FieldHint> = {
   "Name.name": { kind: "text" },

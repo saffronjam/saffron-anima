@@ -1,6 +1,5 @@
-/// The asset View modal: a large (512 px) square preview of a single catalog asset
-/// (parity with `viewerPanel`, editor_panels.cpp:327-351, and the 512 re-render at
-/// editor_app.cppm:165). A shadcn Dialog, opened by a tile double-click. The native
+/// The asset View modal: a large (512 px) square preview of a single catalog asset.
+/// A shadcn Dialog, opened by a tile double-click. The native
 /// viewport is a reparented X11 child that always paints over the webview, so a
 /// dialog centered on the screen would be covered by it.
 /// So while the viewer is open we set `store.viewportHidden`, which the
@@ -14,7 +13,7 @@ import type { AssetEntry } from "../protocol";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-/// Preview render size (px), matching the C++ View re-render.
+/// Preview render size (px).
 const VIEW_SIZE = 512;
 
 export interface AssetViewerProps {

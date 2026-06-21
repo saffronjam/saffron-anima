@@ -1,8 +1,7 @@
 /// Write-coalescer for high-frequency mutations (gizmo echo, scrub fields, sliders).
 /// Buffers the latest pushed value, keeps at most ONE send in flight (completion
 /// flushes whatever was buffered meanwhile), spaces send starts >= throttleMs apart,
-/// and tracks sent/completed/in-flight counters around the async send. Ported and
-/// generalized from the worktree `queueTransform`.
+/// and tracks sent/completed/in-flight counters around the async send.
 
 export interface CoalescerStats {
   sent: number;
@@ -57,8 +56,8 @@ export function makeCoalescer<T>(options: CoalescerOptions<T>): Coalescer<T> {
 
   // Single-in-flight pump: at most one send is ever outstanding, the throttle is a
   // floor between send starts, and completion re-drives so the latest pushed value
-  // is never dropped. The gate is what keeps per-key sends ordered now that the
-  // Tauri `control` command is async (concurrent invokes have no ordering guarantee).
+  // is never dropped. The gate keeps per-key sends ordered: the Tauri `control`
+  // command is async (concurrent invokes have no ordering guarantee).
   function maybeSend(): void {
     if (pending === null || inFlight) {
       return;

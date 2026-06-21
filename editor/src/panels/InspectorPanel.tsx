@@ -1,5 +1,5 @@
-/// The Inspector panel: the React port of the C++ registry-driven `inspectorPanel`,
-/// fully data-driven. It reads the live `inspect` result from the store
+/// The Inspector panel: registry-driven and fully data-driven.
+/// It reads the live `inspect` result from the store
 /// (`componentsBySelected`, kept fresh by the reconcile poll) and renders EVERY
 /// present component's fields via `renderField` — there is NO per-component switch,
 /// so a future engine-side `registerComponent` shows up here automatically (with a
