@@ -1,7 +1,7 @@
 /**
  * GENERATED - do not edit.
  *
- * Produced by tools/gen-control-dto/gen.ts from control_dto.cppm.
+ * Produced by cargo run -p xtask -- gen-protocol.
  */
 
 export type WireUuid = string;

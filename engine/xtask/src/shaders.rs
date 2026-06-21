@@ -1,4 +1,4 @@
-//! The `slangc` shader pipeline, replacing `cmake/CompileShaders.cmake`.
+//! The `slangc` shader pipeline.
 //!
 //! Compiles every `*.slang` entry-point shader in `engine/assets/shaders/` to
 //! `<runtime>/shaders/<name>.spv`, precompiles the shared `lighting.slang` to a reusable
@@ -21,8 +21,8 @@ const LIGHTING_STEM: &str = "lighting";
 /// to point at the conventional toolbox cache location when `slangc` is not otherwise found.
 const SLANG_VERSION: &str = "2026.10";
 
-/// The exact per-shader `slangc` flag set carried over from `CompileShaders.cmake`. Kept as a
-/// named constant so the flag-drift guard test asserts against one source of truth.
+/// The exact per-shader `slangc` flag set. A named constant so the flag-drift guard test asserts
+/// against one source of truth.
 pub const SLANGC_SPV_FLAGS: &[&str] = &[
     "-profile",
     "glsl_450",
@@ -120,7 +120,7 @@ pub fn run(config: &Config) -> Result<Report> {
         let src_copy = out_dir.join(format!("{stem}.slang"));
 
         // Every shader depends on lighting.slang (the shared dep edge), so a lighting.slang
-        // touch forces a full fan-out rebuild — matching CMake's `DEPENDS ${shader} ${lighting_src}`.
+        // touch forces a full fan-out rebuild.
         if is_stale(&spv, &[&path, &lighting_src])? {
             compile_spv(&config.slangc, &path, &config.shader_src_dir, &spv)?;
             report.spv_compiled += 1;
@@ -139,7 +139,7 @@ pub fn run(config: &Config) -> Result<Report> {
 
 /// Resolves `slangc`: a `PATH` lookup, then `SAFFRON_SLANG_DIR/bin`, then the conventional
 /// toolbox cache (`$HOME/.cache/saffron-slang/slang/bin`). A missing `slangc` is a hard error —
-/// the toolbox provisions it; there is no silent prebuilt fetch (NO LEGACY: one compiler source).
+/// the toolbox provisions it; there is no silent prebuilt fetch.
 fn find_slangc() -> Result<PathBuf> {
     if let Ok(found) = which("slangc") {
         return Ok(found);
@@ -221,8 +221,7 @@ fn spv_arg_vector(src: &Path, include_dir: &Path, out: &Path) -> Vec<String> {
     args
 }
 
-/// An output is stale if it is missing or older than any of its source dependencies. Mirrors
-/// CMake's `OUTPUT`/`DEPENDS` mtime comparison.
+/// An output is stale if it is missing or older than any of its source dependencies.
 fn is_stale(output: &Path, deps: &[&Path]) -> Result<bool> {
     let out_mtime = match std::fs::metadata(output).and_then(|m| m.modified()) {
         Ok(t) => t,
@@ -239,8 +238,8 @@ fn is_stale(output: &Path, deps: &[&Path]) -> Result<bool> {
     Ok(false)
 }
 
-/// Copies `src` to `dst` only when the contents differ — the `copy_if_different` source-copy
-/// that keeps each `.slang` next to its `.spv` without churning mtimes on a no-op run.
+/// Copies `src` to `dst` only when the contents differ — keeps each `.slang` next to its `.spv`
+/// without churning mtimes on a no-op run.
 fn copy_if_different(src: &Path, dst: &Path) -> Result<()> {
     if files_equal(src, dst)? {
         return Ok(());
@@ -262,8 +261,8 @@ fn files_equal(a: &Path, b: &Path) -> Result<bool> {
     Ok(ab == bb)
 }
 
-/// Copies `<asset_src>/<name>` recursively to `<runtime>/<name>`, the `POST_BUILD copy_directory`
-/// equivalent (models/fonts/icons next to the binary so `asset_path(...)` resolves).
+/// Copies `<asset_src>/<name>` recursively to `<runtime>/<name>` (models/fonts/icons next to the
+/// binary so `asset_path(...)` resolves).
 fn copy_asset_tree(asset_src: &Path, runtime: &Path, name: &str) -> Result<()> {
     let from = asset_src.join(name);
     if !from.is_dir() {
@@ -296,11 +295,11 @@ mod tests {
 
     use super::*;
 
-    /// Guards against flag drift from `CompileShaders.cmake`: the per-shader argument vector
-    /// must be exactly `<src> -profile glsl_450 -target spirv -emit-spirv-directly
-    /// -fvk-use-entrypoint-name -matrix-layout-column-major -I <dir> -o <out>`.
+    /// Guards against flag drift: the per-shader argument vector must be exactly `<src> -profile
+    /// glsl_450 -target spirv -emit-spirv-directly -fvk-use-entrypoint-name
+    /// -matrix-layout-column-major -I <dir> -o <out>`.
     #[test]
-    fn spv_flag_set_matches_cmake() {
+    fn spv_flag_set_is_frozen() {
         let args = spv_arg_vector(
             Path::new("/shaders/mesh.slang"),
             Path::new("/shaders"),

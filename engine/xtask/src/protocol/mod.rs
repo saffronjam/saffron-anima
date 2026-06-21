@@ -1,28 +1,25 @@
-//! `xtask gen-protocol`: the TS / OpenRPC / manifest emitters that replace the C++ `gen.ts`.
+//! `xtask gen-protocol`: the TS / OpenRPC / manifest emitters.
 //!
 //! The DTO crate (`saffron-protocol`) is the single source of truth: its `ts-rs` derives give
 //! the field metadata (via [`saffron_protocol::ts_decls`]) and its `schemars` fragments give the
 //! OpenRPC per-DTO schemas (via [`saffron_protocol::struct_fragments`]). This module assembles
-//! the three editor-facing artifacts byte-equivalently to `gen.ts`:
+//! the three editor-facing artifacts:
 //!
-//! - `editor/src/protocol/sa-types.ts` — reproduces `emitTs` (`gen.ts:1813`): header, the
-//!   `WireUuid` alias, the hand-authored component-interfaces block, the command-reachable DTO
-//!   interfaces in the `transitiveStructs` order, and the `CommandParamsMap`/`CommandResultMap`.
-//! - `schemas/control/openrpc.generated.json` — reproduces `emitOpenRpc` (`gen.ts:2569`): the
-//!   `{ openrpc, info, methods, components.schemas }` envelope, `methods` in command-table order,
-//!   `components.schemas` = the sorted per-DTO fragments + the hand-authored component block.
-//! - `schemas/control/command-manifest.generated.json` — reproduces `emitManifest`
-//!   (`gen.ts:2598`): the fixture/skip ledger; the one intentional byte change is `generatedBy`.
+//! - `editor/src/protocol/sa-types.ts` — header, the `WireUuid` alias, the hand-authored
+//!   component-interfaces block, the command-reachable DTO interfaces in the `transitiveStructs`
+//!   order, and the `CommandParamsMap`/`CommandResultMap`.
+//! - `schemas/control/openrpc.generated.json` — the `{ openrpc, info, methods, components.schemas
+//!   }` envelope, `methods` in command-table order, `components.schemas` = the sorted per-DTO
+//!   fragments + the hand-authored component block.
+//! - `schemas/control/command-manifest.generated.json` — the fixture/skip ledger.
 //! - `schemas/control/sa.generated.luau` — the single Luau defs file: the `sa.*` API surface
 //!   ([`luau::emit_api_defs`], from the `saffron-script` binding table) followed by the
-//!   `:get_component` component snapshots ([`luau::emit_component_defs`], reproducing
-//!   `emitScriptComponentDefs`, `gen.ts:3361`) — the `SaLuaDefs ++ SaComponentDefs` of
-//!   `assets.cppm:1211`, generated from one source (NO LEGACY: no hand-written `library/sa.lua`
-//!   overlay, no `check-script-defs` tripwire — the regen-freshness diff replaces it).
+//!   `:get_component` component snapshots ([`luau::emit_component_defs`]), generated from one
+//!   source (no hand-written `library/sa.lua` overlay; the regen-freshness diff is the drift
+//!   guard).
 //!
 //! Field declaration order is load-bearing (positional-CLI / OpenRPC-`required` order); ts-rs
-//! and `serde_json`'s `preserve_order` keep it, so the outputs match the committed `gen.ts`
-//! artifacts byte-for-byte.
+//! and `serde_json`'s `preserve_order` keep it.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -37,8 +34,7 @@ use serde_json::{Map, Value, json};
 pub mod luau;
 mod ts;
 
-/// The `generatedBy` string the manifest now carries — the one intentional byte change versus
-/// the committed `gen.ts` artifact (asserted as the sole diff by the byte-equivalence test).
+/// The `generatedBy` string the manifest carries.
 pub const GENERATED_BY: &str = "cargo run -p xtask -- gen-protocol";
 
 /// The emitted artifacts, relative to the repo root, paired with their content.
@@ -101,8 +97,8 @@ pub fn run(repo_root: &Path) -> Result<Vec<std::path::PathBuf>> {
 }
 
 /// The parsed `ts-rs` declarations, indexed by ident, plus the parsed enum-union strings — the
-/// field-metadata model the TS emitter walks. This replaces `gen.ts`'s regex `StructDef`/
-/// `EnumDef` parse: `ts-rs` is the parser, this only re-models its output.
+/// field-metadata model the TS emitter walks. `ts-rs` is the parser; this only re-models its
+/// output.
 pub struct DtoDecls {
     /// `ident -> parsed declaration` for every DTO type (structs + enums + `Uuid`).
     by_ident: HashMap<String, Decl>,
@@ -200,12 +196,12 @@ fn strip_doc_comments(input: &str) -> String {
     out
 }
 
-/// The OpenRPC document, byte-equivalent to `emitOpenRpc` (`gen.ts:2569`).
+/// The OpenRPC document.
 fn emit_openrpc() -> String {
     let mut schemas: Map<String, Value> = Map::new();
 
-    // `schemaNames` = every struct fragment + the three wire-helper struct shapes, sorted by
-    // name (`gen.ts:2570`). The fragments come from `schemars`; the wire-helpers are hand-emitted.
+    // Every struct fragment + the three wire-helper struct shapes, sorted by name. The fragments
+    // come from `schemars`; the wire-helpers are hand-emitted.
     let mut named: Vec<(String, Value)> = struct_fragments()
         .into_iter()
         .map(|(name, frag)| (name.to_owned(), frag))
@@ -217,8 +213,8 @@ fn emit_openrpc() -> String {
     for (name, frag) in named {
         schemas.insert(name, frag);
     }
-    // The hand-authored component block is spread last: a key already present keeps its sorted
-    // position, a new key (the aggregates + `Environment`) appends — the JS object-spread order.
+    // The hand-authored component block is inserted last: a key already present keeps its sorted
+    // position, a new key (the aggregates + `Environment`) appends.
     for (name, frag) in component_schemas() {
         schemas.insert(name, frag);
     }
@@ -250,9 +246,9 @@ fn emit_openrpc() -> String {
     pretty(&doc)
 }
 
-/// The three C++ wire-helper struct fragments (`gen.ts` `schemaFor` over the `{ <type> value; }`
-/// structs): `WireUuid` is `{ value: integer }`, the two selectors are `{ value: {} }`. Rust
-/// models these as a `string` alias / opaque `Value`, so their object shapes are hand-emitted.
+/// The three wire-helper struct fragments: `WireUuid` is `{ value: integer }`, the two selectors
+/// are `{ value: {} }`. Rust models these as a `string` alias / opaque `Value`, so their object
+/// shapes are hand-emitted.
 fn wire_helper_fragments() -> Vec<(String, Value)> {
     vec![
         (
@@ -285,13 +281,9 @@ fn wire_helper_fragments() -> Vec<(String, Value)> {
     ]
 }
 
-/// The command manifest, byte-equivalent to `emitManifest` (`gen.ts:2598`) modulo `generatedBy`.
-/// Each command carries exactly one of a fixture or a skip; neither is a build error.
+/// The command manifest. Each command carries exactly one of a fixture or a skip; neither is a
+/// build error.
 fn emit_manifest() -> String {
-    emit_manifest_with(GENERATED_BY)
-}
-
-fn emit_manifest_with(generated_by: &str) -> String {
     let commands: Vec<Value> = COMMANDS
         .iter()
         .map(|cmd| {
@@ -318,15 +310,15 @@ fn emit_manifest_with(generated_by: &str) -> String {
         .collect();
 
     let doc = json!({
-        "generatedBy": generated_by,
+        "generatedBy": GENERATED_BY,
         "commands": commands,
         "skips": [{ "name": "help", "reason": "reflective registry" }],
     });
     pretty(&doc)
 }
 
-/// `JSON.stringify(doc, null, 2) + "\n"` — 2-space indent, a trailing newline, raw non-ASCII
-/// (the em-dash in command summaries stays a literal UTF-8 byte, matching `gen.ts`).
+/// 2-space indent, a trailing newline, raw non-ASCII (the em-dash in command summaries stays a
+/// literal UTF-8 byte).
 fn pretty(value: &Value) -> String {
     let mut buf = Vec::new();
     let formatter = serde_json::ser::PrettyFormatter::with_indent(b"  ");
@@ -337,8 +329,7 @@ fn pretty(value: &Value) -> String {
     text
 }
 
-/// `commandTypeNames` (`gen.ts:1247`): the deduped `[params, result]` of every command, in
-/// table order — the TS interface-walk roots.
+/// The deduped `[params, result]` of every command, in table order — the TS interface-walk roots.
 fn command_type_names() -> Vec<&'static str> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -361,10 +352,6 @@ fn selector_fields() -> HashSet<(&'static str, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The committed `gen.ts` `generatedBy`, used only to diff the two manifests modulo the one
-    /// intentional change.
-    const LEGACY_GENERATED_BY: &str = "tools/gen-control-dto/gen.ts";
 
     fn repo_root() -> std::path::PathBuf {
         // `engine/xtask/` -> repo root is three parents up.
@@ -391,10 +378,9 @@ mod tests {
         assert_eq!(emit().luau_defs, committed);
     }
 
-    /// NO LEGACY: with the `sa.*` defs generated from one source, the hand-written
-    /// `library/sa.lua` overlay, the C++ `SaLuaDefs`/`SaComponentDefs` blobs, the stale
-    /// components-only `.luau` artifact, and the `check-script-defs` drift tripwire must not
-    /// exist anywhere in the Rust tree (the `engine-old/` C++ reference is exempt).
+    /// The `sa.*` defs are generated from one source, so a hand-written `library/sa.lua` overlay,
+    /// a components-only `.luau` artifact, and a `check-script-defs` drift tripwire must not exist
+    /// anywhere in the tree.
     #[test]
     fn no_legacy_overlay_or_tripwire() {
         let root = repo_root();
@@ -408,8 +394,8 @@ mod tests {
                 "legacy artifact must not exist in the Rust tree: {absent}"
             );
         }
-        // No `sa.lua` overlay committed under the Rust trees (a generated `.luau` def file is
-        // the only Lua-type artifact); the C++ reference under `engine-old/` is exempt.
+        // A generated `.luau` def file is the only Lua-type artifact: no `sa.lua` overlay is
+        // committed under these trees.
         for tree in [
             "engine/crates",
             "engine/xtask",
@@ -458,33 +444,12 @@ mod tests {
         assert_eq!(emit().openrpc, committed);
     }
 
-    /// Normalize whichever `generatedBy` a manifest carries to the legacy string, so a manifest
-    /// emitted by the xtask and one emitted by the old `gen.ts` compare equal modulo that one
-    /// field — the only intended byte change. A no-op when the legacy string is already present.
-    fn normalize_generated_by(manifest: &str) -> String {
-        manifest.replacen(GENERATED_BY, LEGACY_GENERATED_BY, 1)
-    }
-
     #[test]
-    fn manifest_differs_only_in_generated_by() {
-        // The committed manifest is byte-identical to the live emit except for `generatedBy` —
-        // robust to whether the committed file still carries the legacy `gen.ts` string or the
-        // regenerated xtask string.
+    fn manifest_is_byte_identical_to_committed() {
         let committed = std::fs::read_to_string(
             repo_root().join("schemas/control/command-manifest.generated.json"),
         )
         .expect("committed command-manifest.generated.json");
-        assert_eq!(
-            normalize_generated_by(&emit().manifest),
-            normalize_generated_by(&committed),
-            "the manifest must differ from the committed artifact only in `generatedBy`"
-        );
-
-        // The legacy-stamped emit reproduces the legacy `gen.ts` artifact byte-for-byte.
-        assert_eq!(
-            normalize_generated_by(&emit_manifest_with(LEGACY_GENERATED_BY)),
-            normalize_generated_by(&committed),
-        );
-        assert!(emit().manifest.contains(GENERATED_BY));
+        assert_eq!(emit().manifest, committed);
     }
 }

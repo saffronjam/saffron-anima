@@ -1,15 +1,15 @@
-//! The `sa-types.ts` emitter — reproduces `emitTs` (`gen.ts:1813`) over the `ts-rs` decls.
+//! The `sa-types.ts` emitter over the `ts-rs` decls.
 
 use std::collections::HashSet;
 
 use super::{Decl, DtoDecls, command_type_names, selector_fields};
 
-/// The hand-authored component-interfaces block (`gen.ts`'s `componentInterfaces` literal): the
-/// 21 component shapes + `Components` + `ComponentBody`. Verbatim, so it stays byte-identical.
+/// The hand-authored component-interfaces block: the 21 component shapes + `Components` +
+/// `ComponentBody`. Emitted verbatim.
 const COMPONENT_BLOCK: &str = include_str!("component_block.ts");
 
-/// The hand-authored `EnvironmentDto` interface (`gen.ts:1825`): the Rust DTO is opaque
-/// (`{ value: Value }`), so its wire-shaped interface is emitted verbatim, not from `ts-rs`.
+/// The hand-authored `EnvironmentDto` interface: the Rust DTO is opaque (`{ value: Value }`), so
+/// its wire-shaped interface is emitted verbatim, not from `ts-rs`.
 const ENVIRONMENT_DTO: &str = include_str!("environment_dto.ts");
 
 /// Build `editor/src/protocol/sa-types.ts`: header, `WireUuid` alias, the component block, the
@@ -34,8 +34,8 @@ pub fn emit_sa_types(decls: &DtoDecls) -> String {
         .join("\n");
 
     format!(
-        "/**\n * GENERATED - do not edit.\n *\n * Produced by tools/gen-control-dto/gen.ts \
-         from control_dto.cppm.\n */\n\nexport type WireUuid = string;\n\n{}\n\n{}\n\nexport \
+        "/**\n * GENERATED - do not edit.\n *\n * Produced by cargo run -p xtask -- \
+         gen-protocol.\n */\n\nexport type WireUuid = string;\n\n{}\n\n{}\n\nexport \
          interface CommandParamsMap {{\n{}\n}}\n\nexport interface CommandResultMap \
          {{\n{}\n}}\n",
         COMPONENT_BLOCK.trim_end_matches('\n'),
@@ -45,8 +45,8 @@ pub fn emit_sa_types(decls: &DtoDecls) -> String {
     )
 }
 
-/// The interface emission order: `EntityRef` first, then `transitiveStructs` over the command
-/// roots + `Vec3`/`Vec4`/`ProbeRef` (`gen.ts:1814`), deduped, struct-only.
+/// The interface emission order: `EntityRef` first, then the transitive structs over the command
+/// roots + `Vec3`/`Vec4`/`ProbeRef`, deduped, struct-only.
 fn interface_order(decls: &DtoDecls) -> Vec<String> {
     let mut roots = command_type_names();
     roots.extend(["Vec3", "Vec4", "ProbeRef"]);
@@ -65,12 +65,12 @@ fn interface_order(decls: &DtoDecls) -> Vec<String> {
     order
 }
 
-/// `structDeps` (`gen.ts:1251`): a DFS pre-order of the struct types reachable from `ty`'s
-/// fields (unwrapping `Array<...>` and ` | null`), itself included; non-structs return empty.
+/// A DFS pre-order of the struct types reachable from `ty`'s fields (unwrapping `Array<...>` and
+/// ` | null`), itself included; non-structs return empty.
 fn struct_deps(decls: &DtoDecls, ty: &str) -> Vec<String> {
     let mut out = Vec::new();
     let inner = unwrap_array(strip_nullable(ty));
-    // Aliases (enums, the `Uuid` = `string` newtype) and primitives are not struct nodes.
+    // Aliases (enums, the `Uuid` = `string` alias) and primitives are not struct nodes.
     if let Some(Decl::Struct(fields)) = decls.get(inner) {
         out.push(inner.to_owned());
         for (_, field_ty) in fields {
@@ -80,8 +80,8 @@ fn struct_deps(decls: &DtoDecls, ty: &str) -> Vec<String> {
     out
 }
 
-/// One interface: `EnvironmentDto` is verbatim; an empty struct is `{\n\n}` (the `gen.ts`
-/// empty-body shape); otherwise one `  name(?): type;` line per field in declaration order.
+/// One interface: `EnvironmentDto` is verbatim; an empty struct is `{\n\n}`; otherwise one
+/// `  name(?): type;` line per field in declaration order.
 fn emit_interface(decls: &DtoDecls, name: &str) -> String {
     if name == "EnvironmentDto" {
         return ENVIRONMENT_DTO.trim_end_matches('\n').to_owned();
@@ -100,17 +100,17 @@ fn emit_interface(decls: &DtoDecls, name: &str) -> String {
     format!("export interface {name} {{\n{body}\n}}")
 }
 
-/// Map a `ts-rs` type token to the `gen.ts` `tsType` spelling, returning `(type, optional)`.
-/// `T | null` is optional; `Array<T>` -> `T[]`; `bigint` -> `number`; `Uuid` -> `WireUuid`;
-/// `JsonValue` -> a selector union when `(struct, field)` is a selector, else `unknown`; an
-/// enum ident inlines its `"a" | "b"` union; structs/`Vec3`/etc. pass through.
+/// Map a `ts-rs` type token to its TS spelling, returning `(type, optional)`. `T | null` is
+/// optional; `Array<T>` -> `T[]`; `bigint` -> `number`; `Uuid` -> `WireUuid`; `JsonValue` -> a
+/// selector union when `(struct, field)` is a selector, else `unknown`; an enum ident inlines its
+/// `"a" | "b"` union; structs/`Vec3`/etc. pass through.
 fn ts_type(ty: &str, struct_name: &str, field: &str) -> (String, bool) {
     let (core, optional) = match ty.strip_suffix("| null") {
         Some(inner) => (inner.trim(), true),
         None => (ty.trim(), false),
     };
 
-    // The two cross-boundary special-cases (`gen.ts:1843`/`:1846`).
+    // The two cross-boundary special-cases.
     if struct_name == "InspectResult" && field == "components" {
         return ("Components".to_owned(), optional);
     }

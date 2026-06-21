@@ -1,29 +1,25 @@
 //! The shared `wire-type -> Luau` mapper + the `sa.*` API and component-snapshot `.luau` emitters.
 //!
 //! This is the single-source Luau type surface: the same single-source discipline as
-//! `@saffron/protocol`, applied to the Lua-facing types. It reproduces `emitScriptComponentDefs`
-//! (`gen.ts:3361`) and its `tsToLua` mapper (`gen.ts:3394`) and the hand-written `SaLuaDefs`
-//! `---@meta` overlay (`assets.cppm:1078`) — but emits one plain `.luau` defs file rather than a
-//! C++ `string_view` blob (NO LEGACY: there is no `library/sa.lua` hand-written overlay and no
-//! `check-script-defs` drift tripwire — both are deleted, replaced by the regen-freshness diff).
+//! `@saffron/protocol`, applied to the Lua-facing types. It emits one plain `.luau` defs file;
+//! there is no `library/sa.lua` hand-written overlay and no `check-script-defs` drift tripwire —
+//! the regen-freshness diff is the drift guard.
 //!
 //! Three pieces, one [`map_type`] mapper:
 //!
-//! - [`emit_api_defs`] (area 12) walks the [`saffron_script::BINDINGS`] descriptor table — the
-//!   single binding source the runtime VM registers from — to emit the `sa.Vec3` value class
+//! - [`emit_api_defs`] walks the [`saffron_script::BINDINGS`] descriptor table — the single
+//!   binding source the runtime VM registers from — to emit the `sa.Vec3` value class
 //!   (fields + `---@operator` overloads + methods), the synthetic `sa.RayHit`/`sa.RagdollState`/
 //!   `sa.ScriptSelf` classes, the `sa.Entity` method set, the `sa.*` free-function/global table,
 //!   and the `sa.ComponentName` alias (the registered-name union from [`REGISTERED`]).
 //! - [`emit_component_defs`] emits the typed `:get_component(name)` snapshots — the
 //!   `---@class sa.<Component>` blocks + the `---@overload` lines — from the same component
 //!   wire-shape catalog the registry knows.
-//! - [`emit_defs`] concatenates the two into the single `.luau` defs file (the `SaLuaDefs ++
-//!   SaComponentDefs` of `assets.cppm:1211`, generated from one source).
+//! - [`emit_defs`] concatenates the two into the single `.luau` defs file.
 //!
-//! The component wire shapes are the hand-authored catalog in `component_block.ts` (the same
-//! interfaces `gen.ts` read from the generated TS), the registered-name set is [`REGISTERED`]
-//! (the phase-3 macro list, mirroring the `scene_edit_components.cpp` registration calls), and
-//! the two shapes with no catalog entry (`AnimationPlayer`, `MaterialAsset`) are supplied here.
+//! The component wire shapes are the hand-authored catalog in `component_block.ts`, the
+//! registered-name set is [`REGISTERED`], and the two shapes with no catalog entry
+//! (`AnimationPlayer`, `MaterialAsset`) are supplied here.
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -31,15 +27,14 @@ use std::collections::HashMap;
 use saffron_script::{BINDINGS, Binding, BindingKind};
 
 /// The hand-authored component-interface catalog (the wire shapes the `:get_component` snapshots
-/// reproduce). The component-snapshot defs are parsed from these interfaces, exactly as `gen.ts`
-/// read them from the generated TS, so there is one source for the component wire shape.
+/// reproduce). The component-snapshot defs are parsed from these interfaces, so there is one
+/// source for the component wire shape.
 const COMPONENT_BLOCK: &str = include_str!("component_block.ts");
 
-/// The component names the registry registers (the phase-3 macro list, in registration order) —
-/// the roots of the reachability walk. This is the `scene_edit_components.cpp`
-/// `registerComponent<C>(reg, "Name")` set: the 21 serialized components plus `MaterialAsset` and
-/// `AnimationPlayer`, which serialize through their own serde but have no `component_block.ts`
-/// interface (they are the two synthetic shapes [`synthetic_shapes`] supplies).
+/// The component names the registry registers, in registration order — the roots of the
+/// reachability walk: the 21 serialized components plus `MaterialAsset` and `AnimationPlayer`,
+/// which serialize through their own serde but have no `component_block.ts` interface (they are
+/// the two synthetic shapes [`synthetic_shapes`] supplies).
 pub const REGISTERED: &[&str] = &[
     "Name",
     "Transform",
@@ -78,9 +73,8 @@ pub struct Field {
     pub optional: bool,
 }
 
-/// Map a wire-type token to its Luau type annotation — the shared `tsToLua` analogue
-/// (`gen.ts:3394`), the one helper both the component-snapshot emitter and area 12's `sa.*` API
-/// emitter call.
+/// Map a wire-type token to its Luau type annotation — the one helper both the component-snapshot
+/// emitter and the `sa.*` API emitter call.
 ///
 /// - `number` / `boolean` / `string` pass through.
 /// - `WireUuid` -> `string` (ids cross as decimal strings).
@@ -112,7 +106,7 @@ pub fn map_type(ty: &str) -> String {
 /// The interface a field type references (the node the reachability walk follows), or `None` for
 /// primitives, vectors, arrays-of-primitive, unions, and generics — so the emitted `---@class`
 /// set grows transitively from the registered roots: nested DTOs are emitted, unrelated ones are
-/// not (`gen.ts`'s `referenced`, 3408).
+/// not.
 fn referenced(ty: &str) -> Option<&str> {
     let base = ty.trim_end_matches("[]");
     match base {
@@ -122,9 +116,8 @@ fn referenced(ty: &str) -> Option<&str> {
     }
 }
 
-/// The synthetic component shapes with no `component_block.ts` interface. `gen.ts` injects these
-/// by hand (`gen.ts:3379`) because they serialize through their own serde, not a catalog
-/// interface; the literal field lists are reproduced verbatim so the emitted defs match.
+/// The synthetic component shapes with no `component_block.ts` interface: they serialize through
+/// their own serde, not a catalog interface, so their literal field lists are supplied here.
 fn synthetic_shapes() -> Vec<(String, Vec<Field>)> {
     let field = |name: &str, ty: &str| Field {
         name: name.to_owned(),
@@ -163,8 +156,7 @@ fn interfaces() -> HashMap<String, Vec<Field>> {
 }
 
 /// Parse every `export interface Name { ... }` block into ordered [`Field`]s. The catalog is
-/// flat (no nested braces inside a body), so a brace-delimited scan over the field lines is
-/// faithful to `gen.ts`'s `/export interface (\w+) \{([^}]*)\}/` parse.
+/// flat (no nested braces inside a body), so a brace-delimited scan over the field lines suffices.
 fn parse_interfaces(text: &str) -> HashMap<String, Vec<Field>> {
     let mut out = HashMap::new();
     let mut rest = text;
@@ -185,8 +177,7 @@ fn parse_interfaces(text: &str) -> HashMap<String, Vec<Field>> {
     out
 }
 
-/// Split one interface body into ordered `(name, type, optional)` fields, matching
-/// `gen.ts`'s `/^\s*(\w+)(\??):\s*(.+?);?\s*$/` per-line parse.
+/// Split one interface body into ordered `(name, type, optional)` fields, one per line.
 fn parse_fields(body: &str) -> Vec<Field> {
     let mut fields = Vec::new();
     for line in body.lines() {
@@ -210,8 +201,8 @@ fn parse_fields(body: &str) -> Vec<Field> {
 }
 
 /// The transitive set of interface names reachable from [`REGISTERED`] via field references — the
-/// `---@class` set (`gen.ts`'s `reach`, 3414). Nested DTOs (`BVec3`, `PhysicsMaterial`,
-/// `FootChainDto`, …) are pulled in; unrelated interfaces are not.
+/// `---@class` set. Nested DTOs (`BVec3`, `PhysicsMaterial`, `FootChainDto`, …) are pulled in;
+/// unrelated interfaces are not.
 fn reachable(interfaces: &HashMap<String, Vec<Field>>) -> BTreeSet<String> {
     let mut reach = BTreeSet::new();
     let mut queue: Vec<String> = REGISTERED.iter().map(|s| (*s).to_owned()).collect();
@@ -237,8 +228,7 @@ fn reachable(interfaces: &HashMap<String, Vec<Field>>) -> BTreeSet<String> {
 /// Emit the component-snapshot `.luau` defs: the `---@class sa.<Component>` blocks (sorted by
 /// name) for every interface reachable from the registered set, plus the `---@overload` lines for
 /// the registered components and the `Entity:get_component` stub. Byte-stable across re-runs (the
-/// freshness gate). Reproduces `emitScriptComponentDefs`'s Lua body (`gen.ts:3443`), minus the
-/// C++ `#pragma once` / `string_view` wrapper.
+/// freshness gate).
 #[must_use]
 pub fn emit_component_defs() -> String {
     let interfaces = interfaces();
@@ -285,10 +275,10 @@ pub fn emit_component_defs() -> String {
 }
 
 /// Map an `sa.*` binding-table type token to its Luau type annotation — the API half of the
-/// shared mapper (area 10 README §8). Unlike [`map_type`] (which expands `Vec3` to the inline
-/// `{x,y,z}` snapshot shape for `:get_component`), the API surface references the value/handle
-/// classes by name: `sa.vec3` returns the `sa.Vec3` userdata, `sa.spawn` an `sa.Entity`. The
-/// primitives still go through [`map_type`], so the mapping has one owner.
+/// shared mapper. Unlike [`map_type`] (which expands `Vec3` to the inline `{x,y,z}` snapshot shape
+/// for `:get_component`), the API surface references the value/handle classes by name: `sa.vec3`
+/// returns the `sa.Vec3` userdata, `sa.spawn` an `sa.Entity`. The primitives still go through
+/// [`map_type`], so the mapping has one owner.
 ///
 /// - `number`/`boolean`/`string` pass through (via [`map_type`]).
 /// - `Vec3`/`Entity`/`RayHit`/`RagdollState`/`ScriptSelf` -> `sa.<Name>` (the API classes).
@@ -347,8 +337,8 @@ fn stub(owner: &str, sep: &str, binding: &Binding) -> String {
 /// `---@operator` overloads (from the arithmetic `Meta` bindings), and the method stubs (the
 /// `Method` bindings). The `Static` constructor (`sa.Vec3.new`) and the comparison/string
 /// metamethods (`__eq`/`__tostring`, which are not LuaLS `---@operator`s) are not annotated —
-/// scripts construct via `sa.vec3(...)` and `==`/`tostring` need no type hint. Reproduces the
-/// `SaLuaDefs` `sa.Vec3` block (`assets.cppm:1083`), generated from [`BINDINGS`].
+/// scripts construct via `sa.vec3(...)` and `==`/`tostring` need no type hint. Generated from
+/// [`BINDINGS`].
 fn emit_vec3_class() -> String {
     let vec3 = |kind: BindingKind| {
         BINDINGS
@@ -391,8 +381,7 @@ fn emit_vec3_class() -> String {
 
 /// The `sa.Entity` handle block: `---@class sa.Entity`, `local Entity = {}`, and a stub per
 /// `Method` binding owned by `Entity` — minus `get_component`, which the component-snapshot tail
-/// declares with its per-component typed overloads (`assets.cppm:1122`). Reproduces the
-/// `SaLuaDefs` `sa.Entity` block (`assets.cppm:1117`), generated from [`BINDINGS`].
+/// declares with its per-component typed overloads. Generated from [`BINDINGS`].
 fn emit_entity_class() -> String {
     let mut lines = vec![
         "---@class sa.Entity".to_owned(),
@@ -410,8 +399,7 @@ fn emit_entity_class() -> String {
 
 /// The `sa` namespace table: `sa = {}` then a stub per `Free` binding (`sa.vec3`, `sa.log`, the
 /// input trio + mouse, the query/hierarchy helpers, `sa.raycast`/`sa.spherecast`, `sa.broadcast`,
-/// and the scheduler `wait`/`delay`/`spawn_task`). Reproduces the `SaLuaDefs` `sa = {}` block
-/// (`assets.cppm:1160`), generated from [`BINDINGS`].
+/// and the scheduler `wait`/`delay`/`spawn_task`). Generated from [`BINDINGS`].
 fn emit_namespace() -> String {
     let mut lines = vec!["sa = {}".to_owned()];
     for free in BINDINGS
@@ -425,8 +413,7 @@ fn emit_namespace() -> String {
 
 /// The `sa.ComponentName` alias: the union of every registered component name (the roots of the
 /// snapshot reachability walk, [`REGISTERED`]). `get_component`/`has_component` accept all of
-/// them; the structural ones are rejected by `set/add/remove_component` at runtime. Reproduces
-/// the `SaLuaDefs` `---@alias sa.ComponentName` line (`assets.cppm:1115`).
+/// them; the structural ones are rejected by `set/add/remove_component` at runtime.
 fn emit_component_name_alias() -> String {
     let union = REGISTERED
         .iter()
@@ -445,9 +432,8 @@ fn emit_component_name_alias() -> String {
 /// The `RayHit`/`RagdollState`/`ScriptSelf` classes are synthetic: `RayHit`/`RagdollState` are the
 /// POD result tables `sa.raycast`/`Entity:ragdoll_state` shape (their fields are not in the
 /// descriptor table — only the return *token* is), and `ScriptSelf` is the handler-shape contract
-/// the runtime calls into. Their literal field/handler lists are reproduced here, matching the
-/// `ScriptRayHit`/`ScriptRagdollState` POD (`bridge.rs`) and the lifecycle handlers
-/// (`script_runtime.cpp`).
+/// the runtime calls into. Their literal field/handler lists are supplied here, matching the
+/// `ScriptRayHit`/`ScriptRagdollState` POD and the lifecycle handlers.
 #[must_use]
 pub fn emit_api_defs() -> String {
     let header = "---@meta\n-- Saffron Anima Lua API. Generated from the saffron-script binding \
@@ -483,9 +469,9 @@ pub fn emit_api_defs() -> String {
 }
 
 /// Assemble the single `.luau` defs file: the `sa.*` API surface ([`emit_api_defs`]) followed by
-/// the component snapshots ([`emit_component_defs`]) — the `SaLuaDefs ++ SaComponentDefs`
-/// concatenation (`assets.cppm:1211`), generated from one source. This is the LuaLS def file
-/// written into every project's `library/` and the committed artifact the freshness diff guards.
+/// the component snapshots ([`emit_component_defs`]), generated from one source. This is the LuaLS
+/// def file written into every project's `library/` and the committed artifact the freshness diff
+/// guards.
 #[must_use]
 pub fn emit_defs() -> String {
     format!("{}\n{}", emit_api_defs(), emit_component_defs())
@@ -605,23 +591,6 @@ mod tests {
     #[test]
     fn defs_are_byte_stable_across_reruns() {
         assert_eq!(emit_component_defs(), emit_component_defs());
-    }
-
-    #[test]
-    fn matches_committed_cpp_blob_body() {
-        // The emitted `.luau` body must reproduce the committed C++ `SaComponentDefs` blob
-        // (`script_component_defs.generated.hpp`), minus the `#pragma once`/`string_view` wrapper:
-        // the Lua text between the `R"LUA(` … `)LUA"` markers, verbatim.
-        let cpp = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../engine-old/source/saffron/assets/script_component_defs.generated.hpp"
-        ));
-        let body = cpp
-            .split_once("R\"LUA(\n")
-            .and_then(|(_, rest)| rest.rsplit_once("\n)LUA\""))
-            .map(|(body, _)| body)
-            .expect("the committed blob has the R\"LUA( … )LUA\" markers");
-        assert_eq!(emit_component_defs().trim_end(), body.trim_end());
     }
 
     #[test]
@@ -774,7 +743,7 @@ mod tests {
     #[test]
     fn combined_defs_are_api_then_components_and_byte_stable() {
         let defs = emit_defs();
-        // The API surface comes first (the `SaLuaDefs` half), the snapshots second.
+        // The API surface comes first, the snapshots second.
         let api_at = defs.find("---@class sa.Vec3").expect("the Vec3 class");
         let snapshot_at = defs
             .find("-- Typed component snapshots.")
@@ -796,8 +765,7 @@ mod tests {
     #[test]
     fn combined_defs_match_committed_artifact() {
         // The committed `schemas/control/sa.generated.luau` (embedded by the host's
-        // `sa_lua_defs`) must equal the live emit — the regen-freshness contract that replaces
-        // the deleted `check-script-defs` tripwire.
+        // `sa_lua_defs`) must equal the live emit — the regen-freshness contract.
         let committed = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../schemas/control/sa.generated.luau"

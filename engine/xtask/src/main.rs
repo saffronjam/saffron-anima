@@ -1,7 +1,6 @@
-//! Workspace tooling, run via `cargo run -p xtask <task>`: the `slangc` shader fan-out
-//! (replacing `cmake/CompileShaders.cmake`) and, later, the protocol/codegen emitters
-//! (replacing `gen.ts`). Not shipped; an explicit build step invoked by `just engine` and the
-//! gate, mirroring CMake's `saffron_compile_shaders` custom target.
+//! Workspace tooling, run via `cargo run -p xtask <task>`: the `slangc` shader fan-out and the
+//! protocol/codegen emitters. Not shipped; an explicit build step invoked by `just engine` and
+//! the gate.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -33,7 +32,7 @@ fn run() -> Result<()> {
 }
 
 /// `xtask gen-protocol` — emit the editor-facing protocol artifacts (`sa-types.ts`, the OpenRPC
-/// schema, the command manifest) from the `saffron-protocol` DTO crate, replacing `gen.ts`.
+/// schema, the command manifest) from the `saffron-protocol` DTO crate.
 fn run_gen_protocol() -> Result<()> {
     let written = protocol::run(&workspace_root_repo()?)?;
     for path in &written {
