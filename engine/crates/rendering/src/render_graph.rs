@@ -4,9 +4,7 @@
 //! A pass *declares* what it touches ([`RgUsage`] reads/writes plus color/depth
 //! attachments) and the graph derives every `vkCmdPipelineBarrier2`, every layout
 //! transition, and the cross-frame layout write-back. No pass ever writes a
-//! barrier by hand. This is a faithful transcription of the C++
-//! `render_graph.cppm` engine: same `RgUsage` set, same `usage_info` table, same
-//! `apply_access` hazard rule, same image-vs-buffer split.
+//! barrier by hand.
 //!
 //! The barrier derivation is pure logic on plain data, split out from the GPU
 //! recording so it is unit-testable with no device — a missing or wrong barrier
@@ -21,12 +19,11 @@ use crate::profiler::{CpuMarkerRegistry, CpuSpanBuffer, RgTimestamps, cpu_now_ns
 /// The per-frame profiler recorders the graph drives while executing: the GPU
 /// timestamp recorder and the CPU span recorder, both armed only when a profiler mode
 /// is active. A `None` recorder makes every scope a cheap branch (the unarmed `Off`
-/// case). The render graph opens a GPU + CPU scope around each pass (the C++
-/// `executeRenderGraph` `GpuScope`/`CpuScope` bracket) and reserves a pipeline-stats
-/// slot for top-level graphics passes.
+/// case). The render graph opens a GPU + CPU scope around each pass and reserves a
+/// pipeline-stats slot for top-level graphics passes.
 #[derive(Default)]
 pub struct ProfileRecorders<'a> {
-    /// The GPU timestamp recorder (the C++ `RgTimestamps`), or `None` when unarmed.
+    /// The GPU timestamp recorder, or `None` when unarmed.
     pub gpu: Option<&'a mut RgTimestamps>,
     /// The CPU span recorder's registry + this frame's buffer, or `None` when unarmed.
     pub cpu: Option<(&'a mut CpuMarkerRegistry, &'a mut CpuSpanBuffer)>,
@@ -204,9 +201,9 @@ impl RgPass {
 
 /// Per-resource tracked state, advanced as passes are recorded in order.
 ///
-/// The cross-frame layout write-back is expressed safely: instead of the C++ raw
-/// `vk::ImageLayout*`, an imported image may carry `external_layout`, an index
-/// into [`RenderGraph::external_layouts`]. The slot seeds the entry layout on
+/// The cross-frame layout write-back is expressed safely: an imported image may
+/// carry `external_layout`, an index into [`RenderGraph::external_layouts`]. The slot
+/// seeds the entry layout on
 /// import and receives the resolved exit layout after execute, so an image's
 /// layout carries across frames without a raw pointer.
 #[derive(Clone)]
@@ -253,8 +250,8 @@ struct RgUsageInfo {
     is_write: bool,
 }
 
-/// The stage/access/layout/is-write contract for each usage. Ported one-for-one
-/// from the C++ `usageInfo` table — this is the load-bearing source of truth.
+/// The stage/access/layout/is-write contract for each usage — the load-bearing source
+/// of truth.
 fn usage_info(usage: RgUsage) -> RgUsageInfo {
     match usage {
         RgUsage::ColorWrite => RgUsageInfo {
@@ -351,7 +348,7 @@ impl DerivedBarriers {
 /// Derives a barrier for one `(resource, usage)`, appends it to `barriers`, and
 /// advances the resource state.
 ///
-/// The hazard rule is the C++ rule verbatim: a hazard exists when a write touches
+/// The hazard rule: a hazard exists when a write touches
 /// an already-touched resource (write-after-anything) or a read follows a write
 /// (read-after-write). Images barrier on a layout change *or* a hazard; buffers on
 /// a hazard only. A read after a read with no layout change emits nothing.
@@ -421,8 +418,7 @@ impl RenderGraph {
     /// Allocates a cross-frame layout slot seeded with `initial`, returning its key
     /// for [`RenderGraph::import_image`]. After [`RenderGraph::execute`] the slot
     /// holds the image's resolved exit layout — read it back to seed the next
-    /// frame's import. This is the safe expression of the C++ `vk::ImageLayout*`
-    /// write-back.
+    /// frame's import.
     pub fn alloc_external_layout(&mut self, initial: vk::ImageLayout) -> usize {
         self.external_layouts.push(initial);
         self.external_layouts.len() - 1

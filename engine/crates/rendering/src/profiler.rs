@@ -1,13 +1,7 @@
 //! The GPU/CPU profiler: per-pass GPU timestamps + pipeline statistics, the CPU span
 //! recorder, the calibrated-timestamp correlation, and the bounded capture state
 //! machine — armed through the [`RgTimestamps`] / [`CpuRecorder`] hooks the render
-//! graph (phase 2) reserved.
-//!
-//! Ports the GPU-touching half of `renderer_profiler.cpp` (`allocateProfilerPools`,
-//! `readbackGpuTimings`, `calibrateTimestamps`, `setProfilerMode`, the
-//! capture machine `tickCapture`/`appendCaptureFrame`/`startProfileCapture`/
-//! `stopProfileCapture`, `:42`–`:540`) plus the render-graph recorders
-//! (`ScopeRecord`/`RgTimestamps`/`CpuScope`/`GpuScope`, `render_graph.cppm:132`–`:265`).
+//! graph reserved.
 //!
 //! The profiler is **zero-cost when [`ProfilerMode::Off`]** (the default): no query
 //! pools are allocated, no VMA budget is read, and the recorders are unarmed (a `None`
@@ -21,7 +15,7 @@ use crate::frame::MAX_FRAMES_IN_FLIGHT;
 use crate::{Device, checked};
 
 /// Upper bound on GPU scopes the profiler times per frame — top-level passes plus any
-/// nested sub-scopes. The C++ `MaxProfiledScopes` (`renderer_types.cppm:83`).
+/// nested sub-scopes.
 pub const MAX_PROFILED_SCOPES: u32 = 128;
 
 /// The pipeline-statistics counters captured per pass, in ascending
@@ -326,8 +320,8 @@ impl GpuProfiler {
     }
 
     /// Re-samples the device and host clocks together and stores the offset that
-    /// projects a GPU tick onto the CPU `CLOCK_MONOTONIC` axis (the C++
-    /// `calibrateTimestamps`). Cheap (no queue work); called once per frame while
+    /// projects a GPU tick onto the CPU `CLOCK_MONOTONIC` axis. Cheap (no queue work);
+    /// called once per frame while
     /// profiling, but only actually samples once a session and then ~once a second
     /// (every 64 frames) to track drift. A no-op when calibration is unavailable,
     /// leaving `correlated = false` (the own-axis fallback).
@@ -611,8 +605,7 @@ fn frame_span_ms(records: &[ScopeRecord], raw: &[u64], mask: u64, period: f32) -
 
 /// The additive ns offset projecting a device tick onto the host clock:
 /// `hostNs - deviceNs`, where `deviceNs = (tick & mask) * period`. Pure arithmetic so
-/// the calibration math is unit-testable without a device (the C++ `calibrateTimestamps`
-/// offset computation).
+/// the calibration math is unit-testable without a device.
 fn device_to_host_offset(tick_raw: u64, host_ns: u64, mask: u64, period: f32) -> i64 {
     let device_ns = (tick_raw & mask) as f64 * period as f64;
     (host_ns as f64 - device_ns) as i64
@@ -1111,7 +1104,7 @@ impl CaptureRecorder {
     }
 }
 
-/// Raw `CLOCK_MONOTONIC` ns (the C++ `cpuScopeNowNs`). This is the same axis the GPU
+/// Raw `CLOCK_MONOTONIC` ns. This is the same axis the GPU
 /// calibration projects device ticks onto (`VK_TIME_DOMAIN_CLOCK_MONOTONIC_EXT`), so a
 /// correlated capture places CPU and GPU spans on one timeline.
 pub fn cpu_now_ns() -> u64 {

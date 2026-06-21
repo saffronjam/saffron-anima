@@ -1,18 +1,16 @@
 //! The per-frame command/sync ring.
 //!
-//! The C++ `FrameSync` (`renderer_types.cppm:1068`) held a `MaxFramesInFlight`
-//! ring of `FrameData` (`renderer_types.cppm:85`) — one command pool + buffer +
-//! image-available semaphore + in-flight fence per frame slot. This is that ring,
-//! owning its handles and freeing them in [`FrameRing::destroy`] (called by the
-//! renderer before the device is torn down, since these handles borrow the device
-//! and cannot Drop themselves without it).
+//! A `MAX_FRAMES_IN_FLIGHT` ring of frame slots — one command pool + buffer +
+//! image-available semaphore + in-flight fence per slot. It owns its handles and
+//! frees them in [`FrameRing::destroy`] (called by the renderer before the device
+//! is torn down, since these handles borrow the device and cannot Drop themselves
+//! without it).
 
 use ash::vk;
 
 use crate::{Device, Result, checked};
 
-/// Frames the GPU may have in flight before the CPU blocks — the double-buffer
-/// depth the C++ `MaxFramesInFlight` fixed at 2.
+/// Frames the GPU may have in flight before the CPU blocks — the double-buffer depth.
 pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 /// One frame slot's command recording + synchronization primitives.
@@ -90,7 +88,7 @@ impl FrameRing {
 
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
         // SAFETY: the ash seam. Creates the fence signaled so the first frame's
-        // wait returns immediately (the C++ ring's first-frame behavior).
+        // wait returns immediately.
         let in_flight = checked(
             unsafe { raw.create_fence(&fence_info, None) },
             "create_fence",

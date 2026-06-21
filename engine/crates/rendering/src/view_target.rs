@@ -3,13 +3,11 @@
 //! effect chain (AO / contact / SSGI maps + history + the per-view descriptor sets that
 //! bind them), all sized to the viewport.
 //!
-//! The C++ `ViewTargets` (`renderer_types.cppm:1265`) carried the full screen-space
-//! effect chain for every editor pane. The screen-space images + their per-view sets
-//! live here (not on the device-shared [`crate::ssao::Ssao`]) so a view switch never
-//! binds another view's images — README §2's per-view borrow split applied to compute
-//! sets. The active view's targets are borrowed `&mut self.views[active]` once per
-//! frame with `&Device` separate (the borrow split that makes the C++ `Image&` +
-//! sibling-mutate pattern legal).
+//! This carries the full screen-space effect chain for every editor pane. The
+//! screen-space images + their per-view sets live here (not on the device-shared
+//! [`crate::ssao::Ssao`]) so a view switch never binds another view's images —
+//! README §2's per-view borrow split applied to compute sets. The active view's targets
+//! are borrowed `&mut self.views[active]` once per frame with `&Device` separate.
 
 use ash::vk;
 
@@ -27,7 +25,7 @@ use crate::{Device, Result};
 /// recorded into the *frame's* command buffer, so the frame's in-flight fence covers the
 /// readback — no per-slot fence, no separate submit, no synchronous stall. `valid` marks
 /// that a readback was recorded into this slot, so a slot whose fence has signalled holds
-/// a completed frame's bytes (the C++ `ShmPublishSlot`).
+/// a completed frame's bytes.
 pub struct ShmCaptureSlot {
     /// The `B8G8R8A8_UNORM` blit destination (TRANSFER_DST + TRANSFER_SRC, optimal).
     pub image: Image,
@@ -43,8 +41,8 @@ pub struct ShmCaptureSlot {
 /// The per-frame-in-flight ring of [`ShmCaptureSlot`]s for one view. Frame N records its
 /// readback into `slots[N % MAX_FRAMES_IN_FLIGHT]`; the bytes are published from that same
 /// slot `MAX_FRAMES_IN_FLIGHT` frames later, after its frame fence has signalled — so a
-/// frame's copy never clobbers a still-being-read staging buffer (pipelined, the C++
-/// `ShmPublish::slots`). Created lazily on the first publish, recreated only on an extent
+/// frame's copy never clobbers a still-being-read staging buffer (pipelined). Created
+/// lazily on the first publish, recreated only on an extent
 /// change, so the steady-state shm path allocates nothing per frame.
 #[derive(Default)]
 pub struct ShmCapture {
@@ -114,7 +112,7 @@ pub struct ViewTarget {
 
     /// Last frame's camera viewProj (this view's own), driving the motion prepass's camera
     /// reprojection. Invalid until the first frame stores one. Per-view so a re-activated
-    /// view reprojects against its own last frame (the C++ `prevViewProj`).
+    /// view reprojects against its own last frame.
     pub prev_view_proj: saffron_geometry::glam::Mat4,
     /// False until the first frame stores `prev_view_proj`.
     pub prev_view_proj_valid: bool,
@@ -141,19 +139,19 @@ pub struct ViewTarget {
     /// set 4 in the mesh pipeline: ao_map + contact_map + resolved SSGI.
     pub mesh_set: vk::DescriptorSet,
     /// The mandatory tonemap set: binding 0 = the offscreen color as a storage image
-    /// (GENERAL). Rewritten when the offscreen recreates. The C++ `tonemapSet`.
+    /// (GENERAL). Rewritten when the offscreen recreates.
     pub tonemap_set: vk::DescriptorSet,
 
     /// This view's ReSTIR DI reservoirs + radiance + sets + temporal state, sized to the
     /// viewport. Rides alongside the view so two views never read each other's reservoirs
-    /// (README §2). Inert on a software device. The C++ `restirViews[ViewId]`.
+    /// (README §2). Inert on a software device.
     pub restir: RestirView,
 
     /// The render size the UI panel last requested for this view (device pixels), `0` until
     /// the view has been sized at least once. A view's desired size is set out-of-band (the
     /// `set-viewport-size` control command, the host window resize); the offscreen is
     /// recreated to match. Read to tell whether a not-yet-shown view (the asset-preview pane
-    /// before it is opened) has been seeded. The C++ `ViewTargets::desiredWidth`.
+    /// before it is opened) has been seeded.
     pub desired_width: u32,
     /// The render height the UI panel last requested for this view. See [`ViewTarget::desired_width`].
     pub desired_height: u32,
@@ -248,7 +246,7 @@ impl ViewTarget {
     }
 
     /// Ensures frame slot `slot`'s BGRA8 shm-capture target exists at `extent`, (re)creating
-    /// it on an extent change (the C++ `ensureShmPublishSlot`). The caller has waited this
+    /// it on an extent change. The caller has waited this
     /// slot's frame fence, so the previous target is idle and freed when replaced; recreating
     /// drops `valid` (no completed bytes at the new size yet). Returns [`crate::Error::Vk`]
     /// if the device lacks BLIT_SRC on the offscreen format or BLIT_DST on BGRA8 (optimal
@@ -304,13 +302,13 @@ impl ViewTarget {
 
     /// Teardown hook for the shm-capture ring. The slots own no raw handles beyond their
     /// [`Image`]/[`Buffer`] (which Drop), so this only drops the ring; kept as the explicit
-    /// teardown seam the renderer calls under `wait_idle` (the C++ `destroyShmPublishSlots`).
+    /// teardown seam the renderer calls under `wait_idle`.
     pub fn destroy(&mut self, _device: &Device) {
         self.shm_capture = ShmCapture::default();
     }
 
-    /// Allocates this view's per-view screen-space descriptor sets once (the C++
-    /// init loop over `renderer.views`). The sets are rewritten by
+    /// Allocates this view's per-view screen-space descriptor sets once. The sets are
+    /// rewritten by
     /// [`ViewTarget::build_screen_space`] whenever the images recreate; allocating
     /// them once (not per resize) avoids churning the pool.
     ///
@@ -346,9 +344,8 @@ impl ViewTarget {
     /// every per-view set to bind them, transitioning the mesh-sampled maps + prevColor
     /// to `SHADER_READ_ONLY_OPTIMAL` so set 4 is valid even before the passes first run
     /// (each read is gated by its enable flag in the übershader). Resets the SSGI
-    /// history validity (a resize invalidates the reprojection). The C++
-    /// `recreateSsaoTargets` + `refreshSsaoViewSets`. `ssao` supplies the device-shared
-    /// nearest G-buffer sampler the set writes bind.
+    /// history validity (a resize invalidates the reprojection). `ssao` supplies the
+    /// device-shared nearest G-buffer sampler the set writes bind.
     ///
     /// # Errors
     ///
@@ -435,7 +432,7 @@ impl ViewTarget {
         // Transition the mesh-sampled maps + prevColor + the SSGI history to
         // ShaderReadOnly so their descriptors are valid even before the passes run (the
         // shader gates each read), and so the SSGI / mesh samplers + the graph's seed
-        // layout agree. The C++ one-time init transition in `recreateSsaoTargets`. The
+        // layout agree. A one-time init transition. The
         // storage-only scratch (ao_raw, ssgi_map written first by their producing pass)
         // stay UNDEFINED until the graph transitions them — except ssgi_map, also read
         // as a sampler by ssgi_blur, so it is seeded too.
@@ -488,9 +485,7 @@ impl ViewTarget {
     /// the FXAA + TAA sets and repoints the ssgi-accum binding 2 + mesh set-4 SSGI sampler
     /// for the new mode. Resets the temporal validity (a mode change / resize invalidates
     /// reprojection). Call after [`ViewTarget::build_screen_space`] (it depends on the
-    /// freshly built SSGI maps) at init, every resize, and every AA change. The C++
-    /// `recreateMsaaTargets` + `recreateFxaaTarget` + `recreateTaaTargets`
-    /// (`renderer_detail.cppm:1098`/`:1142`/`:2423`).
+    /// freshly built SSGI maps) at init, every resize, and every AA change.
     ///
     /// # Errors
     ///
@@ -521,8 +516,8 @@ impl ViewTarget {
             | vk::ImageUsageFlags::SAMPLED
             | vk::ImageUsageFlags::STORAGE;
 
-        // The motion target is built whenever the screen-space chain exists (the C++
-        // `recreateTaaTargets` builds it unconditionally): both TAA and SSGI reproject
+        // The motion target is built whenever the screen-space chain exists,
+        // unconditionally: both TAA and SSGI reproject
         // through it, and which one runs is gated per frame, not by the target's existence.
         let need_motion = self.ssgi_resolved.is_some();
         if need_motion {
@@ -618,8 +613,7 @@ impl ViewTarget {
     /// Writes the FXAA + TAA sets and repoints the ssgi-accum binding 2 (motion) + the mesh
     /// set-4 SSGI sampler for the active AA mode. The TAA / FXAA scene input is the scratch
     /// image when built, else the offscreen as a valid placeholder (the set is unused until
-    /// that mode turns on + rebinds). The C++ `recreateTaaTargets` + `updateFxaaSet` write
-    /// blocks (`renderer_detail.cppm:2511`/`:2833`).
+    /// that mode turns on + rebinds).
     fn write_aa_sets(&self, device: &Device, descriptors: &Descriptors, aa: crate::Aa) {
         let raw = device.raw();
         let linear = descriptors.linear_sampler();
@@ -706,21 +700,20 @@ impl ViewTarget {
 
     /// Flips the temporal ping-pong parity + marks the history valid after a frame's TAA /
     /// SSGI accumulation consumed this frame's parity. The next frame reprojects through the
-    /// buffer just written. The C++ `historyValid = true; historyIndex = 1 - historyIndex`.
+    /// buffer just written.
     pub fn flip_history(&mut self) {
         self.history_valid = true;
         self.history_index = 1 - self.history_index;
     }
 
     /// Records this frame's camera viewProj as the per-view previous frame for next frame's
-    /// motion reprojection. The C++ `prevViewProj = viewProj; prevViewProjValid = true`.
+    /// motion reprojection.
     pub fn store_prev_view_proj(&mut self, view_proj: saffron_geometry::glam::Mat4) {
         self.prev_view_proj = view_proj;
         self.prev_view_proj_valid = true;
     }
 
     /// Writes every per-view screen-space set to bind this view's freshly built images.
-    /// Mirrors the C++ `refreshSsaoViewSets` write block one-for-one.
     fn write_screen_space_sets(
         &self,
         device: &Device,
@@ -765,18 +758,18 @@ impl ViewTarget {
             // copy_color: offscreen -> prev_color
             Binding::sampled(self.copy_color_set, 0, linear, offscreen),
             Binding::storage(self.copy_color_set, 1, prev_color),
-            // mesh set 4: AO + contact + denoised SSGI (all linear-sampled). Phase 9 (no
-            // motion) samples the spatially denoised map — the accum pass is off.
+            // mesh set 4: AO + contact + denoised SSGI (all linear-sampled). Without motion
+            // it samples the spatially denoised map — the accum pass is off.
             Binding::sampled(self.mesh_set, 0, linear, ao_map),
             Binding::sampled(self.mesh_set, 1, linear, contact_map),
             Binding::sampled(self.mesh_set, 2, linear, ssgi_denoised),
             // The mandatory tonemap set: binding 0 = the offscreen color as a storage
-            // image (GENERAL). The C++ `updateTonemapSet`.
+            // image (GENERAL).
             Binding::storage(self.tonemap_set, 0, offscreen),
         ];
         // ssgi-accum parities: parity p reads ssgi_history[1-p], writes ssgi_history[p].
-        // Binding 2 (motion) lands in phase 10; until then bind the denoised map as a
-        // neutral placeholder so the set is complete (the accum pass is off without motion).
+        // Without motion, binding 2 (motion) gets the denoised map as a neutral placeholder
+        // so the set is complete (the accum pass is off without motion).
         for p in 0..2usize {
             let set = self.ssgi_accum_sets[p];
             plan.push(Binding::sampled(set, 0, linear, ssgi_denoised));
@@ -817,8 +810,7 @@ impl ViewTarget {
             .map_or(vk::ImageView::null(), Image::view)
     }
 
-    /// Whether the screen-space chain is built (the G-buffer image exists). The C++
-    /// `gbufReady`'s `gNormal.image` check.
+    /// Whether the screen-space chain is built (the G-buffer image exists).
     pub fn screen_space_ready(&self) -> bool {
         self.g_normal.is_some()
     }
@@ -935,8 +927,8 @@ pub(crate) fn initialize_read_only_layouts(device: &Device, images: &[&Image]) -
 }
 
 /// Verifies the device supports the shm-capture blit: BLIT_SRC on the offscreen format and
-/// BLIT_DST on `B8G8R8A8_UNORM`, both in optimal tiling. The C++ `recordShmPublishCopy`
-/// blit assumes this (NVIDIA satisfies it); there is no CPU fallback by design.
+/// BLIT_DST on `B8G8R8A8_UNORM`, both in optimal tiling. The shm-publish blit assumes
+/// this (NVIDIA satisfies it); there is no CPU fallback by design.
 fn require_shm_blit_support(device: &Device, src_format: vk::Format) -> Result<()> {
     // SAFETY: the ash seam. The format-property queries are read-only.
     let src = unsafe {
@@ -967,7 +959,7 @@ fn require_shm_blit_support(device: &Device, src_format: vk::Format) -> Result<(
 
 /// One `UNDEFINED → SHADER_READ_ONLY_OPTIMAL` init transition over `images` so their
 /// descriptors are valid before any pass runs. A one-shot submit + wait at the
-/// (idle) build point. The C++ `recreateSsaoTargets` init transition.
+/// (idle) build point.
 fn initialize_screen_space_layouts(device: &Device, images: &[&Image]) -> Result<()> {
     use crate::checked;
     let raw = device.raw();
@@ -1062,8 +1054,8 @@ mod tests {
     /// asserts no cross-view aliasing: each view's sets are distinct handles, each view
     /// owns distinct images, and building the second view does not disturb the first
     /// view's sets — switching the active view binds *this* view's images, never the
-    /// other's (the phase-9 acceptance gate). Also asserts the build + teardown is
-    /// validation-clean. Skips when no Vulkan device is present.
+    /// other's. Also asserts the build + teardown is validation-clean. Skips when no
+    /// Vulkan device is present.
     #[test]
     fn per_view_screen_space_sets_never_alias_across_views() {
         let device = match Device::new(&SurfaceSource::Offscreen) {
@@ -1132,8 +1124,7 @@ mod tests {
     /// the validation layer would flag if wrong.
     ///
     /// The crease-darkening / color-bleed golden images are DEFERRED-NEEDS-HARDWARE: a
-    /// committed golden needs a stable shaded reference, which rides the full lit color
-    /// render (lighting + IBL sets) that lands in later phases; llvmpipe's GTAO output is
+    /// committed golden needs a stable shaded reference, and llvmpipe's GTAO output is
     /// numerically valid but not bit-stable enough to commit a golden against here.
     /// Skips when no Vulkan device is present.
     #[test]
@@ -1539,8 +1530,8 @@ mod tests {
 
     /// The SSGI history validity resets on a view resize: a fresh build leaves it false
     /// (no temporal history yet), and rebuilding after a resize re-resets it even if a
-    /// frame had set it true (the reprojection is stale). The phase-9 acceptance gate.
-    /// Skips when no Vulkan device is present.
+    /// frame had set it true (the reprojection is stale). Skips when no Vulkan device is
+    /// present.
     #[test]
     fn ssgi_history_validity_resets_on_resize() {
         let device = match Device::new(&SurfaceSource::Offscreen) {
@@ -1584,9 +1575,9 @@ mod tests {
     /// depth are always built (SSGI feeds them, the pass gates per frame); TAA adds the two
     /// history images + the scratch; FXAA adds the scratch but no TAA history; MSAA builds
     /// the multisampled scene color + depth and no scratch/history; off adds neither. The
-    /// build + descriptor set writes + teardown are validation-clean across every mode (the
-    /// phase-10 GPU gate the toolbox can run — no ray tracing, no present). Skips when no
-    /// Vulkan device is present.
+    /// build + descriptor set writes + teardown are validation-clean across every mode (a
+    /// GPU gate the toolbox can run — no ray tracing, no present). Skips when no Vulkan
+    /// device is present.
     #[test]
     fn build_aa_targets_per_mode_is_validation_clean() {
         let device = match Device::new(&SurfaceSource::Offscreen) {
@@ -1680,8 +1671,8 @@ mod tests {
 
     /// The temporal bookkeeping: a fresh AA build has no history and no prev-viewProj; a
     /// frame's `store_prev_view_proj` + `flip_history` mark them valid and toggle the parity;
-    /// a rebuild (resize / AA change) re-invalidates both (the reprojection is stale). The
-    /// phase-10 "TAA history invalidates on resize" acceptance gate. Skips when no device.
+    /// a rebuild (resize / AA change) re-invalidates both (the reprojection is stale).
+    /// Skips when no device.
     #[test]
     fn taa_history_and_prev_view_proj_invalidate_on_rebuild() {
         let device = match Device::new(&SurfaceSource::Offscreen) {

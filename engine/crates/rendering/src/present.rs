@@ -1,9 +1,9 @@
 //! The windowed standalone host's present path: blit the post-processed offscreen
 //! viewport image onto the acquired swapchain image, then present.
 //!
-//! The C++ `presentViewportToSwapchain` (`renderer.cppm:2355`): the present-only host
-//! renders the scene + native overlay into the per-view offscreen color exactly as the
-//! editor host does, then — instead of publishing the BGRA8 read-back to shared memory —
+//! The present-only host renders the scene + native overlay into the per-view offscreen
+//! color exactly as the editor host does, then — instead of publishing the BGRA8
+//! read-back to shared memory —
 //! `vkCmdBlitImage`s that offscreen straight onto the acquired swapchain image and
 //! presents. So the standalone window shows the identical frame the editor would, with no
 //! second render path.
@@ -177,8 +177,8 @@ impl PresentSync {
 /// offscreen (`from_layout`) → `TRANSFER_SRC`, the swapchain `UNDEFINED` → `TRANSFER_DST`,
 /// the `vkCmdBlitImage` (RGBA16F → BGRA8, nearest), then the swapchain `TRANSFER_DST` →
 /// `dst_final_layout`. The offscreen is left in `TRANSFER_SRC`; the caller tracks that so the
-/// next frame's graph import seeds the right entry layout. The C++ `presentViewportToSwapchain`
-/// barrier sequence, sync2 throughout.
+/// next frame's graph import seeds the right entry layout. The barrier sequence is sync2
+/// throughout.
 ///
 /// `dst_final_layout` is `PRESENT_SRC_KHR` for the real windowed present (the presentation
 /// engine reads it); the headless content-correctness stand-in (on an offscreen device with no

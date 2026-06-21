@@ -1,10 +1,7 @@
 //! The surface swapchain + its per-image sync, recreated as a unit on resize.
 //!
-//! The C++ `Swapchain` (`renderer_types.cppm:1055`) was built by `buildSwapchain`
-//! (`renderer_detail.cppm:109`) with vk-bootstrap's `SwapchainBuilder`. There is
-//! no Rust vk-bootstrap, so the FIFO / clamped-extent / image-count selection is
-//! hand-rolled here off that builder's defaults. Per-image render-finished
-//! semaphores and the borrowed-fence tracking match the C++ exactly.
+//! The FIFO / clamped-extent / image-count selection is hand-rolled here, with
+//! per-image render-finished semaphores and borrowed-fence tracking.
 
 use ash::vk;
 
@@ -34,9 +31,9 @@ impl Swapchain {
     ///
     /// Clamps the requested extent to the surface capabilities, picks a FIFO
     /// present mode (always supported), and requests `min_image_count + 1` images
-    /// (clamped to `max_image_count`). The C++ `buildSwapchain` `old_swapchain`
-    /// reuse on resize is handled by the renderer destroying the old one after the
-    /// device is idle, then building a fresh one.
+    /// (clamped to `max_image_count`). Resize is handled by the renderer
+    /// destroying the old swapchain after the device is idle, then building a
+    /// fresh one.
     ///
     /// # Errors
     ///

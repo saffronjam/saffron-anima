@@ -264,8 +264,7 @@ fn window_capture_writes_a_png_of_the_composited_output() {
 /// `render_scene_offscreen` (the procedural sky + grid into the offscreen) →
 /// `present_active_view_to_swapchain` (blit offscreen → swapchain, present) — and captures
 /// the presented swapchain image. This is the windowed-compositing path the host loop runs:
-/// it proves the offscreen is actually blitted onto the swapchain (the C++
-/// `presentViewportToSwapchain`), not a bare clear.
+/// it proves the offscreen is actually blitted onto the swapchain, not a bare clear.
 struct BlitSmoke {
     renderer: Option<Renderer>,
     window: Option<Window>,
@@ -451,8 +450,8 @@ fn present_only_blit_shows_a_non_blank_scene() {
     );
 
     // The captured presented swapchain image must be NON-BLANK: the procedural sky renders a
-    // gradient, so the blitted frame has many distinct colors. A clear-only present (the old
-    // path) would have a single uniform color. Decode + count distinct pixels.
+    // gradient, so the blitted frame has many distinct colors. A clear-only present would
+    // have a single uniform color. Decode + count distinct pixels.
     let bytes = std::fs::read(&path).expect("window capture PNG written");
     let decoded = image::load_from_memory(&bytes).expect("decode capture");
     let rgba = decoded.to_rgba8();

@@ -1,16 +1,7 @@
-//! The top-level renderer aggregate for the bring-up phase: the device, the
-//! swapchain, and the per-frame ring, plus the validation-clean acquire → clear →
-//! present loop.
-//!
-//! This is the slice of the C++ `Renderer` (`renderer_types.cppm:1735`) that
-//! phase 1 fills — the immutable [`Device`], the [`Swapchain`], the
-//! [`crate::frame::FrameRing`], and the clear-color. Later phases add the
-//! per-area sub-state (descriptors, pipelines, targets, lighting, …) as sibling
-//! fields, mutated through their own methods while holding `&Device`. The
-//! acquire/clear/present here is the C++ `beginFrame` (`renderer.cppm:920`) +
-//! `endFrame` (`renderer.cppm:2451`) reduced to the clear+present path, recording
-//! a sync2 layout transition + `vkCmdClearColorImage` rather than a render-graph
-//! pass (the graph arrives in phase 2).
+//! The top-level renderer aggregate: the immutable [`Device`], the [`Swapchain`], the
+//! [`crate::frame::FrameRing`], and the per-area sub-state (descriptors, pipelines,
+//! targets, lighting, …) as sibling fields, each mutated through its own methods while
+//! holding `&Device`. It drives the per-frame acquire → render-graph → present loop.
 
 use std::sync::{Arc, Mutex};
 
@@ -55,7 +46,7 @@ use crate::{Device, Error, Result, Swapchain, checked};
 /// thread, capturing resolved `Arc`/handle state, never `&mut Renderer` (README §2).
 type RenderFn = Box<dyn FnOnce(vk::CommandBuffer)>;
 
-/// The debug render-output mode (the C++ `ViewMode`, `renderer_types.cppm:1724`).
+/// The debug render-output mode.
 ///
 /// `Lit` is the shaded default; `Wireframe` selects the wireframe PSO permutation;
 /// the remaining modes output a single G-buffer channel (albedo / world normal /
@@ -83,7 +74,7 @@ pub enum ViewMode {
 impl ViewMode {
     /// The debug-shading channel the mesh fragment outputs instead of full shading
     /// (`0` lit/wireframe, `1` albedo, …, `5` emissive); folded into the light UBO's
-    /// `point_shadow_meta.w`. The C++ `setSceneLighting` switch.
+    /// `point_shadow_meta.w`.
     fn debug_channel(self) -> u32 {
         match self {
             ViewMode::Albedo => 1,
@@ -96,8 +87,7 @@ impl ViewMode {
     }
 }
 
-/// Which editor pane a render view targets (the C++ `ViewId`,
-/// `renderer_types.cppm:64`).
+/// Which editor pane a render view targets.
 ///
 /// Each view owns its own [`ViewTarget`] — offscreen images + temporal accumulators —
 /// and the renderer renders/presents the one [`Renderer::set_active_view`] selects. The
@@ -114,7 +104,7 @@ pub enum ViewId {
     AssetPreview,
 }
 
-/// The number of editor render views (scene + asset-preview), the C++ `ViewCount`.
+/// The number of editor render views (scene + asset-preview).
 pub const VIEW_COUNT: usize = 2;
 
 impl ViewId {
@@ -143,7 +133,7 @@ impl ViewId {
         }
     }
 
-    /// Parses a wire token into a [`ViewId`] (the C++ `viewIdFromWire`); `None` for an
+    /// Parses a wire token into a [`ViewId`]; `None` for an
     /// unknown token.
     pub fn from_wire(token: &str) -> Option<Self> {
         match token {
@@ -156,8 +146,8 @@ impl ViewId {
 
 /// The full per-frame render statistics: the draw-path counters plus the run-loop frame
 /// timings, VRAM telemetry, and the current profiler/view-mode/exposure state. The
-/// renderer's answer to the control plane's `render-stats` query (the C++ `renderStats`
-/// return). The control layer maps this to its wire DTO.
+/// renderer's answer to the control plane's `render-stats` query. The control layer
+/// maps this to its wire DTO.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RenderStatsFull {
     /// The draw-path counters from the last submitted draw list.
@@ -207,11 +197,11 @@ struct FramePipelines {
     ssgi_accum: Option<Arc<crate::Pipeline>>,
     copy_color: Option<Arc<crate::Pipeline>>,
     /// The five DDGI compute PSOs, resolved together when DDGI runs this frame (all five
-    /// present or the chain is skipped — the C++ `doDdgi` gate ANDs all five). `None`
+    /// present or the chain is skipped — the gate ANDs all five). `None`
     /// arms no DDGI passes.
     ddgi: Option<DdgiPipelines>,
     /// The three ReSTIR DI compute PSOs, resolved together when ReSTIR runs this frame (all
-    /// three present or the chain is skipped — the C++ `doRestir` gate). `None` arms no
+    /// three present or the chain is skipped). `None` arms no
     /// ReSTIR passes; direct lighting then takes the clustered-forward path.
     restir: Option<RestirPipelines>,
     /// This frame's SSGI trace push, with the monotonic frame index already bumped (the
@@ -326,24 +316,23 @@ struct TaaHistorySlots {
 /// handle is freed under a live GPU read, then destroys the borrowing sub-state in
 /// the correct order; the `device` field drops last by declaration order.
 pub struct Renderer {
-    /// The clear color applied to the scene/swapchain image each frame (RGBA, the C++
-    /// `FrameSync::clearColor` default).
+    /// The clear color applied to the scene/swapchain image each frame (RGBA).
     pub clear_color: [f32; 4],
     /// Wireframe view mode — drives the per-draw PSO `wireframe` permutation (gated on
     /// the device's `fill_mode_non_solid` capability inside the cache).
     pub wireframe: bool,
     /// When set, the scene pass is preceded by a depth pre-pass that lays down depth
-    /// first (the C++ `useDepthPrepass`).
+    /// first.
     pub use_depth_prepass: bool,
 
-    /// The tonemap exposure in stops; the mandatory tonemap pass applies `exp2(this)`
-    /// (the C++ `exposureEv`). Defaults to 0 (a 1× multiplier).
+    /// The tonemap exposure in stops; the mandatory tonemap pass applies `exp2(this)`.
+    /// Defaults to 0 (a 1× multiplier).
     exposure_ev: f32,
-    /// The infinite analytic ground grid debug overlay toggle (the C++ `showGrid`).
+    /// The infinite analytic ground grid debug overlay toggle.
     show_grid: bool,
     /// Native-viewport host mode: present blits the post-processed offscreen straight to
     /// the swapchain (no ui pass). The offscreen content is identical to editor mode —
-    /// this only selects the final present path (the C++ `presentViewportOnly`).
+    /// this only selects the final present path.
     present_viewport_only: bool,
 
     /// Set by [`Renderer::begin_offscreen_frame`] (the run loop's `begin_frame`) once the
@@ -361,57 +350,53 @@ pub struct Renderer {
     /// frame's offscreen without waiting an unsignaled semaphore (which would deadlock).
     present_scene_signaled: bool,
 
-    /// The debug render-output mode (the C++ `viewMode`). Transient; drives the
+    /// The debug render-output mode. Transient; drives the
     /// wireframe PSO permutation + the mesh fragment's debug-channel output.
     view_mode: ViewMode,
-    /// Whether the GPU compute-skinning path runs (the C++ `useSkinning`). Off falls
+    /// Whether the GPU compute-skinning path runs. Off falls
     /// back to bind-pose meshes. Defaults on.
     skinning_enabled: bool,
 
     /// Whether the device is a software rasterizer (llvmpipe/lavapipe): GPU timings are
-    /// CPU rasterization time. Mirrored from the device capabilities (the C++
-    /// `softwareGpu`).
+    /// CPU rasterization time. Mirrored from the device capabilities.
     software_gpu: bool,
     /// The physical-device name, captured at init for profiler capture metadata.
     device_name: String,
     /// The last frame's wall-clock render-thread frame time (ms); `0` until the host
-    /// run loop records it (the C++ `frameMs`).
+    /// run loop records it.
     frame_ms: f32,
-    /// The last frame's CPU busy time (ms); `0` until recorded (the C++ `cpuFrameMs`).
+    /// The last frame's CPU busy time (ms); `0` until recorded.
     cpu_frame_ms: f32,
-    /// A monotonic per-frame counter (the C++ `frameSerial`), gating the profiler's
+    /// A monotonic per-frame counter, gating the profiler's
     /// periodic timestamp re-calibration.
     frame_serial: u64,
-    /// The last frame's GPU frame time (ms); `0` until the profiler runs (the C++
-    /// `gpuFrameMs`).
+    /// The last frame's GPU frame time (ms); `0` until the profiler runs.
     gpu_frame_ms: f32,
-    /// The last frame's fence-wait time (ms); `0` until recorded (the C++ `cpuWaitMs`).
+    /// The last frame's fence-wait time (ms); `0` until recorded.
     cpu_wait_ms: f32,
-    /// Device-local VRAM usage in bytes; `0` until the profiler reads the VMA budget
-    /// (the C++ `RenderStats::vramUsageBytes`).
+    /// Device-local VRAM usage in bytes; `0` until the profiler reads the VMA budget.
     vram_usage_bytes: u64,
     /// Device-local VRAM budget in bytes; `0` until profiled.
     vram_budget_bytes: u64,
 
-    /// The shared frame-budget / green-amber-red threshold config (the C++ `perfConfig`).
+    /// The shared frame-budget / green-amber-red threshold config.
     perf_config: PerfConfig,
-    /// The rolling frame-time history ring (the C++ `frameHistory`).
+    /// The rolling frame-time history ring.
     frame_history: FrameHistory,
-    /// The perf-alarm engine: active set + seq-stamped event ring (the C++ `alarms`).
+    /// The perf-alarm engine: active set + seq-stamped event ring.
     alarms: AlarmState,
-    /// The GPU profiler: per-pass timestamps + pipeline statistics (the C++ `profiler`).
+    /// The GPU profiler: per-pass timestamps + pipeline statistics.
     gpu_profiler: GpuProfiler,
-    /// The CPU span profiler, feeding the merged capture (the C++ `cpuProfiler`).
+    /// The CPU span profiler, feeding the merged capture.
     cpu_profiler: CpuProfiler,
-    /// The capture recorder driven by `profiler.capture-start/stop` (the C++ `capture`).
+    /// The capture recorder driven by `profiler.capture-start/stop`.
     capture: CaptureRecorder,
     /// The frame slot whose CPU/GPU spans the next [`Renderer::finalize_frame_telemetry`]
     /// folds into the capture: the slot `render_scene_offscreen` just recorded into, before
-    /// `frames.advance()` moved `frames.index()` on (the C++ `frame.index` the `endFrame`
-    /// telemetry read).
+    /// `frames.advance()` moved `frames.index()` on.
     last_rendered_slot: usize,
     /// Wall-clock ns of the last [`Renderer::finalize_frame_telemetry`], for the alarm tick's
-    /// irregular-interval dt (the C++ `lastFrameNs`).
+    /// irregular-interval dt.
     last_frame_ns: u64,
 
     /// The per-frame editor-overlay geometry (gizmo handles + entity billboards),
@@ -422,8 +407,8 @@ pub struct Renderer {
     scene_draw_list: SceneDrawList,
     stats: RenderStats,
 
-    /// The directional shadow map's layout carried across frames (the C++
-    /// `shadowMap.layout`): the graph seeds the entry layout from it and writes back the
+    /// The directional shadow map's layout carried across frames: the graph seeds the
+    /// entry layout from it and writes back the
     /// resolved exit layout each frame, so the cross-frame `DepthWrite → ShaderReadOnly`
     /// transition is derived, never hand-written.
     directional_shadow_layout: vk::ImageLayout,
@@ -437,11 +422,11 @@ pub struct Renderer {
     /// The per-editor-pane render targets, indexed by [`ViewId::index`] (`Scene` = 0,
     /// `AssetPreview` = 1). Always [`VIEW_COUNT`] entries.
     views: Vec<ViewTarget>,
-    /// Which view the renderer renders + presents this frame (the C++ `activeView`).
+    /// Which view the renderer renders + presents this frame.
     active_view: ViewId,
 
     /// Per-view shm-publish enable, indexed by [`ViewId::index`]: the host sets it from its
-    /// segment wiring (the C++ `shmPublish[view].enabled`). When the active view's flag is
+    /// segment wiring. When the active view's flag is
     /// set, [`Renderer::render_scene_offscreen`] folds the BGRA8 readback blit/copy into the
     /// frame's command buffer (no separate submit), and [`Renderer::begin_offscreen_frame`]
     /// stages the completed pipelined slot's bytes for the host to publish.
@@ -472,19 +457,18 @@ pub struct Renderer {
     /// The 1×1 white texture occupying [`crate::DEFAULT_WHITE_SLOT`] (and seeded into
     /// every other bindless slot at init). A material with no albedo/ORM texture
     /// samples this slot, so it must outlive every draw — held here for the renderer's
-    /// lifetime (the C++ `Renderer::defaultWhiteTexture`).
+    /// lifetime.
     default_white: Arc<crate::GpuTexture>,
 
     /// The offscreen thumbnail + material-preview render sub-state: the lazy
     /// thumbnail/preview PSOs + the preview sphere, plus the render-to-texture and PNG
-    /// read-back primitives. The C++ `Pipelines::thumbnail`/`preview` +
-    /// `Renderer::previewSphere`.
+    /// read-back primitives.
     pub(crate) thumbnail: crate::ThumbnailRenderer,
 
     /// A pending window/composited-output screenshot path, armed by
     /// [`Renderer::request_window_capture`] and consumed at the next present (the swapchain
-    /// image is copied to a host buffer → PNG, then this clears). The C++
-    /// `captureNextSwapchainPath`. `None` when no capture is pending.
+    /// image is copied to a host buffer → PNG, then this clears). `None` when no capture
+    /// is pending.
     capture_next_window_path: Option<std::path::PathBuf>,
 
     frames: FrameRing,
@@ -512,8 +496,7 @@ impl Renderer {
     /// per-frame command/sync ring, and — for [`SurfaceSource::Window`] only — the present
     /// [`Swapchain`]. The editor offscreen host ([`SurfaceSource::Offscreen`]) builds no
     /// swapchain: it has no surface, renders offscreen, and publishes BGRA8 frames to shared
-    /// memory, never presenting (the C++ editor mode, where the swapchain is never
-    /// acquired). This also sidesteps lavapipe's unimplemented `VK_EXT_headless_surface`
+    /// memory, never presenting. This also sidesteps lavapipe's unimplemented `VK_EXT_headless_surface`
     /// swapchain WSI, which SIGSEGVs creating native swapchain image memory.
     ///
     /// # Errors
@@ -525,8 +508,8 @@ impl Renderer {
             SurfaceSource::Window(_) => Some(Swapchain::new(&device, width, height)?),
             SurfaceSource::Offscreen => None,
         };
-        // The C++ `newRenderer` logged the swapchain image count alongside the GPU name;
-        // the offscreen host has no present swapchain, so this fires only windowed.
+        // Log the swapchain image count alongside the GPU name; the offscreen host has no
+        // present swapchain, so this fires only windowed.
         if let Some(swapchain) = swapchain.as_ref() {
             saffron_core::log_info!("{} swapchain images", swapchain.image_count());
         }
@@ -585,8 +568,7 @@ impl Renderer {
 
             // The default white texture takes slot 0 (the first claim) and is seeded
             // into every other bindless slot, so any untextured material samples a valid
-            // descriptor. Uploaded through a one-off uploader on the graphics queue — the
-            // C++ `Renderer::defaultWhiteTexture` upload in `initRenderer`.
+            // descriptor. Uploaded through a one-off uploader on the graphics queue.
             let queue = crate::GpuQueue::new(device.graphics_queue);
             let uploader = crate::Uploader::new(&device, &queue)?;
             let default_white = uploader.upload_default_white(&descriptors)?;
@@ -630,8 +612,8 @@ impl Renderer {
 
             // The two editor views (Scene + AssetPreview), each with its own offscreen +
             // screen-space + AA + ReSTIR targets and per-view sets, so a view switch never
-            // aliases another view's images (the C++ init loop over `renderer.views`,
-            // README §2). Both are sized to the initial extent; the asset-preview view
+            // aliases another view's images. Both are sized to the initial extent; the
+            // asset-preview view
             // stays inert until the editor sizes/activates it, but its targets exist so the
             // present-side shm segment + a `set-active-view assetPreview` render
             // immediately.
@@ -705,8 +687,7 @@ impl Renderer {
 
         let overlay = OverlayState::new(device.resources());
 
-        // Seed the GPU profiler's device-derived capabilities once (the C++
-        // profiler-capability probe at the end of renderer init).
+        // Seed the GPU profiler's device-derived capabilities once.
         let facts = device.profiler_facts();
         let gpu_profiler = GpuProfiler::with_facts(
             facts.timestamp_period,
@@ -778,9 +759,8 @@ impl Renderer {
             default_white,
             // The thumbnail render target's color format is read back over the control plane,
             // never presented, so it follows the device's chosen surface format rather than a
-            // (possibly absent) swapchain. The C++ used the swapchain format for the same
-            // "matches the eventual present format" reason; here it is the surface format the
-            // swapchain would have used.
+            // (possibly absent) swapchain. It is the surface format the swapchain would have
+            // used, matching the eventual present format.
             thumbnail: crate::ThumbnailRenderer::new(
                 device.resources(),
                 device.surface_format.format,
@@ -793,7 +773,7 @@ impl Renderer {
         })
     }
 
-    /// The immutable device, for later phases that own sibling sub-state.
+    /// The immutable device, shared by the sibling sub-state.
     pub fn device(&self) -> &Device {
         &self.device
     }
@@ -832,7 +812,7 @@ impl Renderer {
     }
 
     /// The 1×1 white texture occupying [`crate::DEFAULT_WHITE_SLOT`]: a material with no
-    /// albedo/ORM texture indexes its bindless slot (the C++ `defaultWhiteTexture`).
+    /// albedo/ORM texture indexes its bindless slot.
     pub fn default_white(&self) -> &Arc<crate::GpuTexture> {
         &self.default_white
     }
@@ -852,7 +832,7 @@ impl Renderer {
         &self.views[self.active_view.index()]
     }
 
-    /// Which editor pane is currently rendered/presented (the C++ `renderer.activeView`).
+    /// Which editor pane is currently rendered/presented.
     pub fn active_view_id(&self) -> ViewId {
         self.active_view
     }
@@ -864,8 +844,8 @@ impl Renderer {
         &self.views[view.index()]
     }
 
-    /// Selects which editor pane is rendered/presented (the C++ `setActiveView`,
-    /// `renderer.cppm:1090`). A no-op when `view` is already active; otherwise resets the
+    /// Selects which editor pane is rendered/presented. A no-op when `view` is already
+    /// active; otherwise resets the
     /// newly-shown view's temporal accumulators (they are stale/discontinuous — it
     /// re-converges instead of reprojecting against another view's history).
     pub fn set_active_view(&mut self, view: ViewId) {
@@ -887,34 +867,34 @@ impl Renderer {
     }
 
     /// Whether clustered-forward light culling is on (false = the fragment loops all
-    /// lights, the reference path). The C++ `clusteredEnabled`.
+    /// lights, the reference path).
     pub fn clustered_enabled(&self) -> bool {
         self.lighting.use_clustered
     }
 
-    /// Toggles clustered-forward culling (the C++ `setClustered`).
+    /// Toggles clustered-forward culling.
     pub fn set_clustered(&mut self, enabled: bool) {
         self.lighting.use_clustered = enabled;
     }
 
-    /// Whether shadow casting is on (the master toggle; the C++ `shadowsEnabled`).
+    /// Whether shadow casting is on (the master toggle).
     pub fn shadows_enabled(&self) -> bool {
         self.lighting.use_shadows
     }
 
-    /// Toggles shadow casting (the C++ `setShadows`).
+    /// Toggles shadow casting.
     pub fn set_shadows(&mut self, enabled: bool) {
         self.lighting.use_shadows = enabled;
     }
 
     /// Folds the host's visible-sky settings in (mode / clear / intensity / rotation /
-    /// visibility / panorama slot). The C++ `submitSky`.
+    /// visibility / panorama slot).
     pub fn submit_sky(&mut self, settings: &SkyRenderSettings) {
         self.sky.submit(settings);
     }
 
-    /// Re-arms the IBL environment bake when the source / panorama / params change (the C++
-    /// `requestEnvBake`). The bake fires at the next [`Renderer::render_scene_offscreen`]
+    /// Re-arms the IBL environment bake when the source / panorama / params change.
+    /// The bake fires at the next [`Renderer::render_scene_offscreen`]
     /// (a GPU-idle point), so the visible sky + IBL relight together.
     pub fn request_env_bake(
         &mut self,
@@ -925,77 +905,75 @@ impl Renderer {
         self.ibl.request_env_bake(source, panorama, params);
     }
 
-    /// Whether IBL ambient is on (false = the flat scalar ambient fallback; the C++
-    /// `iblEnabled`).
+    /// Whether IBL ambient is on (false = the flat scalar ambient fallback).
     pub fn ibl_enabled(&self) -> bool {
         self.ibl.use_ibl
     }
 
-    /// Toggles IBL ambient (the C++ `setIbl`).
+    /// Toggles IBL ambient.
     pub fn set_ibl(&mut self, enabled: bool) {
         self.ibl.use_ibl = enabled;
     }
 
-    /// Folds the host's per-frame reflection-probe uploads in (the C++
-    /// `submitReflectionProbes`): arms any dirty slot for capture, re-uploads the metadata
+    /// Folds the host's per-frame reflection-probe uploads in: arms any dirty slot for
+    /// capture, re-uploads the metadata
     /// SSBO, and updates the frame probe count.
     pub fn submit_reflection_probes(&mut self, probes: &[ReflectionProbeUpload]) {
         self.reflection.submit(probes);
     }
 
-    /// Whether reflection probes contribute (the C++ `reflectionProbesEnabled`).
+    /// Whether reflection probes contribute.
     pub fn reflection_probes_enabled(&self) -> bool {
         self.reflection.use_probes
     }
 
-    /// The captured reflection probes in slot order (the `list-probes` source; the C++
-    /// `renderer.reflection.probes`).
+    /// The captured reflection probes in slot order (the `list-probes` source).
     pub fn reflection_probes(&self) -> &[crate::ReflectionProbe] {
         self.reflection.probes()
     }
 
-    /// Toggles reflection probes (the C++ `setReflectionProbes`).
+    /// Toggles reflection probes.
     pub fn set_reflection_probes(&mut self, enabled: bool) {
         self.reflection.use_probes = enabled;
     }
 
-    /// Toggles GTAO ambient occlusion (the C++ `setSsao`).
+    /// Toggles GTAO ambient occlusion.
     pub fn set_ssao(&mut self, enabled: bool) {
         self.ssao.use_ssao = enabled;
     }
 
-    /// Whether GTAO is on and its sets/targets are built (the C++ `ssaoEnabled`).
+    /// Whether GTAO is on and its sets/targets are built.
     pub fn ssao_enabled(&self) -> bool {
         self.ssao.use_ssao && self.ssao.ready
     }
 
-    /// Toggles screen-space directional contact shadows (the C++ `setContactShadows`).
+    /// Toggles screen-space directional contact shadows.
     pub fn set_contact_shadows(&mut self, enabled: bool) {
         self.ssao.use_contact = enabled;
     }
 
-    /// Whether contact shadows are on and ready (the C++ `contactShadowsEnabled`).
+    /// Whether contact shadows are on and ready.
     pub fn contact_shadows_enabled(&self) -> bool {
         self.ssao.use_contact && self.ssao.ready
     }
 
-    /// Toggles screen-space one-bounce GI (the C++ `setSsgi`).
+    /// Toggles screen-space one-bounce GI.
     pub fn set_ssgi(&mut self, enabled: bool) {
         self.ssao.use_ssgi = enabled;
     }
 
-    /// Whether SSGI is on and ready (the C++ `ssgiEnabled`).
+    /// Whether SSGI is on and ready.
     pub fn ssgi_enabled(&self) -> bool {
         self.ssao.use_ssgi && self.ssao.ready
     }
 
     /// Toggles voxel-traced dynamic diffuse GI; turning it on re-converges the probes
-    /// from scratch (a history reset). The C++ `setDdgi`.
+    /// from scratch (a history reset).
     pub fn set_ddgi(&mut self, enabled: bool) {
         self.ddgi.set_enabled(enabled);
     }
 
-    /// Whether DDGI is on and its resources are built (the C++ `ddgiEnabled`).
+    /// Whether DDGI is on and its resources are built.
     pub fn ddgi_enabled(&self) -> bool {
         self.ddgi.enabled()
     }
@@ -1003,7 +981,7 @@ impl Renderer {
     /// Uploads this frame's DDGI scene-box proxy (interleaved world AABBs + albedos,
     /// clamped to the SSBO capacity) and the fitted probe-volume placement + sun/sky for
     /// the trace. Call before [`Renderer::set_scene_lighting`], which folds the volume +
-    /// probe grid into the light UBO. The C++ `setDdgiScene`.
+    /// probe grid into the light UBO.
     #[allow(clippy::too_many_arguments)]
     pub fn set_ddgi_scene(
         &mut self,
@@ -1032,7 +1010,7 @@ impl Renderer {
 
     /// Writes this frame's camera transforms + incoming sun direction for the
     /// screen-space chain (the G-buffer prepass view/viewProj, the contact-shadow
-    /// view-space light direction). The C++ `setSsaoCamera`. Call before
+    /// view-space light direction). Call before
     /// [`Renderer::render_scene_offscreen`].
     pub fn set_ssao_camera(
         &mut self,
@@ -1045,15 +1023,14 @@ impl Renderer {
 
     /// Writes the current frame's directional + ambient + eye + punctual lights into the
     /// per-frame light UBO/SSBO. Call once per frame before
-    /// [`Renderer::render_scene_offscreen`]. The C++ `setSceneLighting`.
+    /// [`Renderer::render_scene_offscreen`].
     ///
     /// # Errors
     ///
     /// Returns [`Error`] if growing the punctual SSBO fails.
     pub fn set_scene_lighting(&mut self, scene: &SceneLighting) -> Result<()> {
         let frame = self.frames.index();
-        // Fold the IBL-ambient flag + the reflection-probe count into the UBO write (the
-        // C++ `setSceneLighting` reads `ibl.useIbl/ready` + `reflection.frameProbeCount`).
+        // Fold the IBL-ambient flag + the reflection-probe count into the UBO write.
         // Probes contribute only when IBL is baked + their toggle is on.
         let ibl_enabled = self.ibl.use_ibl && self.ibl.ready;
         let probes_on = self.reflection.use_probes && self.ibl.ready;
@@ -1064,7 +1041,7 @@ impl Renderer {
         };
         self.lighting.set_frame_ibl(ibl_enabled, probe_count);
         // Fold the DDGI flag + the fitted volume placement + probe grid into the UBO
-        // write (the C++ `setSceneLighting` reads `ddgi.useDdgi/ready` + the volume).
+        // write.
         let (ddgi_min, ddgi_extent) = self.ddgi.volume();
         self.lighting.set_frame_ddgi(
             self.ddgi.enabled(),
@@ -1078,29 +1055,27 @@ impl Renderer {
 
     /// Writes the current frame's cluster-cull params from the camera + viewport, arming
     /// the `light-cull` dispatch when clustered is on and at least one punctual light
-    /// exists. Call after [`Renderer::set_scene_lighting`]. The C++ `setClusterCamera`.
+    /// exists. Call after [`Renderer::set_scene_lighting`].
     pub fn set_cluster_camera(&mut self, camera: ClusterCamera) {
         let frame = self.frames.index();
         self.lighting.set_cluster_camera(frame, camera);
     }
 
     /// Arms the directional shadow pass with the light-space transform; `casting` (gated
-    /// by the master shadow toggle) drives whether the `shadow` pass runs this frame. The
-    /// C++ `setDirectionalShadow`.
+    /// by the master shadow toggle) drives whether the `shadow` pass runs this frame.
     pub fn set_directional_shadow(&mut self, light_view_proj: Mat4, casting: bool) {
         self.lighting
             .set_directional_shadow(light_view_proj, casting);
     }
 
     /// Arms the spot shadow pass with the spot's perspective transform + its index in the
-    /// per-frame light list. The C++ `setSpotShadow`.
+    /// per-frame light list.
     pub fn set_spot_shadow(&mut self, light_view_proj: Mat4, light_index: u32, casting: bool) {
         self.lighting
             .set_spot_shadow(light_view_proj, light_index, casting);
     }
 
     /// Arms the point shadow pass with the light's world position + far plane + its index.
-    /// The C++ `setPointShadow`.
     pub fn set_point_shadow(
         &mut self,
         light_pos: saffron_geometry::glam::Vec3,
@@ -1113,25 +1088,23 @@ impl Renderer {
     }
 
     /// Whether the device supports hardware ray tracing (acceleration-structure +
-    /// ray-query). The C++ `rtSupported`.
+    /// ray-query).
     pub fn rt_supported(&self) -> bool {
         self.rt.supported()
     }
 
     /// Toggles inline ray-query shadows (clamped off on a non-RT device). When off, the
-    /// `tlas-build` pass is skipped and the mesh fragment takes the shadow-map path. The
-    /// C++ `setRtShadows`.
+    /// `tlas-build` pass is skipped and the mesh fragment takes the shadow-map path.
     pub fn set_rt_shadows(&mut self, enabled: bool) {
         self.rt.set_rt_shadows(enabled);
     }
 
-    /// Whether ray-query shadows ran this frame (toggle on, RT supported, TLAS built). The
-    /// C++ `rtShadowsEnabled`.
+    /// Whether ray-query shadows ran this frame (toggle on, RT supported, TLAS built).
     pub fn rt_shadows_enabled(&self) -> bool {
         self.rt.shadows_enabled()
     }
 
-    /// The built per-mesh BLAS count (rt-stats). The C++ `rtBlasCount`.
+    /// The built per-mesh BLAS count (rt-stats).
     pub fn rt_blas_count(&self) -> u32 {
         self.rt.blas_count()
     }
@@ -1148,7 +1121,7 @@ impl Renderer {
 
     /// Captures this frame's static mesh instances (parallel world transforms + meshes) for
     /// the `tlas-build` pass, arming the build when RT shadows are on. Skinned instances
-    /// ride the draw list. The C++ `setRtScene`.
+    /// ride the draw list.
     pub fn set_rt_scene(&mut self, models: Vec<Mat4>, meshes: Vec<Arc<crate::GpuMesh>>) {
         self.rt.set_rt_scene(models, meshes);
     }
@@ -1161,9 +1134,9 @@ impl Renderer {
     /// Toggles ReSTIR DI many-light direct lighting (clamped off on a non-RT device, since
     /// the resolve needs ray-query). Turning it on re-converges the reservoirs from scratch
     /// by arming the active view's temporal reset. When off, direct lighting falls back to
-    /// the clustered-forward path (phase 7). The C++ `setRestir` (`renderer.cppm:2954`).
+    /// the clustered-forward path.
     pub fn set_restir(&mut self, enabled: bool) {
-        // The C++ gate ANDs `rtSupported && activeRestir.ready`; the supported half lives on
+        // The gate ANDs `rt_supported && active_restir.ready`; the supported half lives on
         // `Restir`, the view-ready half on the active `RestirView`.
         let ready = self.views[self.active_view.index()].restir.ready();
         let armed = self.restir.set_enabled(enabled && ready);
@@ -1173,7 +1146,7 @@ impl Renderer {
     }
 
     /// Whether ReSTIR is on, the device supports it, and the active view's reservoirs are
-    /// built (the mesh-sample gate / the C++ `restirEnabled`, `renderer.cppm:2964`).
+    /// built (the mesh-sample gate).
     pub fn restir_enabled(&self) -> bool {
         self.restir.use_restir()
             && self.restir.supported()
@@ -1182,7 +1155,7 @@ impl Renderer {
 
     /// Resets a view's temporal state — its motion reprojection, SSGI/TAA history, the
     /// ReSTIR reservoir history, and the (scene-global) DDGI probes re-converge for the
-    /// view. The C++ `resetViewTemporal` (`renderer.cppm:2970`).
+    /// view.
     pub fn reset_view_temporal(&mut self, view: ViewId) {
         let target = &mut self.views[view.index()];
         target.prev_view_proj_valid = false;
@@ -1193,17 +1166,16 @@ impl Renderer {
     }
 
     /// Stashes an ad-hoc record closure replayed inside the scene pass after the
-    /// batched draw list — the editor gizmo / native overlay seam (the C++ `submit`,
-    /// `renderer.cppm:1073`). The closure captures resolved handles, runs once on the
+    /// batched draw list — the editor gizmo / native overlay seam. The closure captures
+    /// resolved handles, runs once on the
     /// render thread.
     pub fn submit(&mut self, body: impl FnOnce(vk::CommandBuffer) + 'static) {
         self.submissions.push(Box::new(body));
     }
 
     /// Sets a view's desired render size and resizes its offscreen targets to match,
-    /// idling the GPU first so the old images are no longer read (the C++
-    /// `setViewportDesiredSize` records the desired size; the per-frame apply resizes — the
-    /// Rust port applies eagerly here, the established resize seam). The desired size is
+    /// idling the GPU first so the old images are no longer read; the resize applies
+    /// eagerly here at the resize seam. The desired size is
     /// recorded even when the extent already matches, so [`ViewTarget::desired_width`]
     /// tracks "this view has been sized" for the seed-on-first-activate check (a preview
     /// view seeded from the scene size before it is shown).
@@ -1233,12 +1205,11 @@ impl Renderer {
         // sets, which also resets the SSGI history validity (the reprojection is stale).
         self.views[i].build_screen_space(&self.device, &self.descriptors, &self.ssao)?;
         // The AA targets (motion / history / scratch / MSAA) follow the offscreen extent;
-        // rebuild them too, which invalidates the temporal reprojection (the C++ resize
-        // ran recreateMsaa/Fxaa/TaaTargets after the offscreen resize).
+        // rebuild them too, which invalidates the temporal reprojection.
         self.views[i].build_aa_targets(&self.device, &self.descriptors, self.aa)?;
         // The ReSTIR reservoirs + radiance are viewport-sized; rebuild them at the new
         // extent (arming a temporal reset — the reservoir history is stale). A no-op on a
-        // software device. The C++ resize ran `recreateRestirTargets`.
+        // software device.
         let extent = self.views[i].extent();
         self.views[i].restir.reset_history();
         self.views[i]
@@ -1248,7 +1219,7 @@ impl Renderer {
 
     /// A view's last-requested render width in device pixels (`0` until the view has been
     /// sized). Read to tell whether a not-yet-shown preview view needs seeding before a
-    /// `set-active-view assetPreview` (the C++ `previewView.desiredWidth == 0` check). See
+    /// `set-active-view assetPreview` (the `desired_width == 0` check). See
     /// [`ViewTarget::desired_width`].
     pub fn view_desired_width(&self, view: ViewId) -> u32 {
         self.views[view.index()].desired_width
@@ -1261,7 +1232,7 @@ impl Renderer {
     }
 
     /// Captures the active view's offscreen scene color to a PNG file (the screenshot
-    /// path, the C++ `captureViewport`, `renderer_capture.cpp:47`).
+    /// path).
     ///
     /// An out-of-band path, never on the present hot path: the offscreen may still be
     /// sampled by an in-flight frame, so it idles the device first (the capture's layout
@@ -1284,7 +1255,7 @@ impl Renderer {
     }
 
     /// Sets the active view this frame, and whether each view's shm publish is enabled (the
-    /// host's segment wiring → the C++ `shmPublish[view].enabled`). The active view's flag
+    /// host's segment wiring). The active view's flag
     /// gates whether [`Renderer::render_scene_offscreen`] folds the BGRA8 readback into the
     /// frame command buffer this frame.
     pub fn set_shm_publish_enabled(&mut self, view: ViewId, enabled: bool) {
@@ -1294,7 +1265,7 @@ impl Renderer {
     /// Drains the pipelined BGRA8 bytes staged at the last begin-frame fence wait, if any —
     /// `(view, width, height, bgra8)`. The host publishes these into the view's shm segment;
     /// the bytes belong to a frame whose GPU work completed `MAX_FRAMES_IN_FLIGHT` frames ago,
-    /// so the read is stall-free (the C++ `endFrame` pipelined `publishShmPublishSlot`).
+    /// so the read is stall-free.
     pub fn pending_shm_view(&self) -> Option<(ViewId, u32, u32, &[u8])> {
         let (view_idx, slot) = self.pending_shm_publish?;
         let capture = self.views[view_idx].shm_capture.slots[slot].as_ref()?;
@@ -1315,7 +1286,7 @@ impl Renderer {
     /// Stages the just-completed shm-capture slot's BGRA8 bytes for the host to publish, run
     /// at [`Renderer::begin_offscreen_frame`] right after this slot's in-flight fence wait —
     /// the slot's recorded readback (from `MAX_FRAMES_IN_FLIGHT` frames ago) is now host-
-    /// visible, so the read never stalls (the C++ `endFrame` pipelined publish). A no-op when
+    /// visible, so the read never stalls. A no-op when
     /// the active view's shm publish is off or the slot has no completed readback yet.
     fn stage_pending_shm_publish(&mut self, slot: usize) {
         self.pending_shm_publish = None;
@@ -1340,8 +1311,7 @@ impl Renderer {
     /// it in a host-visible staging buffer, and a buffer→host barrier makes the bytes visible
     /// to the host once the frame fence signals. Folded into the frame's single submit — no
     /// separate submit, no synchronous wait. The offscreen is left in `TransferSrcOptimal`
-    /// (the tracked layout the next frame's producer barrier transitions from), matching the
-    /// C++ `recordShmPublishCopy` (`renderer.cppm:2389`).
+    /// (the tracked layout the next frame's producer barrier transitions from).
     ///
     /// # Errors
     ///
@@ -1373,7 +1343,6 @@ impl Renderer {
         };
         // The offscreen rests in COLOR_ATTACHMENT (after the post chain's overlay pass) or
         // SHADER_READ_ONLY (after a prior frame's readback); match the source scope to it.
-        // The C++ `recordShmPublishCopy` widens the source to ComputeShader|ColorAttachmentOutput.
         let (from_stage, from_access) = match from_layout {
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => (
                 vk::PipelineStageFlags2::FRAGMENT_SHADER,
@@ -1488,8 +1457,7 @@ impl Renderer {
                 staging,
                 &[copy],
             );
-            // Make the staging write visible to host reads once the frame fence signals
-            // (the C++ `recordShmPublishCopy` host barrier).
+            // Make the staging write visible to host reads once the frame fence signals.
             let host = vk::BufferMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COPY)
                 .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
@@ -1506,7 +1474,7 @@ impl Renderer {
         }
 
         // The offscreen rests in TRANSFER_SRC after the copy; the next frame's first write
-        // transitions from this tracked layout (the C++ leaves `src.layout` at TransferSrc).
+        // transitions from this tracked layout (it rests at TransferSrc).
         self.views[active].offscreen.layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
         // A readback was recorded into this slot; its bytes are host-visible once this frame's
         // fence signals (published `MAX_FRAMES_IN_FLIGHT` frames later).
@@ -1521,7 +1489,7 @@ impl Renderer {
     /// [`Renderer::capture_viewport`] (the PNG screenshot path, which needs the unconverted
     /// halves for tonemap/clamp encoding). The offscreen may still be sampled by an in-flight
     /// frame, so the device is idled first; the image is left in `ShaderReadOnlyOptimal` so
-    /// the next frame's producer barrier holds (the C++ `captureViewport` layout discipline).
+    /// the next frame's producer barrier holds.
     /// The shm publish uses the GPU-converting [`Renderer::read_active_view_bgra8`] instead.
     fn read_active_offscreen(&mut self) -> Result<(vk::Extent2D, vk::Format, Vec<u8>)> {
         let raw = self.device.raw();
@@ -1535,7 +1503,7 @@ impl Renderer {
             * crate::format_pixel_bytes(format) as vk::DeviceSize;
 
         // The offscreen may still be sampled by an in-flight frame; idle so the read-back's
-        // layout transition cannot race that read (the C++ `device.waitIdle()`).
+        // layout transition cannot race that read.
         self.device.wait_idle()?;
 
         let buffer = crate::Buffer::new(
@@ -1573,8 +1541,8 @@ impl Renderer {
         // PNG screenshot path may hit it before any frame rendered (UNDEFINED → TopOfPipe). The
         // device is idled above, so this barrier is for layout correctness, not cross-queue
         // sync. Leaving it ShaderReadOnly afterwards keeps the next frame's producer barrier
-        // consistent (the C++ `captureViewport` `fromStage`/`fromAccess` choice, widened to the
-        // editor host's COLOR_ATTACHMENT source).
+        // consistent (the `from_stage`/`from_access` choice covers the editor host's
+        // COLOR_ATTACHMENT source).
         let (from_stage, from_access) = match from_layout {
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => (
                 vk::PipelineStageFlags2::FRAGMENT_SHADER,
@@ -1689,7 +1657,7 @@ impl Renderer {
     /// Arms a window/composited-output screenshot for the next present: the swapchain
     /// image (the actual composited window output, distinct from the offscreen
     /// [`Renderer::capture_viewport`] path) is copied to a host buffer and written to
-    /// `path` at the next [`Renderer::render_frame`]. The C++ `requestWindowCapture`.
+    /// `path` at the next [`Renderer::render_frame`].
     ///
     /// # Errors
     ///
@@ -1716,8 +1684,7 @@ impl Renderer {
         self.capture_next_window_path.is_some()
     }
 
-    /// Builds the lazy thumbnail/preview PSOs + the preview sphere up front. The C++
-    /// `prewarmThumbnailResources`.
+    /// Builds the lazy thumbnail/preview PSOs + the preview sphere up front.
     ///
     /// # Errors
     ///
@@ -1727,7 +1694,6 @@ impl Renderer {
     }
 
     /// Renders `mesh` framed by its AABB under a fixed light into a `size`×`size` texture.
-    /// The C++ `renderMeshThumbnail`.
     ///
     /// # Errors
     ///
@@ -1743,7 +1709,7 @@ impl Renderer {
 
     /// Renders a unit sphere with `material` under studio lighting into a `size`×`size`
     /// texture (`shader_spv` of `None` uses the default preview pipeline; a codegen
-    /// material passes its compiled `.spv` path). The C++ `renderMaterialPreview`.
+    /// material passes its compiled `.spv` path).
     ///
     /// # Errors
     ///
@@ -1764,7 +1730,6 @@ impl Renderer {
     }
 
     /// Renders `mesh` shaded per-submesh with its materials into a `size`×`size` texture.
-    /// The C++ `renderModelThumbnail`.
     ///
     /// # Errors
     ///
@@ -1785,7 +1750,6 @@ impl Renderer {
     }
 
     /// Renders the framed mesh to a `size`×`size` texture, then reads it back to a PNG.
-    /// The C++ `encodeAssetThumbnailPng`.
     ///
     /// # Errors
     ///
@@ -1800,7 +1764,7 @@ impl Renderer {
     }
 
     /// Renders the framed, textured model to a `size`×`size` texture, then reads it back
-    /// to a PNG. The C++ `encodeModelThumbnailPng`.
+    /// to a PNG.
     ///
     /// # Errors
     ///
@@ -1821,7 +1785,6 @@ impl Renderer {
     }
 
     /// Renders `texture` (downscaled to fit `size`×`size`) and reads it back to a PNG.
-    /// The C++ `encodeTextureThumbnailPng`.
     ///
     /// # Errors
     ///
@@ -1840,7 +1803,7 @@ impl Renderer {
     /// [`Renderer::record_clear`]) into a host buffer and writes it to the armed path as a
     /// PNG, then clears the pending path. Called from [`Renderer::render_frame`] after the
     /// present submit's fence has signalled. A failure is logged, not fatal (a screenshot
-    /// must never crash the frame loop). The C++ swapchain-present capture branch.
+    /// must never crash the frame loop).
     fn run_pending_window_capture(&mut self, image_index: usize) {
         let Some(path) = self.capture_next_window_path.take() else {
             return;
@@ -2023,8 +1986,7 @@ impl Renderer {
     /// Selects the anti-aliasing mode (`msaa_samples` ≥ 2 → MSAA, else `fxaa`, else `taa`,
     /// else off — mutually exclusive). Idles the GPU, recreates the active view's AA
     /// targets, and — when the MSAA sample count changed — clears the sample-count-baked
-    /// PSO cache so the mesh + depth-prepass PSOs rebuild for the new count. The C++ `setAa`
-    /// (`renderer_aa.cpp:67`).
+    /// PSO cache so the mesh + depth-prepass PSOs rebuild for the new count.
     ///
     /// # Errors
     ///
@@ -2034,11 +1996,10 @@ impl Renderer {
         self.device.wait_idle()?;
         if count_changed {
             // The mesh + depth-prepass PSOs bake the sample count — clear them so the next
-            // request rebuilds for the new count (the C++ `pipelines.cache.clear()`).
+            // request rebuilds for the new count.
             self.pipelines.set_sample_count(self.aa.sample_count());
             // The sky PSO bakes the sample count too — rebuild it for the new scene-color
-            // target, or the sky pass draws MSAA color with a 1× pipeline (the C++ `setAa`
-            // sky-PSO rebuild, `renderer_aa.cpp:105`).
+            // target, or the sky pass draws MSAA color with a 1× pipeline.
             self.sky
                 .set_sample_count(&self.device, &self.descriptors, self.aa.sample_count())?;
         }
@@ -2052,7 +2013,7 @@ impl Renderer {
     }
 
     /// Selects the AA mode by name (`"off"` / `"fxaa"` / `"taa"` / `"msaa2"` / `"msaa4"` /
-    /// `"msaa8"`) — the control-plane / CLI entry. The C++ `setAaMode`.
+    /// `"msaa8"`) — the control-plane / CLI entry.
     ///
     /// # Errors
     ///
@@ -2069,35 +2030,33 @@ impl Renderer {
         self.set_aa(samples, fxaa, taa)
     }
 
-    /// The current AA mode as a name (`"off"` / `"fxaa"` / `"taa"` / `"msaaN"`). The C++
-    /// `aaMode`.
+    /// The current AA mode as a name (`"off"` / `"fxaa"` / `"taa"` / `"msaaN"`).
     pub fn aa_mode(&self) -> String {
         self.aa.mode()
     }
 
-    /// Toggles the depth pre-pass (lays down scene depth before the shaded scene pass). The
-    /// C++ `setDepthPrepass`.
+    /// Toggles the depth pre-pass (lays down scene depth before the shaded scene pass).
     pub fn set_depth_prepass(&mut self, enabled: bool) {
         self.use_depth_prepass = enabled;
     }
 
-    /// Whether the depth pre-pass is on. The C++ `depthPrepassEnabled`.
+    /// Whether the depth pre-pass is on.
     pub fn depth_prepass_enabled(&self) -> bool {
         self.use_depth_prepass
     }
 
     /// Sets the tonemap exposure in stops; the mandatory tonemap pass applies
-    /// `exp2(this)`. The C++ `setExposure` (`renderer.cppm:2795`).
+    /// `exp2(this)`.
     pub fn set_exposure(&mut self, ev: f32) {
         self.exposure_ev = ev;
     }
 
-    /// The current tonemap exposure in stops. The C++ `exposureEv` (`renderer.cppm:2800`).
+    /// The current tonemap exposure in stops.
     pub fn exposure_ev(&self) -> f32 {
         self.exposure_ev
     }
 
-    /// Selects the debug render-output mode (the C++ `setViewMode`). `Wireframe` arms
+    /// Selects the debug render-output mode. `Wireframe` arms
     /// the wireframe PSO permutation; the channel modes fold a debug-output index into
     /// the light UBO's `point_shadow_meta.w`.
     pub fn set_view_mode(&mut self, mode: ViewMode) {
@@ -2106,57 +2065,54 @@ impl Renderer {
         self.lighting.set_debug_channel(mode.debug_channel());
     }
 
-    /// The current debug render-output mode (the C++ `viewMode`).
+    /// The current debug render-output mode.
     pub fn view_mode(&self) -> ViewMode {
         self.view_mode
     }
 
-    /// Toggles the GPU compute-skinning path (the C++ `setSkinning`).
+    /// Toggles the GPU compute-skinning path.
     pub fn set_skinning(&mut self, enabled: bool) {
         self.skinning_enabled = enabled;
     }
 
-    /// Whether GPU skinning is on (the C++ `skinningEnabled`).
+    /// Whether GPU skinning is on.
     pub fn skinning_enabled(&self) -> bool {
         self.skinning_enabled
     }
 
-    /// Whether the device is a software rasterizer (the C++ `softwareGpu`).
+    /// Whether the device is a software rasterizer.
     pub fn software_gpu(&self) -> bool {
         self.software_gpu
     }
 
-    /// The active view's offscreen render width in device pixels (the C++
-    /// `viewportWidth`).
+    /// The active view's offscreen render width in device pixels.
     pub fn viewport_width(&self) -> u32 {
         self.views[self.active_view.index()].extent().width
     }
 
-    /// The active view's offscreen render height in device pixels (the C++
-    /// `viewportHeight`).
+    /// The active view's offscreen render height in device pixels.
     pub fn viewport_height(&self) -> u32 {
         self.views[self.active_view.index()].extent().height
     }
 
-    /// The number of cached PSOs (the C++ `pipelineCount`).
+    /// The number of cached PSOs.
     pub fn pipeline_count(&self) -> u32 {
         self.pipelines.pipeline_count()
     }
 
-    /// The high-water count of bindless texture slots claimed (the C++
-    /// `bindlessTextureCount`).
+    /// The high-water count of bindless texture slots claimed.
     pub fn bindless_texture_count(&self) -> u32 {
         self.descriptors.texture_count()
     }
 
-    /// The number of reclaimed-and-free bindless slots (the C++ `bindlessFreeCount`).
+    /// The number of reclaimed-and-free bindless slots.
     pub fn bindless_free_count(&self) -> u32 {
         self.descriptors.free_count()
     }
 
     /// The most recent frame's full draw + timing counters, folding the run-loop frame
-    /// times and the profiler mode into the draw-path [`RenderStats`] (the C++
-    /// `renderStats`). `fps` derives from `frame_ms`.
+    /// times and the profiler mode into the draw-path [`RenderStats`]. `fps` derives from
+    /// `frame_ms`.
     pub fn render_stats(&self) -> RenderStatsFull {
         let fps = if self.frame_ms > 0.0 {
             1000.0 / self.frame_ms
@@ -2180,7 +2136,7 @@ impl Renderer {
     }
 
     /// Records the run loop's per-frame wall-clock timings for [`Renderer::render_stats`]
-    /// and the frame-history percentiles (the C++ per-frame `frameMs`/`cpuFrameMs`/… set).
+    /// and the frame-history percentiles.
     pub fn record_frame_timings(&mut self, frame_ms: f32, cpu_frame_ms: f32, cpu_wait_ms: f32) {
         self.frame_ms = frame_ms;
         self.cpu_frame_ms = cpu_frame_ms;
@@ -2188,8 +2144,8 @@ impl Renderer {
     }
 
     /// Folds one frame's wall-clock delta (seconds) into the smoothed `frame_ms` headline the
-    /// `render-stats` query reports, exactly as the C++ `endFrame` did (`renderer.cppm:2670`):
-    /// seed on the first frame, then a 0.9/0.1 EMA. A zero or non-finite delta is ignored.
+    /// `render-stats` query reports: seed on the first frame, then a 0.9/0.1 EMA. A zero or
+    /// non-finite delta is ignored.
     pub fn observe_frame_delta(&mut self, dt_seconds: f32) {
         if dt_seconds <= 0.0 || !dt_seconds.is_finite() {
             return;
@@ -2203,8 +2159,8 @@ impl Renderer {
     }
 
     /// Folds one frame's CPU split (busy + fence-wait, in ms) into the smoothed `cpu_frame_ms`
-    /// / `cpu_wait_ms` the `render-stats` query reports, exactly as the C++ `endFrame` did
-    /// (`renderer.cppm:2695`): seed on the first frame, then a 0.9/0.1 EMA each. The busy span is
+    /// / `cpu_wait_ms` the `render-stats` query reports: seed on the first frame, then a
+    /// 0.9/0.1 EMA each. The busy span is
     /// the run loop's update + render window minus the GPU wait, so it is render-thread CPU work,
     /// not wall clock. A non-finite value is ignored.
     pub fn observe_cpu_frame(&mut self, busy_ms: f32, wait_ms: f32) {
@@ -2224,15 +2180,15 @@ impl Renderer {
         }
     }
 
-    /// The per-frame telemetry tail the run loop calls once after each rendered frame (the C++
-    /// `endFrame` perf block): folds the CPU busy/wait split into the smoothed headline, pushes
+    /// The per-frame telemetry tail the run loop calls once after each rendered frame:
+    /// folds the CPU busy/wait split into the smoothed headline, pushes
     /// the raw frame into the history ring, runs the perf-alarm detectors, and advances the
     /// profiler-capture state machine over the slot just rendered.
     ///
     /// `busy_ms` is the loop's update+render span minus the GPU fence-wait; `wait_ms` is that
     /// wait; `dt_sec` is the wall-clock delta since the prior frame (drives the alarm EMA's
-    /// irregular-interval alpha). Splitting the wall-clock-delta EMA ([`Renderer::observe_frame_delta`],
-    /// called at the loop's frame top) from this tail mirrors the C++ ordering.
+    /// irregular-interval alpha). The wall-clock-delta EMA ([`Renderer::observe_frame_delta`])
+    /// is split out and called at the loop's frame top, ahead of this tail.
     pub fn finalize_frame_telemetry(&mut self, busy_ms: f32, wait_ms: f32, dt_sec: f32) {
         self.observe_cpu_frame(busy_ms, wait_ms);
 
@@ -2262,42 +2218,39 @@ impl Renderer {
             .tick(&self.frame_history, &self.perf_config, &inputs);
     }
 
-    /// The current GPU profiler mode (the C++ `profilerMode`).
+    /// The current GPU profiler mode.
     pub fn profiler_mode(&self) -> ProfilerMode {
         self.gpu_profiler.mode
     }
 
     /// Selects the GPU profiler mode, allocating the query pools on first non-`Off`
-    /// request and clamping to what the device supports (the C++ `setProfilerMode`).
+    /// request and clamping to what the device supports.
     pub fn set_profiler_mode(&mut self, mode: ProfilerMode) {
         self.gpu_profiler.set_mode(&self.device, mode);
     }
 
-    /// Whether the device's graphics queue supports timestamp queries (the C++
-    /// `profilerTimestampsSupported`).
+    /// Whether the device's graphics queue supports timestamp queries.
     pub fn profiler_timestamps_supported(&self) -> bool {
         self.gpu_profiler.timestamps_supported
     }
 
-    /// Whether the device supports pipeline-statistics queries (the C++
-    /// `profilerPipelineStatsSupported`).
+    /// Whether the device supports pipeline-statistics queries.
     pub fn profiler_pipeline_stats_supported(&self) -> bool {
         self.gpu_profiler.pipeline_stats_supported
     }
 
-    /// The last frame's per-pass GPU timings (the C++ `passTimings`). Empty unless the
+    /// The last frame's per-pass GPU timings. Empty unless the
     /// profiler ran in a timestamps mode.
     pub fn pass_timings(&self) -> &[PassTiming] {
         &self.gpu_profiler.last_timings
     }
 
-    /// The last frame's total GPU span across all passes (ms) (the C++
-    /// `passTimingsTotalMs`).
+    /// The last frame's total GPU span across all passes (ms).
     pub fn pass_timings_total_ms(&self) -> f32 {
         self.gpu_profiler.last_gpu_total_ms
     }
 
-    /// Arms a profiler capture, returning its id (the C++ `startProfileCapture`).
+    /// Arms a profiler capture, returning its id.
     pub fn start_profile_capture(
         &mut self,
         mode: CaptureMode,
@@ -2317,8 +2270,7 @@ impl Renderer {
         )
     }
 
-    /// Finishes the armed capture and returns the accumulated spans + metadata (the C++
-    /// `stopProfileCapture`).
+    /// Finishes the armed capture and returns the accumulated spans + metadata.
     pub fn stop_profile_capture(&mut self) -> ProfileCapture {
         let software_gpu = self.software_gpu;
         let device_name = self.device_name.clone();
@@ -2333,7 +2285,7 @@ impl Renderer {
     }
 
     /// Advances the capture recorder once per finalized frame, appending the merged
-    /// CPU+GPU spans while `Recording` (the C++ `capture.tick` at the read-back seam).
+    /// CPU+GPU spans while `Recording`, at the read-back seam.
     /// The run loop calls this each frame after the profiler read-back.
     pub fn tick_profile_capture(&mut self, cpu_slot: usize) {
         self.capture
@@ -2345,59 +2297,57 @@ impl Renderer {
         &mut self.cpu_profiler
     }
 
-    /// The capture's mode (the C++ `profileCaptureMode`).
+    /// The capture's mode.
     pub fn profile_capture_mode(&self) -> CaptureMode {
         self.capture.mode
     }
 
-    /// The capture state machine's current state (the C++ `profileCaptureState`).
+    /// The capture state machine's current state.
     pub fn profile_capture_state(&self) -> CaptureState {
         self.capture.state
     }
 
-    /// Frames copied into the in-flight capture so far (the C++
-    /// `profileCaptureCapturedFrames`).
+    /// Frames copied into the in-flight capture so far.
     pub fn profile_capture_captured_frames(&self) -> u32 {
         self.capture.captured_frames
     }
 
-    /// The in-flight capture's target frame count (the C++ `profileCaptureTargetFrames`).
+    /// The in-flight capture's target frame count.
     pub fn profile_capture_target_frames(&self) -> u32 {
         self.capture.target_frames
     }
 
-    /// The rolling frame-time percentile / stutter summary (the C++ `frameHistoryStats`).
+    /// The rolling frame-time percentile / stutter summary.
     pub fn frame_history_stats(&self) -> FrameHistoryStats {
         self.frame_history.stats()
     }
 
-    /// The most recent `max_samples` frame samples, oldest→newest (the C++ `frameSamples`).
+    /// The most recent `max_samples` frame samples, oldest→newest.
     pub fn frame_samples(&self, max_samples: u32) -> Vec<FrameSample> {
         self.frame_history.samples(max_samples)
     }
 
-    /// The shared frame-budget / threshold config (the C++ `perfConfig`).
+    /// The shared frame-budget / threshold config.
     pub fn perf_config(&self) -> PerfConfig {
         self.perf_config
     }
 
-    /// Replaces the perf config, clamping it into sane ranges (the C++ `setPerfConfig`).
+    /// Replaces the perf config, clamping it into sane ranges.
     pub fn set_perf_config(&mut self, config: PerfConfig) {
         self.perf_config = config.clamped();
     }
 
-    /// Drains perf-alarm events with `seq > since` (the C++ `drainAlarms`).
+    /// Drains perf-alarm events with `seq > since`.
     pub fn drain_alarms(&self, since: u64) -> AlarmDrain {
         self.alarms.drain(since)
     }
 
-    /// The currently-firing perf alarms (the C++ `activeAlarms`).
+    /// The currently-firing perf alarms.
     pub fn active_alarms(&self) -> &[ActiveAlarm] {
         self.alarms.active()
     }
 
-    /// Toggles the infinite analytic ground-grid debug overlay. The C++ `setShowGrid`
-    /// (`renderer.cppm:3096`).
+    /// Toggles the infinite analytic ground-grid debug overlay.
     pub fn set_show_grid(&mut self, enabled: bool) {
         self.show_grid = enabled;
     }
@@ -2409,8 +2359,7 @@ impl Renderer {
 
     /// Selects native-viewport-host present mode: present blits the post-processed
     /// offscreen straight to the swapchain (no ui pass). The offscreen content (incl. the
-    /// overlay) is identical to editor mode. The C++ `setPresentViewportOnly`
-    /// (`renderer.cppm:2316`).
+    /// overlay) is identical to editor mode.
     pub fn set_present_viewport_only(&mut self, enabled: bool) {
         self.present_viewport_only = enabled;
     }
@@ -2423,8 +2372,7 @@ impl Renderer {
     /// Replaces this frame's editor-overlay geometry: the `depth_tested` range (gizmo /
     /// frustums occluded by scene geometry) then the `on_top` range (handles, always
     /// drawn). Composited into the post-tonemap color so present-only blits it too. The
-    /// geometry source is the host's native gizmo builder. The C++ `submitOverlay`
-    /// (`renderer.cppm:2345`).
+    /// geometry source is the host's native gizmo builder.
     pub fn submit_overlay(&mut self, depth_tested: Vec<OverlayVertex>, on_top: Vec<OverlayVertex>) {
         self.overlay.submit(depth_tested, on_top);
     }
@@ -2444,9 +2392,8 @@ impl Renderer {
     /// Builds the frame's [`SceneDrawList`] from `items` + the concatenated `joints`
     /// palette (`worldBone * inverseBind` per joint, indexed by each skinned item's
     /// `joint_offset`). Uploads the instance / material / palette SSBOs, sizes the
-    /// deformed buffers, and wires the skin dispatches for the current frame slot. The
-    /// C++ `submitDrawList` (joints form). Call once per frame before
-    /// [`Renderer::render_scene_offscreen`].
+    /// deformed buffers, and wires the skin dispatches for the current frame slot. Call
+    /// once per frame before [`Renderer::render_scene_offscreen`].
     ///
     /// # Errors
     ///
@@ -2484,11 +2431,9 @@ impl Renderer {
     /// (geometry → instanced draw → a flat-ambient image). Call after
     /// [`Renderer::submit_draw_list`]; submit-seam closures replay after the batch list.
     ///
-    /// This is the offscreen half of the C++ `beginFrameGraph` (`renderer.cppm:1112`)
-    /// reduced to the `depth-prepass` + `scene` passes: the graph derives the
-    /// UNDEFINED → COLOR/DEPTH attachment barriers and the depth WAW barrier from the
-    /// declared usages. No present (the swapchain present is the bring-up path); the
-    /// offscreen image is left in `COLOR_ATTACHMENT_OPTIMAL` for a later post/capture.
+    /// The graph derives the UNDEFINED → COLOR/DEPTH attachment barriers and the depth WAW
+    /// barrier from the declared usages. The offscreen image is left in
+    /// `COLOR_ATTACHMENT_OPTIMAL` for a later post/capture.
     ///
     /// # Errors
     ///
@@ -2496,7 +2441,7 @@ impl Renderer {
     /// Begins the offscreen frame: waits + resets the current slot's in-flight fence and
     /// resets its command pool, so the slot is idle before any per-frame state reset (notably
     /// the layers' draw-list submit, which resets the per-frame skinning descriptor pool).
-    /// The C++ `beginFrame` fence-wait, split out so the run loop runs it in `begin_frame`
+    /// The fence-wait is split out so the run loop runs it in `begin_frame`
     /// (before the `on_render`/`on_ui` hooks) rather than at submit time. Sets
     /// [`Renderer::frame_begun`] so the following [`Renderer::render_scene_offscreen`] does not
     /// re-wait the now-unsignaled fence.
@@ -2515,12 +2460,12 @@ impl Renderer {
         )?;
         // This slot's GPU work (from MAX_FRAMES_IN_FLIGHT frames ago) is now complete, so its
         // timestamp pool reads back without blocking: fold the prior frame's per-pass GPU spans
-        // into `gpu_frame_ms` + `last_timings` (the C++ `readbackGpuTimings` at the begin-frame
-        // fence wait). A no-op when the profiler is `Off`.
+        // into `gpu_frame_ms` + `last_timings` at the begin-frame fence wait. A no-op when the
+        // profiler is `Off`.
         let slot = self.frames.index();
         // Re-sample the GPU↔CPU clock offset (cheap, no queue work) before the read-back, so
-        // this frame's spans decode onto the CPU axis (the C++ `calibrateTimestamps` ordering:
-        // calibrate → readback). The profiler self-gates to ~once a second; only runs while
+        // this frame's spans decode onto the CPU axis (ordering: calibrate → readback). The
+        // profiler self-gates to ~once a second; only runs while
         // profiling with pools allocated.
         self.frame_serial = self.frame_serial.wrapping_add(1);
         if self.gpu_profiler.mode != ProfilerMode::Off && self.gpu_profiler.pools_ready {
@@ -2534,12 +2479,12 @@ impl Renderer {
         // frame: the GPU `last_timings` just read back and the CPU spans still in `buffers[slot]`
         // were both recorded `MAX_FRAMES_IN_FLIGHT` frames ago. Ticking after the reset (at frame
         // end) would pair this frame's CPU spans with the older GPU read-back, splitting the lanes
-        // by the read-back lag (the C++ `readbackGpuTimings → tickCapture → reset` ordering).
+        // by the read-back lag (ordering: readback → tick-capture → reset).
         self.capture
             .tick(&self.cpu_profiler, slot, &self.gpu_profiler);
         // This slot's frame fence just signalled, so its recorded shm readback (from
         // MAX_FRAMES_IN_FLIGHT frames ago) is host-visible: stage those bytes for the host to
-        // publish without a stall (the C++ `endFrame` pipelined `publishShmPublishSlot`).
+        // publish without a stall.
         self.stage_pending_shm_publish(slot);
         // SAFETY: the ash seam. The waited fence is unsignaled and reset before resubmit.
         let raw = self.device.raw();
@@ -2563,7 +2508,7 @@ impl Renderer {
 
     /// Resets this slot's GPU timestamp (and pipeline-stats) query pool on the recording command
     /// buffer, so the graph's per-pass scopes write into a clean pool. A no-op when the profiler
-    /// is `Off` or its pools are not allocated (the C++ `beginFrame` `resetQueryPool` block).
+    /// is `Off` or its pools are not allocated.
     fn reset_profiler_pools(&self, cmd: vk::CommandBuffer, slot: usize) {
         if self.gpu_profiler.mode == ProfilerMode::Off || !self.gpu_profiler.pools_ready {
             return;
@@ -2590,7 +2535,7 @@ impl Renderer {
         // Re-bake the IBL environment if the sky inputs changed (the directional light
         // moved). Deferred to here — a GPU-idle point — so the visible sky + IBL relight
         // together. The bake waits idle internally; an editor-time event, not per-frame hot
-        // (the C++ `beginFrameGraph` rebake block). A failure is logged, not fatal.
+        // A failure is logged, not fatal.
         if self.ibl.rebake_pending {
             if let Err(err) = self.ibl.fire_rebake(&self.device) {
                 saffron_core::log_error!("ibl re-bake failed: {err}");
@@ -2600,7 +2545,7 @@ impl Renderer {
         // Wait + reset this slot's fence and command pool. The run loop calls
         // [`Renderer::begin_offscreen_frame`] in `begin_frame` so the slot is idle *before*
         // the layers' draw-list submit resets the per-frame skinning descriptor pool (the
-        // C++ `beginFrame` waits the fence first); the `frame_begun` latch skips the
+        // fence is waited first); the `frame_begun` latch skips the
         // re-wait here so a standalone caller (the unit tests) still gets a self-contained
         // begin while the loop avoids a double-wait that would deadlock on the reset fence.
         if !self.frame_begun {
@@ -2612,7 +2557,7 @@ impl Renderer {
         let command_buffer = self.frames.command_buffer();
 
         // Reset this slot's CPU span buffer for a fresh frame when the profiler is active
-        // (the C++ `beginFrame` `cpuProfiler.buffers[frame.index].reset()`). When `Off` the
+        // When `Off` the
         // buffer stays empty and every CPU scope below is a cheap no-op.
         let profile_cpu = self.gpu_profiler.mode != ProfilerMode::Off;
         if profile_cpu {
@@ -2653,7 +2598,7 @@ impl Renderer {
         };
 
         // Screen-space effects ride a thin G-buffer prepass that runs when ANY of GTAO /
-        // contact / SSGI is on (the C++ `doScreen` gate). Resolve the prepass + each
+        // contact / SSGI is on. Resolve the prepass + each
         // effect's compute PSO up front (each takes `&mut self.pipelines`) so the graph
         // build below borrows the rest of `self` immutably; a `None` skips that pass.
         let gbuf_ready =
@@ -2662,8 +2607,8 @@ impl Renderer {
         let want_contact = gbuf_ready && self.ssao.use_contact;
         let want_ssgi = gbuf_ready && self.ssao.use_ssgi;
         // ReSTIR needs the thin G-buffer (it reconstructs world pos/normal from it), so it
-        // forces the prepass on even with no screen-space effect — the C++ ANDed
-        // `hasGbuffer` into `doRestir` after forcing the prepass for ReSTIR.
+        // forces the prepass on even with no screen-space effect, then ANDs G-buffer
+        // readiness into the ReSTIR enable.
         let want_restir = self.restir.use_restir()
             && self.restir.supported()
             && self.views[self.active_view.index()].restir.ready()
@@ -2787,7 +2732,7 @@ impl Renderer {
             None
         };
         // SSGI temporal accumulation runs whenever SSGI is on AND motion ran (it reprojects
-        // through the motion target); the C++ ran it independent of the final-image AA mode.
+        // through the motion target), independent of the final-image AA mode.
         let ssgi_accum = if want_ssgi && have_motion_targets {
             self.pipelines
                 .request_ssgi_accum(self.descriptors.taa_set_layout())
@@ -2869,7 +2814,7 @@ impl Renderer {
             "begin_command_buffer (scene)",
         )?;
 
-        // The validation-clean gate's regression probe (phase-5): when armed, record one
+        // The validation-clean gate's regression probe: when armed, record one
         // deliberately invalid command so a planted error surfaces through the debug
         // messenger. This proves the detector is wired — a silently-disabled gate (wrong
         // messenger prefix, no validation layer) would let the planted error pass unseen and
@@ -2879,14 +2824,14 @@ impl Renderer {
 
         // Timestamp queries are uninitialized until reset; reset this slot's pool(s) before the
         // graph writes into it (reading an unreset pool risks device loss). A no-op when the
-        // profiler is `Off` (the C++ `beginFrame` `resetQueryPool` block).
+        // profiler is `Off`.
         self.reset_profiler_pools(command_buffer, frame);
 
         self.record_scene_graph(command_buffer, frame, frame_pipelines);
 
         // Fold the active view's BGRA8 shm-publish readback into THIS frame's command buffer
         // when the view's shm publish is enabled — one submit covers it, with no separate
-        // submit and no synchronous wait (the C++ `recordShmPublishCopy` into `frame.commandBuffer`).
+        // submit and no synchronous wait.
         if self.shm_publish_enabled[self.active_view.index()] {
             self.record_shm_copy(command_buffer, frame)?;
         }
@@ -2899,8 +2844,7 @@ impl Renderer {
             "end_command_buffer (scene)",
         )?;
 
-        // CPU span over the frame's queue submit (the C++ `submit-present` `CpuScope`,
-        // `renderer.cppm:2591`). A no-op when the profiler is `Off`.
+        // CPU span over the frame's queue submit. A no-op when the profiler is `Off`.
         let profile_cpu = self.gpu_profiler.mode != ProfilerMode::Off;
         let submit_span = if profile_cpu {
             let CpuProfiler { registry, buffers } = &mut self.cpu_profiler;
@@ -2941,9 +2885,8 @@ impl Renderer {
             let CpuProfiler { buffers, .. } = &mut self.cpu_profiler;
             buffers[frame].end_span(index, cpu_now_ns());
         }
-        // One primary command buffer recorded + one submit2 this frame (the C++ `endFrame`
-        // `stats.commandBuffers = 1; stats.queueSubmits = 1`). The offscreen / shm-publish host
-        // path submits exactly once per frame.
+        // One primary command buffer recorded + one submit2 this frame. The offscreen /
+        // shm-publish host path submits exactly once per frame.
         self.stats.command_buffers = 1;
         self.stats.queue_submits = 1;
         // The slot just recorded into is the one `finalize_frame_telemetry` reads this frame
@@ -2971,8 +2914,7 @@ impl Renderer {
     ) {
         // CPU span over this frame's render-graph CONSTRUCTION (cull + scene/lighting/post
         // pass declarations), closed just before `execute-render-graph` opens — a top-level
-        // sibling of it (the C++ `build-frame-graph` `CpuScope`, `renderer.cppm:1161`). A no-op
-        // when the profiler is `Off`.
+        // sibling of it. A no-op when the profiler is `Off`.
         let profile_cpu = self.gpu_profiler.mode != ProfilerMode::Off;
         let build_span = if profile_cpu {
             let CpuProfiler { registry, buffers } = &mut self.cpu_profiler;
@@ -3228,7 +3170,6 @@ impl Renderer {
         // where the scene renders its 1× result (`scene_output`) and what the scene pass
         // attaches: MSAA renders to multisampled targets resolving into the 1× output;
         // FXAA / TAA render to a 1× scratch then a compute pass resolves it → offscreen.
-        // Exactly the C++ `sceneColor` / `sceneOutput` / `sceneColorAttachment` branching.
         // The offscreen contents are regenerated every frame (sky/scene clears it), so it
         // enters UNDEFINED — but its *exit* layout must be tracked so the shm read-back's
         // entry barrier uses the right `old_layout`. An external slot seeded at UNDEFINED
@@ -3307,8 +3248,7 @@ impl Renderer {
         // The motion-vector prepass: reproject this frame's vs last frame's camera into the
         // 1× motion target. Runs before the screen-space SSGI accumulation (it reprojects
         // through motion) and before the scene so the TAA resolve (after the scene) reads
-        // it; the graph derives ColorWrite → SampledReadCompute. The C++ runs it when
-        // `taa || do_ssgi`.
+        // it; the graph derives ColorWrite → SampledReadCompute. Runs when `taa || do_ssgi`.
         let motion_resource = self.add_motion_pass(
             &mut graph,
             &pipelines,
@@ -3351,8 +3291,7 @@ impl Renderer {
 
         // Visible sky: a fullscreen pass that fills the scene color target before the
         // geometry. It writes the SAME target the scene pass uses, owns the color clear when
-        // present, and the scene pass then loads instead of clearing (the C++ sky pass +
-        // `doSky` color-load gate).
+        // present, and the scene pass then loads instead of clearing.
         let did_sky = self.sky.should_draw();
         if did_sky {
             let bindless = bindless_set;
@@ -3362,7 +3301,7 @@ impl Renderer {
             // pass then LOADs it and owns the single MSAA resolve into scene_output. The sky
             // must NOT resolve or DONT_CARE here — discarding the multisampled samples would
             // leave the scene pass loading undefined MSAA color (a noisy band over black). The
-            // C++ sky pass is likewise unconditionally clear+store with no resolve.
+            // sky pass is unconditionally clear+store with no resolve.
             let mut color_att = RgAttachment::clear_store(scene_color_attachment);
             color_att.clear_value = vk::ClearValue {
                 color: vk::ClearColorValue {
@@ -3427,8 +3366,8 @@ impl Renderer {
                 float32: clear_color,
             },
         };
-        // The sky pass owns the color clear when it ran; the scene then loads it (the C++
-        // `doSky` color-load gate). Otherwise the scene clears the color itself.
+        // The sky pass owns the color clear when it ran; the scene then loads it.
+        // Otherwise the scene clears the color itself.
         if did_sky {
             color_att.load_op = vk::AttachmentLoadOp::LOAD;
         }
@@ -3478,7 +3417,7 @@ impl Renderer {
         // The scene pass binds five descriptor-set operations (sets 0, {1,2}, 3, 4, 5) plus one
         // each for the RT sets 6/7 when present — constant in the batch count. Record it for
         // `render-stats` here, where the resolved sets are known, since the pass body runs inside
-        // a graph closure whose return value is discarded (the C++ `descriptorBinds` accumulation).
+        // a graph closure whose return value is discarded.
         self.stats.descriptor_binds = crate::scene_pass::scene_draw_list_bind_count(
             self.scene_draw_list.valid && !self.scene_draw_list.batches.is_empty(),
             rt_mesh_set,
@@ -3607,16 +3546,16 @@ impl Renderer {
         // each pass body is then bracketed by a timestamp scope, written into this slot's pool
         // (reset at the top of the frame). The recorder is owned here, threaded through the
         // graph execute, then stashed back into the profiler for read-back `MAX_FRAMES_IN_FLIGHT`
-        // frames later (the C++ `scopeRecorder` arm + `executeRenderGraph` + `stashRecorder`).
+        // frames later.
         let mut recorder = self.gpu_profiler.frame_recorder(frame);
         // The graph is fully constructed; close the `build-frame-graph` span before the
-        // `execute-render-graph` span opens (siblings at top level, the C++ ordering).
+        // `execute-render-graph` span opens (siblings at top level).
         if let Some(index) = build_span {
             let CpuProfiler { buffers, .. } = &mut self.cpu_profiler;
             buffers[frame].end_span(index, cpu_now_ns());
         }
 
-        // Arm the CPU span recorder on the same gate as the GPU one (the C++ `cpuProfiler`):
+        // Arm the CPU span recorder on the same gate as the GPU one:
         // the graph brackets each pass body in a CPU span that nests under the
         // `execute-render-graph` scope opened here, so the merged capture carries both lanes.
         // `cpu_profiler` and `gpu_profiler` are distinct fields, so the two recorder borrows
@@ -3685,8 +3624,7 @@ impl Renderer {
 
         // Read back the ReSTIR radiance image's resolved exit layout (it rode an external
         // slot, ending ShaderReadOnly after the scene's SampledRead). The per-view temporal
-        // state was already advanced inside `add_restir_passes` (the C++ advanced it in the
-        // graph-build, before execute).
+        // state was already advanced inside `add_restir_passes`, before execute.
         if let Some(slot) = restir.radiance_slot {
             let layout = graph.external_layout(slot);
             self.views[self.active_view.index()]
@@ -3716,14 +3654,14 @@ impl Renderer {
 
         // TAA and/or SSGI accumulation consumed this frame's history parity; mark it valid
         // and flip the shared ping-pong index once so next frame reprojects through the
-        // buffer just written. FXAA touches no history, so it does not flip. The C++
-        // `historyValid = true; historyIndex = 1 - historyIndex`.
+        // buffer just written. FXAA touches no history, so it does not flip. Marks history
+        // valid and advances the ping-pong index by one.
         if temporal_ran {
             view.flip_history();
         }
         // Record this frame's camera viewProj as this view's previous frame for next
         // frame's motion reprojection (per-view: a re-activated view reprojects against its
-        // own last frame). The C++ end-of-frame `prevViewProj` store.
+        // own last frame).
         view.store_prev_view_proj(frame_view_proj);
     }
 
@@ -3738,8 +3676,7 @@ impl Renderer {
     /// Returns the irradiance + distance atlas resources for the scene's `SampledRead`
     /// declaration + the four imported images' external slots for the layout write-back.
     /// An empty [`DdgiResult`] when DDGI did not run (the scene skips the SampledRead +
-    /// keeps the atlases at their resting ShaderReadOnly layout). The C++ `doDdgi` block
-    /// (`renderer.cppm:1685`–`:1852`).
+    /// keeps the atlases at their resting ShaderReadOnly layout).
     fn add_ddgi_passes(&self, graph: &mut RenderGraph, pipelines: &FramePipelines) -> DdgiResult {
         let Some(ddgi_pipelines) = &pipelines.ddgi else {
             return DdgiResult::default();
@@ -3934,13 +3871,12 @@ impl Renderer {
     /// image). Writes this frame's per-view bindings (G-buffer/motion samplers, light +
     /// cluster SSBOs, the TLAS), imports the radiance image + the combined-reservoir
     /// sentinel buffer (the three passes serialize via RAW barriers on it the graph
-    /// derives), and advances the per-view temporal state. The C++ `doRestir` block
-    /// (`renderer.cppm:1885`–`:1990`).
+    /// derives), and advances the per-view temporal state.
     ///
     /// The full runtime gate ANDs: ReSTIR PSOs resolved, RT supported, a TLAS built this
     /// frame, the cluster cull ran (the froxel candidate lists), and the G-buffer prepass
     /// ran. Returns an empty [`RestirResult`] when any gate is unmet (direct lighting then
-    /// takes the clustered-forward path). The C++ `doRestir` gate (`renderer.cppm:1891`).
+    /// takes the clustered-forward path).
     fn add_restir_passes(
         &mut self,
         graph: &mut RenderGraph,
@@ -4035,8 +3971,8 @@ impl Renderer {
         let groups_y = groups(extent.height);
 
         // The combined-reservoir SSBO is the sentinel: the three passes serialize through
-        // RAW barriers the graph derives from StorageWrite → StorageRead on it (the C++
-        // `resvSentinel`). The radiance image rides an external slot for the cross-frame
+        // RAW barriers the graph derives from StorageWrite → StorageRead on it. The radiance
+        // image rides an external slot for the cross-frame
         // General ↔ ShaderReadOnly write-back.
         let sentinel = graph.import_buffer(combined);
         let radiance_slot = graph.alloc_external_layout(rad_layout);
@@ -4121,7 +4057,7 @@ impl Renderer {
         );
 
         // Advance the per-view temporal state (bump the RNG index, clear the history reset)
-        // — the C++ advanced it in the graph build, after adding the three passes.
+        // in the graph build, after adding the three passes.
         self.views[self.active_view.index()].restir.advance_frame();
 
         RestirResult {
@@ -4140,8 +4076,6 @@ impl Renderer {
     /// schedules after the scene pass, and the SSGI history / resolved external-layout
     /// slots (read back after execute). No-op (empty result) when the prepass did not run
     /// this frame.
-    ///
-    /// The C++ screen-space block in `beginFrameGraph` (`renderer.cppm:~1452`–`:1678`).
     fn add_screen_space_passes(
         &self,
         graph: &mut RenderGraph,
@@ -4157,8 +4091,8 @@ impl Renderer {
             // ReSTIR), but the übershader's layout always declares set 4, so it must still be
             // bound or `vkCmdDrawIndexed` reports set 4 unbound (`VUID-vkCmdDrawIndexed-None-08600`).
             // The per-view set 4 is allocated + written to the neutral init-transitioned maps at
-            // view bring-up (`build_screen_space`), so bind it whenever it is built — the C++
-            // unconditional `activeView(renderer).meshSet`. The in-shader AO/contact/SSGI flags
+            // view bring-up (`build_screen_space`), so bind it whenever it is built. The
+            // in-shader AO/contact/SSGI flags
             // gate the reads, so the lit image is correct against the neutral maps.
             let view = &self.views[self.active_view.index()];
             if view.screen_space_ready() {
@@ -4373,7 +4307,7 @@ impl Renderer {
             // final-image AA mode, sharing the ping-pong parity flipped after the scene.
             // The scene then SampledReads the resolved map (the mesh set 4 binding 2 points
             // at it when TAA is on, else the denoised map — but the layout transition is on
-            // whichever map this declares). The C++ `ssgi-accum` pass.
+            // whichever map this declares).
             if let (Some(accum), Some(motion)) = (&pipelines.ssgi_accum, motion) {
                 let p = view.history_index;
                 let ssgi_resolved_slot = graph.alloc_external_layout(
@@ -4456,8 +4390,7 @@ impl Renderer {
     /// Appends the motion-vector prepass when its PSO + targets resolved this frame: clear
     /// the rg16f motion target + its depth scratch, draw every batch with the cur/prev
     /// camera viewProj (the per-view `prev_view_proj`). Returns the imported motion resource
-    /// (the TAA / SSGI-accum passes sample it), or `None` when motion did not run. The C++
-    /// `motion` pass (`renderer.cppm:1432`).
+    /// (the TAA / SSGI-accum passes sample it), or `None` when motion did not run.
     fn add_motion_pass(
         &self,
         graph: &mut RenderGraph,
@@ -4535,7 +4468,7 @@ impl Renderer {
 
     /// Appends the FXAA edge-blur compute pass when its PSO resolved this frame: sample the
     /// scene's 1× result (`scene_output` = scratch) and store the blurred result into the
-    /// offscreen (`color`). The C++ `fxaa` pass (`renderer.cppm:2099`).
+    /// offscreen (`color`).
     fn add_fxaa_pass(
         &self,
         graph: &mut RenderGraph,
@@ -4569,7 +4502,7 @@ impl Renderer {
     /// blend with the current scene (`scene_output` = scratch) into the offscreen (`color`)
     /// plus the next-frame history. Parity `p` reads history `1 - p` and writes history `p`,
     /// bound in the per-view TAA set. Returns the history images' external-layout slots when
-    /// the pass ran. The C++ `taa` pass at `renderer.cppm:2120`.
+    /// the pass ran.
     fn add_taa_pass(
         &self,
         graph: &mut RenderGraph,
@@ -4641,8 +4574,8 @@ impl Renderer {
     /// offscreen `color` (`StorageImageRwCompute`, GENERAL layout) binding the per-view
     /// tonemap set + the `exp2(exposure_ev)` push, dispatched 8×8 over the viewport. The
     /// graph derives the ColorWrite → General transition before and (when present blits /
-    /// samples it) General → the present layout after. The C++ `addTonemapPass`
-    /// (`renderer.cppm:2296`). A build failure leaves the offscreen linear-HDR (logged).
+    /// samples it) General → the present layout after. A build failure leaves the offscreen
+    /// linear-HDR (logged).
     fn add_tonemap_pass(
         &self,
         graph: &mut RenderGraph,
@@ -4672,8 +4605,7 @@ impl Renderer {
     /// the post-tonemap offscreen `color`, depth-testing against the persisted 1× scene
     /// `depth`). The grid runs when shown; the overlay when geometry is queued. Both load
     /// the color (composite over the tonemapped image) and load the depth read-only (the
-    /// depth-tested ranges occlude; the on-top range ignores it). The C++ `grid` +
-    /// `editor-overlay` passes (`renderer.cppm:2202`–`:2283`).
+    /// depth-tested ranges occlude; the on-top range ignores it).
     fn add_grid_overlay_passes(
         &self,
         graph: &mut RenderGraph,
@@ -4824,10 +4756,10 @@ impl Renderer {
     ///
     /// The standalone host renders the scene into the offscreen in `on_ui`
     /// ([`Renderer::render_scene_offscreen`]) and blits it onto this acquired image in
-    /// [`Renderer::present_active_view_to_swapchain`] at `end_frame` — the C++
-    /// `presentViewportOnly` path, where `beginFrame` acquires and `endFrame` blits + presents.
+    /// [`Renderer::present_active_view_to_swapchain`] at `end_frame`: the present-only path,
+    /// where the frame begin acquires and the frame end blits + presents.
     /// Returns `false` when the swapchain is out of date (a resize the caller should handle by
-    /// rebuilding), matching the C++ `beginFrame` boolean.
+    /// rebuilding).
     ///
     /// # Errors
     ///
@@ -4892,8 +4824,7 @@ impl Renderer {
     }
 
     /// Blits the active view's post-processed offscreen onto the acquired swapchain image and
-    /// presents — the standalone present-only host's frame transport (the C++
-    /// `presentViewportToSwapchain`, `renderer.cppm:2355`).
+    /// presents — the standalone present-only host's frame transport.
     ///
     /// Runs at `end_frame`, after `on_ui` rendered the scene + native overlay into the
     /// offscreen via [`Renderer::render_scene_offscreen`] (which signals the slot's
@@ -5084,7 +5015,7 @@ impl Renderer {
 
     /// Records and submits one acquire → clear → present frame.
     ///
-    /// Mirrors the C++ per-frame path reduced to a clear:
+    /// The per-frame path reduced to a clear:
     /// 1. wait the slot's in-flight fence, then reset it;
     /// 2. acquire the next swapchain image (the slot's image-available semaphore);
     /// 3. wait any fence still tracking that image;
@@ -5287,9 +5218,9 @@ impl Renderer {
             .signal_semaphore_infos(&signal);
         let submits = [submit];
 
-        // SAFETY: the ash seam. The graphics queue is externally synchronized; in
-        // this phase it is touched from one thread only (the worker thread arrives
-        // in phase 16 behind the queue mutex). The fence is freshly reset.
+        // SAFETY: the ash seam. The graphics queue is externally synchronized; this
+        // submit runs on the render thread (the thumbnail worker submits behind the
+        // queue mutex). The fence is freshly reset.
         checked(
             unsafe {
                 raw.queue_submit2(
@@ -5329,7 +5260,7 @@ impl Renderer {
 }
 
 /// One whole-image sync2 layout transition (single color mip), the capture path's
-/// barrier (the C++ `transitionImage` inside `captureImageToBuffer`).
+/// barrier.
 ///
 /// # Safety
 ///
@@ -5468,7 +5399,7 @@ fn writeback_ssgi_history_layout(
     }
 }
 
-/// The validation-clean gate's regression probe seam (phase-5): when
+/// The validation-clean gate's regression probe seam: when
 /// `SAFFRON_VK_PLANT_VALIDATION_ERROR` is set, record one out-of-spec command into the
 /// scene frame's command buffer so the validation layer flags exactly one error on submit.
 ///
@@ -6091,7 +6022,7 @@ mod tests {
         recorded.map(|()| out)
     }
 
-    /// The phase-11 GPU-runtime gate: build the descriptor + pipeline sub-state, seed a
+    /// A GPU-runtime gate: build the descriptor + pipeline sub-state, seed a
     /// known linear-HDR color into an offscreen, then run the full final post chain
     /// (mandatory tonemap → ground grid → editor overlay) through the render graph and
     /// read the offscreen back. Asserts the tonemap mapped the HDR value to the expected

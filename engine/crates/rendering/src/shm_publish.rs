@@ -1,9 +1,7 @@
 //! The viewport shm publish: the byte-exact seqlock producer the editor's Wayland
 //! presenter reads.
 //!
-//! Ports `recreateShmSegment` / `enableViewportShmPublish` / `publishShmPublishSlot` /
-//! `destroyShmPublishSlots` (`renderer_capture.cpp:146`/`:193`/`:270`/`:306`). The
-//! segment is a **frozen wire contract**: a 32-byte header of eight `u32`s
+//! The segment is a **frozen wire contract**: a 32-byte header of eight `u32`s
 //! `[magic, width, height, seq, ring_slots, slot_capacity, 0, 0]` followed by
 //! `ring_slots` fixed-capacity BGRA8 frames. Frame `s` lands in ring slot
 //! `s % ring_slots`; `seq` is bumped last under a [`Ordering::Release`] fence so a
@@ -17,8 +15,7 @@
 //! memory object, `ftruncate`s it, and `mmap`s it `MAP_SHARED`; the producer writes
 //! the header + the ring via a raw pointer into that mapping. The seqlock ordering is
 //! the load-bearing invariant — `fence(Release)` between the pixel/dimension writes
-//! and the final `seq` store, exactly mirroring the C++
-//! `std::atomic_thread_fence(std::memory_order_release)`.
+//! and the final `seq` store.
 
 use std::ffi::CString;
 use std::os::fd::{AsFd, OwnedFd};
@@ -68,11 +65,11 @@ mod field {
 
 /// The producer side of one view's shm segment.
 ///
-/// Owns the POSIX shm fd + the `MAP_SHARED` mapping and writes the seqlock. The C++
-/// `ShmPublish` additionally held the per-frame-in-flight GPU `ShmPublishSlot`s (the
-/// BGRA8 image + staging buffer); those live on the renderer's capture record because
-/// they need the device/allocator — this type is the pure, GPU-free producer that
-/// owns the wire contract. [`Drop`] unmaps, closes, and `shm_unlink`s the name.
+/// Owns the POSIX shm fd + the `MAP_SHARED` mapping and writes the seqlock. The
+/// per-frame-in-flight GPU slots (the BGRA8 image + staging buffer) live on the
+/// renderer's capture record because they need the device/allocator — this type is the
+/// pure, GPU-free producer that owns the wire contract. [`Drop`] unmaps, closes, and
+/// `shm_unlink`s the name.
 #[derive(Default)]
 pub struct ShmPublish {
     /// The shm object name (`shm_open` path, e.g. `/saffron-scene`). Empty until enabled.
@@ -155,10 +152,10 @@ impl ShmPublish {
             Mode::from(0o600),
         )?;
         ftruncate(&fd, total_bytes as u64)?;
-        // SAFETY: the ash/shm seam. `fd` is a freshly truncated shm object of
-        // `total_bytes`; `mmap` over the whole length with `MAP_SHARED` read/write is
-        // the POSIX contract the C++ used. The returned pointer is non-null on success
-        // (`mmap` returns an error otherwise, propagated by `?`).
+        // SAFETY: the shm seam. `fd` is a freshly truncated shm object of `total_bytes`;
+        // `mmap` over the whole length with `MAP_SHARED` read/write is the POSIX
+        // contract. The returned pointer is non-null on success (`mmap` returns an error
+        // otherwise, propagated by `?`).
         let base = unsafe {
             mmap(
                 ptr::null_mut(),
@@ -395,9 +392,9 @@ mod tests {
 
     #[test]
     fn first_frame_lands_in_slot_1_not_slot_0() {
-        // The C++ computes `next = seq + 1` then writes slot `next % ring_slots`, so the
-        // first published frame (seq 1) lands in slot 1, NOT slot 0 — the off-by-one the
-        // reader (`seq % slots`) mirrors. A drift to slot 0 would silently misread.
+        // `publish` computes `next = seq + 1` then writes slot `next % ring_slots`, so
+        // the first published frame (seq 1) lands in slot 1, NOT slot 0 — the off-by-one
+        // the reader (`seq % slots`) mirrors. A drift to slot 0 would silently misread.
         let mut shm = ShmPublish::default();
         shm.enable(&unique_name("slot1")).expect("enable");
 

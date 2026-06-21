@@ -1,12 +1,9 @@
 //! The frame-time history ring, its percentile/consistency summary, and the
 //! perf-degradation alarm engine.
 //!
-//! Ports the GPU-free instrumentation half of `renderer_profiler.cpp`: the rolling
-//! [`FrameSample`] ring (`frameRing` + `frameRingHead`/`frameRingCount`), the
-//! on-demand [`FrameHistoryStats`] percentiles (`frameHistoryStats`, `:576`), the
-//! stutter detector (`renderer.cppm:2716`), the shared [`PerfConfig`] thresholds
-//! (`perfBudgetMs`/`setPerfConfig`, `:541`/`:555`), and the whole alarm state machine
-//! (`AlarmState`, `tickAlarms`/`raiseAlarm`/`clearAlarm`/`drainAlarms`, `:632`–`:960`).
+//! The GPU-free instrumentation: the rolling [`FrameSample`] ring, the on-demand
+//! [`FrameHistoryStats`] percentiles, the stutter detector, the shared [`PerfConfig`]
+//! thresholds, and the whole alarm state machine.
 //!
 //! The frame ring is recorded every frame regardless of the profiler mode — the
 //! distribution stays honest only if it sees every frame, un-smoothed. The alarm
@@ -113,7 +110,7 @@ impl PerfConfig {
         }
     }
 
-    /// Clamps a requested config into sane ranges (the C++ `setPerfConfig` clamps).
+    /// Clamps a requested config into sane ranges.
     pub fn clamped(self) -> Self {
         let green_median_mul = self.green_median_mul.max(1.0);
         let vram_warn_frac = self.vram_warn_frac.clamp(0.0, 1.0);
@@ -139,7 +136,7 @@ pub struct FrameHistory {
     count: usize,
     frame_serial: u64,
     stutter_count: u64,
-    /// Wall-clock ns of the last detected stutter (the C++ `lastStutterNs`).
+    /// Wall-clock ns of the last detected stutter.
     last_stutter_ns: u64,
 }
 
@@ -179,7 +176,7 @@ impl FrameHistory {
     }
 
     /// Records one frame: detects a stutter against the previous-3 average + the
-    /// `2× budget` floor (before the push, like the C++), then pushes the sample.
+    /// `2× budget` floor (before the push), then pushes the sample.
     ///
     /// A frame is a stutter when its time exceeds **both** `2×` the previous-3 average
     /// and an absolute floor of `2× budget` — the relative rule catches hitches at any

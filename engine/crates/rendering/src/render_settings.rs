@@ -1,7 +1,6 @@
 //! The project-file `renderSettings` block: the renderer's render-panel state as JSON.
 //!
-//! Ports `renderSettingsToJson` / `applyRenderSettings` (`assets.cppm:922`/`:940`). The
-//! save path serializes the AA mode, exposure, and the feature toggles; the load path
+//! The save path serializes the AA mode, exposure, and the feature toggles; the load path
 //! applies a saved block, leaving any missing field at its current value and applying the
 //! RT toggles only where the device supports ray tracing (so a project authored on an RT
 //! machine loads cleanly on a software one). One block, one schema — the project document
@@ -90,7 +89,7 @@ fn parse_render_settings(settings: &Value) -> RenderSettings {
 
 impl Renderer {
     /// Serializes the renderer's render-panel settings as the project-file
-    /// `renderSettings` block. The C++ `renderSettingsToJson`.
+    /// `renderSettings` block.
     pub fn render_settings_to_json(&self) -> Value {
         settings_to_json(&RenderSettings {
             aa: Some(self.aa_mode()),
@@ -111,12 +110,12 @@ impl Renderer {
     /// Applies a saved `renderSettings` block: a missing field keeps the current value,
     /// and the RT toggles apply only where the device supports ray tracing. A non-object
     /// value (or a wrong-typed field) is ignored field-by-field, so a malformed block
-    /// degrades to "keep current". The C++ `applyRenderSettings`.
+    /// degrades to "keep current".
     pub fn apply_render_settings(&mut self, settings: &Value) {
         let patch = parse_render_settings(settings);
         if let Some(aa) = &patch.aa {
             // The AA mode setter idles + rebuilds the active view's AA targets; a bad name
-            // falls back to "off" inside the setter, matching the C++ `setAaMode`.
+            // falls back to "off" inside the setter.
             let _ = self.set_aa_mode(aa);
         }
         if let Some(ev) = patch.exposure_ev {
@@ -163,8 +162,8 @@ mod tests {
     use serde_json::json;
 
     /// The serialized block carries every render-panel field with the frozen project keys
-    /// (matching the C++ `renderSettingsToJson` schema the editor's render panel reads).
-    /// Pure logic — no device needed (a headless `Renderer::new` crashes lavapipe's WSI).
+    /// (the schema the editor's render panel reads). Pure logic — no device needed (a
+    /// headless `Renderer::new` crashes lavapipe's WSI).
     #[test]
     fn render_settings_block_has_the_frozen_keys() {
         let settings = RenderSettings {

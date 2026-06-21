@@ -1,8 +1,6 @@
 //! The scene-global shadow render targets: the directional + spot depth maps and the
 //! omnidirectional point-shadow distance cube. The scene has one light rig, so these
-//! live once (not per editor pane) — the C++ `Targets` shadow-map slice
-//! (`renderer_types.cppm:1329`, the `initShadowResources` portion of
-//! `renderer_detail.cppm:2898`).
+//! live once (not per editor pane).
 //!
 //! The directional and spot maps are plain depth [`Image`]s (sampled with the compare
 //! sampler). The point cube ([`PointShadowCube`]) is a `CUBE_COMPATIBLE` 6-layer color
@@ -53,7 +51,7 @@ impl Targets {
         // Transition all three maps once to ShaderReadOnly so their descriptors are valid
         // on frames where no shadow pass runs (the shader gates the sample), and so the
         // point cube's first per-frame barrier (ShaderReadOnly → ColorAttachment) has a
-        // matching old layout. The C++ `initShadowResources` one-time init transition.
+        // matching old layout. A one-time init transition.
         initialize_shadow_layouts(device, &directional_shadow, &spot_shadow, &point_shadow)?;
         directional_shadow.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         spot_shadow.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
@@ -84,7 +82,7 @@ impl Targets {
 
 /// Runs a one-off command buffer transitioning the directional + spot depth maps and the
 /// point cube (all 6 layers) `UNDEFINED → SHADER_READ_ONLY_OPTIMAL`, submitting on the
-/// graphics queue and waiting. The C++ `initShadowResources` init transition.
+/// graphics queue and waiting.
 fn initialize_shadow_layouts(
     device: &Device,
     directional: &Image,
@@ -174,7 +172,7 @@ fn init_barrier(
 }
 
 /// A single-mip `SHADOW_MAP_SIZE`² depth image, usable as a depth attachment and sampled
-/// with the compare sampler. The C++ `newDepthImage(.., sampled=true)`.
+/// with the compare sampler.
 fn shadow_depth_map(resources: &Arc<DeviceResources>) -> Result<Image> {
     Image::new(
         resources,
@@ -199,7 +197,6 @@ fn shadow_depth_map(resources: &Arc<DeviceResources>) -> Result<Image> {
 /// shared single-layer depth scratch the per-face passes clear and reuse.
 ///
 /// A move-only Drop type owning its VMA allocation + 7 image views + the depth scratch.
-/// The C++ `newColorCubeImage` cube + `Targets::pointShadowDepth`/`pointShadowFaces`.
 pub struct PointShadowCube {
     resources: Arc<DeviceResources>,
     image: vk::Image,
