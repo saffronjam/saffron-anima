@@ -70,8 +70,7 @@ impl Default for PoseDelta {
 /// The two world-space joint rotations a two-bone solve produces.
 ///
 /// `upper` is the thigh/upper-arm and `lower` the shin/forearm. The end effector
-/// is positioned by composing these onto the chain (the solver body lands in a
-/// later phase).
+/// is positioned by composing these onto the chain.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TwoBoneIkResult {
     /// World-space delta rotation for the upper joint.

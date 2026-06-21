@@ -149,7 +149,7 @@ mod tests {
     use super::*;
 
     /// Compose the solved world-space delta rotations back onto the chain and
-    /// return the end-effector world position — the C++ `solvedEnd` lambda.
+    /// return the end-effector world position.
     ///
     /// The bone world rotations start at identity, so `upper` pre-multiplies the
     /// whole chain about the root and `lower` pre-multiplies the lower segment
@@ -264,8 +264,8 @@ mod tests {
     #[test]
     fn rotation_between_antiparallel() {
         // `from = +X`, `to = -X`: a 180 deg rotation about some axis perpendicular
-        // to X that takes +X onto -X (the antiparallel-axis fallback, exercised
-        // only indirectly by the C++ swing). The quaternion stays unit.
+        // to X that takes +X onto -X (the antiparallel-axis fallback). The
+        // quaternion stays unit.
         let q = rotation_between(Vec3::X, Vec3::new(-1.0, 0.0, 0.0));
         let rotated = q * Vec3::X;
         assert!(rotated.is_finite(), "antiparallel flip must not be NaN");

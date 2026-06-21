@@ -2,13 +2,12 @@
 //! pose-algebra helpers the player runtime and IK build on.
 //!
 //! This crate has zero FFI and no GPU concept. It consumes the clip types
-//! (`AnimClip`/`AnimTrack`) from `saffron-geometry` and, in later phases, reads
-//! and writes `saffron-scene` components; its only output toward rendering is the
+//! (`AnimClip`/`AnimTrack`) from `saffron-geometry` and reads and writes
+//! `saffron-scene` components; its only output toward rendering is the
 //! per-bone pose override scene composes into world matrices.
 //!
-//! The glam pin deletes the C++ `wxyz` quaternion hazard: a sampled rotation is a
-//! [`glam::Vec4`] whose four lanes are already the quaternion, so `Quat::from_vec4`
-//! reads it with no reorder — the `asQuat`/`fromQuat` swizzle helpers do not survive.
+//! A sampled rotation is a [`glam::Vec4`] whose four lanes are already the quaternion in
+//! `xyzw` order, so `Quat::from_vec4` reads it with no reorder.
 //!
 //! # The skinning-prepass seam (the contract toward rendering)
 //!

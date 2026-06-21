@@ -39,8 +39,8 @@ struct TransitionState {
 ///
 /// Clip bytes live in a `.smodel` SANM chunk whose reader is in `saffron-assets`, and the
 /// animation crate must not depend on assets (the DAG forbids it), so the host hands this
-/// closure in at tick time, borrowing the **live** asset catalog (the C++ `clipLoader` that
-/// captured the live `assets&`). It is the only injected dependency, so a `&mut dyn FnMut`
+/// closure in at tick time, borrowing the **live** asset catalog. It is the only injected
+/// dependency, so a `&mut dyn FnMut`
 /// borrowed for the call is the right shape — not a stored `'static` closure that would have to
 /// own its own server. `FnMut` because the asset resolve mutates the server's load caches.
 /// `tick_animation` runs on the main thread, so no `Send` bound.
@@ -59,7 +59,7 @@ pub struct AnimationRuntime {
     transitions: HashMap<u64, TransitionState>,
     /// Each rig's previous-frame final local pose by entity uuid; snapshotted at the end
     /// of every tick. The host's play tick reads it to motor each active ragdoll toward this
-    /// frame's animated pose (the C++ `simTick` iterating `state->animation.lastPose`).
+    /// frame's animated pose.
     last_pose: HashMap<u64, Vec<JointPose>>,
 }
 
@@ -85,8 +85,7 @@ impl AnimationRuntime {
     /// The host calls this on an asset-preview enter/leave edge: the preview swaps the
     /// active scene to a fresh entity set, so a re-entered preview must start with no
     /// stale per-entity transition / pose entries, while the loaded clips (keyed by id,
-    /// still valid) stay cached. The C++ `transitions.clear(); lastPose.clear();` of the
-    /// preview-prune (`host.cppm:1481-1482`).
+    /// still valid) stay cached.
     pub fn prune_session(&mut self) {
         self.transitions.clear();
         self.last_pose.clear();
@@ -110,8 +109,7 @@ impl AnimationRuntime {
 
     /// Every driven rig's previous-frame final local pose, by entity uuid.
     ///
-    /// The host snapshots this into the play tick's ragdoll `PoseTarget` list each frame
-    /// (the C++ `for (const auto& [rig, pose] : state->animation.lastPose)`):
+    /// The host snapshots this into the play tick's ragdoll `PoseTarget` list each frame,
     /// after [`tick_animation`](crate::tick_animation) and before the physics step, so an
     /// active ragdoll's motors read this frame's animated pose during the solve.
     pub fn last_poses(&self) -> impl Iterator<Item = (u64, &[JointPose])> {
@@ -660,7 +658,7 @@ mod tests {
         move |_id| Ok(clip.clone())
     }
 
-    /// The C++ preview-block rig: two bones (`Root`, `Tip`) parented under a `Rig`, joint 0
+    /// The preview-block rig: two bones (`Root`, `Tip`) parented under a `Rig`, joint 0
     /// bound to a LINEAR rotation track spinning 0→90° about Y over 1s by durable name.
     /// Returns `(scene, rig, root_bone, clip)`; the caller wraps `clip` in a [`clip_loader`].
     fn spin_preview_scene() -> (Scene, Entity, Entity, AnimClip) {
@@ -971,7 +969,7 @@ mod tests {
         assert!(!p.ping_forward, "PingPong flips direction at the end");
     }
 
-    /// Runs the C++ transition oracle for one mode: a single-bone rig switched in from the
+    /// Runs the transition oracle for one mode: a single-bone rig switched in from the
     /// rest (identity) outgoing pose to a clip holding 90° about Y, over a 1s transition.
     /// Ticks the switch frame (`x=0`), then runs the transition out, returning the switch
     /// rotation and the steady-state incoming rotation.

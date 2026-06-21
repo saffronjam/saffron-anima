@@ -62,7 +62,7 @@ pub fn sample_track(track: &AnimTrack, t: f32) -> Vec4 {
         return finish(read_vec4(value_offset(n - 1)));
     }
 
-    // The first key strictly greater than `t` (the C++ `upper_bound`).
+    // The first key strictly greater than `t`.
     let i1 = times.partition_point(|&time| time <= t);
     let i0 = i1 - 1;
     let dt = times[i1] - times[i0];
