@@ -3,13 +3,11 @@
 //! combined-image-sampler set, the samplers, and the bindless slot allocator with
 //! its reclaim free-list.
 //!
-//! This is the C++ `Descriptors` sub-state (`renderer_types.cppm:1113`) plus the
-//! slice of `initDescriptorResources` (`renderer_detail.cppm:2858`) that builds it.
-//! The phase scope is the *device-global* descriptor state — layouts that never
-//! change after init, the two pools, the one bindless set bound by every draw, and
-//! the samplers. The per-frame light/instance/cluster *sets* and the per-view
-//! post-process sets are not built here (later phases own those); only the layouts
-//! they allocate against live here, immutable and borrowed `&`.
+//! The scope is the *device-global* descriptor state — layouts that never change
+//! after init, the two pools, the one bindless set bound by every draw, and the
+//! samplers. The per-frame light/instance/cluster *sets* and the per-view
+//! post-process sets are not built here; only the layouts they allocate against live
+//! here, immutable and borrowed `&`.
 //!
 //! # The bindless table and its slot allocator
 //!
@@ -34,7 +32,7 @@ use crate::{Device, Result, checked};
 
 /// Capacity of the bindless texture array (set 0). One global combined-image-sampler
 /// array indexed per-instance; lavapipe and desktop GPUs allow far more, this is
-/// plenty (the C++ `MaxBindlessTextures`, `renderer_types.cppm:74`).
+/// plenty.
 pub const MAX_BINDLESS_TEXTURES: u32 = 1024;
 
 /// The bindless slot the default white texture occupies. Every material that names
@@ -42,14 +40,11 @@ pub const MAX_BINDLESS_TEXTURES: u32 = 1024;
 /// reclaimed.
 pub const DEFAULT_WHITE_SLOT: u32 = 0;
 
-/// Hard cap on reflection probes (the C++ `MaxReflectionProbes`,
-/// `renderer_types.cppm:1425`). The IBL set's probe-cube arrays are sized to it.
+/// Hard cap on reflection probes. The IBL set's probe-cube arrays are sized to it.
 pub const MAX_REFLECTION_PROBES: u32 = 8;
 
-/// The number of editor render views (scene + asset-preview), the C++ `ViewCount`
-/// (`renderer_types.cppm:69`). The general descriptor pool sizes its per-view
-/// post-process headroom against this; the per-view sets themselves live in later
-/// phases.
+/// The number of editor render views (scene + asset-preview). The general descriptor
+/// pool sizes its per-view post-process headroom against this.
 const VIEW_COUNT: u32 = 2;
 
 /// The device-global descriptor infrastructure: layouts, pools, the bindless set,
@@ -95,7 +90,7 @@ pub struct Descriptors {
 /// The bindless slot allocator: the high-water `next_index` and a reference to the
 /// shared reclaim free-list. Lives behind the [`Descriptors`] bindless `Mutex` so a
 /// claim that grows `next_index` and a reclaim that pushes the free-list never race
-/// (one lock covers both, matching the single C++ `bindlessMutex`).
+/// (one lock covers both).
 struct SlotAllocator {
     next_index: u32,
     free_list: BindlessFreeList,
@@ -103,7 +98,7 @@ struct SlotAllocator {
 
 impl SlotAllocator {
     /// Hands out the next bindless slot: reuse a reclaimed one (LIFO) if any, else
-    /// grow `next_index`. The C++ `claimBindlessSlot` (`renderer_textures.cpp:129`).
+    /// grow `next_index`.
     fn claim(&mut self) -> u32 {
         if let Ok(mut free) = self.free_list.lock()
             && let Some(slot) = free.pop()
@@ -135,8 +130,8 @@ impl Descriptors {
         let raw = resources.device();
 
         // Build everything into a partial set so a mid-init failure can free what was
-        // already created (the C++ early-return paths leaked on failure; here the
-        // `Partial` Drop reclaims). `?` over each step short-circuits to the cleanup.
+        // already created (the `Partial` Drop reclaims). `?` over each step
+        // short-circuits to the cleanup.
         let mut partial = Partial::new(&resources);
 
         partial.linear_sampler = Some(create_linear_sampler(raw)?);
@@ -302,7 +297,7 @@ impl Descriptors {
     /// Claims a stable bindless slot, reusing a reclaimed one if available, under the
     /// bindless mutex. The upload path then writes the texture into this slot with
     /// [`Descriptors::write_texture`] and constructs the [`crate::GpuTexture`] holding
-    /// the free-list clone. The C++ `claimBindlessSlot`.
+    /// the free-list clone.
     pub fn claim_slot(&self) -> u32 {
         self.slots
             .lock()
@@ -313,8 +308,7 @@ impl Descriptors {
     /// Writes `view` into bindless slot `index` of the global set with the linear
     /// sampler, under the bindless mutex (host access to a descriptor set is
     /// externally synchronized; the worker writes it too — README §5). The image must
-    /// be in `SHADER_READ_ONLY_OPTIMAL` when sampled (the graph guarantees it). The
-    /// C++ `writeBindlessTexture` (`renderer_detail.cppm:2797`).
+    /// be in `SHADER_READ_ONLY_OPTIMAL` when sampled (the graph guarantees it).
     pub fn write_texture(&self, view: vk::ImageView, index: u32) {
         let image_info = [vk::DescriptorImageInfo {
             sampler: self.linear_sampler,
@@ -342,7 +336,7 @@ impl Descriptors {
     /// white view so no slot is ever sampled while unbound: some drivers (lavapipe)
     /// fault sampling a partially-bound array even on a slot a shader never reads, and
     /// it is undefined behaviour on real hardware. Real uploads overwrite their slot
-    /// afterwards. The C++ default-white fill in `initRenderer` (`renderer.cppm:540`).
+    /// afterwards.
     pub fn seed_all_textures(&self, view: vk::ImageView) {
         let image_info = vec![
             vk::DescriptorImageInfo {
@@ -452,9 +446,8 @@ impl Descriptors {
         }
     }
 
-    /// The number of bindless slots ever handed out (the high-water mark, the C++
-    /// `bindlessTextureCount` = `nextBindlessIndex`). Slot 0 (the default white) is
-    /// counted, so this is `>= 1` after init.
+    /// The number of bindless slots ever handed out (the high-water mark). Slot 0 (the
+    /// default white) is counted, so this is `>= 1` after init.
     pub fn texture_count(&self) -> u32 {
         self.slots
             .lock()
@@ -462,8 +455,7 @@ impl Descriptors {
             .next_index
     }
 
-    /// The number of reclaimed slots currently available for reuse (the C++
-    /// `bindlessFreeCount`).
+    /// The number of reclaimed slots currently available for reuse.
     pub fn free_count(&self) -> u32 {
         self.free_list.lock().map(|f| f.len() as u32).unwrap_or(0)
     }
@@ -475,7 +467,7 @@ impl Drop for Descriptors {
         // this call; the run loop idled it before teardown (README §4). The bindless
         // set frees implicitly with its pool, so only the pools/layouts/samplers are
         // destroyed here, each exactly once. Pools before layouts is not required
-        // (they are independent device children), but matches the C++ order.
+        // (they are independent device children).
         let raw = self.resources.device();
         unsafe {
             raw.destroy_descriptor_pool(self.bindless_pool, None);
@@ -748,7 +740,7 @@ fn create_instance_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> 
 /// (irradiance/prefiltered/BRDF combined-image-samplers); bindings 3-4 carry the
 /// reflection-probe cube arrays (`MAX_REFLECTION_PROBES` each); binding 5 is the
 /// probe-metadata SSBO — all fragment-stage. Probes ride the always-present IBL set
-/// rather than a 9th bound set (the C++ `iblSetLayout`, `renderer_detail.cppm:3497`).
+/// rather than a 9th bound set.
 fn create_ibl_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
     let sampler = vk::DescriptorType::COMBINED_IMAGE_SAMPLER;
     let bindings = [
@@ -776,7 +768,7 @@ fn create_ibl_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
 }
 
 /// Set 4 (mesh pipeline): the AO + contact + SSGI sampler set — three fragment-stage
-/// combined-image-samplers (the C++ `meshAoSetLayout`, `renderer_detail.cppm:3655`).
+/// combined-image-samplers.
 fn create_ssao_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
     let sampler = vk::DescriptorType::COMBINED_IMAGE_SAMPLER;
     let bindings = [
@@ -793,8 +785,7 @@ fn create_ssao_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout>
 }
 
 /// Set 5 (mesh pipeline): the DDGI irradiance + distance sampler set — two
-/// fragment-stage combined-image-samplers (the C++ `ddgiMeshLayout`,
-/// `renderer_detail.cppm:3971`).
+/// fragment-stage combined-image-samplers.
 fn create_ddgi_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
     let sampler = vk::DescriptorType::COMBINED_IMAGE_SAMPLER;
     let bindings = [light_binding(0, sampler), light_binding(1, sampler)];
@@ -807,7 +798,7 @@ fn create_ddgi_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout>
 }
 
 /// Set 6 (mesh pipeline, RT only): the TLAS — one fragment-stage acceleration
-/// structure (the C++ `rtMeshLayout`, `renderer_detail.cppm:4146`).
+/// structure.
 fn create_rt_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
     let bindings = [light_binding(
         0,
@@ -822,7 +813,7 @@ fn create_rt_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
 }
 
 /// Set 7 (mesh pipeline, RT only): the ReSTIR radiance sampler — one fragment-stage
-/// combined-image-sampler (the C++ `restirMeshLayout`, `renderer_detail.cppm:4243`).
+/// combined-image-sampler.
 fn create_restir_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
     let bindings = [light_binding(0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER)];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
@@ -903,9 +894,9 @@ fn compute_binding(slot: u32, kind: vk::DescriptorType) -> vk::DescriptorSetLayo
 }
 
 /// The general descriptor pool the per-frame + per-view sets allocate against
-/// (`FREE_DESCRIPTOR_SET` so freed sets return capacity). Sized for the C++
-/// headroom: the bindless count, the per-frame light/instance UBOs/SSBOs, and the
-/// per-view post-process storage images.
+/// (`FREE_DESCRIPTOR_SET` so freed sets return capacity). Sized for headroom: the
+/// bindless count, the per-frame light/instance UBOs/SSBOs, and the per-view
+/// post-process storage images.
 fn create_descriptor_pool(raw: &ash::Device) -> Result<vk::DescriptorPool> {
     let frames = crate::frame::MAX_FRAMES_IN_FLIGHT as u32;
     let views = VIEW_COUNT;

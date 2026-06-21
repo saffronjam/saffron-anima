@@ -2,13 +2,10 @@
 //! logical device, graphics queue, the VMA allocator, the resolved feature
 //! capabilities, and the loaded extension dispatch tables.
 //!
-//! This is the C++ `VulkanContext` (`renderer_types.cppm:1036`) plus the bits of
-//! `newRenderer` (`renderer.cppm:127`) that build it. The README's borrow strategy
-//! (§2) names this the bucket constructed once and then borrowed `&Device`
-//! everywhere — never `&mut` after init — which is what lets many passes hold a
-//! handle while siblings mutate. There is no Rust `vk-bootstrap`, so the
-//! ~150-LOC feature-probe / degradation chain (`enable_*_if_present`) is
-//! hand-rolled here, branch-for-branch off `newRenderer`.
+//! The README's borrow strategy (§2) names this the bucket constructed once and then
+//! borrowed `&Device` everywhere — never `&mut` after init — which is what lets many
+//! passes hold a handle while siblings mutate. The ~150-LOC feature-probe /
+//! degradation chain (`enable_*_if_present`) is hand-rolled here.
 
 use ash::ext::calibrated_timestamps;
 use ash::ext::debug_utils;
@@ -33,19 +30,17 @@ static VALIDATION_ISSUE_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// The running count of validation/performance warnings + errors the debug
 /// messenger has seen this process. Reading it before and after a render and
-/// asserting it did not move is the validation-clean gate; the host's e2e harness
-/// uses it the same way the C++ engine grepped a clean validation log.
+/// asserting it did not move is the validation-clean gate the host's e2e harness reads.
 pub fn validation_issue_count() -> u64 {
     VALIDATION_ISSUE_COUNT.load(Ordering::Relaxed)
 }
 
 /// Where the device draws its output to.
 ///
-/// The C++ host always created a surface from the SDL window. The Rust split keeps
-/// the surface-bound bring-up (the standalone present-only host) and the no-surface
+/// The surface-bound bring-up (the standalone present-only host) and the no-surface
 /// offscreen bring-up (the editor native-viewport host, every headless render-and-
-/// read-back, and the validation-clean smoke) as a *parameter*, not a fork — so
-/// `08-host-and-viewport` reuses this code with no second path.
+/// read-back, and the validation-clean smoke) are a *parameter*, not a fork — so the
+/// host and viewport reuse this code with no second path.
 ///
 /// The two paths split on whether a surface exists at all. [`Self::Window`] enables
 /// `VK_KHR_surface` + the platform surface extension and creates a real surface for
@@ -79,11 +74,9 @@ impl<T: HasDisplayHandle + HasWindowHandle> WindowSurface for T {}
 
 /// Resolved optional-feature flags, probed once at device creation.
 ///
-/// These are the C++ `VulkanContext::rtSupported` / `fillModeNonSolid` fields plus
-/// the software-rasterizer detection. Optional features never gate device
-/// selection — a software (llvmpipe) device reports `rt_supported == false` and is
-/// created and used regardless, which is the degradation the phase's unit test
-/// asserts.
+/// Optional features never gate device selection — a software (llvmpipe) device
+/// reports `rt_supported == false` and is created and used regardless, the
+/// degradation the unit test asserts.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Capabilities {
     /// KHR acceleration-structure + ray-query present and enabled.
@@ -102,7 +95,7 @@ pub struct Capabilities {
 }
 
 /// The GPU-timestamp profiler facts read once from the physical device at init,
-/// used to seed [`crate::GpuProfiler`] (the C++ profiler-capability probe).
+/// used to seed [`crate::GpuProfiler`].
 #[derive(Debug, Clone, Default)]
 pub struct ProfilerFacts {
     /// ns per timestamp tick (the device limit).
@@ -125,8 +118,8 @@ pub struct ProfilerFacts {
 /// The immutable Vulkan core shared `&Device` by every later sub-state.
 ///
 /// Field order is load-bearing: Rust drops fields top-to-bottom, so the allocator
-/// is dropped before the device, the device before the surface/instance, matching
-/// the C++ `destroyRenderer` teardown order. `waitGpuIdle` before any teardown is
+/// is dropped before the device, the device before the surface/instance.
+/// `waitGpuIdle` before any teardown is
 /// the run loop's responsibility (the host's `Drop`), so nothing here is freed
 /// under a live GPU read.
 pub struct Device {
@@ -150,13 +143,13 @@ pub struct Device {
     // and die before the instance.
     resources: Option<Arc<DeviceResources>>,
     swapchain_loader: swapchain::Device,
-    // The `VK_KHR_acceleration_structure` device dispatch (the C++ `RtDispatch`,
-    // `renderer_types.cppm:1019`): a cheap handle + resolved fn-pointer table. Present
+    // The `VK_KHR_acceleration_structure` device dispatch: a cheap handle + resolved
+    // fn-pointer table. Present
     // only when `capabilities.rt_supported` — the build path and the `AccelerationStructure`
     // Drop go through it; on a software device it stays `None` and every RT path is a no-op.
     accel: Option<accel::Device>,
-    // The `VK_EXT_calibrated_timestamps` device dispatch (the C++ `calibratedTs` PFN
-    // table), present only when the extension is enabled and both the device and the
+    // The `VK_EXT_calibrated_timestamps` device dispatch,
+    // present only when the extension is enabled and both the device and the
     // host `CLOCK_MONOTONIC` domains are calibrateable. The profiler's periodic
     // `calibrate` samples through it to project GPU ticks onto the CPU clock; `None`
     // when absent (the software / NVIDIA-without-it path keeps the own-axis fallback).
@@ -175,9 +168,8 @@ pub struct Device {
 }
 
 /// The Vulkan API version the engine targets (1.3 — the highest VMA 0.4 supports;
-/// the C++ targeted 1.4, but 1.3 covers dynamic rendering + sync2 + the descriptor
-/// indexing the bindless path needs, and lavapipe exposes a 1.4 device which
-/// satisfies a 1.3 instance request).
+/// 1.3 covers dynamic rendering + sync2 + the descriptor indexing the bindless path
+/// needs, and lavapipe exposes a 1.4 device which satisfies a 1.3 instance request).
 const API_VERSION: u32 = vk::API_VERSION_1_3;
 
 impl Device {
@@ -222,8 +214,7 @@ impl Device {
         // through a real swapchain. The offscreen host renders into an offscreen image
         // and reads back (never presents), so it has no surface to query present support
         // against — gating on present there would have no surface and wrongly reject every
-        // GPU. The C++ editor host used a real (hidden) window surface; the Rust offscreen
-        // host drops the surface entirely.
+        // GPU. The offscreen host drops the surface entirely.
         let require_present = surface.is_some();
         let selection =
             select_physical_device(&instance, surface_loader.as_ref(), surface, require_present)?;
@@ -244,7 +235,7 @@ impl Device {
         let allocator = create_allocator(&instance, &device, physical_device)?;
         let swapchain_loader = swapchain::Device::new(&instance, &device);
         // Resolve the acceleration-structure dispatch only when the RT extensions were
-        // enabled on the device — the C++ `RtDispatch` PFN resolution (`renderer.cppm:301`).
+        // enabled on the device.
         let accel = if selection.capabilities.rt_supported {
             Some(accel::Device::new(&instance, &device))
         } else {
@@ -252,8 +243,8 @@ impl Device {
         };
         // VK_EXT_calibrated_timestamps: only when the extension was enabled on the device AND
         // both a device domain and the host CLOCK_MONOTONIC domain are calibrateable can the
-        // read-back project GPU spans onto the CPU clock (the C++ `calibratedTs` resolution +
-        // domain check). Otherwise correlation stays off and GPU spans keep their own axis.
+        // read-back project GPU spans onto the CPU clock. Otherwise correlation stays off
+        // and GPU spans keep their own axis.
         let calibrated_ts = calibrated_ts_enabled
             .then(|| {
                 let instance_loader = calibrated_timestamps::Instance::new(&entry, &instance);
@@ -313,14 +304,14 @@ impl Device {
         })
     }
 
-    /// The logical device handle (for resource creation in later phases).
+    /// The logical device handle (for resource creation).
     pub fn raw(&self) -> &ash::Device {
         self.bundle().device()
     }
 
     /// The shared device + allocator bundle a GPU resource wrapper clones so it can
-    /// free itself in its own `Drop`. The handle through which every later phase
-    /// creates [`crate::Buffer`] / [`crate::Image`] / … resources.
+    /// free itself in its own `Drop`. The handle through which
+    /// [`crate::Buffer`] / [`crate::Image`] / … resources are created.
     pub fn resources(&self) -> &Arc<DeviceResources> {
         self.bundle()
     }
@@ -357,15 +348,15 @@ impl Device {
     }
 
     /// The `VK_KHR_acceleration_structure` device dispatch, present only when
-    /// [`Capabilities::rt_supported`]. The C++ `RtDispatch` PFN table — the BLAS/TLAS
-    /// build path resolves its commands here, and an [`crate::AccelerationStructure`]
-    /// clones it for a self-contained `Drop`. `None` on a software device.
+    /// [`Capabilities::rt_supported`]. The BLAS/TLAS build path resolves its commands
+    /// here, and an [`crate::AccelerationStructure`] clones it for a self-contained
+    /// `Drop`. `None` on a software device.
     pub fn accel_dispatch(&self) -> Option<&accel::Device> {
         self.accel.as_ref()
     }
 
-    /// Samples the device and host clocks together via `vkGetCalibratedTimestampsEXT`
-    /// (the C++ `calibrateTimestamps` core). Returns `(device_ticks_raw, host_ns,
+    /// Samples the device and host clocks together via `vkGetCalibratedTimestampsEXT`.
+    /// Returns `(device_ticks_raw, host_ns,
     /// max_deviation)` — the device sample in query-pool tick units, the host sample on
     /// `host_domain` (`CLOCK_MONOTONIC` ns). `None` when the dispatch is absent or the
     /// call fails, so the profiler keeps GPU spans on their own axis.
@@ -393,8 +384,7 @@ impl Device {
 
     /// The GPU-timestamp profiler facts read once at init: the ns-per-tick period,
     /// the graphics-queue `timestampValidBits` mask, whether timestamps are usable,
-    /// and the physical-device name. The C++ profiler-capability probe
-    /// (`renderer.cppm:267`).
+    /// and the physical-device name.
     pub fn profiler_facts(&self) -> ProfilerFacts {
         // SAFETY: the ash seam. The physical device handle is valid; both queries
         // are read-only.
@@ -432,28 +422,27 @@ impl Device {
     }
 
     /// The device address of `buffer` (core 1.2 `vkGetBufferDeviceAddress`, fed to AS
-    /// builds as vertex / index / instance / scratch input). The C++
-    /// `bufferDeviceAddress` (`renderer_detail.cppm:408`). The buffer must carry
+    /// builds as vertex / index / instance / scratch input). The buffer must carry
     /// `SHADER_DEVICE_ADDRESS` usage.
     pub fn buffer_device_address(&self, buffer: vk::Buffer) -> vk::DeviceAddress {
         self.bundle().buffer_device_address(buffer)
     }
 
-    /// The VMA allocator (image/buffer creation in later phases). Lives in the
-    /// shared bundle, destroyed before the device when the last holder drops.
+    /// The VMA allocator (image/buffer creation). Lives in the shared bundle,
+    /// destroyed before the device when the last holder drops.
     pub fn allocator(&self) -> &vk_mem::Allocator {
         self.bundle().allocator()
     }
 
-    /// The Vulkan instance (for instance-level PFN resolution in later phases,
-    /// e.g. the debug-utils command-buffer labels that name render-graph passes).
+    /// The Vulkan instance (for instance-level PFN resolution, e.g. the debug-utils
+    /// command-buffer labels that name render-graph passes).
     pub fn instance(&self) -> &ash::Instance {
         &self.instance
     }
 
     /// The Vulkan loader entry. Held for the whole device lifetime — the instance
     /// and device dispatch through it, and `vkGetInstanceProcAddr` (used to resolve
-    /// extension command pointers in later phases) needs it.
+    /// extension command pointers) needs it.
     pub fn entry(&self) -> &ash::Entry {
         &self.entry
     }
@@ -464,7 +453,6 @@ impl Device {
     /// sample support. A count valid as a framebuffer limit can still be unsupported
     /// for a specific format, and creating an image with it is invalid
     /// (`VUID-VkImageCreateInfo-samples`), so the AA selector clamps against this.
-    /// The C++ `Targets::supportedSampleCounts` probe.
     pub fn supported_sample_counts(
         &self,
         color_format: vk::Format,
@@ -517,7 +505,7 @@ impl Device {
 
 impl Drop for Device {
     fn drop(&mut self) {
-        // Teardown order, the C++ `destroyRenderer` surface → device → instance:
+        // Teardown order, surface → device → instance:
         // the run loop's `wait_idle` ran first and every device-borrowing sub-state
         // (resources, swapchain, frame ring) was already destroyed by the owner.
         //
@@ -708,7 +696,7 @@ fn create_debug_messenger(
 /// The validation-layer message sink. Forwards real validation/performance
 /// messages to the engine log under the `vulkan` subsystem so the validation-clean
 /// gate parses them, and drops loader chatter (general-type messages below error)
-/// unless `SAFFRON_VK_VERBOSE` is set — the exact filter the C++ callback applied.
+/// unless `SAFFRON_VK_VERBOSE` is set.
 /// Always returns `VK_FALSE` (does not abort the triggering call).
 unsafe extern "system" fn debug_callback(
     severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -805,10 +793,9 @@ struct DeviceSelection {
     preference: DevicePreference,
 }
 
-/// The device-type preference order — the C++ `vk-bootstrap`
-/// `PhysicalDeviceSelector` default, which prefers a discrete GPU and falls back
-/// down the type ladder. Higher is better, so `Ord` ranks a discrete GPU above an
-/// integrated one above a virtual one above a CPU/software rasterizer.
+/// The device-type preference order: prefer a discrete GPU and fall back down the
+/// type ladder. Higher is better, so `Ord` ranks a discrete GPU above an integrated
+/// one above a virtual one above a CPU/software rasterizer.
 ///
 /// This is a *preference*, never a gate: when the only qualifying device is the CPU
 /// rasterizer (the CI toolbox with no hardware ICD), it still scores `Cpu` and is
@@ -827,8 +814,8 @@ enum DevicePreference {
 }
 
 impl DevicePreference {
-    /// Ranks a `VkPhysicalDeviceType` into the preference order, matching the C++
-    /// `vk-bootstrap` selector's default discrete > integrated > virtual > cpu/other.
+    /// Ranks a `VkPhysicalDeviceType` into the preference order: discrete > integrated
+    /// > virtual > cpu/other.
     fn from_type(device_type: vk::PhysicalDeviceType) -> Self {
         match device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => Self::Discrete,
@@ -843,14 +830,13 @@ impl DevicePreference {
 /// present) queue family and the required Vulkan 1.2/1.3 feature set, then probes its
 /// optional features.
 ///
-/// This is the hand-rolled `vk-bootstrap` `PhysicalDeviceSelector` chain: the
-/// required features (`runtimeDescriptorArray`, `descriptorBindingPartiallyBound`,
+/// The required features (`runtimeDescriptorArray`, `descriptorBindingPartiallyBound`,
 /// `bufferDeviceAddress`, `dynamicRendering`, `synchronization2`) gate selection;
 /// RT / fill-mode-non-solid / memory-budget / pipeline-stats are probed and never
 /// gate (the degradation the unit test asserts on llvmpipe).
 ///
 /// Among the qualifying devices it prefers by [`DevicePreference`] (discrete GPU
-/// first), the C++ `vk-bootstrap` default. With an NVIDIA ICD added next to Mesa's
+/// first). With an NVIDIA ICD added next to Mesa's
 /// llvmpipe the loader enumerates both; this picks the discrete 3070 Ti rather than
 /// whichever the loader listed first. When the only qualifying device is the
 /// software rasterizer (the CI toolbox), it is still selected — preference, never
@@ -1135,8 +1121,7 @@ fn create_logical_device(
     // Enable the optional core features the renderer uses when the device advertises them:
     // `pipelineStatisticsQuery` (the deepest profiler level's input — creating a stats query
     // pool without it is `VUID-VkQueryPoolCreateInfo-queryType-00791`) and `fillModeNonSolid`
-    // (the wireframe view mode's `PolygonMode::LINE`). Both are optional, never gating selection
-    // (the C++ `enable_features_if_present`).
+    // (the wireframe view mode's `PolygonMode::LINE`). Both are optional, never gating selection.
     // SAFETY: the ash seam. Core feature query on the chosen device.
     let core_features = unsafe { instance.get_physical_device_features(physical_device) };
     let mut enabled_core = vk::PhysicalDeviceFeatures::default();
@@ -1148,8 +1133,7 @@ fn create_logical_device(
     }
 
     // Slang's `SV_VertexID` fullscreen-triangle shaders (the sky / post passes) emit the
-    // SPIR-V `DrawParameters` capability, so the device must enable `shaderDrawParameters`
-    // (the C++ `features11.shaderDrawParameters`).
+    // SPIR-V `DrawParameters` capability, so the device must enable `shaderDrawParameters`.
     let mut features11 = vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);
     let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
         .runtime_descriptor_array(true)
@@ -1209,8 +1193,8 @@ fn create_allocator(
     Ok(allocator)
 }
 
-/// The desired swapchain / offscreen surface format (the C++ desired format):
-/// `B8G8R8A8_UNORM` with the sRGB-nonlinear color space. Used directly by the
+/// The desired swapchain / offscreen surface format: `B8G8R8A8_UNORM` with the
+/// sRGB-nonlinear color space. Used directly by the
 /// offscreen host (which never presents) and preferred by the windowed host.
 const PREFERRED_SURFACE_FORMAT: vk::SurfaceFormatKHR = vk::SurfaceFormatKHR {
     format: vk::Format::B8G8R8A8_UNORM,
@@ -1261,9 +1245,9 @@ fn surface_capture_supported(
     .unwrap_or(false)
 }
 
-/// Logs the chosen GPU's name and type once selection is final, mirroring the C++
-/// `newRenderer` "vulkan ready — gpu '…'" line. This is the line the device-selection
-/// gate greps to confirm the discrete GPU was preferred over the software rasterizer.
+/// Logs the chosen GPU's name and type once selection is final ("vulkan ready — gpu
+/// '…'"). This is the line the device-selection gate greps to confirm the discrete GPU
+/// was preferred over the software rasterizer.
 fn log_selected_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) {
     // SAFETY: the ash seam. Read-only property query on the chosen device.
     let props = unsafe { instance.get_physical_device_properties(physical_device) };
@@ -1281,8 +1265,7 @@ fn log_selected_device(instance: &ash::Instance, physical_device: vk::PhysicalDe
     log_info!("vulkan ready — gpu '{name}' ({kind})");
 }
 
-/// Logs the resolved software-GPU and RT capability once, mirroring the C++
-/// `newRenderer` info lines.
+/// Logs the resolved software-GPU and RT capability once.
 fn log_software_gpu(capabilities: &Capabilities) {
     if capabilities.software_gpu {
         log_info!("software rasterizer detected — GPU timings reflect CPU rasterization time");
@@ -1310,8 +1293,8 @@ fn attachment_usage(format: vk::Format) -> vk::ImageUsageFlags {
 mod tests {
     use super::*;
 
-    /// The device-type preference order matches the C++ `vk-bootstrap` default:
-    /// discrete > integrated > virtual > cpu/other. This is the ranking
+    /// The device-type preference order is discrete > integrated > virtual >
+    /// cpu/other. This is the ranking
     /// `select_physical_device` uses to prefer a discrete GPU over the software
     /// rasterizer when both qualify (the NVIDIA ICD added next to llvmpipe).
     #[test]
@@ -1347,8 +1330,7 @@ mod tests {
     /// optional-feature flags never gate selection. On the toolbox's llvmpipe the
     /// `software_gpu` flag is set; whether `rt_supported` is true or false (Mesa's
     /// lavapipe advertises ray-query, so it may be true), the device is still built
-    /// and usable. This is the phase's named acceptance test for the degradation
-    /// path. Skips cleanly when no Vulkan device is obtainable.
+    /// and usable. Skips cleanly when no Vulkan device is obtainable.
     #[test]
     fn software_device_probe_does_not_gate_selection() {
         let device = match Device::new(&SurfaceSource::Offscreen) {

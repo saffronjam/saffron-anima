@@ -3,13 +3,10 @@
 //! `impl Drop` type that frees its handles, plus the [`DeviceResources`] bundle the
 //! device shares so a resource can free itself without a live `&Device`.
 //!
-//! This ports the C++ move-only wrappers (`renderer_types.cppm:96–544`,
-//! `:1515`). In C++ each was ~40 lines of deleted-copy / defaulted-move / hand
-//! dtor calling a `reset()` that freed the handle through a *borrowed* raw
-//! `VmaAllocator` + `vk::Device`. In Rust the move is the language's job and the
-//! `reset()` body becomes the `Drop` body — but the borrowed-handle trick is unsafe
-//! in Rust (nothing makes the device outlive the resource). So instead of borrowing
-//! raw handles, every wrapper holds an [`Arc`]`<`[`DeviceResources`]`>`: the ash
+//! The move is the language's job and freeing the handle is the `Drop` body. A
+//! borrowed-handle trick would be unsafe (nothing makes the device outlive the
+//! resource), so instead of borrowing raw handles, every wrapper holds an
+//! [`Arc`]`<`[`DeviceResources`]`>`: the ash
 //! device + the VMA allocator behind one `Arc`. The device/allocator are destroyed
 //! only when the last clone drops (README §4: "the device must outlive every
 //! resource" — here it is *structural*, not field-order-hopeful), and the `Arc`
@@ -24,21 +21,19 @@ use vk_mem::{Alloc, Allocator};
 
 /// The shared bindless texture free-list: returned slot indices a later upload
 /// reuses. README §5's second `Arc<Mutex>` site — a [`GpuTexture`]'s `Drop` locks
-/// it and pushes its slot back, even off the main thread (the C++
-/// `Descriptors::bindlessFreeList`, a `Ref<std::vector<u32>>` every texture holds).
+/// it and pushes its slot back, even off the main thread. Every texture holds a
+/// clone of this shared free-list.
 pub type BindlessFreeList = Arc<Mutex<Vec<u32>>>;
 
 /// The device + allocator handles a GPU resource needs to free itself, shared
 /// behind one `Arc` so the resource can `Drop` without a live `&Device`.
 ///
-/// The C++ wrappers each stored a *borrowed* `vk::Device` + `VmaAllocator` raw
-/// pointer and trusted the renderer to free every resource before the device. Rust
-/// cannot encode "borrowed but the owner outlives me" for a `Drop` type, so the two
-/// handles live behind this `Arc`: a resource clones the `Arc` at construction, and
+/// Rust cannot encode "borrowed but the owner outlives me" for a `Drop` type, so the
+/// two handles live behind this `Arc`: a resource clones the `Arc` at construction, and
 /// the allocator/device are destroyed only when the last holder (the [`super::Device`]
 /// itself, normally the final one after the run loop's `wait_idle` and resource
-/// teardown) drops. The [`Drop`] frees the allocator before the device, matching the
-/// C++ `destroyRenderer` order (`vmaDestroyAllocator` before `vkDestroyDevice`).
+/// teardown) drops. The [`Drop`] frees the allocator before the device
+/// (`vmaDestroyAllocator` before `vkDestroyDevice`).
 pub struct DeviceResources {
     /// The VMA allocator. `Option` so [`Drop`] can free it before the device.
     allocator: Option<Allocator>,
@@ -85,7 +80,7 @@ impl DeviceResources {
 impl Drop for DeviceResources {
     fn drop(&mut self) {
         // The VMA allocator frees its own `VkDeviceMemory` through the live device,
-        // so it must go before `vkDestroyDevice` — the C++ `destroyRenderer` order.
+        // so it must go before `vkDestroyDevice`.
         // Field order alone cannot guarantee it (the allocator is an `Option` so its
         // `Drop` runs here, ahead of the `device` field's drop).
         drop(self.allocator.take());
@@ -107,8 +102,6 @@ fn checked_vma<T>(
 /// A move-only VMA buffer. When [`Buffer::mapped`] is non-null the allocation is
 /// persistently mapped for per-frame host writes; [`Drop`] frees it before the
 /// allocator is destroyed (the bundle's `Arc` keeps the allocator alive until then).
-///
-/// The C++ `Buffer` (`renderer_types.cppm:486`).
 pub struct Buffer {
     resources: Arc<DeviceResources>,
     buffer: vk::Buffer,
@@ -173,7 +166,7 @@ impl Buffer {
     }
 
     /// The persistent host-mapped pointer, or null when the buffer was not created
-    /// `MAPPED`. The C++ `Buffer::mapped`.
+    /// `MAPPED`.
     pub fn mapped_ptr(&self) -> *mut u8 {
         self.mapped
     }
@@ -247,10 +240,9 @@ impl ImageDesc {
 
 /// A VMA-allocated 2D image owning its handle, view, and allocation.
 ///
-/// The C++ `Image` (`renderer_types.cppm:153`). `layout` tracks the image's current
-/// layout across frames (the render graph seeds and updates it). [`Drop`] frees the
-/// view (through the device) then the image (through the allocator), the
-/// `reset()` order.
+/// `layout` tracks the image's current layout across frames (the render graph seeds
+/// and updates it). [`Drop`] frees the view (through the device) then the image
+/// (through the allocator).
 pub struct Image {
     resources: Arc<DeviceResources>,
     image: vk::Image,
@@ -397,7 +389,7 @@ impl Drop for Image {
     fn drop(&mut self) {
         // SAFETY: the ash/VMA seam. The bundle keeps device + allocator alive; the
         // view is destroyed through the device, then the image through the
-        // allocator (the C++ `reset()` order). Each handle is freed exactly once.
+        // allocator, in that order. Each handle is freed exactly once.
         unsafe {
             self.resources.device().destroy_image_view(self.view, None);
             self.resources
@@ -408,7 +400,7 @@ impl Drop for Image {
 }
 
 /// A VMA-allocated 3D image (the DDGI voxel proxy), owning handle + view +
-/// allocation. The C++ `Image3D` (`renderer_types.cppm:1515`).
+/// allocation.
 pub struct Image3D {
     resources: Arc<DeviceResources>,
     image: vk::Image,
@@ -509,7 +501,7 @@ impl Image3D {
 impl Drop for Image3D {
     fn drop(&mut self) {
         // SAFETY: the ash/VMA seam. View through the device, then image through the
-        // allocator (the C++ `reset()` order). Each handle freed exactly once.
+        // allocator, in that order. Each handle freed exactly once.
         unsafe {
             self.resources.device().destroy_image_view(self.view, None);
             self.resources
@@ -521,8 +513,8 @@ impl Drop for Image3D {
 
 /// A device-local sampled texture (image + view) that also owns a bindless slot.
 ///
-/// The C++ `GpuTexture` (`renderer_types.cppm:336`). [`Drop`] returns the bindless
-/// slot to the shared free-list under the mutex (so a worker-uploaded texture
+/// [`Drop`] returns the bindless slot to the shared free-list under the mutex (so a
+/// worker-uploaded texture
 /// destroyed off the main thread is safe — README §5), then frees the view and
 /// image. The sampler is shared (the renderer's linear sampler), so it is not owned
 /// here.
@@ -613,7 +605,7 @@ impl Drop for GpuTexture {
         // Reclaim the bindless slot for reuse, under the shared mutex — a
         // worker-uploaded texture may be dropped off the main thread. The
         // descriptor still points at the destroyed view, but no live material
-        // references the slot; the next upload overwrites it (the C++ `reset()`).
+        // references the slot; the next upload overwrites it.
         if let Some(free_list) = self.free_list.take()
             && let Ok(mut slots) = free_list.lock()
         {
@@ -634,9 +626,8 @@ impl Drop for GpuTexture {
 /// ranges, the local-space AABB, the CPU-side copies retained for triangle-precise
 /// picking, and the optional ray-tracing BLAS.
 ///
-/// The C++ `GpuMesh` (`renderer_types.cppm:228`). The three VMA buffers are freed in
-/// [`Drop`]; the [`AccelerationStructure`] is an `Arc` (shared, read-only after
-/// build) and drops itself.
+/// The three VMA buffers are freed in [`Drop`]; the [`AccelerationStructure`] is an
+/// `Arc` (shared, read-only after build) and drops itself.
 pub struct GpuMesh {
     resources: Arc<DeviceResources>,
     vertex_buffer: vk::Buffer,
@@ -761,9 +752,8 @@ impl Drop for GpuMesh {
 
 /// A graphics or compute pipeline owning its `vk::Pipeline` + `vk::PipelineLayout`.
 ///
-/// The C++ `Pipeline` (`renderer_types.cppm:96`). Owned by the renderer (never
-/// crosses to client code); [`Drop`] frees the pipeline then the layout through the
-/// device.
+/// Owned by the renderer (never crosses to client code); [`Drop`] frees the pipeline
+/// then the layout through the device.
 pub struct Pipeline {
     resources: Arc<DeviceResources>,
     pipeline: vk::Pipeline,
@@ -803,7 +793,7 @@ impl Pipeline {
 impl Drop for Pipeline {
     fn drop(&mut self) {
         // SAFETY: the ash seam. The bundle keeps the device alive; pipeline then
-        // layout, each freed exactly once (the C++ `reset()` order).
+        // layout, in that order, each freed exactly once.
         unsafe {
             self.resources
                 .device()
@@ -818,11 +808,10 @@ impl Drop for Pipeline {
 /// A ray-tracing acceleration structure (BLAS or TLAS): the `vk` handle, its device
 /// address, and its backing device buffer.
 ///
-/// The C++ `AccelerationStructure` (`renderer_types.cppm:423`). It clones the ash
-/// `acceleration_structure::Device` (a cheap handle + fn-pointer table) at
-/// construction so [`Drop`] is self-contained — no live `RtDispatch` needed, the
-/// Rust expression of the C++ borrowed `destroyFn`. [`Drop`] destroys the handle
-/// (through the cloned dispatch) then the backing buffer (through the allocator).
+/// It clones the ash `acceleration_structure::Device` (a cheap handle + fn-pointer
+/// table) at construction so [`Drop`] is self-contained — no live dispatch needed.
+/// [`Drop`] destroys the handle (through the cloned dispatch) then the backing buffer
+/// (through the allocator).
 pub struct AccelerationStructure {
     resources: Arc<DeviceResources>,
     dispatch: ash::khr::acceleration_structure::Device,
@@ -844,9 +833,8 @@ unsafe impl Sync for AccelerationStructure {}
 
 impl AccelerationStructure {
     /// Allocates an AS-storage backing buffer of `size`, creates the acceleration
-    /// structure of `kind` over it, and queries its device address — the C++
-    /// `createAccelStructure` (`renderer_detail.cppm:449`). The backing buffer carries
-    /// `ACCELERATION_STRUCTURE_STORAGE | SHADER_DEVICE_ADDRESS` usage; the build is
+    /// structure of `kind` over it, and queries its device address. The backing buffer
+    /// carries `ACCELERATION_STRUCTURE_STORAGE | SHADER_DEVICE_ADDRESS` usage; the build is
     /// recorded separately by the caller.
     ///
     /// # Errors

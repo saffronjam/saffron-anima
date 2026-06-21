@@ -1,13 +1,11 @@
 //! The std430 GPU-upload structs and the übershader material selector.
 //!
-//! Every struct here is the Rust expression of a C++ GPU-layout type the Slang
-//! shaders read by raw bytes: [`InstanceData`] (`renderer_types.cppm:1868`),
-//! [`MaterialParamsData`] (`:1884`), and [`GpuLight`] (`:2018`). Each is
+//! Every struct here is a GPU-layout type the Slang shaders read by raw bytes:
+//! [`InstanceData`], [`MaterialParamsData`], and [`GpuLight`]. Each is
 //! `#[repr(C)]` + [`bytemuck::Pod`] / [`bytemuck::Zeroable`] with a pinned
-//! `const _: () = assert!(size_of == N)` matching the C++ `static_assert`, and the
-//! field byte offsets are checked in the tests (README §3: a wrong offset corrupts
-//! the per-frame material dedup that hashes [`MaterialParamsData`] by raw bytes —
-//! not just a pixel).
+//! `const _: () = assert!(size_of == N)`, and the field byte offsets are checked in
+//! the tests (README §3: a wrong offset corrupts the per-frame material dedup that
+//! hashes [`MaterialParamsData`] by raw bytes — not just a pixel).
 //!
 //! The glam types come through `saffron_geometry::glam` (the engine's one pinned
 //! math vocabulary) so a glam version split cannot silently change a stride. `Vec4`
@@ -19,11 +17,10 @@ use saffron_geometry::glam::{Mat4, UVec4, Vec3, Vec4};
 
 /// The übershader variant selector for a renderable.
 ///
-/// The C++ `Material` (`renderer_types.cppm:549`): one übershader backs every
-/// renderable, and `unlit` selects a distinct cached PSO permutation (the unlit
-/// fragment branch, baked as a specialization constant). `shader` names the SPIR-V
-/// the PSO compiles — `shaders/mesh.spv` for the default übershader; a node-graph
-/// material names its codegen'd `.spv`.
+/// One übershader backs every renderable, and `unlit` selects a distinct cached PSO
+/// permutation (the unlit fragment branch, baked as a specialization constant).
+/// `shader` names the SPIR-V the PSO compiles — `shaders/mesh.spv` for the default
+/// übershader; a node-graph material names its codegen'd `.spv`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Material {
     /// The shader the PSO compiles, relative to the runtime shader dir (or an
@@ -47,8 +44,8 @@ impl Default for Material {
 /// binding 0). The vertex shader indexes it by `InstanceIndex`. std430-compatible:
 /// every member is 16-byte aligned.
 ///
-/// The C++ `InstanceData` (`renderer_types.cppm:1868`). Eight 16-byte blocks: three
-/// `Mat4` (model, normal matrix, prev-frame model) then five `vec4`-class fields.
+/// Eight 16-byte blocks: three `Mat4` (model, normal matrix, prev-frame model) then
+/// five `vec4`-class fields.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct InstanceData {
@@ -92,7 +89,7 @@ impl Default for InstanceData {
 /// Many instances of one material share one entry (deduplicated per frame by hashing
 /// the raw bytes — so the layout below is load-bearing past correctness).
 ///
-/// The C++ `MaterialParamsData` (`renderer_types.cppm:1884`), six 16-byte blocks.
+/// Six 16-byte blocks.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MaterialParamsData {
@@ -115,8 +112,8 @@ const _: () = assert!(
     "MaterialParamsData must match the std430 shader layout (6x 16-byte blocks)"
 );
 
-// The per-frame dedup key is the struct's raw bytes (the C++ hashed the struct's
-// bytes). `glam::Vec4` is float-backed, so it implements neither `Eq` nor `Hash`;
+// The per-frame dedup key is the struct's raw bytes. `glam::Vec4` is float-backed,
+// so it implements neither `Eq` nor `Hash`;
 // instead `Eq`/`Hash` here are defined over `bytemuck::bytes_of` — byte-exact, and
 // the struct has no padding (every field is a 16-byte block) so two values are equal
 // exactly when their factors + indices are bit-identical.
@@ -148,9 +145,7 @@ impl Default for MaterialParamsData {
 }
 
 /// One punctual (point or spot) light in the per-frame light storage buffer (set 1,
-/// binding 1). Positions/directions are world space. std430-compatible.
-///
-/// The C++ `GpuLight` (`renderer_types.cppm:2018`), four `vec4`.
+/// binding 1). Positions/directions are world space. std430-compatible — four `vec4`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuLight {
