@@ -12,15 +12,14 @@ graph, per-pass bars, a VRAM gauge, and the alarm UX. Everything is coloured fro
 `PerfConfig`, so the HUD agrees with the engine and the e2e tests on what green, amber, and red mean.
 
 The dashboard ("Stats") is one of two performance **tools** — alongside the [Profiler](profiler-panel/)
-— opened from the Topbar's **wrench** menu into the editor's **right sidebar**, where each is a
-closeable tab. Closing the last tab removes the sidebar.
+— opened from the Topbar's **Tools** menu as a [dock panel](dock-system/).
 
 ## A separate, gated polling lane
 
 The reconcile poll already syncs the cheap interactive state at ~20 Hz. Telemetry rides a **second**
 lane at ~10 Hz so it never competes with selection/gizmo latency: alarms are drained every tick (the
 badge stays live even with the panel closed), while the heavier `frame-history` and `pass-timings`
-reads only run while the Stats tool is open (`rightTools.includes("stats")`). Each fetch fills a Zustand slice; the alarm cursor
+reads only run while the Stats tool is open (`isPanelOpen(state, "stats")`). Each fetch fills a Zustand slice; the alarm cursor
 (`since`) only advances, so a missed poll just catches up next time and nothing is double-counted.
 
 ## Charting: Canvas for live, DOM for the rest

@@ -14,13 +14,13 @@ scene itself.
 
 Every editor operation that touches the scene rides the same JSON-over-unix-socket
 [control protocol](../../tooling-and-control/control-plane-architecture/) the `sa` CLI
-speaks. The engine project builds the `SaffronAnima` host executable — a headless host
+speaks. The engine workspace builds the `saffron-host` executable — a headless host
 that boots the engine, publishes frames, and drains the control socket, with no panels of
 its own.
 
 ## Two processes, one socket
 
-The Rust backend spawns `SaffronAnima` with `SAFFRON_EDITOR_NATIVE_VIEWPORT=1` (hidden
+The Rust backend spawns `saffron-host` with `SAFFRON_EDITOR_NATIVE_VIEWPORT=1` (hidden
 window), a per-instance `SAFFRON_CONTROL_SOCK` (pid-scoped, so two editor windows do not
 collide), **two** shared-memory segment names — `SAFFRON_VIEWPORT_SHM_SCENE` and
 `SAFFRON_VIEWPORT_SHM_ASSET`, one ring per [view](../viewport-compositing/) so each pane's

@@ -13,16 +13,17 @@ the transport is the control socket.
 ## How it works
 
 The preview camera is placed from the mesh's bounding box so any mesh fills the frame regardless of
-size. It finds the center and a bounding radius, then backs the camera off by the distance that fits
-that radius in the field of view:
+size. `mesh_bounds` finds the center and a bounding radius, then `framed_view_proj` backs the camera
+off by the distance that fits that radius in the field of view:
 
-```cpp
-const glm::vec3 center = (mesh->boundsMin + mesh->boundsMax) * 0.5f;
-f32 radius = glm::length(mesh->boundsMax - mesh->boundsMin) * 0.5f;
-if (radius <= 0.0001f) { radius = 1.0f; }
-const f32 fovy = glm::radians(45.0f);
-const f32 distance = radius / glm::tan(fovy * 0.5f) * 1.3f;
-const glm::vec3 eye = center + glm::normalize(glm::vec3(1.0f, 0.7f, 1.0f)) * distance;
+```rust
+let center = (mesh.bounds_min + mesh.bounds_max) * 0.5;
+let mut radius = (mesh.bounds_max - mesh.bounds_min).length() * 0.5;
+if radius <= 0.0001 { radius = 1.0; }
+
+let fovy = 45.0_f32.to_radians();
+let distance = radius / (fovy * 0.5).tan() * 1.3;
+let eye = center + Vec3::new(1.0, 0.7, 1.0).normalize() * distance;
 ```
 
 The eye offset `(1, 0.7, 1)` gives the canonical 3/4 view. The `1.3` factor leaves a margin so the
@@ -39,50 +40,48 @@ flat color. The render is multisampled at the highest count the device supports 
 thumbnail sizes geometry edges alias hard without it, and a one-shot tiny render makes the extra
 samples free in practice. The pass draws into a transient MSAA target and resolves into the 1x image
 that gets read back; the sample count is independent of the viewport's [AA mode](../../anti-aliasing/aa-modes/).
-The image is rendered with a one-time-submit command buffer through dynamic rendering — clear to dark
-gray, draw each submesh, resolve, then transition for the readback:
+`render_to_texture` records a one-time-submit command buffer through dynamic rendering — clear to dark
+gray, then the closure binds the pipeline, pushes the matrices, and draws each submesh:
 
-```cpp
-transitionImage(cmd, color.image, eUndefined, eColorAttachmentOptimal, ...);
-cmd.beginRendering(rendering);
-cmd.bindPipeline(eGraphics, renderer.pipelines.thumbnail->pipeline);
-cmd.pushConstants(... , &push);
-cmd.bindVertexBuffers(0, mesh->vertexBuffer, offset);
-cmd.bindIndexBuffer(mesh->indexBuffer, 0, eUint32);
-for (const Submesh& submesh : mesh->submeshes)
-    cmd.drawIndexed(submesh.indexCount, 1, submesh.firstIndex, submesh.vertexOffset, 0);
-cmd.endRendering();
+```rust
+raw.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
+raw.cmd_push_constants(cmd, pipeline.layout(), vk::ShaderStageFlags::VERTEX, 0,
+    bytemuck::bytes_of(&push));
+raw.cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer()], &[0]);
+raw.cmd_bind_index_buffer(cmd, mesh.index_buffer(), 0, vk::IndexType::UINT32);
+for submesh in &mesh.submeshes {
+    raw.cmd_draw_indexed(cmd, submesh.index_count, 1,
+        submesh.first_index, submesh.vertex_offset, 0);
+}
 ```
 
-The render is synchronous — submit, then `waitIdle`. Thumbnails are built lazily and once, between
-frames on the [control-drain step, off the present path](../../tooling-and-control/asset-commands/),
-so the wait is acceptable. The pipeline is built on first use and cached on the renderer
-(`renderer.pipelines.thumbnail`), so the second thumbnail reuses it. A texture asset skips the render
-and copies its decoded image straight back.
+The Vulkan calls go through `ash`'s raw device seam; the render is synchronous — submit, then wait the
+fence. Thumbnails are built lazily and once, between frames on the
+[control-drain step, off the present path](../../tooling-and-control/asset-commands/), so the wait is
+acceptable. The pipeline is built on first use and cached (`ensure_thumbnail_pipeline`), so the second
+thumbnail reuses it. A texture asset skips the render and copies its decoded image straight back.
 
 ## Model thumbnails are textured
 
 A bare mesh shows in a flat color, but a [`.smodel`](../../geometry-and-assets/smodel-container/) tile
-shows the model as it looks — its mesh shaded with the embedded materials. `renderModelThumbnail`
+shows the model as it looks — its mesh shaded with the embedded materials. `render_model_thumbnail`
 frames the mesh exactly as above, then draws each submesh through the **material-preview pipeline**
 (`preview.slang`, the same studio-lit shader the [material preview](../../materials-and-pipelines/native-materials/)
-uses) with that submesh's material from the table, indexed by `Submesh.materialSlot`:
+uses) with that submesh's material from the table, indexed by `Submesh.material_slot`:
 
-```cpp
-for (const Submesh& submesh : mesh->submeshes) {
-    const SubmeshMaterial& m = submeshMaterials[min(submesh.materialSlot, submeshMaterials.size() - 1)];
-    push.baseColor = m.baseColor;
-    push.tex = { idx(m.albedoTexture), idx(m.metallicRoughnessTexture), idx(m.normalTexture), features };
-    push.pbr = { m.metallic, m.roughness, m.normalStrength, 0 };
-    cmd.pushConstants(...); cmd.drawIndexed(submesh.indexCount, 1, submesh.firstIndex, submesh.vertexOffset, 0);
-}
+```rust
+let pushes: Vec<(Submesh, PreviewPush)> = mesh.submeshes.iter().map(|submesh| {
+    let idx = (submesh.material_slot as usize).min(submesh_materials.len() - 1);
+    (*submesh, preview_push(&submesh_materials[idx], view_proj))
+}).collect();
+// in the record closure: bind the bindless set, then per submesh push + draw_indexed
 ```
 
 The materials and their textures live as chunks of the container, so the thumbnail worker has no
-`AssetServer`: the main thread resolves them at enqueue — the mesh chunk into `meshBytes`, each material
-into a `MaterialAsset`, and each referenced texture's chunk into `materialTextures` bytes — and the
+`AssetServer`: the main thread resolves them at enqueue — the mesh chunk into bytes, each material
+into a `MaterialAsset`, and each referenced texture's chunk into bytes — and the
 worker decodes from memory, uploads, and builds the `SubmeshMaterial` table. Bumping
-`ThumbnailCacheVersion` retires the older flat-rendered model thumbnails so they regenerate textured.
+`THUMBNAIL_CACHE_VERSION` retires the older flat-rendered model thumbnails so they regenerate textured.
 
 ## Across the socket as a PNG
 
@@ -106,12 +105,12 @@ readback runs once per asset, not once per tile or per frame. That
 
 | What | File | Symbols |
 |---|---|---|
-| The render | `renderer_thumbnail.cpp` | `renderMeshThumbnail` |
-| Textured model render | `renderer_thumbnail.cpp`; `assets.cppm` | `renderModelThumbnail`, the `Model` job in `generateThumbnail` |
-| Auto-framing | `renderer_thumbnail.cpp` | `center`/`radius`/`distance`, the `(1, 0.7, 1)` eye |
-| The minimal pipeline | `renderer_thumbnail.cpp` | `newThumbnailPipeline`, `renderer.pipelines.thumbnail` |
-| MSAA + resolve | `renderer_thumbnail.cpp` | `thumbnailSampleCount`, the `resolveMode` color attachment |
-| Readback → base64 PNG (engine) | `control_commands_asset.cpp` | `get-thumbnail`, `view-asset` |
+| The render | `engine/crates/rendering/src/thumbnail_render.rs` | `render_mesh_thumbnail` |
+| Textured model render | `engine/crates/rendering/src/thumbnail_render.rs` · `engine/crates/assets/src/thumbnail.rs` | `render_model_thumbnail`, the `ThumbnailContent::Model` arm in `generate_thumbnail` |
+| Auto-framing | `engine/crates/rendering/src/thumbnail_render.rs` | `mesh_bounds`, `framed_view_proj`, the `(1, 0.7, 1)` eye |
+| The minimal pipeline | `engine/crates/rendering/src/thumbnail_render.rs` | `ensure_thumbnail_pipeline`, `render_to_texture` |
+| MSAA + resolve | `engine/crates/rendering/src/thumbnail_render.rs` | `ThumbnailTargets::sample_count`, the resolve attachment |
+| Readback → base64 PNG (engine) | `engine/crates/control/src/commands_asset.rs` | `get-thumbnail`, `view-asset` |
 | Decode + blob-URL cache (client) | `editor/src/state/store.ts` | `getThumbnailUrl`, `base64ToBlob`, `thumbnailCache` |
 
 ## Related

@@ -19,12 +19,10 @@ keep in sync.
 
 `SceneEditCamera` is a plain struct of position and orientation. Orientation is stored as yaw and pitch,
 so the look controls add directly to two scalars. At yaw 0 the camera looks down `-Z`, and the
-forward vector is rebuilt from the angles when needed:
+`forward()` vector is rebuilt from the angles when needed:
 
-```cpp
-return glm::normalize(glm::vec3(std::cos(pitch) * std::sin(yaw),
-                                std::sin(pitch),
-                                -std::cos(pitch) * std::cos(yaw)));
+```rust
+Vec3::new(pitch.cos() * yaw.sin(), pitch.sin(), -pitch.cos() * yaw.cos()).normalize()
 ```
 
 ## Input
@@ -34,12 +32,12 @@ events. While the **right mouse button is held** over the [viewport panel](../vi
 the webview takes pointer lock and sends `fly-input` snapshots: accumulated relative mouse
 deltas plus the WASD/Space/Shift key state, at roughly the pointer-event cadence. The engine
 stores the latest snapshot on the edit context and drains the accumulated look delta once per
-frame into `updateSceneEditCamera`, so a burst of samples between frames is never lost.
+frame into `update_scene_edit_camera`, so a burst of samples between frames is never lost.
 Releasing the button — or Escape, which exits pointer lock natively — sends `active:false`
 and ends the fly.
 
 Samples arrive at ~60Hz, slower than the engine renders, so applying each delta whole would
-staircase the view. The drained delta instead lands in a pending accumulator (`lookPending`)
+staircase the view. The drained delta instead lands in a pending accumulator (`look_pending`)
 that yaw and pitch consume through an exponential filter — the same ~25ms time constant the
 [gizmo](../gizmo/) uses for drag samples — turning the sample steps into continuous motion at
 about two frames of lag. The filter only reshapes timing; every pixel of input still lands.
@@ -63,17 +61,17 @@ and write the one engine-side camera.
 ## Feeding the renderer and the gizmo
 
 The editor camera converts to a `CameraView`, the same view type a scene camera produces, so
-`renderScene`, the gizmo overlay, and the pick ray all consume one view:
+the scene pass, the gizmo overlay, and the pick ray all consume one view through
+`SceneEditCamera::view`:
 
-```cpp
-auto sceneEditCameraView(const SceneEditCamera& camera) -> CameraView
-{
-    CameraView result;
-    const glm::vec3 forward = sceneEditCameraForward(camera);
-    result.view = glm::lookAt(camera.position, camera.position + forward, glm::vec3(0,1,0));
-    result.fov = camera.fov;
-    ...
-    return result;
+```rust
+pub fn view(&self) -> CameraView {
+    CameraView {
+        view: Mat4::look_at_rh(self.position, self.position + self.forward(), Vec3::Y),
+        fov: self.fov,
+        near_plane: self.near_plane,
+        far_plane: self.far_plane,
+    }
 }
 ```
 
@@ -92,14 +90,14 @@ they are session preferences, not framing.
 
 | What | File | Symbols |
 |---|---|---|
-| State | `scene_edit_context.cppm` | `SceneEditCamera`, `SceneEditCameraInput` |
-| Forward from yaw/pitch | `scene_edit_camera.cpp` | `sceneEditCameraForward` |
-| Move/look math | `scene_edit_camera.cpp` | `updateSceneEditCamera`, `lookPending`, the `controlling` latch |
-| Convert to a view | `scene_edit_camera.cpp` | `sceneEditCameraView` |
-| Persisted view ↔ JSON | `scene_edit_camera.cpp` | `sceneEditCameraToJson`, `sceneEditCameraFromJson` |
-| Fly snapshot drain | `host.cppm` | the `onUpdate` `flyInput` drain |
+| State | `engine/crates/sceneedit/src/camera.rs` | `SceneEditCamera`, `SceneEditCameraInput` |
+| Forward from yaw/pitch | `engine/crates/sceneedit/src/camera.rs` | `SceneEditCamera::forward` |
+| Move/look math | `engine/crates/sceneedit/src/camera.rs` | `update_scene_edit_camera`, `look_pending`, the `controlling` latch |
+| Convert to a view | `engine/crates/sceneedit/src/camera.rs` | `SceneEditCamera::view` |
+| Persisted view ↔ JSON | `engine/crates/sceneedit/src/camera.rs` | `SceneEditCamera::to_json`, `SceneEditCamera::from_json` |
+| Fly snapshot drain | `engine/crates/host/src/layer.rs` | the `on_update` `fly_input` drain |
 | Pointer-lock streaming (webview) | `editor/src/panels/ViewportPanel.tsx` | the fly `useEffect` |
-| Camera commands (engine) | `control_commands_scene.cpp` | `fly-input`, `get-camera`, `set-camera`, `focus` |
+| Camera commands (engine) | `engine/crates/control/src/commands_scene.rs` | `fly-input`, `get-camera`, `set-camera`, `focus` |
 | Camera wrappers (client) | `editor/src/control/client.ts` | `getCamera`, `setCamera` |
 
 ## Related

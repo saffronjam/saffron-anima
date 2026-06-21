@@ -105,7 +105,7 @@ commits through `rename-entity` with an optimistic row update; Escape cancels.
 | Tree, rows, drag, sentinel | `editor/src/panels/HierarchyTree.tsx` | `HierarchyTree`, `TreeRow`, `EnvironmentRow`, `RenameRow` |
 | Tree building + expand-state | `editor/src/state/store.ts` | `buildTree`, `expandedIds`, `setParent`, `selectedSentinel` |
 | Create presets | `editor/src/app/CreateMenu.tsx` | `CREATE_PRESETS`, `CreateMenu` |
-| Commands (engine) | `control_commands_scene.cpp` | `list-entities`, `set-parent`, `add-entity`, `copy-entity`, `destroy-entity`, `select` |
+| Commands (engine) | `engine/crates/control/src/commands_scene.rs` | `list-entities`, `set-parent`, `add-entity`, `copy-entity`, `destroy-entity`, `select` |
 
 ## Related
 

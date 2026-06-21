@@ -13,21 +13,21 @@ The model is Unreal's play-in-editor adapted to this engine: Play does not mutat
 
 Entering play serializes the edit scene and deserializes it into a fresh throwaway scene — the copy is *defined* as "create this scene again", so it equals what loading a saved project would produce. Everything that touches the scene while playing — rendering, picking, every control command — routes through one chokepoint, `activeScene`, which hands back the play duplicate while playing and the authored scene otherwise. The edit scene is never writable through that chokepoint during play.
 
-Stop is then just `playScene.reset()`. There is no restore step to get wrong: the authored scene was never aliased, so dropping the duplicate *is* the restore. This is why the discard guarantee is structural rather than a careful undo — a runtime system can mutate anything in the play world and the authored scene cannot feel it.
+Stop is then just dropping the duplicate (`play_scene = None`). There is no restore step to get wrong: the authored scene was never aliased, so dropping the duplicate *is* the restore. This is why the discard guarantee is structural rather than a careful undo — a runtime system can mutate anything in the play world and the authored scene cannot feel it.
 
 The duplicate is cheap here. GPU meshes and textures are keyed by uuid on the asset server and shared by both scenes, so duplication copies only component structs, not GPU resources. On a typical scene the Play press costs a fraction of a millisecond.
 
 ## Camera handover
 
-In edit mode the viewport renders through the fly-camera. While playing it renders through the scene's primary `CameraComponent` — evaluated every frame, so a camera animated or re-flagged during play is honored live. A scene with no primary camera falls back to the fly-camera and reports `hasPrimaryCamera: false`, which the editor surfaces as a toast ("No primary camera — using the editor camera"). Play never renders a black frame for the lack of a camera; it warns and keeps going.
+In edit mode the viewport renders through the fly-camera. While playing it renders through the scene's primary `Camera` (`primary_camera`) — evaluated every frame, so a camera animated or re-flagged during play is honored live. A scene with no primary camera falls back to the fly-camera and reports `hasPrimaryCamera: false`, which the editor surfaces as a toast ("No primary camera — using the editor camera"). Play never renders a black frame for the lack of a camera; it warns and keeps going.
 
 The fly-camera stays controllable during play, which is what makes the fallback usable and what keeps `get-camera`/`set-camera`/`fly-input` outside the discard — the editor camera is session state, never part of the duplicated scene.
 
 ## The state machine
 
-`Edit → Playing ↔ Paused → Edit`. Pause freezes only the runtime tick; rendering, the control plane, and the fly-camera keep running, so a paused frame stays fully inspectable. Step advances exactly one fixed tick (1/60 s) and is accepted only while paused, so single-stepping is deterministic rather than tied to wall-clock frames. A reserved max-delta clamp keeps a hitch from spiking the simulation once physics arrives.
+`Edit → Playing ↔ Paused → Edit`. Pause freezes only the runtime tick; rendering, the control plane, and the fly-camera keep running, so a paused frame stays fully inspectable. Step advances exactly one fixed tick (1/60 s) and is accepted only while paused, so single-stepping is deterministic rather than tied to wall-clock frames. A max-delta clamp keeps a hitch from spiking the simulation.
 
-The tick seam exists and is wired, but the engine has no physics, scripting, or animation yet, so in this version the play scene holds still. What play mode buys today is the camera cut, the runtime-vs-authored split, and the lifecycle signal (`onPlayStateChanged`) those future systems hang off without touching the machinery again.
+`tick_play` is the gated driver, and the runtime systems hang off one `sim_tick` seam: the host installs a closure that runs animation, physics, and scripting against the play scene each tick, so `SceneEdit` stays free of those dependencies and the seam stays the single integration point. A lifecycle signal (`on_play_state_changed`) fires on every transition so a system can arm or tear down on the play edge without touching the machinery.
 
 ## Live-tune-and-discard
 
@@ -45,10 +45,10 @@ The editor learns the engine's play state through its existing reconcile poll �
 
 | What | File | Symbols |
 |---|---|---|
-| State machine + duplication + tick (engine) | `scene_edit_play.cpp` | `enterPlay`, `pausePlay`, `resumePlay`, `stepPlay`, `stopPlay`, `tickPlay` |
-| Play state + chokepoint (engine) | `scene_edit_context.cppm` | `PlayState`, `activeScene`, `renderCameraView` |
-| Render + tick wiring (engine) | `engine/source/saffron/host/host.cppm` | `layer.onUi`, `layer.onUpdate` |
-| Play commands (engine) | `control_commands_scene.cpp` | `play`, `pause`, `stop`, `step`, `get-play-state` |
+| State machine + duplication + tick (engine) | `engine/crates/sceneedit/src/play.rs` | `enter_play`, `pause_play`, `resume_play`, `step_play`, `stop_play`, `tick_play`, `sim_tick` |
+| Play state + chokepoint (engine) | `engine/crates/sceneedit/src/play.rs` · `context.rs` | `PlayState`, `active_scene`, `render_camera_view`, `on_play_state_changed` |
+| Render + tick wiring (engine) | `engine/crates/host/src/layer.rs` | `HostLayer::on_ui`, `HostLayer::on_update` |
+| Play commands (engine) | `engine/crates/control/src/commands_scene.rs` | `play`, `pause`, `stop`, `step`, `get-play-state` |
 | Client wrappers | `editor/src/control/client.ts` | `play`, `pause`, `stop`, `step`, `getPlayState` |
 | Store slice + poll apply | `editor/src/state/store.ts` | `playState`, `setPlayState` |
 | Toolbar group | `editor/src/panels/Topbar.tsx` | `onPlayPause`, `onStop`, `onStep` |

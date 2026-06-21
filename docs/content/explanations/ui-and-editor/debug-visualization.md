@@ -7,7 +7,7 @@ weight = 18
 
 Debug visualization draws the volumes the engine reasons about but never normally shows — the
 boxes mouse picking tests, the box the shadow fit covers, the reach of each light. The picker
-(`pickEntity`) is AABB-only: it transforms a mesh's local AABB by its world matrix, re-encloses
+(`pick_entity`) is AABB-only: it transforms a mesh's local AABB by its world matrix, re-encloses
 the eight corners axis-aligned in world space, and ray-tests that box. For a rotated mesh or one
 with a thin protrusion (an antenna, a rig limb) that box bulges well past the silhouette, so a
 click in empty space can still land — and skinned meshes are skipped entirely. Turning on the
@@ -16,12 +16,12 @@ than guess at.
 
 These are **editor view state**: they live on the `SceneEditContext` and are not on the undo stack
 (toggling one is not an undo entry, unlike the [Render panel's](../metrics-dashboard/) feature
-toggles). They do persist with the project, though — `saveProject` carries a `debugOverlays` block,
-so a reopened project restores them, the way the
+toggles). They do persist with the project, though — the project save carries a `debugOverlays` block
+(`debug_overlays_to_json`), so a reopened project restores them, the way the
 [editor camera](../../geometry-and-assets/project-serialization/) rides along. They render as
 world-space lines in the editor overlay pass, into the depth-tested bucket so scene geometry occludes
 them. Most are Edit-only; the **collider** overlay is the exception — it reads the authored
-`ColliderComponent` (present in Edit and Play), so it also draws during simulation, tracking the bodies
+`Collider` component (present in Edit and Play), so it also draws during simulation, tracking the bodies
 as they move.
 
 ## Overlays
@@ -29,10 +29,10 @@ as they move.
 | Overlay | Draws | Notes |
 |---|---|---|
 | **Bounding Boxes** | The world AABB per mesh — the exact box `pickEntity` tests | Static meshes: the per-draw box (green). Skinned meshes: the joint-union box (magenta), since the picker would need the same union to hit a rig. |
-| **Scene AABB** | The whole-scene box the directional-shadow / DDGI fit derives each frame (yellow) | `renderScene` recomputes and discards this every frame; the overlay recomputes the same union for display. |
+| **Scene AABB** | The whole-scene box the directional-shadow / DDGI fit derives each frame (yellow) | `render_scene` recomputes and discards this every frame; the overlay recomputes the same union for display. |
 | **Light Volumes** | Point-light range as three great-circle rings; spot-light cone from apex to base ring | The spot direction matches the lighting upload (`normalize(worldRotation · direction)`), so the cone shows where the light actually shines. Directional lights are skipped (their position is arbitrary). |
 | **Grid** | An infinite ground-plane reference grid with red (X) / blue (Z) axis lines | Not a line overlay — a fullscreen analytic render-graph pass (`grid.slang`): the fragment reconstructs the world ray from the inverse view-projection, intersects `y = 0`, anti-aliases the lines with `fwidth`, fades with distance, and writes `SV_Depth` so geometry occludes it. Runs at 1× after tonemap, before the line overlay. |
-| **Colliders** | The physics collision shape per `ColliderComponent` — an oriented box / sphere / capsule wireframe (cook-source AABB for hull/mesh) | Drawn **scale-free** to match the simulated Jolt body (world position + rotation, the collider offset rotated-only — never the entity's world matrix, which carries scale). Cyan for solid colliders, **green** for sensors (triggers), **orange** for the selected one. Draws in Edit *and* Play. The per-bone ragdoll capsules and the character-controller capsule are not entity colliders, so they are not drawn. |
+| **Colliders** | The physics collision shape per `Collider` component — an oriented box / sphere / capsule wireframe (cook-source AABB for hull/mesh) | Drawn **scale-free** to match the simulated Jolt body (world position + rotation, the collider offset rotated-only — never the entity's world matrix, which carries scale). Cyan for solid colliders, **green** for sensors (triggers), **orange** for the selected one. Draws in Edit *and* Play. The per-bone ragdoll capsules and the character-controller capsule are not entity colliders, so they are not drawn. |
 
 ## Driving it
 
@@ -53,16 +53,16 @@ scene pass outputs. It is mutually exclusive — one mode at a time — so it is
 (`set-view-mode {lit|wireframe|albedo|normal|roughness|metallic|emissive}`), the
 [`set-aa`](../../tooling-and-control/render-commands/) shape, read back through `render-stats.viewMode`
 (there is no `get-view-mode`). The Render panel's **View Mode** dropdown drives it. Like the overlays
-it is transient — it lives on the `Renderer`, never serializes into the project, resets to **Lit** on
+it is transient — it lives on the `Renderer` (`view_mode`), never serializes into the project, resets to **Lit** on
 load, and is not undoable. The enum lists only implemented modes, so the dropdown never offers a value
 the engine would ignore.
 
 - **Lit** — the normal forward+ PBR render.
-- **Wireframe** — the mesh PSO drawn with `vk::PolygonMode::eLine`. A per-draw PSO variant selected by
-  the view mode, gated on the `fillModeNonSolid` device feature; a GPU lacking it stays Lit. (Mesa
+- **Wireframe** — the mesh PSO drawn with `PolygonMode::LINE`. A per-draw PSO variant selected by
+  the view mode, gated on the `fill_mode_non_solid` device feature; a GPU lacking it stays Lit. (Mesa
   llvmpipe — the software path — supports it, so a headless run wireframes for real.)
 - **Albedo / Normal / Roughness / Metallic / Emissive** — surface channels the mesh fragment outputs
-  directly instead of lighting. The active channel rides a spare `LightGlobals` slot
+  directly instead of lighting. The active channel rides a spare light-globals slot
   (`pointShadowMeta.w`) the fragment reads (`debugViewChannel()`), so no new render targets or passes
   are involved. These still pass through the tonemap, so the values are display-referred (exposure +
   Reinhard + gamma), not raw — fine for eyeballing, not for sampling exact values.
@@ -81,11 +81,11 @@ sa render-stats -o json | jq .viewMode    # "normal"
 
 | What | File | Symbols |
 |---|---|---|
-| Overlay state + project serde | `sceneedit/scene_edit_context.cppm` · `scene_edit_context.cpp` | `DebugOverlayOptions`, `SceneEditContext::debugOverlays`, `debugOverlaysToJson`/`debugOverlaysFromJson` |
-| View-mode state + device feature | `rendering/renderer_types.cppm` · `rendering/renderer.cppm` | `ViewMode`, `Renderer::viewMode`, `setViewMode`/`viewMode`, `VulkanContext::fillModeNonSolid` |
-| Wireframe PSO variant | `rendering/renderer_pipelines.cpp` · `rendering/renderer_drawlist.cpp` | `newMeshPipeline`/`requestMeshPipeline` (wireframe), the per-draw gate |
-| Buffer-channel output | `engine/assets/shaders/mesh.slang` · `lighting.slang` · `rendering/renderer_lighting.cpp` | the fragment debug branch, `debugViewChannel()`, the `pointShadowMeta.w` pack |
-| Control commands | `control/control_commands_scene.cpp` · `control/control_commands_render.cpp` | `get-debug-overlays`, `set-debug-overlays`, `set-view-mode`, `RenderStatsDto::viewMode` |
-| World-space line builders | `host/host.cppm` | `buildDebugOverlays`, `buildColliderOverlays`, `addWorldAabb`, `addWorldRing`, `addWorldOrientedBox`, `addWorldArc`, `submitSceneEditOverlay` |
-| Grid pass + shader | `rendering/renderer.cppm` · `rendering/renderer_pipelines.cpp` · `engine/assets/shaders/grid.slang` | the grid `RgPass`, `newGridPipeline`, `recordGrid`, `Renderer::showGrid` (from `RenderSceneOptions::showGrid`) |
+| Overlay state + project serde | `engine/crates/sceneedit/src/overlay.rs` · `context.rs` | `DebugOverlayOptions`, `SceneEditContext::debug_overlays`, `debug_overlays_to_json`/`debug_overlays_from_json` |
+| View-mode state + device feature | `engine/crates/rendering/src/renderer.rs` · `device.rs` | `ViewMode`, `Renderer::view_mode`, `set_view_mode`/`view_mode`, `Capabilities::fill_mode_non_solid` |
+| Wireframe PSO variant | `engine/crates/rendering/src/pipelines.rs` | `request_mesh_pipeline` (wireframe), `PsoKey::wireframe` |
+| Buffer-channel output | `engine/assets/shaders/mesh.slang` · `lighting.slang` · `engine/crates/rendering/src/lighting.rs` | the fragment debug branch, `debugViewChannel()`, the `pointShadowMeta.w` pack |
+| Control commands | `engine/crates/control/src/commands_animation.rs` · `commands_render.rs` | `get-debug-overlays`, `set-debug-overlays`, `set-view-mode`, `RenderStatsDto::view_mode` |
+| World-space line builders | `engine/crates/host/src/overlay.rs` | `build_debug_overlays`, `build_collider_overlays`, `add_world_aabb`, `add_world_ring`, `add_world_oriented_box`, `add_world_arc`, `build_scene_edit_overlay` |
+| Grid pass + shader | `engine/crates/rendering/src/overlay.rs` · `pipelines.rs` · `engine/assets/shaders/grid.slang` | `record_grid`, `request_grid`, `Renderer::show_grid` / `set_show_grid` |
 | Editor panel + state | `editor/src/panels/RenderPanel.tsx` · `editor/src/state/store.ts` | `DEBUG_OVERLAYS`, `VIEW_MODES`, `onDebugToggle`, `onViewMode`, `debugOverlays` slice |

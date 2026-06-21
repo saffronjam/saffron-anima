@@ -19,8 +19,8 @@ Each mode draws only its own handles: translate shows the three axis lines plus 
 
 Light billboards are drawn the same way. Camera entities use editor-only helpers instead: a
 black system camera model is appended to the edit-mode draw list, and the overlay draws a
-dark-orange frustum from the camera FOV and near/far planes, capped by `frustumMaxDistance`. The
-`CameraComponent` can hide either helper with `showModel` or `showFrustum`; play mode renders
+dark-orange frustum from the camera FOV and near/far planes, capped by `frustum_max_distance`. The
+`Camera` component can hide either helper with `show_model` or `show_frustum`; play mode renders
 neither one.
 
 The frustum is **depth-tested against the scene depth**, so the camera model and any geometry in
@@ -63,9 +63,9 @@ The operation (T/R/S), the world/local space, and the preserve-children flag are
 
 By default a parent's transform carries its whole subtree — that is what parenting means. Preserve children (Blender's *Affect Only Parents*, Maya's *Preserve Children*) inverts that for the moment you want to adjust the parent alone: with the toggle on, transforming a parent rebases each direct child's local TRS against the parent's new world matrix, so the children visually stay put.
 
-A drag freezes every direct child's world matrix at `begin` alongside the parent snapshot, and each applied frame rewrites the child locals from those frozen matrices — the same `local = world⁻¹ · childWorld` rebase [reparenting](../../scene-and-ecs/scene-hierarchy/) uses, so there is no per-frame drift. The Inspector path (`set-transform`) does the same around its one write. Grandchildren need no handling: they are relative to the rebased child and follow it.
+A drag freezes every direct child's world matrix at `begin` alongside the parent snapshot, and each applied frame rewrites the child locals from those frozen matrices — the same `local = world⁻¹ · childWorld` rebase [reparenting](../../scene-and-ecs/scene-hierarchy/) uses (`set_local_from_matrix`), so there is no per-frame drift. The Inspector path (`set-transform`) does the same around its one write. Grandchildren need no handling: they are relative to the rebased child and follow it.
 
-The rebase is TRS-only, like the reparent decompose: a rotated child under a non-uniformly scaled parent would need shear to hold its pose exactly, and `TransformComponent` cannot represent shear — keep parents you scale non-uniformly unrotated relative to their children (or parent through a unit-scale empty).
+The rebase is TRS-only, like the reparent decompose: a rotated child under a non-uniformly scaled parent would need shear to hold its pose exactly, and the `Transform` component cannot represent shear — keep parents you scale non-uniformly unrotated relative to their children (or parent through a unit-scale empty).
 
 ## In the code
 
@@ -74,14 +74,14 @@ The rebase is TRS-only, like the reparent decompose: a rotated child under a non
 | Pointer forwarding | `editor/src/panels/ViewportPanel.tsx` | `gizmoPointer`, the `begin`/`drag`/`end` gesture, `DRAG_THRESHOLD_PX` |
 | The gizmo-pointer wrapper | `editor/src/control/client.ts` | `gizmoPointer`, `GizmoPointerPhase` |
 | T/R/S + world/local + preserve children | `editor/src/panels/Topbar.tsx` | `selectOp`, `selectSpace`, `togglePreserveChildren` |
-| Child rebase (engine) | `scene_edit_gizmo.cpp`, `scene.cppm` | `rebasePreservedChildren`, `setLocalFromMatrix` |
+| Child rebase (engine) | `engine/crates/sceneedit/src/gizmo.rs` · `engine/crates/scene/src/hierarchy.rs` | `rebase_preserved_children`, `set_local_from_matrix` |
 | W/E/R shortcuts | `editor/src/app/useGizmoShortcuts.ts` | `useGizmoShortcuts`, `GIZMO_COMMANDS`, `matchesBinding` |
 | Shared gizmo state | `editor/src/state/store.ts` | `gizmo`, `setGizmo` |
-| Mode commands (engine) | `control_commands_scene.cpp` | `get-gizmo`, `set-gizmo`, `gizmo-pointer` |
-| Overlay geometry (engine) | `engine/source/saffron/host/host.cppm` | `buildNativeGizmo`, `buildSceneEditCameraFrustums`, `addLine`, `submitNativeGizmo` |
-| Hit-test / shared geometry (engine) | `scene_edit_gizmo.cpp` | `hitNativeGizmo`, `gizmoPlaneCorners`, `ringBasis` |
-| Analytic AA (engine) | `gizmo_overlay.slang`, `renderer_types.cppm` | `fragmentMain`, `OverlayVertex` |
-| Depth-tested overlay (engine) | `renderer.cppm`, `renderer_pipelines.cpp` | `newOverlayPipeline` (`depthTest`), the `editor-overlay` pass depth attachment, `submitOverlay` |
+| Mode commands (engine) | `engine/crates/control/src/commands_scene.rs` | `get-gizmo`, `set-gizmo`, `gizmo-pointer` |
+| Overlay geometry (engine) | `engine/crates/host/src/overlay.rs` | `build_native_gizmo`, `build_scene_edit_camera_frustums`, `add_line`, `build_scene_edit_overlay` |
+| Hit-test / shared geometry (engine) | `engine/crates/sceneedit/src/gizmo.rs` | `hit_native_gizmo`, `gizmo_plane_corners`, `ring_basis` |
+| Analytic AA (engine) | `engine/assets/shaders/gizmo_overlay.slang` · `engine/crates/rendering/src/overlay.rs` | `fragmentMain`, `OverlayVertex` |
+| Depth-tested overlay (engine) | `engine/crates/rendering/src/overlay.rs` · `engine/crates/rendering/src/renderer.rs` | `OverlayState`, `record_overlay` (the `depth_tested` vs `on_top` ranges), `Renderer::submit_overlay` |
 
 ## Related
 

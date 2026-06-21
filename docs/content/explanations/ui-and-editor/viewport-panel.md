@@ -86,8 +86,8 @@ key code).
 | Per-view two-tier bounds-sync hook | `editor/src/lib/useSubsurfaceBounds.ts` | `useSubsurfaceBounds`, `computeBounds`, `liveSync`, `scheduleEndCommit` |
 | Pointer-lock fly streaming | `editor/src/panels/ViewportPanel.tsx` | the fly `useEffect`, `FLY_STREAM_MS` |
 | Per-view rect + park bridge (Rust) | `editor/src-tauri/src/lib.rs` | `set_viewport_bounds`, `set_viewport_parked` |
-| Subsurface side | `editor/src-tauri/src/wayland_viewport.rs` | `Viewports`, `ViewportShared`, `View`, `install` |
-| Render size + active view (engine) | `control_commands_render.cpp` / `control_commands_asset.cpp` | `set-viewport-size`, `viewport-native-info`, `set-active-view` |
+| Subsurface side | `editor/src-tauri/src/wayland_viewport.rs` | `Viewports`, `ViewportShared`, `ViewSurface`, `install` |
+| Render size + active view (engine) | `engine/crates/control/src/commands_render.rs` · `commands_asset.rs` | `set-viewport-size`, `viewport-native-info`, `set-active-view` |
 
 ## Related
 

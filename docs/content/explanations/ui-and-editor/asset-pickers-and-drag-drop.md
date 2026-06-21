@@ -45,7 +45,7 @@ Dragging a texture onto a Mesh field does nothing: the same type comparison guar
 | Drag payload + reader | `editor/src/components/AssetTile.tsx` | `ASSET_DND_MIME`, `AssetDragPayload`, `readAssetPayload` |
 | Where it's mounted | `editor/src/components/fieldRenderer.tsx` | the `uuid` case in `renderField`, `FieldHint.asset` |
 | The write (client) | `editor/src/panels/InspectorPanel.tsx` | `sendWrite` (`assignAsset` / `setComponentField`) |
-| Assign (engine) | `control_commands_asset.cpp` | `assign-asset` |
+| Assign (engine) | `engine/crates/control/src/commands_asset.rs` | `assign-asset` |
 
 ## Related
 

@@ -5,7 +5,7 @@ weight = 7
 
 # Physics inspector
 
-The [Inspector](../inspector/) edits physics the same way it edits everything else — data-driven, no per-component code — but physics carries three field shapes the generic widget set could not draw: an enum (a rigidbody's motion type, a collider's shape), a per-axis boolean lock (`glm::bvec3`), and a nested struct (a collider's physics material). Each becomes a new generic `FieldKind`, so the rigidbody, collider, character controller, and kinematic-bones components author cleanly from the same machinery the rest of the components use, never a bespoke physics panel.
+The [Inspector](../inspector/) edits physics the same way it edits everything else — data-driven, no per-component code — but physics carries three field shapes the generic widget set could not draw: an enum (a rigidbody's motion type, a collider's shape), a per-axis boolean lock (a `BVec3`), and a nested struct (a collider's physics material). Each becomes a new generic `FieldKind`, so the rigidbody, collider, character controller, and kinematic-bones components author cleanly from the same machinery the rest of the components use, never a bespoke physics panel.
 
 The model is Unity's and Godot's **split body/shape**: a `Rigidbody` owns motion (type, mass, damping, gravity factor, axis locks, layer), a `Collider` owns geometry plus its physics material and sensor flag, and a collider with **no** rigidbody is an implicit static body. The Add-Component menu lists Rigidbody, Collider, and Character Controller on any entity; the two rig sidecars (Kinematic Bones, Bone Physics) appear only on a skinned entity, since they index its skeleton.
 
@@ -69,4 +69,4 @@ The Bone Physics section is read-only: its per-bone bodies are auto-fit on skinn
 | Enum + lock widgets | `editor/src/components/EnumField.tsx` · `LockAxesField.tsx` | `EnumField`, `LockAxesField` |
 | Collider Fit-to-mesh + static note, Bone Physics readout | `editor/src/panels/InspectorPanel.tsx` | `componentBody` (`Collider`/`BonePhysics` bodies), `onFitCollider` |
 | Addability + section order | `editor/src/lib/componentOrder.ts` · `InspectorPanel.tsx` | `COMPONENT_ORDER`, the `missing` memo + `RIG_ONLY` |
-| Typed component shapes | `tools/gen-control-dto/gen.ts` → `editor/src/protocol/sa-types.ts` | `Rigidbody`, `Collider`, `KinematicBones`, `CharacterController`, `BVec3`, `PhysicsMaterial` |
+| Typed component shapes | `engine/crates/protocol/src/dto.rs` → (`xtask gen-protocol`) → `editor/src/protocol/sa-types.ts` | `Rigidbody`, `Collider`, `KinematicBones`, `CharacterController`, `BVec3`, `PhysicsMaterial` |

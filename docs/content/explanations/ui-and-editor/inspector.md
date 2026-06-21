@@ -7,7 +7,7 @@ weight = 6
 
 The Inspector is the editor panel for viewing and editing the components of the selected entity. It is data-driven: it holds no per-component code, rendering whatever components and fields the engine returns and choosing a widget for each field from its value shape.
 
-A component registered engine-side with `registerComponent` appears here automatically, with a sensible widget even before it has an explicit hint. The panel describes itself entirely from the live `inspect` result, so the editor and the engine never drift on what an entity holds.
+A component registered engine-side with `register_component!` appears here automatically, with a sensible widget even before it has an explicit hint. The panel describes itself entirely from the live `inspect` result, so the editor and the engine never drift on what an entity holds.
 
 ## How it works
 
@@ -27,7 +27,7 @@ The render path has no `if (component === "Transform")` branch. Components draw 
 
 `renderField` resolves a field to a widget in three steps:
 
-1. The explicit `FIELD_HINTS` table, keyed `Component.field`, which mirrors the C++ per-component widgets.
+1. The explicit `FIELD_HINTS` table, keyed `Component.field`, which mirrors the engine's per-component widgets.
 2. The value's shape — `{x,y,z}`→vec3, `{x,y,z,w}`→vec4, number, boolean, string.
 3. A read-only text fallback, so an unmapped field is still visible.
 
@@ -69,7 +69,7 @@ A few fields skip the full-DTO write because the engine offers merge helpers for
 
 ## Smoothed drags, drag-local widgets
 
-A drag samples at the webview's pointer rate (~60 Hz), far below the engine's frame rate, so writing each sample directly would render as visible steps. Material and Transform edits borrow the [gizmo's](../gizmo/) answer: mid-drag sends carry `smooth:1`, which makes `set-material`/`set-transform` record the numeric fields as per-entity targets instead of writing them, and the engine converges the live component toward those targets every rendered frame with the same ~25ms exponential the gizmo uses for pointer samples (`stepEditSmoothing`). Once within epsilon the value snaps exactly and the entry is dropped. Transform smoothing yields to a live gizmo drag on the same entity, and applies exact under preserve-children (each write must rebase the subtree).
+A drag samples at the webview's pointer rate (~60 Hz), far below the engine's frame rate, so writing each sample directly would render as visible steps. Material and Transform edits borrow the [gizmo's](../gizmo/) answer: mid-drag sends carry `smooth:1`, which makes `set-material`/`set-transform` record the numeric fields as per-entity targets instead of writing them, and the engine converges the live component toward those targets every rendered frame with the same ~25ms exponential the gizmo uses for pointer samples (`step_edit_smoothing`). Once within epsilon the value snaps exactly and the entry is dropped. Transform smoothing yields to a live gizmo drag on the same entity, and applies exact under preserve-children (each write must rebase the subtree).
 
 The widgets themselves never wait on that round trip. Every scrub widget (NumberDrag, SliderField, VectorEditor, ColorField) renders drag-local state through `useScrubValue`: the pointer updates the widget immediately, changes flow outward at most once per animation frame, and the prop only drives the widget when no gesture is active — so the color canvas or a scrubbed axis tracks the cursor exactly while the store, wire, and viewport follow.
 
@@ -91,8 +91,8 @@ Each section header has a drag handle. Dragging follows the tab-strip pattern: a
 | Color canvas + label casing | `editor/src/components/ColorField.tsx`, `editor/src/lib/humanize.ts` | `ColorField`, `humanizeFieldName` |
 | Read-modify-write routing | `editor/src/panels/InspectorPanel.tsx` | `onFieldChange`, `sendWrite`, `coalescerFor` |
 | Optimistic overlay | `editor/src/state/store.ts` | `applyOptimisticComponent`, `dragActive` |
-| Edits (engine) | `control_commands_scene.cpp` | `set-component`, `set-transform`, `set-material`, `set-component-field`, `set-component-order`, `add-component`, `remove-component` |
-| Smoothed drags (engine) | `scene_edit_gizmo.cpp`, `scene_edit_context.cppm` | `stepEditSmoothing`, `MaterialSmoothTarget`, `TransformSmoothTarget` |
+| Edits (engine) | `engine/crates/control/src/commands_scene.rs` | `set-component`, `set-transform`, `set-material`, `set-component-field`, `set-component-order`, `add-component`, `remove-component` |
+| Smoothed drags (engine) | `engine/crates/sceneedit/src/smoothing.rs` | `step_edit_smoothing`, `MaterialSmoothTarget`, `TransformSmoothTarget` |
 | Drag-local widgets | `editor/src/lib/useScrubValue.ts` | `useScrubValue`, `ScrubValue` |
 
 ## Related

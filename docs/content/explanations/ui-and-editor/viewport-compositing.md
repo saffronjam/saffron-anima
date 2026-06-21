@@ -61,14 +61,14 @@ flowchart LR
 ```
 
 The engine side is a pipelined readback with zero added stalls. Each frame-in-flight slot
-owns a BGRA8 image and a persistently mapped staging buffer; `endFrame` records the
+owns a BGRA8 image and a persistently mapped staging buffer; `end_frame` records the
 offscreen→BGRA8 blit (the GPU does the format conversion) and the image→buffer copy into
 the frame's normal command buffer, then submits with the frame fence only — no swapchain
-acquire, no present, no `waitIdle`. When `beginFrame` waits that fence two frames later,
+acquire, no present, no `wait_gpu_idle`. When `begin_frame` waits that fence two frames later,
 the readback is complete by construction and a `memcpy` publishes it into the **active
 view's** shared segment. Each view owns its own segment + ring, and only the active view is
 rendered and published each frame, so the inactive view's last frame stays put. A segment is
-grow-only with a 32-byte header (`magic, width, height, seq, ringSlots, slotCapacity`) and a
+grow-only with a 32-byte header (`magic, width, height, seq, ring_slots, slot_capacity`) and a
 fixed-capacity 4-slot ring: frame `s` lands in slot `s % 4`, the header is written
 pixels-first with `seq` bumped last behind a release fence, so a reader that sees a new `seq`
 is guaranteed matching dimensions and pixels.
@@ -158,12 +158,12 @@ stalls the visible one.
 
 ## Input rides the control plane
 
-The engine's SDL window is hidden and receives no events, so every input path is a control
+The engine's winit window is hidden and receives no events, so every input path is a control
 command from the webview: `gizmo-pointer` and `pick` for the [gizmo](../gizmo/) and
 [selection](../selection/), and `fly-input` for the [editor camera](../editor-camera/)
 (pointer-lock relative deltas + move keys). Webview pointer events arrive at ~60Hz, so the
 engine smooths gizmo drag samples toward their target each rendered frame
-(`stepNativeGizmoDrag`) instead of staircase-stepping at the sample rate.
+(`step_native_gizmo_drag`) instead of staircase-stepping at the sample rate.
 
 > [!NOTE]
 > wl_shm makes the compositor upload each frame on its paint thread, and the ring has no
@@ -174,15 +174,16 @@ engine smooths gizmo drag samples toward their target each rendered frame
 
 | What | File | Symbols |
 |---|---|---|
-| Per-view targets + identity | `renderer_types.cppm` | `ViewId`, `ViewTargets`, `ShmPublish`, `ShmPublishSlot`, `activeView`, `activeShmPublish` |
-| Active view + temporal reset | `renderer.cppm` / `renderer_types.cppm` | `setActiveView`, `resetViewTemporal` |
-| Slot lifecycle + segment | `renderer_capture.cpp` | `enableViewportShmPublish` (per view), `ensureShmPublishSlot`, `publishShmPublishSlot`, `destroyShmPublish` |
-| Recorded readback + fence-only submit | `renderer.cppm` | `recordShmPublishCopy`, the active-view `shmPublish` branches in `beginFrame`/`endFrame` |
-| Loop cap | `app.cppm` | `maxFpsFromEnv` |
-| Two subsurfaces + one loop | `editor/src-tauri/src/wayland_viewport.rs` | `install`, `run`, `Viewports`, `ViewportShared`, `View`, `PresentationStats` |
+| Per-view targets + identity | `engine/crates/rendering/src/renderer.rs` · `view_target.rs` | `ViewId`, `ViewTarget`, `ShmCapture`, `active_view`, `active_view_id` |
+| Active view + temporal reset | `engine/crates/rendering/src/renderer.rs` | `set_active_view`, `reset_view_temporal` |
+| Segment publisher (seqlock ring) | `engine/crates/rendering/src/shm_publish.rs` | `ShmPublish`, `enable`, `publish`, `seq`, `slot_capacity` |
+| Recorded readback + fence-only submit | `engine/crates/rendering/src/renderer.rs` | `record_shm_copy`, `read_active_view_bgra8`, the active-view shm branch in `end_frame` |
+| Host shm wiring (per-view configs) | `engine/crates/host/src/viewport_shm.rs` | `ViewportShmPublisher`, `ShmViewConfig`, `configs_from_env` |
+| Loop cap | `engine/crates/app/src/lib.rs` | `max_fps_from_env`, `pace_loop` |
+| Two subsurfaces + one loop | `editor/src-tauri/src/wayland_viewport.rs` | `install`, `run`, `Viewports`, `ViewportShared`, `ViewSurface`, `PresentationStats` |
 | Backdrop + per-view segment remap | `editor/src-tauri/src/wayland_viewport.rs` | `backdrop_pixel_fd`, `stat_shm` |
 | Rect + park bridge (per view) | `editor/src-tauri/src/lib.rs` | `set_viewport_bounds`, `set_viewport_parked`, `viewport_shm_name`, `spawn_engine` |
-| Render size + active-view commands | `control_commands_render.cpp` / `control_commands_asset.cpp` | `set-viewport-size`, `set-active-view` |
+| Render size + active-view commands | `engine/crates/control/src/commands_render.rs` · `commands_asset.rs` | `set-viewport-size`, `set-active-view` |
 
 ## Related
 

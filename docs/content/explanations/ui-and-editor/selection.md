@@ -58,8 +58,8 @@ The ray and AABB math, along with the Vulkan-clip caveat, are covered in [Pickin
 | Version-stamped reconcile | `editor/src/state/store.ts` | `startReconcile`, `selectionVersion`, `sceneVersion`, `getSelection` |
 | Hierarchy click | `editor/src/panels/HierarchyPanel.tsx` | `onSelect` |
 | Viewport pick | `editor/src/panels/ViewportPanel.tsx` | `runPick`, `client.pick` |
-| Selection + pick (engine) | `control_commands_scene.cpp` | `select`, `get-selection`, `deselect`, `pick`; `pickEntity` |
-| Poll counters (engine) | `editor.cppm` | `selectionVersion`, `sceneVersion`, `setSelection` |
+| Selection + pick (engine) | `engine/crates/control/src/commands_scene.rs` · `engine/crates/assets/src/render_scene.rs` | `select`, `get-selection`, `deselect`, `pick`; `pick_entity` |
+| Poll counters (engine) | `engine/crates/sceneedit/src/context.rs` | `selection_version`, `scene_version`, `set_selection` |
 
 ## Related
 

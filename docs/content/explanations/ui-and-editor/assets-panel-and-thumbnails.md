@@ -60,7 +60,7 @@ When the catalog changes, on a project or scene load, every cached blob URL is s
 The webview cache is per-session — wiped on every project load — so on its own a project with ~100 textures pays a full round of generation at every startup. Underneath it the **engine keeps a persistent PNG cache** that survives restarts, because the engine is the right owner: it knows the source files and when they change.
 
 - **Location:** `<projectRoot>/cache/thumbnails/`, next to the project's `assets/` and outside it, so the catalog scan and project save/load never pick it up. One PNG per entry.
-- **Key:** the asset uuid, the requested pixel size, and a *stamp* of the source file — its size and mtime, folded with a cache-format version into the filename `<uuid>-<size>-<stamp>.png`. A hit is a single `exists()` after stating the source; a stale entry (edited source, or a version bump) simply never matches its old stamp again, so there is no explicit invalidation step for edits. Bumping `ThumbnailCacheVersion` invalidates every entry at once when generation behaviour changes.
+- **Key:** the asset uuid, the requested pixel size, and a *stamp* of the source file — its size and mtime, folded with a cache-format version into the filename `<uuid>-<size>-<stamp>.png`. A hit is a single `exists()` after stating the source; a stale entry (edited source, or a version bump) simply never matches its old stamp again, so there is no explicit invalidation step for edits. Bumping `THUMBNAIL_CACHE_VERSION` invalidates every entry at once when generation behaviour changes.
 - **Flow:** `get-thumbnail` reads the cached PNG bytes straight into the base64 reply on a hit — no GPU work, no encode — and reports the width/height read from the PNG header. On a miss it generates as above and writes the PNG before replying (best-effort: a failed write logs and still replies). So the second start of a project is disk reads, with no multi-second HDR spike.
 
 The stamp keys textures on their imported file and meshes on the `.smesh`; materials stamp on the resolved material state, so editing a parent material reflows every instance's key (see [asset commands](../../tooling-and-control/asset-commands/) for the `thumbnail-cache` command and the delete/orphan cleanup).
@@ -98,7 +98,7 @@ Double-clicking a tile opens a closeable titlebar tab for that asset (`view-asse
 | Thumbnail blob-URL cache | `editor/src/state/store.ts` | `getCachedThumbnailUrl`, `getThumbnailUrl`, `invalidateThumbnails`, `thumbnailCache` |
 | Asset tabs | `editor/src/app/WindowTitlebar.tsx` | `TitlebarTab`, `ViewTab`, `openAssetTab` |
 | Preview content | `editor/src/components/AssetViewer.tsx` | `AssetPreview`, `viewAsset` |
-| Readback + metadata (engine) | `control_commands_asset.cpp` | `get-thumbnail`, `view-asset`, `list-assets`, `probe-asset`, `rename-asset`, `move-asset`, `delete-asset`, `delete-asset-folder` |
+| Readback + metadata (engine) | `engine/crates/control/src/commands_asset.rs` | `get-thumbnail`, `view-asset`, `list-assets`, `probe-asset`, `rename-asset`, `move-asset`, `delete-asset`, `delete-asset-folder` |
 
 ## Related
 

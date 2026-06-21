@@ -97,7 +97,7 @@ map owns for the panel's open lifetime. Each leaf body claims the hosts of the t
 moves — only the host div's DOM parent does — component state, refs, and DOM survive. The
 Material panel keeps its GPU preview across a move to the bottom dock; the Timeline keeps its
 canvas. A per-panel `renderer` policy (`always` vs `onlyWhenVisible`) decides whether a hidden
-panel stays mounted, generalizing the old keep-mounted right sidebar.
+panel stays mounted.
 
 ## The live-subsurface leaf
 

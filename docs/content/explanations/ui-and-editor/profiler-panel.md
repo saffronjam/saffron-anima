@@ -6,8 +6,7 @@ weight = 17
 # Profiler panel
 
 The Profiler is one of two performance **tools** — Stats and Profiler — opened from the Topbar's
-**wrench** menu into the editor's **right sidebar**, where each is a closeable tab (closing the last
-one removes the sidebar and the viewport reclaims the width). Stats is the always-on HUD — a streaming
+**Tools** menu as [dock panels](../dock-system/). Stats is the always-on HUD — a streaming
 1 Hz read of headline numbers. The Profiler is the opposite surface: you click Capture, the engine
 records a bounded window, and the panel shows that one capture broken down by pass across a merged
 CPU+GPU timeline. The two are peers, and the Profiler fetches nothing until you ask — opening it starts
@@ -47,7 +46,7 @@ The **Flame** button in the capture controls opens a separate **main editor tab*
 a large two-lane chart (`flame-chart-js`): a GPU lane of nested pass spans and a CPU lane of
 render-thread phases, sharing one axis when the capture is correlated (its own zero when not). Spans
 are coloured by magnitude. Promoting it to a full tab gives the flame graph the width a timeline wants —
-the narrow sidebar keeps the table, which answers *which* pass, while the tab shows *where in the frame
+the docked Profiler panel keeps the table, which answers *which* pass, while the tab shows *where in the frame
 and how consistently*.
 
 ## Export
@@ -59,16 +58,16 @@ can't cross the webview → desktop-browser boundary, so the bridge instead serv
 ephemeral `127.0.0.1` port (permissive CORS) and opens `ui.perfetto.dev/#!/?url=…` pointing back at it;
 Perfetto fetches and loads the trace itself, no download/drag (the loopback bind is reachable from the
 host browser because the toolbox shares the host network namespace). The HUD's alarm badge deep-links here
-for a per-pass alarm (and to Stats for a frame-wide one), opening the right tool in the sidebar.
+for a per-pass alarm (and to Stats for a frame-wide one), opening the matching tool panel.
 
 ## Code
 
 | What | File | Symbols |
 |---|---|---|
-| Tool panel + table | `ProfilerPanel.tsx`, `CaptureTable.tsx` | `ProfilerPanel` |
-| Right sidebar (tools host) | `panels/RightSidebar.tsx`, `app/Layout.tsx` | `RightSidebar`, `rightTools` |
-| Flame graph (main tab) | `CaptureFlame.tsx`, `app/App.tsx` | `FlameGraphWorkspace`, `openFlameTab` |
-| Capture controls + export | `CaptureControls.tsx` | ButtonGroup capture, Download menu, open-in-Perfetto, Flame button |
-| Capture store slice + transforms | `state/store.ts`, `lib/captureTree.ts`, `lib/perfettoExport.ts` | `captureState`, `spansToFlameTree`, `toPerfettoTrace` |
-| Perfetto auto-import (loopback trace server) | `src-tauri/src/lib.rs` | `serve_trace`, `start_trace_server`, `open_external` |
-| Alarm deep-link | `AlarmBadge.tsx` | `openRightTool("profiler")` for per-pass alarms |
+| Tool panel + table | `editor/src/panels/ProfilerPanel.tsx` · `editor/src/components/CaptureTable.tsx` | `ProfilerPanel`, `CaptureTable` |
+| Tool-panel registration | `editor/src/components/dock/panelRegistry.tsx` · `editor/src/panels/Topbar.tsx` | the `profiler` / `stats` registry entries, the Tools-menu `openPanel` |
+| Flame graph (main tab) | `editor/src/components/CaptureFlame.tsx` · `editor/src/app/App.tsx` | `FlameGraphWorkspace`, `openFlameTab` |
+| Capture controls + export | `editor/src/components/CaptureControls.tsx` | ButtonGroup capture, Download menu, open-in-Perfetto, Flame button |
+| Capture store slice + transforms | `editor/src/state/store.ts` · `editor/src/lib/captureTree.ts` · `editor/src/lib/perfettoExport.ts` | `captureState`, `spansToFlameTree`, `toPerfettoTrace` |
+| Perfetto auto-import (loopback trace server) | `editor/src-tauri/src/lib.rs` | `serve_trace`, `start_trace_server`, `open_external` |
+| Alarm deep-link | `editor/src/components/AlarmBadge.tsx` | `openPanel("profiler")` for per-pass alarms |
