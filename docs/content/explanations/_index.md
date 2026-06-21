@@ -30,7 +30,7 @@ around this spine.
 | [Vulkan foundation](vulkan-foundation/) | device, VMA, sync2, dynamic rendering, RAII wrappers |
 | [Frame & render graph](frame-and-render-graph/) | declared usage → automatic barriers, per-frame sync |
 | [Geometry & assets](geometry-and-assets/) | mesh import, `.smesh`, GPU upload, asset catalog |
-| [Scene & ECS](scene-and-ecs/) | entt, component registry, serialization, picking |
+| [Scene & ECS](scene-and-ecs/) | hecs, component registry, serialization, picking |
 | [Materials & pipelines](materials-and-pipelines/) | übershader, PSO cache, descriptor sets, bindless |
 | [Lighting & BRDF](lighting-and-brdf/) | clustered forward, Cook-Torrance, lights, HDR |
 | [Image-based lighting](image-based-lighting/) | sky, irradiance, prefilter, BRDF LUT |

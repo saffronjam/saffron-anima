@@ -5,11 +5,11 @@ description = 'How the Saffron Anima renderer works, concept by concept, with li
 
 # Saffron Anima
 
-Saffron Anima is a from-scratch **Vulkan** renderer and **C++26** game engine with a
-Tauri/React editor. These docs explain how it renders, concept by concept, and link
-each explanation to the code behind it.
+Saffron Anima is a from-scratch **Vulkan** renderer and game engine written in **Rust**,
+with a Tauri/React editor. These docs explain how it renders, concept by concept, and
+link each explanation to the code behind it.
 
-The code is Go-flavoured: small data structs, free functions, errors as values, no
+The code favours small data structs, free functions, and errors as values over deep
 inheritance. That style runs through the whole engine, so read [the conventions](explanations/core-and-conventions/)
 before the deeper graphics pages.
 
