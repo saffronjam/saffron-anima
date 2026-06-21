@@ -46,8 +46,7 @@ use crate::render_material::build_submesh_material;
 use crate::{AssetServer, Error, Result};
 
 /// The thumbnail cache version, folded into every stamp so a behaviour change retires
-/// the whole on-disk cache. `v2`: model thumbnails render textured (the C++
-/// `ThumbnailCacheVersion`).
+/// the whole on-disk cache. At `v2`, model thumbnails render textured.
 pub const THUMBNAIL_CACHE_VERSION: u32 = 2;
 
 /// The FNV-1a 64-bit offset basis.
@@ -56,7 +55,7 @@ const FNV_OFFSET: u64 = 1469598103934665603;
 const FNV_PRIME: u64 = 1099511628211;
 
 /// PNG bytes plus the actual encoded pixel dimensions, so a control reply reports the
-/// truthful width/height rather than echoing the requested size (the C++ `ThumbnailPng`).
+/// truthful width/height rather than echoing the requested size.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThumbnailPng {
     /// The encoded PNG bytes.
@@ -68,8 +67,7 @@ pub struct ThumbnailPng {
 }
 
 /// A thumbnail request's reply: the PNG (a cache hit or freshly generated), or a
-/// `pending` flag telling the editor to retry while the worker generates it (the C++
-/// `ThumbnailReply`).
+/// `pending` flag telling the editor to retry while the worker generates it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThumbnailReply {
     /// The PNG bytes (empty while `pending`).
@@ -82,8 +80,7 @@ pub struct ThumbnailReply {
     pub pending: bool,
 }
 
-/// What the on-disk thumbnail cache holds: entry count + total bytes (the C++
-/// `ThumbnailCacheStats`).
+/// What the on-disk thumbnail cache holds: entry count + total bytes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ThumbnailCacheStats {
     /// Number of cached thumbnail files.
@@ -104,13 +101,11 @@ pub struct ThumbnailCacheStats {
 pub trait ThumbnailGpu: GpuUploader {
     /// Binds the calling thread to the renderer's dedicated thumbnail command pool (every
     /// subsequent one-off upload/render/readback on this thread allocates from it). Called
-    /// once at the top of the worker loop; idempotent per thread. The C++
-    /// `bind_thumbnail_worker_thread`.
+    /// once at the top of the worker loop; idempotent per thread.
     fn bind_worker_thread(&self);
 
     /// Renders `texture` downscaled to fit `size`×`size`, encoding the read-back to PNG.
     /// `transfer` selects the HDR mapping (`Tonemap` for an HDR asset, `Clamp` otherwise).
-    /// The C++ `encode_texture_thumbnail_png`.
     ///
     /// # Errors
     ///
@@ -123,7 +118,7 @@ pub trait ThumbnailGpu: GpuUploader {
     ) -> saffron_rendering::Result<ThumbnailPng>;
 
     /// Renders `mesh` framed by its AABB under fixed lighting, encoding the read-back to
-    /// PNG (the flat-mesh asset tile). The C++ `encode_asset_thumbnail_png`.
+    /// PNG (the flat-mesh asset tile).
     ///
     /// # Errors
     ///
@@ -135,7 +130,7 @@ pub trait ThumbnailGpu: GpuUploader {
     ) -> saffron_rendering::Result<ThumbnailPng>;
 
     /// Renders `mesh` shaded with its per-submesh materials (the textured model tile),
-    /// encoding the read-back to PNG. The C++ `encode_model_thumbnail_png`.
+    /// encoding the read-back to PNG.
     ///
     /// # Errors
     ///
@@ -150,8 +145,7 @@ pub trait ThumbnailGpu: GpuUploader {
     /// Renders a unit sphere with `material` under studio lighting into a `size`×`size`
     /// texture (the material-preview pane + cached material thumbnails). `shader_spv` of
     /// `None` uses the cached default studio preview pipeline; a non-foldable graph material
-    /// passes its compiled `_preview.spv` path for a per-call codegen pipeline. The C++
-    /// `render_material_preview`.
+    /// passes its compiled `_preview.spv` path for a per-call codegen pipeline.
     ///
     /// # Errors
     ///
@@ -180,7 +174,7 @@ pub struct ThumbnailTextureSource {
 }
 
 /// What kind of thumbnail a [`ThumbnailJob`] renders, carrying the type-specific inputs
-/// the worker needs (the C++ job's `type` + the per-type fields, as a data-carrying enum).
+/// the worker needs, as a data-carrying enum.
 #[derive(Clone, Debug)]
 pub enum ThumbnailContent {
     /// A texture preview: decode + upload the source, then read it back.
@@ -235,8 +229,7 @@ type MeshHandback = Vec<(Uuid, Arc<GpuMesh>)>;
 
 /// The mutex-guarded shared state between the worker thread and the main thread.
 ///
-/// Guarded by one [`Mutex`], woken by a [`Condvar`] (the C++ `std::mutex` +
-/// `std::condition_variable`).
+/// Guarded by one [`Mutex`], woken by a [`Condvar`].
 #[derive(Default)]
 pub struct WorkerState {
     /// Pending jobs, FIFO.
@@ -285,7 +278,7 @@ impl ThumbnailWorker {
 }
 
 /// The worker thread body: bind the pool, then wait → pop → generate → handback forever
-/// until `stop`. The C++ `thumbnailWorkerLoop`.
+/// until `stop`.
 fn worker_loop(shared: &Arc<(Mutex<WorkerState>, Condvar)>, gpu: &dyn ThumbnailGpu) {
     gpu.bind_worker_thread();
     let (lock, cv) = &**shared;
@@ -326,7 +319,7 @@ fn worker_loop(shared: &Arc<(Mutex<WorkerState>, Condvar)>, gpu: &dyn ThumbnailG
 
 /// Decodes + uploads one texture (worker or sync path), recording the `(id, Arc)` for the
 /// cache handback. Returns the live `Arc<GpuTexture>` or `None` on a decode/upload failure
-/// (logged warn). The C++ `thumbnailUploadTexture`.
+/// (logged warn).
 fn upload_thumbnail_texture(
     gpu: &dyn ThumbnailGpu,
     src: &ThumbnailTextureSource,
@@ -382,7 +375,7 @@ fn upload_thumbnail_texture(
 ///
 /// Uploaded GPU resources are appended to `texture_out` / `mesh_out` for the caller to
 /// cache. Runs on the worker thread (worker command pool, queue/bindless mutexes) or, with
-/// no worker, inline on the main thread. The C++ `generateThumbnail`.
+/// no worker, inline on the main thread.
 ///
 /// # Errors
 ///
@@ -430,9 +423,9 @@ fn generate_thumbnail(
                 }
             }
             let sm = build_submesh_material(material, &mut |tid| local.get(&tid.value()).cloned());
-            // The disk-cached material tile renders through the default studio preview
-            // (the C++ worker's `renderMaterialPreview(renderer, sm, size)`); the codegen
-            // `_preview.spv` path is reserved for the live `preview-render` command, which
+            // The disk-cached material tile renders through the default studio preview; the
+            // codegen `_preview.spv` path is reserved for the live `preview-render` command,
+            // which
             // has the `AssetServer` to compile it.
             let tex = gpu
                 .render_material_preview(&sm, job.size, None)
@@ -491,7 +484,7 @@ impl FnvHash {
 }
 
 /// FNV-1a folds `version | file_size | mtime_ticks` into a compact hex token — the
-/// `<stamp>` filename field (the C++ `foldThumbnailStamp`).
+/// `<stamp>` filename field.
 fn fold_thumbnail_stamp(version: u64, file_size: u64, mtime_ticks: u64) -> String {
     let mut h = FnvHash::new();
     h.mix(version);
@@ -502,8 +495,7 @@ fn fold_thumbnail_stamp(version: u64, file_size: u64, mtime_ticks: u64) -> Strin
 
 /// A material thumbnail keys on its *resolved* state (a content hash of the resolved
 /// params + texture uuids), not a file stamp — editing a parent material reflows every
-/// instance without touching the child `.smat`. Folded with the cache version (the C++
-/// `thumbnailMaterialStamp`).
+/// instance without touching the child `.smat`. Folded with the cache version.
 fn thumbnail_material_stamp(m: &MaterialAsset) -> String {
     let mut h = FnvHash::new();
     h.mix(u64::from(THUMBNAIL_CACHE_VERSION));
@@ -541,7 +533,7 @@ fn thumbnail_material_stamp(m: &MaterialAsset) -> String {
 }
 
 /// The leading uuid of a cache filename (`<uuid>-<size>-<stamp>.png`); `0` if it doesn't
-/// parse (the C++ `thumbnailCacheFileUuid`).
+/// parse.
 fn thumbnail_cache_file_uuid(filename: &str) -> u64 {
     match filename.split_once('-') {
         Some((head, _)) => head.parse().unwrap_or(0),
@@ -590,8 +582,8 @@ fn write_thumbnail_cache(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
-/// Inserts handed-back GPU resources into the caches, skipping uuids already cached
-/// (the C++ `insertThumbnailHandback`). Main thread only.
+/// Inserts handed-back GPU resources into the caches, skipping uuids already cached.
+/// Main thread only.
 fn insert_thumbnail_handback(
     assets: &mut AssetServer,
     textures: TextureHandback,
@@ -618,7 +610,7 @@ impl AssetServer {
 
     /// FNV-1a stamp of the asset's source file (size + mtime, folded with the cache
     /// version). Empty when the file is missing/unstattable — the entry is then never
-    /// cached. The C++ `thumbnailSourceStamp`.
+    /// cached.
     fn thumbnail_source_stamp(&self, rel_path: &str) -> String {
         if rel_path.is_empty() {
             return String::new();
@@ -637,8 +629,7 @@ impl AssetServer {
         fold_thumbnail_stamp(u64::from(THUMBNAIL_CACHE_VERSION), meta.len(), mtime)
     }
 
-    /// What the on-disk thumbnail cache holds (count + bytes). The C++
-    /// `thumbnailCacheStats`.
+    /// What the on-disk thumbnail cache holds (count + bytes).
     #[must_use]
     pub fn thumbnail_cache_stats(&self) -> ThumbnailCacheStats {
         let mut stats = ThumbnailCacheStats::default();
@@ -657,8 +648,7 @@ impl AssetServer {
         stats
     }
 
-    /// Empties the project's cache dir, returning what was removed. The C++
-    /// `clearThumbnailCacheDir`.
+    /// Empties the project's cache dir, returning what was removed.
     pub fn clear_thumbnail_cache_dir(&self) -> ThumbnailCacheStats {
         let removed = self.thumbnail_cache_stats();
         let dir = self.thumbnail_cache_dir();
@@ -671,7 +661,7 @@ impl AssetServer {
     }
 
     /// Removes every cached thumbnail for one asset uuid (all sizes/stamps) — on delete +
-    /// reimport. The C++ `removeThumbnailCacheForAsset`.
+    /// reimport.
     pub fn remove_thumbnail_cache_for_asset(&self, id: Uuid) {
         let dir = self.thumbnail_cache_dir();
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -686,8 +676,7 @@ impl AssetServer {
     }
 
     /// Deletes cache files whose uuid is no longer in the catalog (reimport mints new
-    /// uuids, orphaning the old PNGs). Run on project load. The C++
-    /// `sweepThumbnailCacheOrphans`.
+    /// uuids, orphaning the old PNGs). Run on project load.
     pub fn sweep_thumbnail_cache_orphans(&self) {
         let dir = self.thumbnail_cache_dir();
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -703,10 +692,10 @@ impl AssetServer {
     }
 
     /// Starts the off-thread thumbnail worker over `gpu` (a `'static` GPU seam), if not
-    /// already running. The C++ `startThumbnailWorker`.
+    /// already running.
     ///
     /// The caller must have prewarmed the renderer's lazy preview pipelines on the main
-    /// thread first (the C++ `prewarmThumbnailResources`), so the worker never races their
+    /// thread first, so the worker never races their
     /// first-use initialization. Idempotent: a second call while a worker runs is a no-op.
     pub fn start_thumbnail_worker(&mut self, gpu: Box<dyn ThumbnailGpu + Send>) {
         if self.thumbnail_worker.is_some() {
@@ -715,8 +704,7 @@ impl AssetServer {
         self.thumbnail_worker = Some(ThumbnailWorker::spawn(gpu));
     }
 
-    /// Sets `stop`, notifies, and joins the worker thread, then drops it. The C++
-    /// `stopThumbnailWorker`.
+    /// Sets `stop`, notifies, and joins the worker thread, then drops it.
     ///
     /// Called **before** `wait_gpu_idle` / renderer teardown: the worker's last submit's
     /// fences have completed and its un-handed-back textures are referenced by no frame, so
@@ -737,7 +725,7 @@ impl AssetServer {
     }
 
     /// Drains the worker's finished uploads into the GPU caches. Call once per frame on the
-    /// main thread. The C++ `drainThumbnailCompletions`.
+    /// main thread.
     pub fn drain_thumbnail_completions(&mut self) {
         let Some(worker) = self.thumbnail_worker.as_ref() else {
             return;
@@ -757,7 +745,7 @@ impl AssetServer {
 /// Abandons the worker's queue + dedup/failed state + un-drained handbacks (a project
 /// switch, GPU idle at the call site). Standalone so [`AssetServer::clear_thumbnail_queue`]
 /// (defined in `lib.rs`, called by `clear_asset_caches`) can drive it without a borrow
-/// tangle. The C++ `clearThumbnailQueue`.
+/// tangle.
 pub(crate) fn clear_worker_queue(worker: &ThumbnailWorker) {
     let (lock, _cv) = &*worker.shared;
     let mut state = lock.lock().expect("worker state mutex");
@@ -771,7 +759,7 @@ pub(crate) fn clear_worker_queue(worker: &ThumbnailWorker) {
 /// Builds the resolved [`ThumbnailJob`] for `{id, size}` from the catalog/material/
 /// container state, plus its cache stamp. Runs on the main thread (the worker has no
 /// [`AssetServer`]). Returns the job alone — the caller decides cache-hit vs. enqueue vs.
-/// sync. The catalog/material resolution half of the C++ `requestThumbnail`.
+/// sync. The catalog/material resolution half of the thumbnail request.
 ///
 /// # Errors
 ///
@@ -941,7 +929,7 @@ fn build_embedded_job(
     ))
 }
 
-/// The five texture slot ids of a material, in the C++ order.
+/// The five texture slot ids of a material, in slot order.
 fn material_texture_ids(m: &MaterialAsset) -> [Uuid; 5] {
     [
         m.albedo_texture,
@@ -1025,8 +1013,7 @@ fn add_model_texture(
     textures.push(src);
 }
 
-/// Maps a container texture chunk's flag word to its [`Colorspace`] (the chunk-flag
-/// encoding the C++ reads back).
+/// Maps a container texture chunk's flag word to its [`Colorspace`].
 fn colorspace_from_flags(flags: u32) -> Colorspace {
     match flags {
         1 => Colorspace::Srgb,
@@ -1039,8 +1026,7 @@ fn colorspace_from_flags(flags: u32) -> Colorspace {
 /// Resolves `{asset, size}` to a thumbnail over `gpu` — a cache hit returns the PNG, a
 /// miss generates it (sync when there is no worker, else enqueued with a `pending` reply).
 ///
-/// Materials key on resolved state, mesh/texture on the source-file stat. The C++
-/// `requestThumbnail`.
+/// Materials key on resolved state, mesh/texture on the source-file stat.
 ///
 /// # Errors
 ///

@@ -6,8 +6,8 @@
 //! - [`build_submesh_material`] maps one resolved [`MaterialAsset`] to a
 //!   [`SubmeshMaterial`], resolving each texture slot through a borrowed loader closure.
 //!   The main draw path passes [`AssetServer::load_texture_asset`]; the thumbnail worker
-//!   passes its own uploader — one mapping, one call site, no trait object (the C++
-//!   `std::function<Ref<GpuTexture>(Uuid)>` becomes a `&dyn Fn(Uuid) -> Option<Arc<…>>`).
+//!   passes its own uploader — one mapping, one call site, the loader a
+//!   `&dyn Fn(Uuid) -> Option<Arc<…>>`.
 //! - [`AssetServer::resolve_material_asset`] instantiates a [`MaterialAsset`] on the main
 //!   thread, wiring [`build_submesh_material`]'s loader to [`AssetServer::load_texture_asset`].
 //! - [`AssetServer::resolve_entity_materials`] resolves a single renderable's whole
@@ -52,7 +52,7 @@ const DEFAULT_MESH_SHADER: &str = "shaders/mesh.spv";
 ///
 /// Built by [`AssetServer::resolve_entity_materials`] from the entity's
 /// [`MaterialAsset`]/[`MaterialSet`]/[`Material`] component (precedence in that order),
-/// else engine defaults. The C++ `ResolvedMaterials`.
+/// else engine defaults.
 #[derive(Clone)]
 pub struct ResolvedMaterials {
     /// One [`SubmeshMaterial`] per mesh submesh; a single entry applies to every
@@ -79,7 +79,7 @@ impl Default for ResolvedMaterials {
 }
 
 /// Maps a resolved [`MaterialAsset`] to a render-ready [`SubmeshMaterial`], resolving
-/// each texture slot through `load_tex` (the C++ `buildSubmeshMaterial`).
+/// each texture slot through `load_tex`.
 ///
 /// The main draw path passes a closure over [`AssetServer::load_texture_asset`]; the
 /// thumbnail worker passes its own uploader. A zero texture id leaves that handle unset —
@@ -87,9 +87,9 @@ impl Default for ResolvedMaterials {
 /// packed `orm_texture` feeds **both** the metallic-roughness and the occlusion slot, and
 /// `alpha_clip` is `blend == "masked"`.
 ///
-/// The loader is `FnMut`: the main path's closure fills the texture cache as it resolves
-/// (the C++ closure captured `assets` and mutated its caches), so a borrowed mutable
-/// closure is the faithful, allocation-free shape — no trait object for a single call site.
+/// The loader is `FnMut`: the main path's closure fills the texture cache as it resolves,
+/// so a borrowed mutable closure is the allocation-free shape — no trait object for a
+/// single call site.
 pub fn build_submesh_material(
     material: &MaterialAsset,
     load_tex: &mut dyn FnMut(saffron_core::Uuid) -> Option<Arc<GpuTexture>>,
@@ -129,8 +129,7 @@ pub fn build_submesh_material(
 
 impl AssetServer {
     /// Resolves a loaded [`MaterialAsset`] to a render-ready [`SubmeshMaterial`], wiring
-    /// [`build_submesh_material`]'s loader to [`AssetServer::load_texture_asset`] (the C++
-    /// `resolveMaterialAsset`).
+    /// [`build_submesh_material`]'s loader to [`AssetServer::load_texture_asset`].
     ///
     /// The main-thread instantiation: each texture id resolves through the GPU cache (a
     /// cache hit returns the live `Arc`; a miss uploads, then caches). A dangling id
@@ -144,8 +143,7 @@ impl AssetServer {
     }
 
     /// Resolves a single renderable's whole submesh-material table from the entity's
-    /// material components, applying the precedence and the codegen-shader override (the
-    /// C++ `resolveEntityMaterials`).
+    /// material components, applying the precedence and the codegen-shader override.
     ///
     /// A [`MaterialAsset`](saffron_scene::MaterialAsset) component (a `.smat` id) wins:
     /// the resolved material fills every submesh slot, and when its raw graph is
@@ -253,7 +251,7 @@ impl AssetServer {
     }
 
     /// Lowers one inline [`MaterialSlot`] to a [`SubmeshMaterial`], resolving each texture
-    /// id through the GPU cache (the C++ `lower` lambda inside `resolveEntityMaterials`).
+    /// id through the GPU cache.
     ///
     /// Distinct from [`build_submesh_material`]: a slot carries an explicit
     /// `metallic_roughness_texture` and `occlusion_texture` separately (it is not a packed
@@ -625,7 +623,7 @@ mod tests {
             )
             .unwrap();
 
-        // The C++ pushes exactly one submesh material for the single inline Material,
+        // Exactly one submesh material is pushed for the single inline Material,
         // regardless of submesh count.
         let meshes = [submesh(0), submesh(0)];
         let resolved = assets.resolve_entity_materials(&NoGpu, &scene, entity, &meshes);
@@ -670,7 +668,7 @@ mod tests {
         let mut scene = Scene::default();
         let entity = scene.create_entity("e");
         // A MaterialAsset component with a zero id is *not* a winner — the precedence
-        // falls through to the Material component (the C++ `if (matId.value != 0)` guard).
+        // falls through to the Material component (the `matId != 0` guard).
         scene
             .add_component(
                 entity,
@@ -707,7 +705,7 @@ mod tests {
         let entity = scene.create_entity("e");
         let meshes = [submesh(0)];
         let resolved = assets.resolve_entity_materials(&NoGpu, &scene, entity, &meshes);
-        // No components: the C++ returns an empty submesh list with default flags.
+        // No components: an empty submesh list with default flags.
         assert!(resolved.submeshes.is_empty());
         assert!(!resolved.unlit);
         assert_eq!(resolved.proxy_albedo, Vec3::ONE);

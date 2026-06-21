@@ -13,9 +13,9 @@
 //! query needs `&mut`, the world reads need `&`), `&mut AssetServer` (mutable for the
 //! on-demand cache fill), and `&mut R: SceneRenderer` (mutable for the ~30 setters). They
 //! are three different values, so the three borrows are disjoint and the borrow checker is
-//! satisfied without interior mutability. The C++ `Renderer&` god-aggregate's free-function
-//! setters become methods on the [`SceneRenderer`] trait, which a recording stub also
-//! implements — so the driver is unit-tested without a Vulkan device.
+//! satisfied without interior mutability. The renderer's per-frame setters are methods on
+//! the [`SceneRenderer`] trait, which a recording stub also implements — so the driver is
+//! unit-tested without a Vulkan device.
 //!
 //! Because `for_each` borrows the ECS world mutably while the world-transform readers
 //! (`world_matrix`/`world_rotation`/`world_translation`) borrow it immutably, each loop
@@ -42,20 +42,20 @@ use crate::{AssetServer, RenderSceneOptions, SystemMeshVisual};
 /// The per-frame renderer operations [`render_scene`] drives, plus the upload + skinning
 /// seam it inherits from [`GpuUploader`].
 ///
-/// The C++ passes a single `Renderer&` and calls ~30 free-function setters on it; the Rust
-/// port names them as trait methods so the live renderer ([`RendererScene`]) and a recording
-/// test stub both satisfy the same contract. The mesh/texture upload + `skinning_enabled`
+/// The ~30 per-frame setters are trait methods, so the live renderer ([`RendererScene`])
+/// and a recording test stub both satisfy the same contract. The mesh/texture upload +
+/// `skinning_enabled`
 /// gate ride the [`GpuUploader`] supertrait, so one handle serves both the resolve path
 /// (immutable, `&self`) and the setter path (mutable, `&mut self`).
 pub trait SceneRenderer: GpuUploader {
-    /// The active offscreen viewport width in pixels (the C++ `viewportWidth`). `0` early-outs.
+    /// The active offscreen viewport width in pixels. `0` early-outs.
     fn viewport_width(&self) -> u32;
-    /// The active offscreen viewport height in pixels (the C++ `viewportHeight`). `0` early-outs.
+    /// The active offscreen viewport height in pixels. `0` early-outs.
     fn viewport_height(&self) -> u32;
 
-    /// Arms the spot shadow pass (the C++ `setSpotShadow`).
+    /// Arms the spot shadow pass.
     fn set_spot_shadow(&mut self, light_view_proj: Mat4, light_index: u32, casting: bool);
-    /// Arms the point shadow pass (the C++ `setPointShadow`).
+    /// Arms the point shadow pass.
     fn set_point_shadow(
         &mut self,
         light_pos: Vec3,
@@ -63,11 +63,11 @@ pub trait SceneRenderer: GpuUploader {
         light_index: u32,
         casting: bool,
     );
-    /// Arms the directional shadow pass (the C++ `setDirectionalShadow`).
+    /// Arms the directional shadow pass.
     fn set_directional_shadow(&mut self, light_view_proj: Mat4, casting: bool);
-    /// Captures the frame's static RT instances (the C++ `setRtScene`).
+    /// Captures the frame's static RT instances.
     fn set_rt_scene(&mut self, models: Vec<Mat4>, meshes: Vec<Arc<GpuMesh>>);
-    /// Uploads the frame's DDGI scene-box proxy + fitted volume (the C++ `setDdgiScene`).
+    /// Uploads the frame's DDGI scene-box proxy + fitted volume.
     #[allow(clippy::too_many_arguments)]
     fn set_ddgi_scene(
         &mut self,
@@ -81,28 +81,28 @@ pub trait SceneRenderer: GpuUploader {
         sun_intensity: f32,
         sky_color: Vec3,
     );
-    /// Folds the frame's reflection-probe uploads in (the C++ `submitReflectionProbes`).
+    /// Folds the frame's reflection-probe uploads in.
     fn submit_reflection_probes(&mut self, probes: &[ReflectionProbeUpload]);
-    /// Writes the per-frame light UBO/SSBO (the C++ `setSceneLighting`).
+    /// Writes the per-frame light UBO/SSBO.
     ///
     /// # Errors
     ///
     /// Returns a [`saffron_rendering::Error`] if growing the punctual SSBO fails.
     fn set_scene_lighting(&mut self, scene: &SceneLighting) -> saffron_rendering::Result<()>;
-    /// Re-arms the IBL environment bake (the C++ `requestEnvBake`).
+    /// Re-arms the IBL environment bake.
     fn request_env_bake(
         &mut self,
         source: EnvSource,
         panorama: Option<Arc<saffron_rendering::GpuTexture>>,
         params: SkygenParams,
     );
-    /// Writes the cluster-cull camera params (the C++ `setClusterCamera`).
+    /// Writes the cluster-cull camera params.
     fn set_cluster_camera(&mut self, camera: ClusterCamera);
-    /// Writes the screen-space camera + sun direction (the C++ `setSsaoCamera`).
+    /// Writes the screen-space camera + sun direction.
     fn set_ssao_camera(&mut self, view: Mat4, proj: Mat4, sun_direction_world: Vec3);
-    /// Toggles the ground-grid debug overlay this frame (the C++ `setShowGrid`).
+    /// Toggles the ground-grid debug overlay this frame.
     fn set_show_grid(&mut self, enabled: bool);
-    /// Builds the frame's draw list + concatenated joint palette (the C++ `submitDrawList`).
+    /// Builds the frame's draw list + concatenated joint palette.
     ///
     /// # Errors
     ///
@@ -113,7 +113,7 @@ pub trait SceneRenderer: GpuUploader {
         items: &[DrawItem],
         joints: &[Mat4],
     ) -> saffron_rendering::Result<()>;
-    /// Folds the visible-sky settings in (the C++ `submitSky`).
+    /// Folds the visible-sky settings in.
     fn submit_sky(&mut self, settings: &SkyRenderSettings);
 }
 
@@ -286,21 +286,20 @@ impl SceneRenderer for RendererScene<'_> {
 }
 
 /// A gimbal-stable up vector for a `lookAt` down `dir`: switches to `+Z` when `dir` is
-/// near-vertical. The C++ `lookAtUpForDir`.
+/// near-vertical.
 fn look_at_up_for_dir(dir: Vec3) -> Vec3 {
     if dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y }
 }
 
 /// The entity's stable [`IdComponent`](saffron_scene::IdComponent) uuid value, or `0` when
-/// it carries no id. The C++ `entityIdOrZero`.
+/// it carries no id.
 fn entity_id_or_zero(scene: &Scene, entity: Entity) -> u64 {
     scene
         .component::<saffron_scene::IdComponent>(entity)
         .map_or(0, |id| id.id.value())
 }
 
-/// `transpose(inverse(mat3(model)))` as a [`Mat4`] (the normal matrix). The C++
-/// `glm::mat4(glm::transpose(glm::inverse(glm::mat3(model))))`.
+/// `transpose(inverse(mat3(model)))` as a [`Mat4`] (the normal matrix).
 fn normal_matrix(model: Mat4) -> Mat4 {
     Mat4::from_mat3(Mat3::from_mat4(model).inverse().transpose())
 }
@@ -321,8 +320,7 @@ fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f3
 }
 
 /// Appends the editor-camera gizmo models to `items`: one per [`Camera`] entity with
-/// `show_model`, placed by its world matrix and the fixed local lens offset. The C++
-/// `appendEditorCameraModels`.
+/// `show_model`, placed by its world matrix and the fixed local lens offset.
 ///
 /// A no-op until the editor-camera mesh loads (attempted once). The visual's mesh + resolved
 /// material are read out of [`AssetServer::editor_camera_model`] after the load.
@@ -375,8 +373,7 @@ fn append_editor_camera_models<R: SceneRenderer>(
 }
 
 /// Draws every renderable in `scene` through `camera`, driving the renderer's draw list and
-/// every per-frame lighting / shadow / GI / sky / RT / cluster / SSAO setter. The C++
-/// `renderScene`.
+/// every per-frame lighting / shadow / GI / sky / RT / cluster / SSAO setter.
 ///
 /// A no-op on a zero-size viewport. `update_world_transforms` runs **once** before any
 /// consumer reads the world-transform cache. The skinned draw list is gathered only when
@@ -503,7 +500,7 @@ pub fn render_scene<R: SceneRenderer>(
     renderer.submit_reflection_probes(&probe_uploads);
 
     // Fallback ambient (used when IBL is off): the scene environment's ambient color when
-    // use_sky_for_ambient, else the directional light's legacy scalar ambient (grayscale).
+    // use_sky_for_ambient, else the directional light's scalar ambient (grayscale).
     let ambient = if scene.environment.use_sky_for_ambient {
         scene.environment.ambient_color * scene.environment.ambient_intensity
     } else {
@@ -573,7 +570,7 @@ pub fn render_scene<R: SceneRenderer>(
 
 /// The directional light's resolved direction / color / intensity / ambient, re-aimed by the
 /// entity's world rotation when it carries a [`Transform`]. The first one wins; a scene with
-/// no directional light keeps the C++ default `(-0.5, -1, -0.3)`, white, intensity 1,
+/// no directional light keeps the default `(-0.5, -1, -0.3)`, white, intensity 1,
 /// ambient 0.15.
 fn gather_directional_light(scene: &mut Scene) -> (Vec3, Vec3, f32, f32) {
     let mut found: Option<(Entity, DirectionalLight)> = None;
@@ -830,7 +827,7 @@ fn gather_reflection_probes(scene: &mut Scene) -> Vec<ReflectionProbeUpload> {
 
 /// Drives the environment bake from the scene environment + the sun derived from the
 /// directional light, returning the loaded sky panorama (Texture mode) for the visible-sky
-/// resolve below. The C++ env-source resolution block.
+/// resolve below.
 fn drive_env_bake<R: SceneRenderer>(
     renderer: &mut R,
     scene: &Scene,
@@ -879,7 +876,7 @@ fn drive_env_bake<R: SceneRenderer>(
 
 /// Picks the nearest entity the camera ray strikes: a per-mesh AABB broad-phase rejects far
 /// meshes, then a ray-triangle narrow-phase finds the true surface hit (so a click through
-/// the empty space inside a loose bounding box misses). The C++ `pickEntity`.
+/// the empty space inside a loose bounding box misses).
 ///
 /// Covers static [`MeshComponent`] (rest verts transformed by the entity's world matrix) and
 /// [`SkinnedMesh`] (verts CPU-skinned through a freshly-rebuilt joint palette into world
@@ -1086,8 +1083,8 @@ mod tests {
         },
     }
 
-    /// A recording [`SceneRenderer`]: records every setter call (the C++ `Renderer&` setter
-    /// fan-out) and optionally backs the upload path with a live [`Uploader`] so the draw-list
+    /// A recording [`SceneRenderer`]: records every setter call and optionally backs the
+    /// upload path with a live [`Uploader`] so the draw-list
     /// and pick tests resolve real `Arc<GpuMesh>`. Without a GPU the upload methods are never
     /// reached by the early-out and light tests (no mesh resolves), so those run off-hardware.
     struct RecordingRenderer<'a> {

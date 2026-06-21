@@ -9,8 +9,8 @@
 //!
 //! # The load order is load-bearing (the UAF guard)
 //!
-//! [`AssetServer::load_project`] keeps the exact ordered sequence the C++ `loadProject`
-//! ran: parse → version-gate → `wait_gpu_idle` → clear the worker queue + the GPU
+//! [`AssetServer::load_project`] keeps an exact ordered sequence:
+//! parse → version-gate → `wait_gpu_idle` → clear the worker queue + the GPU
 //! caches → set the asset root → ensure the script `src/` + library → load the catalog
 //! from the doc → reconcile against disk (the filesystem is the source of truth, a cold
 //! scan on a cache miss) → sweep orphan thumbnail cache files → apply render settings →
@@ -39,8 +39,7 @@ use crate::catalog::{
 use crate::error::{Error, Result};
 
 /// The unified project document version. A `project.json` declaring any other version is
-/// a typed [`Error::BadProjectVersion`], not a silent best-effort load. The C++
-/// `ProjectVersion`.
+/// a typed [`Error::BadProjectVersion`], not a silent best-effort load.
 pub const PROJECT_VERSION: i64 = 1;
 
 /// The renderer-touching operations [`AssetServer::save_project`] / [`AssetServer::load_project`]
@@ -53,21 +52,19 @@ pub const PROJECT_VERSION: i64 = 1;
 pub trait ProjectHost {
     /// Blocks until the GPU has finished every in-flight frame. Called by `load_project`
     /// / `create_project` **before** the asset caches are cleared, so dropping a cached
-    /// `Arc<GpuTexture>` never frees a resource a frame still reads. The C++ `waitGpuIdle`.
+    /// `Arc<GpuTexture>` never frees a resource a frame still reads.
     fn wait_gpu_idle(&mut self);
 
-    /// Serializes the renderer's settings as the project-file `renderSettings` block (the
-    /// C++ `renderSettingsToJson`).
+    /// Serializes the renderer's settings as the project-file `renderSettings` block.
     fn render_settings_to_json(&self) -> Value;
 
     /// Applies a saved `renderSettings` block; missing fields keep the current value and
-    /// the RT toggles apply only where the device supports ray tracing (the C++
-    /// `applyRenderSettings`).
+    /// the RT toggles apply only where the device supports ray tracing.
     fn apply_render_settings(&mut self, settings: &Value);
 }
 
 /// The opaque editor-camera + debug-overlay blocks that ride through `save_project` /
-/// `load_project` (the C++ `editorCamera` / `debugOverlays` arguments).
+/// `load_project` (the `editorCamera` / `debugOverlays` blocks).
 ///
 /// They belong to `saffron-sceneedit`, so this crate never owns or interprets them — it
 /// writes each to the doc only when it is a JSON object on save, and hands them back
@@ -81,7 +78,7 @@ pub struct ProjectSidecar {
     pub debug_overlays: Value,
 }
 
-/// The spec for [`AssetServer::create_project`] (the C++ `createProject` arguments).
+/// The spec for [`AssetServer::create_project`].
 ///
 /// `root` empty resolves to `<userdata>/<name>`; `display_name` empty falls back to
 /// [`default_display_name`].
@@ -95,7 +92,7 @@ pub struct NewProject {
     pub root: String,
 }
 
-/// The active project's identity + paths (the C++ `ProjectInfo`). The host owns one and
+/// The active project's identity + paths. The host owns one and
 /// passes `&mut` it into create/load so it is updated in place.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectInfo {
@@ -111,8 +108,7 @@ pub struct ProjectInfo {
     pub display_name: String,
 }
 
-/// The app-data root: `$SAFFRON_APPDATA_DIR` when set and non-empty, else `appdata`
-/// (the C++ `appDataRoot`).
+/// The app-data root: `$SAFFRON_APPDATA_DIR` when set and non-empty, else `appdata`.
 #[must_use]
 pub fn app_data_root() -> String {
     match std::env::var("SAFFRON_APPDATA_DIR") {
@@ -121,7 +117,7 @@ pub fn app_data_root() -> String {
     }
 }
 
-/// The per-user project root: `<appDataRoot>/userdata` (the C++ `projectUserdataRoot`).
+/// The per-user project root: `<appDataRoot>/userdata`.
 #[must_use]
 pub fn project_userdata_root() -> String {
     Path::new(&app_data_root())
@@ -130,7 +126,7 @@ pub fn project_userdata_root() -> String {
         .into_owned()
 }
 
-/// Whether `name` is a legal project directory name (the C++ `validProjectName`).
+/// Whether `name` is a legal project directory name.
 ///
 /// Non-empty, at most 63 bytes, lowercase ASCII letters / digits / `-`, and the first
 /// and last characters are a lowercase letter or digit (no leading/trailing `-`).
@@ -147,8 +143,8 @@ pub fn valid_project_name(name: &str) -> bool {
     bytes.iter().all(|&c| is_lower_digit(c) || c == b'-')
 }
 
-/// A display name derived from a project name (the C++ `defaultDisplayName`): `-`
-/// becomes a space and each word's first letter upper-cases (`my-cool-game` →
+/// A display name derived from a project name: `-` becomes a space and each word's first
+/// letter upper-cases (`my-cool-game` →
 /// `My Cool Game`). An empty name yields `Untitled Project`.
 #[must_use]
 pub fn default_display_name(name: &str) -> String {
@@ -172,7 +168,7 @@ pub fn default_display_name(name: &str) -> String {
     out
 }
 
-/// Resolves a `project.json` path from a selection (the C++ `projectJsonPath`).
+/// Resolves a `project.json` path from a selection.
 ///
 /// A valid project *name* resolves to `<userdata>/<name>/project.json`; a path already
 /// ending in `project.json` is used verbatim; any other path is treated as a project
@@ -195,8 +191,7 @@ pub fn project_json_path(selection: &str) -> PathBuf {
     path.join("project.json")
 }
 
-/// Builds a [`ProjectInfo`] from a resolved `project.json` path and its parsed document
-/// (the C++ `projectInfoFromPath`).
+/// Builds a [`ProjectInfo`] from a resolved `project.json` path and its parsed document.
 ///
 /// The root is the file's parent (`.` when empty); the name falls back to the root's
 /// directory name (then `project`) when the document carries no valid `name`; the display
@@ -232,8 +227,8 @@ pub fn project_info_from_path(path: &Path, doc: &Value) -> ProjectInfo {
     }
 }
 
-/// The starter Lua script written into a fresh project's `src/example.lua` (the C++
-/// `StarterScript`). Written only when absent, so a user copy is never clobbered.
+/// The starter Lua script written into a fresh project's `src/example.lua`. Written only
+/// when absent, so a user copy is never clobbered.
 pub const STARTER_SCRIPT: &str = r#"-- example.lua: attach to an entity's Script component, then press Play.
 -- Orbits the entity in the x/y plane around where it was authored.
 ---@class Example : sa.ScriptSelf
@@ -260,8 +255,8 @@ return Example
 "#;
 
 /// The project `.luarc.json` pointing LuaLS at `library/`, declaring the `sa` global, and
-/// disabling the libs the runtime VM sandboxes out (the C++ `LuarcJson`). Written
-/// only-when-absent so a user copy is never clobbered.
+/// disabling the libs the runtime VM sandboxes out. Written only-when-absent so a user
+/// copy is never clobbered.
 pub const LUARC_JSON: &str = r#"{
   "runtime.version": "Lua 5.4",
   "workspace.library": ["library"],
@@ -270,8 +265,7 @@ pub const LUARC_JSON: &str = r#"{
 }
 "#;
 
-/// Ensures `<root>/src/` exists and seeds `src/example.lua` when absent (the C++
-/// `ensureScriptSrc`).
+/// Ensures `<root>/src/` exists and seeds `src/example.lua` when absent.
 ///
 /// Idempotent: the folder is ensured on create *and* on load (a pre-existing project gains
 /// it on open), the example only when it does not already exist. A directory-creation
@@ -291,7 +285,7 @@ pub fn ensure_script_src(root: &Path) {
 }
 
 /// Ensures `<root>/library/` exists, (re)writes `library/sa.lua` with the supplied LuaLS
-/// type-def text, and seeds `.luarc.json` when absent (the C++ `ensureScriptLibrary`).
+/// type-def text, and seeds `.luarc.json` when absent.
 ///
 /// `sa.lua` is an engine-owned generated artifact describing the live `sa` API, so it is
 /// rewritten every open to track the engine version — the host supplies the text (it owns
@@ -314,8 +308,8 @@ pub fn ensure_script_library(root: &Path, sa_lua_defs: &str) {
     }
 }
 
-/// The file stem as a Lua identifier for the boilerplate's class table (the C++
-/// `scriptClassName`): non-identifier characters become `_`, the first letter upper-cases,
+/// The file stem as a Lua identifier for the boilerplate's class table: non-identifier
+/// characters become `_`, the first letter upper-cases,
 /// and a leading digit gets a `Script` prefix (`turret-2` → `Turret_2`).
 fn script_class_name(stem: &str) -> String {
     let mut name: String = stem
@@ -338,8 +332,7 @@ fn script_class_name(stem: &str) -> String {
     }
 }
 
-/// Creates `<root>/src/<name>.lua` with the class-table boilerplate the runtime expects
-/// (the C++ `createProjectScript`).
+/// Creates `<root>/src/<name>.lua` with the class-table boilerplate the runtime expects.
 ///
 /// A `.lua` suffix is appended when missing; subfolders are allowed, `..` is not. Returns
 /// the `src/`-relative path a `ScriptSlot` stores.
@@ -381,7 +374,7 @@ pub fn create_project_script(root: &str, name: &str) -> Result<String> {
 
 impl AssetServer {
     /// Saves the whole project (catalog + folders + scene + render settings + the optional
-    /// editor camera / debug overlays) to one JSON file (the C++ `saveProject`).
+    /// editor camera / debug overlays) to one JSON file.
     ///
     /// `target` falls back to `project.path` when empty. The opaque [`ProjectSidecar`]
     /// blocks are written only when they are JSON objects — the host passes them through
@@ -441,8 +434,7 @@ impl AssetServer {
     }
 
     /// Loads a project file: replaces the catalog + scene, after idling the GPU and
-    /// clearing the GPU caches so stale `Arc`s drop and assets re-resolve (the C++
-    /// `loadProject`).
+    /// clearing the GPU caches so stale `Arc`s drop and assets re-resolve.
     ///
     /// `sa_lua_defs` is the LuaLS type-def text the host supplies for `library/sa.lua`.
     /// The saved [`ProjectSidecar`] blocks (each JSON null when absent) are returned to the
@@ -531,7 +523,7 @@ impl AssetServer {
 
     /// Creates a fresh, empty project: resets the scene + catalog, idles + clears the GPU
     /// caches, sets the asset root, ensures the script `src/` + library, then saves
-    /// `project.json` (the C++ `createProject`).
+    /// `project.json`.
     ///
     /// `spec.root` empty resolves the root to `<userdata>/<name>`; `spec.display_name`
     /// empty falls back to [`default_display_name`].
@@ -590,8 +582,8 @@ impl AssetServer {
     }
 
     /// Creates an auto-named empty project keyed to the current working directory + the
-    /// `$SAFFRON_CONTROL_SOCK` (the C++ `createAutoEmptyProject`): a deterministic per-shell
-    /// scratch project so a host launched without a project still has a loadable one.
+    /// `$SAFFRON_CONTROL_SOCK`: a deterministic per-shell scratch project so a host launched
+    /// without a project still has a loadable one.
     ///
     /// # Errors
     ///
@@ -621,8 +613,7 @@ impl AssetServer {
 
 /// An FNV-1a fold of `key` as a decimal string, for the auto-empty project name suffix.
 ///
-/// The C++ used `std::hash<std::string>`, whose value is unspecified; the only contract is
-/// a stable per-`(cwd, socket)` suffix, so a deterministic FNV-1a is the faithful port.
+/// FNV-1a is deterministic, giving a stable per-`(cwd, socket)` suffix.
 fn auto_empty_suffix(key: &str) -> String {
     const FNV_OFFSET: u64 = 1469598103934665603;
     const FNV_PRIME: u64 = 1099511628211;

@@ -87,7 +87,7 @@ fn read_smeta(path: &str) -> Result<SmetaData> {
     Ok(meta)
 }
 
-/// Writes a `.smeta` sidecar (pretty, 2-space indent — the C++ `dumpJson(doc, 2)`).
+/// Writes a `.smeta` sidecar (pretty, 2-space indent).
 ///
 /// # Errors
 ///
@@ -157,8 +157,8 @@ impl AssetServer {
     /// # Errors
     ///
     /// Currently infallible in practice (filesystem errors on individual entries are
-    /// skipped with a warn), but returns [`Result`] so the contract matches the C++ and
-    /// the cache-write caller composes with `?`.
+    /// skipped with a warn), but returns [`Result`] so the cache-write caller composes
+    /// with `?`.
     pub fn scan_assets(&mut self) -> Result<ScanDelta> {
         let mut delta = ScanDelta::default();
         if self.root.as_os_str().is_empty() || !self.root.exists() {
@@ -468,7 +468,7 @@ fn preserve_name_folder(previous: &AssetCatalog, row: &mut AssetEntry) {
 /// A cheap fingerprint of `assets/`: an FNV-1a fold over sorted `(relpath, mtime, size)`
 /// for every file (including `.smeta` sidecars; excluding `.cache/`). Stat-only — no file
 /// contents read. Any add / remove / touch / sidecar edit changes it, so it is a sound
-/// trigger for invalidating the cache (the C++ `assetSignature`).
+/// trigger for invalidating the cache.
 fn asset_signature(root: &std::path::Path) -> u64 {
     if !root.exists() {
         return 0;
@@ -508,7 +508,7 @@ fn asset_signature(root: &std::path::Path) -> u64 {
 }
 
 /// Detects a texture's material-map role from its filename (lowercased substring match).
-/// Returns an empty string when no role token is recognized (the C++ `detectMaterialRole`).
+/// Returns an empty string when no role token is recognized.
 #[must_use]
 pub fn detect_material_role(filename: &str) -> &'static str {
     let lower = filename.to_ascii_lowercase();

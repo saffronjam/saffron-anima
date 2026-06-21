@@ -54,7 +54,7 @@ pub struct ModelSpawnInput {
     pub animations: Vec<Uuid>,
 }
 
-/// Decodes the META `nodes` block into the node forest (the C++ `importedNodesFromJson`).
+/// Decodes the META `nodes` block into the node forest.
 ///
 /// Each record carries a `name`, a `parent` index (`-1` for a root), and the local TRS.
 /// The `r` array is glTF `w,x,y,z`; it is reordered to glam's `xyzw`
@@ -102,7 +102,7 @@ pub fn imported_nodes_from_json(nodes: &Value) -> Vec<ImportedNode> {
     out
 }
 
-/// Decodes the META `skin` block into the skin descriptor (the C++ `importedSkinFromJson`).
+/// Decodes the META `skin` block into the skin descriptor.
 ///
 /// `inverseBind` matrices are 16 floats each, column-major (the glam layout), read back
 /// straight into a [`Mat4`]; a malformed matrix decodes to identity. A non-object input
@@ -164,8 +164,8 @@ fn f32_at(array: &[Value], i: usize) -> f32 {
 }
 
 /// Applies the spawn input's material table to `entity`: a [`MaterialSet`] when more than
-/// one slot, otherwise an inline [`Material`] from the first slot (the C++
-/// `applyImportedMaterials`). An empty table leaves a default [`Material`].
+/// one slot, otherwise an inline [`Material`] from the first slot. An empty table leaves
+/// a default [`Material`].
 fn apply_imported_materials(scene: &mut Scene, entity: Entity, input: &ModelSpawnInput) {
     if input.materials.len() > 1 {
         let _ = scene.add_component(
@@ -217,8 +217,8 @@ fn spawn_unskinned(scene: &mut Scene, name: String, input: &ModelSpawnInput) -> 
 
 /// Instantiates a rigged import: one entity per glTF node (local TRS, parented by uuid),
 /// [`Bone`] tags on the joints, and a [`SkinnedMesh`] on the mesh node listing the joints
-/// in glTF order, all wrapped under one identity container root (the C++
-/// `spawnSkinnedModel`). Returns the container root.
+/// in glTF order, all wrapped under one identity container root. Returns the container
+/// root.
 fn spawn_skinned_model(scene: &mut Scene, name: String, input: &ModelSpawnInput) -> Entity {
     let mut node_entities: Vec<Entity> = Vec::with_capacity(input.nodes.len());
     let mut node_uuids: Vec<Uuid> = Vec::with_capacity(input.nodes.len());
@@ -313,8 +313,8 @@ fn spawn_skinned_model(scene: &mut Scene, name: String, input: &ModelSpawnInput)
 }
 
 /// Auto-fits a per-bone capsule into a [`BonePhysicsComponent`] from the rest skeleton so
-/// a freshly imported rig is ragdoll-ready (the C++ auto-fit in `spawnSkinnedModel`): the
-/// half-height spans toward the child joint, the radius is a fraction of it.
+/// a freshly imported rig is ragdoll-ready: the half-height spans toward the child joint,
+/// the radius is a fraction of it.
 fn autofit_bone_physics(scene: &mut Scene, mesh_entity: Entity) {
     let handles = scene
         .with_component::<SkinnedMesh, _>(mesh_entity, |skin| skin.bone_handles.clone())
@@ -363,8 +363,8 @@ fn autofit_bone_physics(scene: &mut Scene, mesh_entity: Entity) {
     let _ = scene.add_component(mesh_entity, phys);
 }
 
-/// Spawns a model, dispatching to [`spawn_skinned_model`] when the input carries a skin
-/// (the C++ `spawnModel`). Returns the root entity.
+/// Spawns a model, dispatching to [`spawn_skinned_model`] when the input carries a skin.
+/// Returns the root entity.
 pub fn spawn_model(scene: &mut Scene, name: impl Into<String>, input: &ModelSpawnInput) -> Entity {
     let name = name.into();
     if input.has_skin {
@@ -376,7 +376,7 @@ pub fn spawn_model(scene: &mut Scene, name: impl Into<String>, input: &ModelSpaw
 impl crate::AssetServer {
     /// Expands a `.smodel` container into the scene, reconstructing the spawn input from
     /// its META (mesh/material/animation sub-ids, the node forest, the skin) and reusing
-    /// [`spawn_model`] (the C++ `instantiateModel`).
+    /// [`spawn_model`].
     ///
     /// Spawned components hold **soft references** — sub-ids resolved at draw time
     /// through the container — so reimport/extract changes flow through and a spawned
@@ -412,9 +412,9 @@ impl crate::AssetServer {
 
         // Each baked material sub-asset resolves to its full `.smat` (factors + texture sub-ids)
         // from the container's material chunk, so the spawned entity's `Material` carries the
-        // imported texture slots — not just the flat factors (the C++ `resolveMaterial` per slot,
-        // `assets.cppm:5013`). A chunk that fails to resolve falls back to the META `materials`
-        // flat factors (a logged degradation, never a hard failure).
+        // imported texture slots — not just the flat factors. A chunk that fails to resolve
+        // falls back to the META `materials` flat factors (a logged degradation, never a hard
+        // failure).
         let factors = material_factors(&meta.materials);
         let material_subs: Vec<Uuid> = meta
             .sub_assets
@@ -472,8 +472,8 @@ impl crate::AssetServer {
     }
 
     /// Resolves a baked material sub-asset to its full [`MaterialAsset`] by reading the
-    /// container's `SMAT` chunk and parsing the `.smat` JSON (the C++ `resolveMaterial` for a
-    /// container sub-asset). Returns `None` when the chunk is absent or unparseable, so the
+    /// container's `SMAT` chunk and parsing the `.smat` JSON. Returns `None` when the chunk
+    /// is absent or unparseable, so the
     /// caller falls back to the META flat factors. The texture sub-ids it carries reference the
     /// container's own texture sub-assets, which resolve through the catalog at draw time.
     fn resolve_container_material(

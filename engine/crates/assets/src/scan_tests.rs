@@ -239,9 +239,9 @@ fn detect_material_role_classifies_filenames() {
     assert_eq!(detect_material_role("brick_BaseColor.png"), "albedo");
     assert_eq!(detect_material_role("metal_diffuse.tga"), "albedo");
     // Normal maps are detected by the `_nor`/`nrm` tokens. A literal "normal" name
-    // classifies as "orm" first (the word "normal" contains the substring "orm"), which
-    // is the faithful C++ substring-precedence behavior — so the importer-side convention
-    // is to name normal maps `*_nor`/`*_nrm`.
+    // classifies as "orm" first (the word "normal" contains the substring "orm"), the
+    // substring-precedence behavior — so the importer-side convention is to name normal
+    // maps `*_nor`/`*_nrm`.
     assert_eq!(detect_material_role("stone_nor.png"), "normal");
     assert_eq!(detect_material_role("floor_nrm.png"), "normal");
     assert_eq!(detect_material_role("literal_normal.png"), "orm");
