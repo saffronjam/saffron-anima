@@ -1,12 +1,12 @@
 # tests/e2e — end-to-end engine tests
 
-Black-box tests that boot a real `SaffronAnima` and drive it over the JSON-over-unix-socket
+Black-box tests that boot a real `saffron-host` and drive it over the JSON-over-unix-socket
 control plane — the same wire the editor and `sa` CLI use. The driver is plain TypeScript on
-`bun test`; nothing here is C++. The wire contract is consumed through the generated
+`bun test`; nothing here is Rust. The wire contract is consumed through the generated
 `@saffron/protocol` types (from `schemas/control/`), so assertions stay in sync with the schema.
 
 ```sh
-make e2e                       # from anywhere — auto-enters the toolbox
+just e2e                       # from anywhere — auto-enters the toolbox
 cd tests/e2e && bun test       # inside the toolbox (host bun on PATH)
 ```
 
@@ -14,15 +14,14 @@ cd tests/e2e && bun test       # inside the toolbox (host bun on PATH)
 
 | File | Role |
 |---|---|
-| `harness.ts` | `Engine.boot()` spawns a headless weston + the engine on a per-run control socket, captures stdout/stderr into `.log`, and exposes `call(cmd, params)` + `validationErrors()`. Always `shutdown()`. |
-| `*.test.ts` | The suite (~46 files), grouped by area: control plane + rendering (`rendering`, `control`, `scene`, `camera`, `picking`, `play`, `perf`, `profiler`, `toggles`, `assets`, `hierarchy`, …), animation (`animation*`, `foot-ik`), skinning (`skinning`, `skinned-*`, `skeleton-overlay`), scripting (`script`), materials (`material*`), and pixel/golden render checks (`*_render`, `material_scene_codegen`). |
-| `parity/` + `parity.test.ts` | The **cross-engine parity rig** (cutover-only): drives the same three comparators (golden image, physics sim trace, serde round-trip) against BOTH the C++ `SaffronAnima` and the Rust `saffron-host`, and writes `appdata/parity-report.json` for the cutover sign-off. `parity/harness.ts` carries a `ParityEngine.boot(bin, env)` that takes the binary explicitly (the shared `harness.ts` freezes `SAFFRON_ANIMA_BIN` at import, so it cannot switch binaries in one process). The rig `describe.skip`s when the C++ binary is absent — it is deleted with `engine-old/` at cutover (NO LEGACY). |
+| `harness.ts` | `Engine.boot()` spawns a headless weston + the engine (`SAFFRON_ANIMA_BIN`, defaulting to `engine/target/debug/saffron-host`) on a per-run control socket, captures stdout/stderr into `.log`, and exposes `call(cmd, params)` + `validationErrors()`. Always `shutdown()`. |
+| `*.test.ts` | The suite, grouped by area: control plane + rendering (`rendering`, `control`, `scene`, `camera`, `picking`, `play`, `perf`, `profiler`, `toggles`, `assets`, `hierarchy`, …), animation (`animation*`, `foot-ik`), skinning (`skinning`, `skinned-*`, `skeleton-overlay`), scripting (`script`), materials (`material*`), and pixel/golden render checks (`*_render`, `material_scene_codegen`). |
 
 ## Conventions
 
 - **No display setup needed.** Each `Engine` starts its own headless weston with a unique
   socket, so tests are isolated and never open a window. Needs `weston` + the engine binary
-  (build it first: `make engine`).
+  (build it first: `just engine`).
 - **Assert on `validationErrors()`.** The engine runs with validation layers on; a test that
   exercises a feature should assert the log stays free of `[saffron:vulkan] error: [validation]`
   lines — that is what catches GPU-state bugs (e.g. the MSAA sample-count regression) headlessly.
@@ -32,9 +31,3 @@ cd tests/e2e && bun test       # inside the toolbox (host bun on PATH)
   files. Golden-image baselines are not wired up yet.
 - Type results via `@saffron/protocol` (`engine.call<RenderStats>("render-stats")`) so a schema
   change that breaks an assertion shows up at typecheck.
-- **Parity verdicts are recorded, never loosened.** The parity rig classifies each comparator as
-  `exact` (byte/bit-identical across both engines — asserted green), `tolerance` (a *measured*
-  difference with its number + reason, e.g. the project-JSON key-order or the llvmpipe preview
-  lighting delta — recorded for the sign-off, never silently passed), or `deferred` (a leg the
-  toolbox cannot run: real GPU, ARM, the live editor). A difference the rig cannot explain is a
-  cutover blocker, not a rounding footnote.

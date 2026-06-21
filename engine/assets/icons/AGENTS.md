@@ -1,15 +1,15 @@
-# Editor icons (legacy)
+# Editor icons
 
-SVGs vendored from [Lucide](https://lucide.dev/icons/). CMake still copies the whole
-`icons/` directory next to the binary on every build (`engine/CMakeLists.txt`, alongside
-models and fonts), but **nothing currently consumes them**: they were used by the retired
-in-engine editor. The Tauri/React editor ships its own icons via the
-`lucide-react` package, and the host's in-viewport billboards are native solid-color
-glyphs (no textures). The renderer still exposes `uploadSvgIcon` (`renderer_textures.cpp`)
-if textured icons are wanted again, but there is no caller today.
+SVGs vendored from [Lucide](https://lucide.dev/icons/). `cargo run -p xtask -- shaders` copies the
+whole `icons/` directory next to the host binary on every build (alongside `models/` and `fonts/`,
+via `copy_asset_tree` in `engine/xtask/src/shaders.rs`), but **nothing currently consumes them**.
+The Tauri/React editor ships its own icons via the `lucide-react` package, and the host's
+in-viewport billboards are native flat-colored glyphs built as overlay geometry
+(`build_scene_edit_billboards` in `engine/crates/host/src/overlay.rs`) — no textures, and the
+renderer has no SVG-icon upload path.
 
-Treat this directory as vestigial — leave it unless you are reviving textured icons or
-cleaning up the asset copy.
+Treat this directory as vestigial — leave it unless you are reviving textured icons or cleaning up
+the asset copy.
 
 ## Adding a new icon (if reviving)
 
@@ -31,4 +31,4 @@ Browse names at https://lucide.dev/icons/ — the URL slug is the filename witho
 | `lightbulb.svg` | lightbulb | PointLight billboard |
 | `flashlight.svg` | flashlight | SpotLight billboard |
 | `camera.svg` | camera | Camera billboard |
-| `eye.svg` | eye | Entity visibility toggle (legacy) |
+| `eye.svg` | eye | Entity visibility toggle |

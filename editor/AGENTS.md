@@ -1,7 +1,7 @@
 # editor — Tauri/React editor
 
-The editor is a **Tauri 2 / React 19 / TypeScript** app. It spawns the `SaffronAnima`
-host headless, presents the host's shared-memory frames on a Wayland subsurface below its
+The editor is a **Tauri 2 / React 19 / TypeScript** app. It spawns the Rust `saffron-host`
+present-only viewport host headless, presents the host's shared-memory frames on a Wayland subsurface below its
 transparent window (the viewport panel is a hole the render shows through), and drives
 every operation over the JSON-over-unix-socket control plane. The engine renders; this
 app is the UI shell composited over the live viewport.
@@ -20,7 +20,7 @@ src/
   protocol/    GENERATED TypeScript types — do not edit by hand
   lib/         utilities
   assets/      static assets (fonts)
-scripts/gen-protocol.ts   re-runs tools/gen-control-dto → src/protocol/sa-types.ts
+scripts/gen-protocol.ts   re-runs `cargo run -p xtask -- gen-protocol` → src/protocol/sa-types.ts
 src-tauri/     Rust bridge (lib.rs + wayland_viewport.rs): engine spawn, control passthrough, subsurface presenter
 ```
 
@@ -39,7 +39,8 @@ bun run build    # gen:protocol + tsc + vite build
 bun run tauri:dev  # launches the app; needs a Wayland session for the subsurface presenter
 ```
 
-`bun run gen:protocol` regenerates `src/protocol/sa-types.ts` from `control_dto.cppm` (and also emits the
+`bun run gen:protocol` regenerates `src/protocol/sa-types.ts` from the `saffron-protocol` DTOs
+(`engine/crates/protocol/src/dto.rs`, via `cargo run -p xtask -- gen-protocol`; it also emits the
 OpenRPC + command-manifest JSON under `schemas/control/`). `index.ts` is the hand-kept re-export shim.
 
 ## Debugging runtime/GUI bugs you can't see (log, then ask)
@@ -51,12 +52,12 @@ alone, **instrument first, then ask the user to capture data:**
 
 1. Add **temporary, clearly-prefixed** logging (`[vp-dbg] …`) at each step of the suspect chain — enough
    to disambiguate the competing hypotheses, not a firehose. Route it to **one stream the user can paste**:
-   the terminal where `make run` prints. Rust bridge / engine logs already go there via `eprintln!` /
+   the terminal where `just run` prints. Rust bridge / engine logs already go there via `eprintln!` /
    stdout; for **React state** (effect firing order, `phase`/`revealed`, a computed rect, a store flag)
    add a temporary Tauri command that `eprintln!`s and call it from React via `invoke` — webview
    `console.log` does **not** reach the `tauri dev` terminal. Log **transitions**, not per-frame state,
    in hot loops, and delete the command + its calls once the bug is found.
-2. Tell the user exactly what to do: restart `make run` (a full restart — **Vite HMR does not reliably
+2. Tell the user exactly what to do: restart `just run` (a full restart — **Vite HMR does not reliably
    apply Zustand store-shape changes or new commands to a live session**), reproduce the bug, and paste
    the `[vp-dbg]` lines (and/or a screenshot). State which questions the log answers.
 3. Diagnose from the **real log**, then fix. **Remove the temporary logging** once the cause is confirmed
@@ -69,9 +70,10 @@ user confirms it against real output — say "this should fix it, please verify 
 ## Rules that are easy to break
 
 - **`src/protocol/sa-types.ts` is generated.** Never edit it. Edit the DTOs in
-  `control_dto.cppm` + `tools/gen-control-dto/gen.ts`, run `bun run gen:protocol`, and
-  commit the result. `src/protocol/index.ts` is the hand-kept re-export shim (compat
-  overrides live there), and `client.ts` layers the typed wrappers on top.
+  `engine/crates/protocol/src/dto.rs`, run `bun run gen:protocol`
+  (`cargo run -p xtask -- gen-protocol`), and commit the result. `src/protocol/index.ts` is the
+  hand-kept re-export shim (compat overrides live there), and `client.ts` layers the typed wrappers
+  on top.
 - **Entity IDs are strings end-to-end.** They are u64 in the engine; treat them as opaque
   strings in JS and **never `Number()` them** — that silently corrupts large IDs.
 - **The viewport is a transparent hole down to the engine's subsurface.** The page-level
@@ -176,7 +178,7 @@ user confirms it against real output — say "this should fix it, please verify 
 
 The Rust bridge sets a per-PID socket under `$XDG_RUNTIME_DIR` and a per-PID, per-view shm
 segment for each viewport (scene + asset preview), spawns `$SAFFRON_ANIMA_BIN` (default
-`build/debug/bin/SaffronAnima`) with `SAFFRON_VIEWPORT_SHM_SCENE` +
+`engine/target/debug/saffron-host`) with `SAFFRON_VIEWPORT_SHM_SCENE` +
 `SAFFRON_VIEWPORT_SHM_ASSET` + `SAFFRON_MAX_FPS` (and the NVIDIA `VK_ICD_FILENAMES` guard),
 and presents via `wayland_viewport.rs` — one subsurface per view, each glued to its pane,
 plus a shared opaque backdrop below both. A watchdog flips the UI to an error overlay if the
@@ -188,6 +190,7 @@ The bridge also picks the **webview render path** in `run()` (`lib.rs`), logging
 buffer" crash (WebKit enables explicit sync on its EGL surface, then a non-dmabuf buffer reaches
 it and Mutter fatally rejects it — a driver/WebKit/Mutter interaction *not* fixed by newer drivers,
 only sidestepped by disabling explicit sync; the lone tradeoff is possible stale-frame ghosting).
-`SAFFRON_WEBVIEW_HW` toggles this; `make run` sets it via the `Makefile`'s `WEBVIEW_HW` knob (`=0`
-for the software/Mesa-llvmpipe fallback), because a host-side `SAFFRON_WEBVIEW_HW=1 make run` would
-**not** cross the toolbox boundary into the recipe (see the root `AGENTS.md` toolbox-env rule).
+`SAFFRON_WEBVIEW_HW` toggles this; the `just run` recipe `export`s it inside the toolbox-bound recipe
+(set it to `0` there for the software/Mesa-llvmpipe fallback), because a host-side
+`SAFFRON_WEBVIEW_HW=1 just run` would **not** cross the toolbox boundary into the recipe (see the
+root `AGENTS.md` toolbox-env rule).
