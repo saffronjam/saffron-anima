@@ -1,20 +1,17 @@
 //! Determinism build driver for Jolt — fetches Jolt 5.3.0 on demand, then compiles it + the
-//! C++ `cxx` shim.
+//! `cxx` shim.
 //!
-//! This crate boundary is the Rust expression of the C++ pimpl: `physics.cpp` was the sole TU
-//! that included `<Jolt/...>`, and Jolt's arch/FP flags were applied to *only* that source
-//! (`engine-old/CMakeLists.txt:71`, `cmake/Dependencies.cmake:68-109`). Here the flags live in
-//! this `build.rs` and reach nothing else in the workspace — so the rest of the tree is never
-//! silently recompiled with `-mavx2` / `-ffp-model=precise`, which would change its float
-//! results.
+//! Jolt's arch/FP flags live in this `build.rs` and reach nothing else in the workspace — so the
+//! rest of the tree is never silently recompiled with `-mavx2` / `-ffp-model=precise`, which
+//! would change its float results.
 //!
-//! The flag set is `JoltBuildFlags::DETERMINISTIC`, mirrored from `cmake/Dependencies.cmake`
-//! and Jolt's own CMake. Two flag-confined `cc` invocations link into this crate: one compiles
-//! every `.cpp` under the fetched `Jolt/` tree (the static `saffron_jolt` archive), the other —
-//! produced by `cxx_build::bridge` so it carries the generated bridge glue — compiles the shim
-//! TU (`shim/jolt_bridge.cpp`). Both see the identical `JPH_*` defines because those defines
-//! change Jolt's struct layout; a skew between the shim and Jolt is silent memory corruption.
-//! A `cargo::rustc-cfg` marker lets a `#[test]` confirm the flags were active.
+//! The flag set is `JoltBuildFlags::DETERMINISTIC`. Two flag-confined `cc` invocations link into
+//! this crate: one compiles every `.cpp` under the fetched `Jolt/` tree (the static
+//! `saffron_jolt` archive), the other — produced by `cxx_build::bridge` so it carries the
+//! generated bridge glue — compiles the shim TU (`shim/jolt_bridge.cpp`). Both see the identical
+//! `JPH_*` defines because those defines change Jolt's struct layout; a skew between the shim and
+//! Jolt is silent memory corruption. A `cargo::rustc-cfg` marker lets a `#[test]` confirm the
+//! flags were active.
 //!
 //! The Jolt source is **not** stored in this repo. It is fetched on demand from the pinned
 //! official release tarball, checksum-verified, and extracted into the gitignored
@@ -41,9 +38,7 @@ mod fetch {
     /// The pinned Jolt release. A bump here is a replay-format migration: change the tag, the
     /// commit, *and* re-derive [`ARCHIVE_SHA256`] from the new tarball in lockstep.
     pub const VERSION: &str = "5.3.0";
-    /// The upstream git commit `v5.3.0` resolves to — the pin record (formerly
-    /// `VENDORED_COMMIT.txt`), kept for provenance and to match `cmake/Dependencies.cmake`'s
-    /// `GIT_TAG v5.3.0`.
+    /// The upstream git commit `v5.3.0` resolves to — the pin record, kept for provenance.
     pub const COMMIT: &str = "0373ec0dd762e4bc2f6acdb08371ee84fa23c6db";
 
     /// The official source tarball for the pinned tag.
@@ -172,9 +167,8 @@ mod fetch {
         Ok(())
     }
 
-    /// Lowercase-hex SHA-256 of `data`. A direct, self-contained FIPS 180-4 implementation,
-    /// mirroring the one in `saffron-physics`'s determinism gate — fixed algorithm, no crate, so
-    /// it adds no dependency and no determinism risk of its own.
+    /// Lowercase-hex SHA-256 of `data`. A direct, self-contained FIPS 180-4 implementation —
+    /// fixed algorithm, no crate, so it adds no dependency and no determinism risk of its own.
     fn sha256_hex(data: &[u8]) -> String {
         const K: [u32; 64] = [
             0x428a_2f98,
@@ -313,15 +307,14 @@ mod fetch {
 
 /// Apply the confined determinism flag set to a `cc::Build` (Jolt TUs or the shim TU).
 fn apply_flags(flags: &JoltBuildFlags, build: &mut cc::Build) {
-    // The determinism flags (`-ffp-model=precise`, `-stdlib=libc++`) are clang-specific and
-    // match the C++ engine's `clang-libcxx` preset; `cc`'s default `c++` resolves to GCC in the
-    // toolbox, which rejects them. Default to the project compiler (clang) while honoring an
-    // explicit `CXX` override so a different toolchain can still be pointed at this build.
+    // The determinism flags (`-ffp-model=precise`, `-stdlib=libc++`) are clang-specific; `cc`'s
+    // default `c++` resolves to GCC in the toolbox, which rejects them. Default to clang while
+    // honoring an explicit `CXX` override so a different toolchain can still be pointed at this
+    // build.
     if std::env::var_os("CXX").is_none() {
         build.compiler("clang++");
     }
-    // Jolt requires C++17 (`Jolt/Jolt.cmake:2`); `cxx`'s generated glue needs C++17 too; libc++
-    // is the toolbox stdlib.
+    // Jolt and `cxx`'s generated glue both require C++17; libc++ is the toolbox stdlib.
     build.cpp(true).std("c++17").cpp_set_stdlib("c++");
     for (key, value) in flags.defines {
         build.define(key, *value);
@@ -337,8 +330,8 @@ fn apply_flags(flags: &JoltBuildFlags, build: &mut cc::Build) {
 /// Emit the link directives so the static Jolt archive links cleanly.
 fn emit_link_directives(flags: &JoltBuildFlags) {
     if flags.link_threads {
-        // The C++ `-pthread`, link-only (`Dependencies.cmake:109`): Jolt's `JobSystemThreadPool`
-        // needs the platform threads library at link time.
+        // `-pthread`, link-only: Jolt's `JobSystemThreadPool` needs the platform threads library
+        // at link time.
         println!("cargo::rustc-link-lib=pthread");
     }
     // The shim and Jolt are C++; the consuming crate must link the C++ runtime. On the
@@ -361,10 +354,9 @@ fn vendor_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vendor")
 }
 
-/// Gather every `.cpp` under the fetched `Jolt/` library tree — the `JOLT_PHYSICS_SRC_FILES`
-/// list Jolt's CMake compiles (`Jolt/Jolt.cmake:10`). Jolt guards all platform/feature-specific
-/// code internally with the preprocessor, so the full set compiles unconditionally given the
-/// right defines.
+/// Gather every `.cpp` under the fetched `Jolt/` library tree. Jolt guards all
+/// platform/feature-specific code internally with the preprocessor, so the full set compiles
+/// unconditionally given the right defines.
 fn jolt_sources(jolt_lib_dir: &Path) -> Vec<PathBuf> {
     let mut sources = Vec::new();
     collect_cpp(jolt_lib_dir, &mut sources);

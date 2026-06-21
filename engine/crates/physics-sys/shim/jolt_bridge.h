@@ -12,7 +12,7 @@
 // returns `UniquePtr<JoltWorld>` by value and so needs the complete type. That pulls `<Jolt/...>`
 // into this header — fine, because the only TUs that include it (the generated bridge glue and
 // `jolt_bridge.cpp`) are the two compiled with the determinism + AVX2 flags, confined to this
-// crate; nothing else in the workspace ever sees this header.
+// crate.
 //
 // The `JPH_*` defines this TU sees must match every Jolt TU's (they change `Vec3`/`Quat`/`RVec3`
 // layout), so an ABI mismatch is silent memory corruption, not a link error. The `#error` guards
@@ -66,8 +66,7 @@ namespace saffron::physics
     struct BonePart;
     struct RayHit;
 
-    // Object-layer slots, mirroring `ObjectLayer` (`physics_types.cppm:26`) discriminant-for-
-    // discriminant. The raw `u8` crossing the bridge is one of these.
+    // Object-layer slots. The raw `u8` crossing the bridge is one of these.
     enum class ObjectLayer : JPH::ObjectLayer
     {
         Static,
@@ -78,10 +77,9 @@ namespace saffron::physics
         Count,
     };
 
-    // The v1 collision matrix (symmetric), ported verbatim from `layersCollide` (`physics.cpp:591`):
-    // a sensor overlaps every solid layer to generate triggers but never another sensor; two static
-    // bodies never collide; debris collides with the world and characters but not other debris;
-    // everything else collides.
+    // The v1 collision matrix (symmetric): a sensor overlaps every solid layer to generate
+    // triggers but never another sensor; two static bodies never collide; debris collides with the
+    // world and characters but not other debris; everything else collides.
     inline bool layers_collide_impl(ObjectLayer a, ObjectLayer b)
     {
         if (a == ObjectLayer::Sensor || b == ObjectLayer::Sensor)
@@ -100,7 +98,7 @@ namespace saffron::physics
     }
 
     // Broad-phase layers (Jolt's coarse AABB tier): everything non-moving in one, everything that
-    // moves in the other. v1 keeps it to two (`physics.cpp:75`).
+    // moves in the other. v1 keeps it to two.
     namespace BroadPhase
     {
         constexpr JPH::BroadPhaseLayer NonMoving{ 0 };
@@ -109,14 +107,13 @@ namespace saffron::physics
     }
 
     // Only Static-layer bodies live in the non-moving broad phase; every other object layer is in
-    // the moving one, so a sensor over a static floor still pairs through the moving tier
-    // (`broadPhaseFor`, `physics.cpp:85`).
+    // the moving one, so a sensor over a static floor still pairs through the moving tier.
     inline JPH::BroadPhaseLayer broad_phase_for(ObjectLayer layer)
     {
         return layer == ObjectLayer::Static ? BroadPhase::NonMoving : BroadPhase::Moving;
     }
 
-    // Object layer -> broad-phase layer (`BroadPhaseLayerImpl`, `physics.cpp:91`).
+    // Object layer -> broad-phase layer.
     class BroadPhaseLayerImpl final : public JPH::BroadPhaseLayerInterface
     {
       public:
@@ -138,8 +135,7 @@ namespace saffron::physics
 #endif
     };
 
-    // "May an object in this layer collide with this broad-phase layer?" (the coarse cull;
-    // `ObjectVsBroadPhaseImpl`, `physics.cpp:113`).
+    // "May an object in this layer collide with this broad-phase layer?" (the coarse cull).
     class ObjectVsBroadPhaseImpl final : public JPH::ObjectVsBroadPhaseLayerFilter
     {
       public:
@@ -149,8 +145,7 @@ namespace saffron::physics
         }
     };
 
-    // "May these two object layers collide?" — the v1 matrix (`ObjectLayerPairImpl`,
-    // `physics.cpp:125`).
+    // "May these two object layers collide?" — the v1 matrix.
     class ObjectLayerPairImpl final : public JPH::ObjectLayerPairFilter
     {
       public:
@@ -176,7 +171,7 @@ namespace saffron::physics
     // Jolt invokes the contact callbacks from job threads during Update, so they must not touch any
     // Rust state directly. They buffer raw POD pairs under a mutex; the sim thread drains them
     // after Update via `drain()`. OnContactPersisted is ignored — v1 emits Begin/End transitions
-    // only (`ContactListenerImpl`, `physics.cpp:476`).
+    // only.
     class ContactListenerImpl final : public JPH::ContactListener
     {
       public:
@@ -219,8 +214,7 @@ namespace saffron::physics
 
     // One live ragdoll: the Jolt `Ragdoll` plus the `RagdollSettings` it references (kept alive so
     // the ragdoll's constraints stay valid). Parts are 1:1 with the rig's bones in index order; the
-    // safe layer (`saffron-physics`) holds the bone-index/weight bookkeeping. Mirrors the Jolt-owning
-    // half of `RagdollEntry` (`physics.cpp:530`).
+    // safe layer (`saffron-physics`) holds the bone-index/weight bookkeeping.
     struct RagdollEntry
     {
         JPH::Ref<JPH::RagdollSettings> settings;
@@ -231,7 +225,7 @@ namespace saffron::physics
     // held by value and declared before `system`, so they are destroyed *after* it (Jolt borrows
     // them for the world's lifetime). `characters` and `ragdolls` reference `system` too, so they
     // are declared after it (destroyed first); the destructor removes every ragdoll from the system
-    // before its bodies destruct. Mirrors `PhysicsWorldImpl` (`physics.cpp:546`).
+    // before its bodies destruct.
     class JoltWorld
     {
       public:
@@ -243,16 +237,15 @@ namespace saffron::physics
         std::unique_ptr<JPH::JobSystemThreadPool> jobSystem;
         JPH::PhysicsSystem system;
         // CharacterVirtual sweep objects (not bodies); released before `system`, which they
-        // reference (`physics.cpp:564`).
+        // reference.
         std::vector<JPH::Ref<JPH::CharacterVirtual>> characters;
-        // Live ragdolls; released before `system` (their bodies live in it, `physics.cpp:565`).
+        // Live ragdolls; released before `system` (their bodies live in it).
         std::vector<RagdollEntry> ragdolls;
 
         // Remove every live ragdoll from the system before its bodies are destroyed: `~Ragdoll`
         // destroys its bodies but never removes their constraints, so a ragdoll left live at world
         // teardown would strand dangling constraints and stall the drop. This runs before the
-        // members destruct, so the subsequent `~Ragdoll` DestroyBodies is safe
-        // (`~PhysicsWorldImpl`, `physics.cpp:571`).
+        // members destruct, so the subsequent `~Ragdoll` DestroyBodies is safe.
         ~JoltWorld()
         {
             for (RagdollEntry &entry : ragdolls)

@@ -1,15 +1,13 @@
 // The C++ side of the Jolt FFI seam: implements the free functions of the `cxx` bridge declared
-// in `src/bridge.rs` against vendored Jolt. This is the Rust expression of the C++ pimpl —
-// `engine-old`'s `physics.cpp` was the sole TU that included `<Jolt/...>`; here this shim TU and
-// the Jolt TUs are the only code compiled with the determinism + AVX2 flags, confined to this
-// crate.
+// in `src/bridge.rs` against vendored Jolt. This shim TU and the Jolt TUs are the only code
+// compiled with the determinism + AVX2 flags, confined to this crate.
 //
 // The four virtual subclasses `cxx` cannot synthesize from a Rust trait (the three fixed-policy
 // layer filters and the `ContactListener`) live in `jolt_bridge.h`, embedded by value in
 // `JoltWorld`. The filters encode pure v1 policy with no per-project state, so routing them back
 // to Rust per-call would only put a Rust callback on Jolt's hot cull path; they stay in C++. The
 // contact listener fires from Jolt job threads, so its buffer is mutex-guarded and drained on the
-// sim thread — the seam `physics.cpp` already chose.
+// sim thread.
 //
 // This TU includes the generated `bridge.rs.h` so the shared `PendingContact` is a *complete*
 // type here (it is only forward-declared in `jolt_bridge.h`), which lets `drain()` translate the
@@ -58,9 +56,8 @@ namespace saffron::physics
 {
     namespace
     {
-        // Jolt routes its trace output here (mirrors `joltTrace`, `physics.cpp:134`). The host
-        // wires a real logger in a later phase; for now it goes to stderr so a message is never
-        // silently dropped during bring-up.
+        // Jolt routes its trace output here. It goes to stderr so a message is never silently
+        // dropped.
         void jolt_trace(const char *format, ...)
         {
             va_list args;
@@ -149,8 +146,7 @@ namespace saffron::physics
     std::unique_ptr<JoltWorld> jolt_world_new()
     {
         auto world = std::make_unique<JoltWorld>();
-        // 10 MiB scratch for the solver; the canonical Jolt job-system bounds + auto thread count
-        // (`physics.cpp:637`).
+        // 10 MiB scratch for the solver; the canonical Jolt job-system bounds + auto thread count.
         world->tempAllocator = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
         world->jobSystem = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs,
                                                                       JPH::cMaxPhysicsBarriers, -1);
@@ -159,8 +155,7 @@ namespace saffron::physics
 
     void jolt_world_init(JoltWorld &world)
     {
-        // v1 limits: 1024 bodies, default mutex count, 1024 body pairs / contact constraints
-        // (`physics.cpp:640`).
+        // v1 limits: 1024 bodies, default mutex count, 1024 body pairs / contact constraints.
         world.system.Init(1024, 0, 1024, 1024, world.broadPhaseLayer, world.objectVsBroadPhase,
                           world.objectLayerPair);
         world.system.SetGravity(JPH::Vec3(0.0F, -9.81F, 0.0F));
@@ -185,7 +180,7 @@ namespace saffron::physics
     namespace
     {
         // Create a shape from any settings (virtual ShapeSettings::Create); null + a loud log on
-        // error. Mirrors `createShape` (`physics.cpp:341`).
+        // error.
         JPH::ShapeRefC create_shape(const JPH::ShapeSettings &settings, const char *what)
         {
             const JPH::ShapeSettings::ShapeResult result = settings.Create();
@@ -198,8 +193,7 @@ namespace saffron::physics
             return result.Get();
         }
 
-        // Place a shape in the body's local frame when the collider has a non-zero offset. Mirrors
-        // `wrapOffset` (`physics.cpp:353`).
+        // Place a shape in the body's local frame when the collider has a non-zero offset.
         JPH::ShapeRefC wrap_offset(JPH::ShapeRefC shape, JPH::Vec3Arg offset)
         {
             if (shape == nullptr || offset == JPH::Vec3::sZero())
@@ -221,8 +215,7 @@ namespace saffron::physics
 
     namespace
     {
-        // The shape kinds the bridge's `BodyCreate.shape` discriminant selects, mirroring the
-        // scene `Shape` enum (`component.rs:416`) and `ColliderComponent::Shape`.
+        // The shape kinds the bridge's `BodyCreate.shape` discriminant selects.
         enum class Shape : std::uint8_t
         {
             Box,
@@ -236,8 +229,7 @@ namespace saffron::physics
         // (auto-fitted) component fields; ConvexHull/Mesh build from the cooked geometry the safe
         // layer fed in index order (so the cooked shape is reproducible run-to-run). Mesh-on-Dynamic
         // is rejected on the safe side, so it never reaches here. Returns null (a loud log) on a
-        // cook/build failure; the caller maps null to `cInvalidBodyID`. Mirrors `buildColliderShape`
-        // (`physics.cpp:367`).
+        // cook/build failure; the caller maps null to `cInvalidBodyID`.
         JPH::ShapeRefC build_collider_shape(const BodyCreate &create,
                                             rust::Slice<const float> hull_points,
                                             rust::Slice<const float> mesh_vertices,
@@ -248,7 +240,7 @@ namespace saffron::physics
             case Shape::Box:
             {
                 // Jolt rejects a degenerate box; the convex radius is half the smallest half-extent,
-                // capped at 0.05 (`physics.cpp:375`).
+                // capped at 0.05.
                 const JPH::Vec3 he(std::max(create.half_extents[0], 0.01F),
                                    std::max(create.half_extents[1], 0.01F),
                                    std::max(create.half_extents[2], 0.01F));
@@ -328,7 +320,7 @@ namespace saffron::physics
         }
 
         const JPH::RVec3 position(create.position[0], create.position[1], create.position[2]);
-        // glam's Quat storage is xyzw — the same order as JPH::Quat — so no swizzle.
+        // glam's Quat storage is xyzw — the same component order as JPH::Quat.
         const JPH::Quat rotation(create.rotation[0], create.rotation[1], create.rotation[2],
                                  create.rotation[3]);
         const auto motion = static_cast<JPH::EMotionType>(create.motion);
@@ -417,7 +409,7 @@ namespace saffron::physics
         // MoveKinematic derives the body's linear+angular velocity from the target pose and dt, so
         // the swept motion imparts contact velocity to the dynamics it hits (a teleport via
         // SetPositionAndRotation would give zero contact velocity). `rotation` is xyzw — glam's
-        // storage order is Jolt's, so no swizzle. Mirrors the MoveKinematic branch (`physics.cpp:986`).
+        // component order is Jolt's.
         world.system.GetBodyInterface().MoveKinematic(
             body_id(id), JPH::RVec3(position[0], position[1], position[2]),
             JPH::Quat(rotation[0], rotation[1], rotation[2], rotation[3]), dt);
@@ -426,7 +418,7 @@ namespace saffron::physics
     std::uint32_t jolt_add_character(JoltWorld &world, const CharacterCreate &create)
     {
         // The capsule is the entity's collider (radius = half_extents.x, half-height =
-        // half_extents.y), clamped above a degenerate floor (`physics.cpp:937`).
+        // half_extents.y), clamped above a degenerate floor.
         const float radius = std::max(create.radius, 0.05F);
         const float halfHeight = std::max(create.half_height, 0.05F);
         const JPH::ShapeRefC shape =
@@ -503,8 +495,7 @@ namespace saffron::physics
     {
         // A position motor from a bone's PD gains: frequency/damping spring + torque limit, with
         // sensible defaults when authored ~0 (a fresh ragdoll motors gently). Inert until the motor
-        // *state* is set to Position (active ragdoll only). Mirrors `boneMotorSettings`
-        // (`physics.cpp:200`).
+        // *state* is set to Position (active ragdoll only).
         JPH::MotorSettings bone_motor_settings(const BonePart &bone)
         {
             JPH::MotorSettings motor;
@@ -519,8 +510,8 @@ namespace saffron::physics
         // Anchored (world space) at the child bone's joint origin, twist along the bone. A zero
         // swing/twist limit falls back to a sensible default so a freshly-imported ragdoll is
         // floppy, not rigid. SwingTwist carries the per-bone PD motors (driven only when active).
-        // Mirrors `buildJointConstraint` (`physics.cpp:213`); `joint` is the raw discriminant of
-        // the scene `Joint` enum (0 Fixed, 1 Hinge, 2 SwingTwist, 3 Free).
+        // `joint` is the raw discriminant of the scene `Joint` enum (0 Fixed, 1 Hinge,
+        // 2 SwingTwist, 3 Free).
         JPH::Ref<JPH::TwoBodyConstraintSettings>
         build_joint_constraint(const BonePart &bone, JPH::Vec3Arg childPos, JPH::Vec3Arg parentPos)
         {
@@ -580,7 +571,7 @@ namespace saffron::physics
 
         // The SwingTwist parent constraint of a ragdoll part, or nullptr when the part is a root
         // (no parent constraint) or its joint is not a SwingTwist. Used by both the subtype query
-        // and the motor setter (`physics.cpp:1413`).
+        // and the motor setter.
         JPH::SwingTwistConstraint *part_swing_twist(const RagdollEntry &entry, std::uint32_t part)
         {
             if (entry.ragdoll == nullptr || entry.settings == nullptr)
@@ -609,7 +600,7 @@ namespace saffron::physics
         const std::size_t count = parts.size();
 
         // Skeleton joints (1:1 with the bones) + capsule parts seeded at each bone's world pose +
-        // the parent constraint for every non-root bone (`physics.cpp:1271`).
+        // the parent constraint for every non-root bone.
         const JPH::Ref<JPH::RagdollSettings> settings = new JPH::RagdollSettings();
         settings->mSkeleton = new JPH::Skeleton();
         for (std::size_t i = 0; i < count; i = i + 1)
@@ -627,7 +618,7 @@ namespace saffron::physics
             JPH::RagdollSettings::Part &part = settings->mParts[i];
             part.SetShape(shape);
             part.mPosition = JPH::RVec3(bone.position[0], bone.position[1], bone.position[2]);
-            // glam's Quat storage is xyzw — the same order as JPH::Quat — so no swizzle.
+            // glam's Quat storage is xyzw — the same component order as JPH::Quat.
             part.mRotation =
                 JPH::Quat(bone.rotation[0], bone.rotation[1], bone.rotation[2], bone.rotation[3]);
             part.mMotionType = JPH::EMotionType::Dynamic;
@@ -731,7 +722,7 @@ namespace saffron::physics
         constraint->SetTwistMotorState(state);
         if (active)
         {
-            // glam's Quat storage is xyzw — the same order as JPH::Quat — so no swizzle.
+            // glam's Quat storage is xyzw — the same component order as JPH::Quat.
             constraint->SetTargetOrientationBS(
                 JPH::Quat(target[0], target[1], target[2], target[3]));
         }
@@ -795,7 +786,7 @@ namespace saffron::physics
                            .distance = 0.0F };
         }
         // mContactPointOn2 is relative to the base offset (origin); the normal is the negated,
-        // normalized penetration axis (`physics.cpp:1169`).
+        // normalized penetration axis.
         const JPH::Vec3 point = JPH::Vec3(base) + collector.mHit.mContactPointOn2;
         const JPH::Vec3 normal = -collector.mHit.mPenetrationAxis.Normalized();
         return RayHit{ .hit = true,
