@@ -5,83 +5,118 @@ weight = 6
 
 # Frame sync
 
-Frame synchronization is the set of fences and semaphores that lets the CPU record one frame while the GPU renders another without either overwriting the other's work. The CPU never resets a command buffer the GPU is still reading, and a swapchain image is never reused before its previous present completes.
+Frame synchronization is the set of fences and semaphores that lets the CPU record one frame while the GPU
+renders another without either overwriting the other's work. The CPU never resets a command buffer the GPU
+is still reading, and a swapchain image is never reused before its previous present completes.
 
-The renderer keeps two frames in flight and coordinates them with a per-frame ring of sync objects plus a per-image fence. Window and viewport resize are handled as ordinary swapchain and target recreation, gated on a device idle.
+The renderer keeps two frames in flight and coordinates them with a per-frame ring of sync objects plus a
+per-image fence on the swapchain. Window and viewport resize are handled as ordinary swapchain and target
+recreation, gated on a device idle.
 
-## How it works
+## The frame ring
 
-`MaxFramesInFlight` is 2. The renderer holds an `std::array<FrameData, 2>` and a rotating `index`. Each `FrameData` is the CPU-side recording context for one in-flight frame:
+`MAX_FRAMES_IN_FLIGHT` is 2. `FrameRing` holds a `Vec<FrameData>` and a rotating `index`. Each
+`FrameData` is the CPU-side recording context for one in-flight slot — its own command pool + buffer,
+image-available semaphore, and in-flight fence:
 
-```cpp
-struct FrameData
-{
-    vk::CommandPool commandPool;
-    vk::CommandBuffer commandBuffer;
-    vk::Semaphore imageAvailable;
-    vk::Fence inFlight;
-};
+```rust
+struct FrameData {
+    command_pool: vk::CommandPool,
+    command_buffer: vk::CommandBuffer,
+    image_available: vk::Semaphore,
+    in_flight: vk::Fence,
+}
 ```
 
-The `imageAvailable` semaphore and `inFlight` fence belong to the *frame slot*. The `renderFinished` semaphores belong to the *swapchain image* — one per image, not per frame. Present waits on "this image's rendering is done," and an image can be presented across different frame slots.
+The `image_available` semaphore and `in_flight` fence belong to the *frame slot*. The `render_finished`
+semaphores belong to the *swapchain image* — one per image, not per frame, held by `Swapchain`. Present
+waits on "this image's rendering is done," and an image can be presented across different frame slots.
+
+`FrameRing` is not a `Drop` type — its handles borrow the device and command pools are not thread-safe —
+so the renderer calls `FrameRing::destroy` after `wait_idle`, before the device is torn down.
 
 ## Acquiring a frame
 
-`beginFrame` runs the CPU-side waits and image acquisition:
+`begin_offscreen_frame` (the editor/headless scene path) and `render_frame` (the windowed present-only
+path) run the same CPU-side waits:
 
-1. **Wait on the frame fence.** `waitForFences(frame.inFlight, ...)` blocks until the GPU finishes the work this slot submitted two frames ago, freeing its command buffer to reset and re-record.
-2. **Acquire the next swapchain image**, signaling `frame.imageAvailable`. `eErrorOutOfDateKHR` rebuilds the swapchain and skips the frame; `eSuboptimalKHR` is accepted and rendered.
-3. **Wait on the image's own fence if it's still in flight.** `imagesInFlight` records which frame fence last used each image. The swapchain image count need not equal `MaxFramesInFlight`, so the acquired image might still be referenced by an earlier frame. Waiting on its fence before reusing its `renderFinished` semaphore avoids signaling a semaphore that is still pending.
-4. **Reset the fence and command buffer**, clear the frame's draw list and submission vectors, and `begin()` with `eOneTimeSubmit`.
+1. **Wait on the frame fence.** `wait_for_fences(in_flight)` blocks until the GPU finishes the work this
+   slot submitted two frames ago, freeing its command buffer to reset and re-record. The in-flight fence
+   is created `SIGNALED` so the first frame's wait returns immediately.
+2. **Reset the fence and command pool**, then begin recording with `ONE_TIME_SUBMIT`.
+
+The windowed present path additionally **acquires the next swapchain image** (`acquire_next_image`,
+signaling the slot's `image_available`), and **waits any fence still tracking that image** before reusing
+its `render_finished` semaphore — `Swapchain::image_in_flight` records which frame fence last used each
+image. `ERROR_OUT_OF_DATE_KHR` from acquire returns early so the caller rebuilds the swapchain.
 
 ## Submitting and presenting
 
-`endFrame` records the UI pass, runs the graph, ends the command buffer, and submits with `submit2`. The submit uses a binary-semaphore handshake: **wait** on `frame.imageAvailable` at `eColorAttachmentOutput` (don't write color until the image is acquired), **signal** the image's `renderFinished` at `eAllCommands`, and **fence** `frame.inFlight` so this slot can wait next time around.
-
-`presentKHR` waits on `renderFinished` and queues the image. An out-of-date or suboptimal present triggers `recreateSwapchain`. The slot then advances `index = (index + 1) % MaxFramesInFlight`.
+The editor/headless host renders into the offscreen image and submits once per frame with `queue_submit2`,
+fencing the slot's `in_flight` so it can wait next time around, then publishes the read-back BGRA8 frame to
+shared memory — it never presents. The windowed present-only host records an
+`UNDEFINED → TRANSFER_DST → PRESENT_SRC` clear and submits with a binary-semaphore handshake: **wait** on
+`image_available`, **signal** the image's `render_finished`, **fence** `in_flight`; then `queue_present`
+queues the image. An out-of-date or suboptimal present triggers a swapchain rebuild. The slot then
+advances via `FrameRing::advance` (`index = (index + 1) % MAX_FRAMES_IN_FLIGHT`).
 
 ```mermaid
 flowchart TD
-    A[beginFrame] --> B[wait frame.inFlight fence]
-    B --> C[acquireNextImageKHR<br/>signals imageAvailable]
-    C --> D[wait imagesInFlight fence]
-    D --> E[reset fence + cmd buffer; begin]
+    A[begin frame] --> B[wait in_flight fence]
+    B --> C[acquire_next_image<br/>signals image_available]
+    C --> D[wait image_in_flight fence]
+    D --> E[reset fence + pool; begin]
     E --> F[record passes]
-    F --> G[endFrame: submit2<br/>wait imageAvailable, signal renderFinished, fence inFlight]
-    G --> H[presentKHR waits renderFinished]
-    H --> I[index = index+1 mod 2]
+    F --> G[queue_submit2<br/>wait image_available, signal render_finished, fence in_flight]
+    G --> H[queue_present waits render_finished]
+    H --> I[FrameRing::advance]
     I --> A
 ```
 
 ## Resize
 
-Two resizes happen, both in `beginFrame`, both gated on a device idle. A full `device.waitIdle()` is the simple, correct choice: the offscreen is a single shared target, nothing may still be reading it, and resizes are rare (a dragged panel edge), so the stall is acceptable.
+Resizes are gated on a device idle. A full `wait_idle` is the simple, correct choice: the offscreen is a
+single shared target, nothing may still be reading it, and resizes are rare (a dragged panel edge), so the
+stall is acceptable.
 
-**Swapchain resize.** When the window extent differs from the swapchain extent, `beginFrame` idles the device, calls `recreateSwapchain`, and returns `false` to skip the frame. `recreateSwapchain` bails on a zero extent (minimized) and otherwise rebuilds, passing the old swapchain as `set_old_swapchain` so the driver can recycle it. Per-image views and `renderFinished` semaphores are recreated to match.
+**Viewport resize.** The editor's viewport panel can differ in size from the window and drives a view's
+desired size. `set_viewport_desired_size` idles the device and calls `ViewTarget::resize`, which recreates
+the offscreen color, depth, and every dependent target — screen-space G-buffer/AO, AA motion + history,
+ReSTIR reservoirs — and bumps a `generation` counter so the UI knows the
+[viewport descriptor](../../frame-and-render-graph/cross-frame-layouts/) must refresh. The old `Image`s
+drop when replaced; their VMA allocations free at that point.
 
-**Viewport resize.** The editor's Viewport panel can differ in size from the window and drives `desiredWidth/Height`. When those differ from the offscreen extent, `beginFrame` idles and recreates the offscreen color, depth, and every dependent target — MSAA, FXAA/TAA scratch, the SSAO G-buffer and AO maps, TAA motion + history, and (when supported) ReSTIR reservoirs — then bumps a `generation` counter so the UI knows the [viewport descriptor](../../frame-and-render-graph/cross-frame-layouts/) must refresh.
+**Swapchain resize.** When the window extent differs from the swapchain extent, the windowed host idles,
+destroys the old swapchain, and builds a fresh one. Per-image views and `render_finished` semaphores are
+recreated to match.
 
 ## Why a per-image fence on top of per-frame fences
 
-The per-frame fence alone guarantees the *slot's* command buffer is safe to reuse. It does not guarantee the *image* is free. With 3 swapchain images and 2 frames in flight, a just-acquired image might have last been used by the other slot. Reusing its `renderFinished` semaphore before that work finishes is a validation error. The `imagesInFlight` array closes the gap by tracking the last frame fence per image and waiting on it.
+The per-frame fence alone guarantees the *slot's* command buffer is safe to reuse. It does not guarantee
+the *image* is free. With 3 swapchain images and 2 frames in flight, a just-acquired image might have last
+been used by the other slot. Reusing its `render_finished` semaphore before that work finishes is a
+validation error. `Swapchain::set_image_in_flight` / `image_in_flight` close the gap by tracking the last
+frame fence per image and waiting on it.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Frames-in-flight constant | `renderer_types.cppm` | `MaxFramesInFlight` |
-| Per-frame sync objects | `renderer_types.cppm` | `FrameData`, `FrameSync` |
-| Per-image fences/semaphores | `renderer_types.cppm` | `Swapchain::imagesInFlight`, `renderFinished` |
-| Acquire + waits | `renderer.cppm` | `beginFrame` |
-| Submit + present + advance | `renderer.cppm` | `endFrame`, `submit2`, `presentKHR` |
-| Swapchain rebuild | `renderer_detail.cppm` | `recreateSwapchain`, `buildSwapchain` |
+| Frames-in-flight constant | `frame.rs` | `MAX_FRAMES_IN_FLIGHT` |
+| Per-frame sync objects | `frame.rs` | `FrameData`, `FrameRing` |
+| Per-image fences/semaphores | `swapchain.rs` | `images_in_flight`, `render_finished`, `set_image_in_flight` |
+| Scene-frame begin | `renderer.rs` | `begin_offscreen_frame` |
+| Present acquire + submit | `renderer.rs` | `render_frame`, `record_clear`, `submit_and_present` |
+| Viewport resize | `renderer.rs`, `view_target.rs` | `set_viewport_desired_size`, `ViewTarget::resize`, `generation` |
 
 > [!NOTE]
-> `acquireNextImageKHR` and `presentKHR` returning `eSuboptimalKHR` or `eErrorOutOfDateKHR` are not errors — they mean "rebuild the swapchain." Both sites branch on the result directly instead of going through `checked()`, which would turn any non-`eSuccess` into an `Err`.
+> `acquire_next_image` and `queue_present` returning `SUBOPTIMAL_KHR` or `ERROR_OUT_OF_DATE_KHR` are not
+> errors — they mean "rebuild the swapchain." Both sites `match` the raw `vk::Result` directly rather than
+> mapping every non-success code to an `Error::Vk` — see [the Vulkan seam](../vulkan-hpp-no-exceptions/).
 
 ## Related
 
 - [Device & swapchain](../device-and-swapchain/) — how the swapchain + its semaphores are built
 - [Cross-frame layouts](../../frame-and-render-graph/cross-frame-layouts/) — the offscreen layout + generation counter carried across frames
-- [No-exceptions Vulkan-Hpp](../vulkan-hpp-no-exceptions/) — why acquire/present skip `checked`
-- [Render graph overview](../../frame-and-render-graph/render-graph-overview/) — recorded between begin and endFrame
+- [Ash and the Vulkan seam](../vulkan-hpp-no-exceptions/) — why acquire/present match the raw result
+- [Render graph overview](../../frame-and-render-graph/render-graph-overview/) — recorded between begin and submit

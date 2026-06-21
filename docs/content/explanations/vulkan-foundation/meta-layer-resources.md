@@ -5,80 +5,98 @@ weight = 7
 
 # Meta-layer resources
 
-A meta-layer resource is a move-only RAII wrapper around one or more raw Vulkan and VMA handles, owning them and freeing them in its destructor. The engine defines a small set — `Pipeline`, `Image`, `Buffer`, `GpuMesh`, `GpuTexture`, plus `Image3D` and `AccelerationStructure`. Each is passed around as `Ref<T>` (a `std::shared_ptr`), so a logical resource is a reference-counted object rather than an opaque integer behind a manager.
+A meta-layer resource is a RAII wrapper around one or more raw Vulkan and VMA handles, owning them and
+freeing them in its `Drop`. The crate defines a small set — `Buffer`, `Image`, `Image3D`, `GpuTexture`,
+`GpuMesh`, `Pipeline`, and `AccelerationStructure`. A logical resource is a value backed by a plain struct,
+not an opaque integer behind a manager, and shared resources are wrapped in `Arc<T>` where the scene draw
+list, the PSO cache, ECS components, and capture closures all need to hold one.
 
-The layer sits between the raw Vulkan handles and the rest of the engine. It is thin enough to carry no abstraction tax, yet present enough that nothing outside the renderer touches a raw handle.
+The layer sits between the raw `ash` handles and the rest of the engine. It is thin enough to carry no
+abstraction tax, yet present enough that nothing outside the rendering crate touches a raw handle.
 
 ## The wrapper shape
 
 Every wrapper follows the same shape, illustrated by `Pipeline`:
 
-```cpp
-struct Pipeline
-{
-    vk::Device device;  // borrowed
-    vk::Pipeline pipeline;
-    vk::PipelineLayout layout;
+```rust
+pub struct Pipeline {
+    resources: Arc<DeviceResources>,
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+}
 
-    Pipeline(Pipeline&&) noexcept;             // steal, null out other
-    auto operator=(Pipeline&&) noexcept -> Pipeline&;  // reset() then steal
-    ~Pipeline() { reset(); }
-    void reset();  // null-check every handle, destroy, null out
-};
+impl Drop for Pipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.resources.device().destroy_pipeline(self.pipeline, None);
+            self.resources.device().destroy_pipeline_layout(self.layout, None);
+        }
+    }
+}
 ```
 
-Three invariants hold for all of them:
+Two invariants hold for all of them:
 
-- **Move-only.** Copy is deleted; move steals the handles and nulls the source, so the destructor cannot double-free. The raw handle has no shared ownership.
-- **`reset()` is the single free path.** Destructor, move-assignment, and explicit `reset()` all funnel through it. It null-checks every handle and the owning device or allocator, so a default or moved-from wrapper destroys to nothing.
-- **Borrowed device and allocator.** The wrapper holds a `vk::Device` and/or `VmaAllocator` it does *not* own, used only to free its handles. Teardown order depends on this.
+- **`Drop` is the single free path.** Each wrapper frees its own handles in `Drop` — `Image`,
+  `Image3D`, and `GpuTexture` free a view then an image; `Buffer` and `GpuMesh` free buffers;
+  `AccelerationStructure` frees the AS handle through a cloned dispatch table, then its backing buffer. The
+  language's move semantics mean a wrapper is freed exactly once; there is no manual null-out or
+  double-free guard to write.
+- **A shared device + allocator, not a borrow.** Rust cannot encode "borrowed but the owner outlives me"
+  for a `Drop` type, so each wrapper holds a clone of `Arc<DeviceResources>` — the ash device + the VMA
+  allocator behind one `Arc`. The allocator/device are destroyed only when the last clone drops.
 
-Each wrapper frees its own handles: `Image`, `GpuTexture`, and `Image3D` free a view and an image; `Buffer` and `GpuMesh` free buffers; `AccelerationStructure` frees the AS handle through a borrowed function pointer, then its backing buffer.
+## Arc for sharing, Send for off-thread drop
 
-## Ref = shared_ptr
+The wrappers themselves are owned values; a *shared* logical resource is an `Arc<T>`. The upload path
+hands out `Arc<GpuMesh>` and `Arc<GpuTexture>`, and the PSO cache holds `Arc<Pipeline>`. When the last
+`Arc` drops, the wrapper's `Drop` runs and frees the GPU resource — no base class, no virtual destructor,
+no handle table.
 
-The wrappers are move-only, but logical resources are shared between the scene draw list, the PSO cache, ECS components, and capture closures. One alias in `Saffron.Core` bridges the gap:
-
-```cpp
-template <typename T>
-using Ref = std::shared_ptr<T>;
-```
-
-Factories return `Result<Ref<T>>` and `make_shared` the moved wrapper: `uploadMesh` returns `Ref<GpuMesh>`, `uploadTexture` returns `Ref<GpuTexture>`, `requestMeshPipeline` returns `Ref<Pipeline>`. The shared_ptr owns the single move-only wrapper. When the last `Ref` drops, the destructor runs and frees the GPU resource. The meta-layer is therefore a move-only RAII wrapper for correctness, held in a `shared_ptr` for sharing — no base class, no virtual destructor, no handle table. A `Ref<GpuMesh>` is a plain value backed by a plain struct, not a subclass of a `Resource` base.
+Each wrapper is `unsafe impl Send` (and the shared ones `Sync`): the raw handles carry no thread-affine
+state and `vk-mem`'s `Allocation` is `Send`. This is load-bearing — a worker-uploaded `GpuTexture` may be
+dropped off the main thread, and its `Drop` returns its bindless slot to the shared free-list under a
+mutex (`Arc<Mutex<Vec<u32>>>`) before freeing the image.
 
 ```mermaid
 flowchart LR
-    A[uploadMesh / uploadTexture /<br/>requestMeshPipeline] --> B["Result&lt;Ref&lt;T&gt;&gt;<br/>make_shared(move(wrapper))"]
+    A[Uploader / PSO cache] --> B["Arc&lt;GpuMesh&gt; / Arc&lt;GpuTexture&gt; /<br/>Arc&lt;Pipeline&gt;"]
     B --> C[DrawItem / PSO cache /<br/>ECS component]
-    C --> D{last Ref<br/>dropped?}
-    D -- yes --> E["~T() → reset()<br/>vk::/VMA free"]
+    C --> D{last Arc<br/>dropped?}
+    D -- yes --> E["Drop → destroy_buffer /<br/>destroy_image / destroy_pipeline"]
 ```
 
 ## The teardown contract
 
-Every wrapper borrows the device and allocator, so nothing may be alive when those are destroyed. The contract has two halves:
+Every wrapper holds a clone of `Arc<DeviceResources>`, so nothing leaks the device/allocator and nothing
+is freed under a live read:
 
-1. **`waitGpuIdle` before releasing Refs.** No in-flight command buffer may still reference a resource when its destructor runs. The run loop calls `waitGpuIdle` before the client's `onExit`, and `destroyRenderer` idles again first thing.
-2. **Drop every `Ref` before the allocator and device.** `destroyRenderer` explicitly resets the renderer's own Refs and the closure vectors that might capture them — scene draw list, PSO cache, submission vectors, default white texture, every pipeline and target — then destroys descriptor pools, the allocator, and the device, in that order.
-
-A wrong order makes a wrapper's destructor call `vmaDestroyImage` on an already-destroyed allocator. The explicit reset sequence in `destroyRenderer` prevents this.
+1. **`wait_idle` before releasing resources.** No in-flight command buffer may still reference a resource
+   when its `Drop` runs. The run loop calls `wait_idle` before any teardown.
+2. **The bundle outlives every resource structurally.** The allocator and device are destroyed only when
+   the last `Arc<DeviceResources>` clone drops. Normally that is the `Device` itself, after the run loop's
+   `wait_idle` and the owner's resource teardown. `DeviceResources::drop` then frees the allocator before
+   the device (`vmaDestroyAllocator` before `vkDestroyDevice`). A resource that outlived the device would
+   keep the bundle alive, which the validation layer flags.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The wrappers | `renderer_types.cppm` | `Pipeline`, `Image`, `Buffer`, `GpuMesh`, `GpuTexture`, `Image3D`, `AccelerationStructure` |
-| Move-only + `reset()` | `renderer_types.cppm` | each wrapper's move ctor / `reset` |
-| The `Ref` alias | `core.cppm` | `Ref` |
-| Factories returning `Ref` | `renderer.cppm`, `renderer_detail.cppm` | `uploadMesh`, `uploadTexture`, `requestMeshPipeline`, `makeRtBuffer` |
-| Teardown order | `renderer.cppm` | `destroyRenderer`, `waitGpuIdle` |
+| The wrappers | `resources.rs` | `Buffer`, `Image`, `Image3D`, `GpuTexture`, `GpuMesh`, `Pipeline`, `AccelerationStructure` |
+| `Drop` free paths | `resources.rs` | each wrapper's `Drop` impl |
+| The shared bundle | `resources.rs` | `DeviceResources`, `DeviceResources::drop` |
+| Send/Sync + off-thread slot return | `resources.rs` | `unsafe impl Send`, `BindlessFreeList`, `GpuTexture::drop` |
+| Factories returning `Arc` | `upload.rs`, `pipelines.rs` | `Uploader`, `Pipelines` |
 
 > [!NOTE]
-> A `GpuTexture` destructor does *not* reclaim its bindless slot. No live material references a destroyed texture's slot, so its stale descriptor is never sampled. Slots leak across the session, but the array holds 1024, and a real reclaim would need to defer past in-flight frames — not worth it for v1.
+> A `GpuTexture`'s `Drop` returns its bindless slot to the free-list but does not zero the descriptor.
+> No live material references a destroyed texture's slot, so its stale descriptor is never sampled, and
+> the next upload reuses the slot — a real reclaim would need to defer past in-flight frames.
 
 ## Related
 
-- [No-exceptions Vulkan-Hpp](../vulkan-hpp-no-exceptions/) — why smart handles are off and the engine owns handles itself
-- [VMA allocator](../vma-allocator/) — the borrowed allocator these wrappers free through
-- [GPU mesh upload](../../geometry-and-assets/gpu-mesh-upload/) — `uploadMesh` building a `GpuMesh` and returning a `Ref`
-- [Material and PSO selection](../../materials-and-pipelines/material-and-pso-selection/) — the `Ref<Pipeline>` cache
+- [Ash and the Vulkan seam](../vulkan-hpp-no-exceptions/) — why the engine owns ash's raw handles itself
+- [VMA allocator](../vma-allocator/) — the shared allocator these wrappers free through
+- [GPU mesh upload](../../geometry-and-assets/gpu-mesh-upload/) — the upload building a `GpuMesh` and returning an `Arc`
+- [Material and PSO selection](../../materials-and-pipelines/material-and-pso-selection/) — the `Arc<Pipeline>` cache

@@ -6,16 +6,18 @@ bookCollapseSection = true
 
 # Vulkan foundation
 
-The Vulkan foundation is the low-level graphics layer the renderer sits on. It uses Vulkan-Hpp with exceptions off, so every call returns a checked `Result`. It targets Vulkan 1.4, which has no render-pass or framebuffer objects.
+The Vulkan foundation is the low-level graphics layer the renderer sits on. The `saffron-rendering` crate
+binds Vulkan through `ash` (with VMA via `vk-mem`), turning every fallible call into a typed `Result`. It
+targets Vulkan 1.3 — dynamic rendering and synchronization2, no render-pass or framebuffer objects.
 
 ## Pages
 
 | Page | Covers | Code |
 |---|---|---|
-| `vulkan-hpp-no-exceptions` | `VULKAN_HPP_NO_EXCEPTIONS`, the `checked()` conversion to `Result` | `renderer.cppm`, `renderer_detail.cppm` |
-| `device-and-swapchain` | vk-bootstrap device/swapchain selection, feature negotiation | `renderer.cppm` |
-| `vma-allocator` | VMA setup, allocation, the single impl TU | `renderer.cppm`, `vma_impl.cpp` |
-| `synchronization2-and-barriers` | `vk::…Barrier2`, stage/access masks, layout transitions | `renderer_detail.cppm` |
-| `dynamic-rendering` | `beginRendering`, attachment infos, no passes/framebuffers | `render_graph.cppm` |
-| `frame-sync-and-resize` | `MaxFramesInFlight`, per-image fences, swapchain recreation | `renderer_types.cppm`, `renderer.cppm` |
-| `meta-layer-resources` | move-only `Pipeline`/`Image`/`Buffer`/`GpuMesh`/`GpuTexture`, `Ref` ownership | `renderer_types.cppm` |
+| `vulkan-hpp-no-exceptions` | the `ash` seam, the `Error::Vk` enum, the `checked` conversion to a typed `Result` | `lib.rs` |
+| `device-and-swapchain` | hand-rolled device selection, feature negotiation, surface-source split, swapchain build | `device.rs`, `swapchain.rs` |
+| `vma-allocator` | VMA via `vk-mem`, allocation, the shared device+allocator bundle | `device.rs`, `resources.rs` |
+| `synchronization2-and-barriers` | `vk::…Barrier2`, stage/access masks, layout transitions | `render_graph.rs`, `upload.rs` |
+| `dynamic-rendering` | `cmd_begin_rendering`, attachment infos, no passes/framebuffers | `render_graph.rs`, `pipelines.rs` |
+| `frame-sync-and-resize` | `MAX_FRAMES_IN_FLIGHT`, per-image fences, viewport + swapchain recreation | `frame.rs`, `swapchain.rs`, `renderer.rs` |
+| `meta-layer-resources` | RAII `Buffer`/`Image`/`GpuMesh`/`GpuTexture`/`Pipeline`, `Arc` sharing + the bundle | `resources.rs` |
