@@ -13,39 +13,40 @@ over small ledges, and slides along walls natively.
 
 ## The component split
 
-A character entity is a `TransformComponent` + a `ColliderComponent` (a capsule) + a
-`CharacterControllerComponent` — and **no `RigidbodyComponent`**. The controller reuses the
-collider's auto-fit capsule (radius + half-height) rather than introducing a second capsule, so
-there is one source of truth for the shape. The component carries only movement parameters: a
-horizontal `maxSpeed`, a `maxSlopeAngle` (steeper ground is treated as a wall), a `maxStepHeight`
-(ledges up to this are stepped over), and a `gravityFactor`. The desired velocity, the integrated
-vertical velocity, and the last ground state are runtime fields, reset on each play.
+A character entity is a `Transform` + a `Collider` (a capsule) + a `CharacterController` — and **no
+`Rigidbody`**. The controller reuses the collider's auto-fit capsule (radius + half-height) rather
+than introducing a second capsule, so there is one source of truth for the shape. The component
+carries only movement parameters: a horizontal `max_speed`, a `max_step_height` (ledges up to this
+are stepped over), a `gravity_factor`, and a `desired_velocity`. The integrated `vertical_velocity`
+and the last `on_ground` state are runtime fields, reset on each play.
 
-A `CharacterVirtual` is **not** a body, so the world build skips making a static body for a collider
-that also has a `CharacterControllerComponent` — otherwise the static capsule would block the
-character's own sweep.
+A `CharacterVirtual` is **not** a body, so `World::populate` skips making a static body for a collider
+that also has a `CharacterController` — otherwise the static capsule would block the character's own
+sweep. The sweep object is built once with `World::add_character`.
 
 ## Stepping and write-back
 
-Each fixed substep, after the rigid-body `Update` settles the world, every character is advanced:
-gravity accumulates into the vertical velocity (zeroed when grounded), the `move-character` desired
-velocity is folded in and clamped to `maxSpeed`, and `CharacterVirtual::ExtendedUpdate` runs the
-stick-to-floor + WalkStairs sweep against the world, using the layer filters from the collision
-matrix (the character lives in the `Character` layer). The resolved position is then written back
-into the entity-root `TransformComponent`, the same frame, before `renderScene` — so the visible mesh
-follows, exactly as the rigid-body and animation write-backs do.
+Each fixed substep, after the rigid-body update settles the world, `World::step_characters` advances
+every character: gravity accumulates into `vertical_velocity` (zeroed when grounded and not moving
+up), the desired velocity is folded in and clamped to `max_speed`, and Jolt's
+`CharacterVirtual::ExtendedUpdate` (the `character_extended_update` FFI) runs the stick-to-floor +
+WalkStairs sweep against the world, using the layer filters from the collision matrix (the character
+lives in the `Character` layer). The resolved position is then written back into the entity-root
+`Transform`, the same frame — so the visible mesh follows, exactly as the rigid-body and animation
+write-backs do.
 
-This is **binding mode a**: the controller positions the root and nothing more. Any
-`AnimationPlayerComponent` on the entity plays *independently on top* — the controller never reads or
-drives the pose. Root-motion extraction and locomotion blending are a different coupling (the
-animation plan's blend-layer producers), deliberately kept out of here.
+This is **binding mode a**: the controller positions the root and nothing more. Any animation player
+on the entity plays *independently on top* — the controller never reads or drives the pose.
+Root-motion extraction and locomotion blending are a different coupling, deliberately kept out of
+here.
 
 ## move-character is the input seam
 
 `move-character {entity, velocity, jump?}` writes the desired horizontal velocity (and an optional
-jump impulse) onto the component; the actual sweep happens on the next physics step. The command only
-flips component fields — identical to how `set-foot-ik` only sets fields the evaluator consumes next
-frame. For now this command *is* the input seam; mapping real input to it is gameplay's job.
+jump impulse) onto the `CharacterController` component; the actual sweep happens on the next physics
+step. The command only flips component fields — identical to how the foot-IK command only sets fields
+the evaluator consumes next frame. For now this command *is* the input seam; mapping real input to it
+is gameplay's job.
 
 > **`CharacterVirtual`, not `Character` or a kinematic rigidbody.** The body-backed `Character` and
 > the kinematic-rigidbody path are deliberately not reused — a character is its own thing. The
@@ -55,6 +56,7 @@ frame. For now this command *is* the input seam; mapping real input to it is gam
 
 | What | File | Symbols |
 |---|---|---|
-| The component | `engine/source/saffron/scene/scene.cppm` | `CharacterControllerComponent` |
-| Create + step + write-back | `engine/source/saffron/physics/physics.cpp` | `addCharacter`, `stepPhysics` (the `ExtendedUpdate` loop) |
-| The move seam | `engine/source/saffron/control/control_commands_physics.cpp` | `move-character` |
+| The component | `engine/crates/scene/src/component.rs` | `CharacterController` |
+| Create + step + write-back | `engine/crates/physics/src/world.rs` | `World::add_character`, `World::step_characters` |
+| The CharacterVirtual FFI | `engine/crates/physics-sys/src/lib.rs` | `add_character`, `character_extended_update`, `character_on_ground` |
+| The move seam | `engine/crates/control/src/commands_physics.rs` | `move-character` |
