@@ -22,7 +22,7 @@ use crate::context::SceneEditContext;
 pub(crate) const SMOOTH_TAU: f32 = 0.025;
 
 /// The convergence epsilon: an edit snaps exactly and its entry drops once every smoothed
-/// field is within this of its target (the C++ `1e-4`).
+/// field is within this of its target.
 const SMOOTH_EPSILON: f32 = 1e-4;
 
 /// A pending smoothed material edit (`set-material smooth:1`).
@@ -90,7 +90,7 @@ impl TransformSmoothTarget {
 /// exactly and reporting convergence once within [`SMOOTH_EPSILON`].
 trait BlendToward: Copy {
     /// Steps `*self` toward `target` by `alpha`; returns `true` once within epsilon, having
-    /// snapped `*self` to `target` exactly (the C++ `blendToward`).
+    /// snapped `*self` to `target` exactly.
     fn blend_toward(&mut self, target: Self, alpha: f32) -> bool;
 }
 
@@ -136,9 +136,8 @@ impl BlendToward for Vec4 {
 }
 
 impl SceneEditContext {
-    /// The pending smoothed-material entry for `entity`, appended if absent (the C++
-    /// `materialSmoothEntryFor`). A `smooth:1` material edit merges its fields here instead
-    /// of writing the component.
+    /// The pending smoothed-material entry for `entity`, appended if absent. A `smooth:1`
+    /// material edit merges its fields here instead of writing the component.
     pub fn material_smooth_entry_for(&mut self, entity: Entity) -> &mut MaterialSmoothTarget {
         if let Some(index) = self
             .material_smoothing
@@ -154,8 +153,7 @@ impl SceneEditContext {
             .expect("just pushed an entry")
     }
 
-    /// The pending smoothed-transform entry for `entity`, appended if absent (the C++
-    /// `transformSmoothEntryFor`).
+    /// The pending smoothed-transform entry for `entity`, appended if absent.
     pub fn transform_smooth_entry_for(&mut self, entity: Entity) -> &mut TransformSmoothTarget {
         if let Some(index) = self
             .transform_smoothing
@@ -171,14 +169,13 @@ impl SceneEditContext {
             .expect("just pushed an entry")
     }
 
-    /// Drops `entity`'s smoothed-material entry — an exact (non-smooth) write always wins
-    /// (the C++ `cancelMaterialSmoothing`).
+    /// Drops `entity`'s smoothed-material entry — an exact (non-smooth) write always wins.
     pub fn cancel_material_smoothing(&mut self, entity: Entity) {
         self.material_smoothing
             .retain(|entry| entry.entity != entity);
     }
 
-    /// Drops `entity`'s smoothed-transform entry (the C++ `cancelTransformSmoothing`).
+    /// Drops `entity`'s smoothed-transform entry.
     pub fn cancel_transform_smoothing(&mut self, entity: Entity) {
         self.transform_smoothing
             .retain(|entry| entry.entity != entity);
@@ -186,7 +183,7 @@ impl SceneEditContext {
 
     /// Converges every smoothed edit (material + transform) toward its targets one rendered
     /// frame (the `tau = 0.025` exponential), snapping exactly and dropping each entry once
-    /// converged (the C++ `stepEditSmoothing`).
+    /// converged.
     ///
     /// A smooth edit issued during play converges in — and is discarded with — the play
     /// scene; in Edit it is the authored scene. A live gizmo drag owns its target's

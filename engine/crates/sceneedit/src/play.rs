@@ -36,7 +36,7 @@ impl PlayState {
     }
 
     /// The state for a control-plane name, defaulting to [`PlayState::Edit`] on any
-    /// unknown spelling (the C++ `playStateFromName` falls through to edit).
+    /// unknown spelling.
     #[must_use]
     pub fn from_name(name: &str) -> Self {
         match name {
@@ -101,17 +101,17 @@ use crate::error::{Error, Result};
 use saffron_scene::ScriptInputState;
 
 impl SceneEditContext {
-    /// Sets `play_state`, bumps `play_version`, and publishes the change (the C++
-    /// `publishTransition`). The signal is the physics/scripting lifecycle seam.
+    /// Sets `play_state`, bumps `play_version`, and publishes the change. The signal is the
+    /// physics/scripting lifecycle seam.
     fn publish_transition(&mut self, next: PlayState) {
         self.play_state = next;
         self.play_version += 1;
         self.on_play_state_changed.publish(next);
     }
 
-    /// The selected entity's uuid in `scene`, or `0` when nothing valid is selected (the
-    /// C++ `selectedUuidIn`). Resolved against an explicit scene because the selection
-    /// handle is captured before crossing the duplicate boundary.
+    /// The selected entity's uuid in `scene`, or `0` when nothing valid is selected.
+    /// Resolved against an explicit scene because the selection handle is captured before
+    /// crossing the duplicate boundary.
     fn selected_uuid_in(&self, scene: &Scene) -> u64 {
         if !scene.valid(self.selected) {
             return 0;
@@ -121,7 +121,7 @@ impl SceneEditContext {
             .map_or(0, |id| id.id.0)
     }
 
-    /// Drops both smoothing queues (the C++ `dropSmoothing`).
+    /// Drops both smoothing queues.
     ///
     /// The smoothing targets hold raw `Entity` handles, which index one specific scene's
     /// world — a half-converged edit must never keep converging against the other scene
@@ -132,7 +132,7 @@ impl SceneEditContext {
     }
 
     /// Enters play mode: duplicates the authored scene by a JSON round-trip, switches to
-    /// the duplicate, and lands `Playing` (the C++ `enterPlay`).
+    /// the duplicate, and lands `Playing`.
     ///
     /// The duplicate is `scene_to_json` then `scene_from_json` into a fresh [`Scene`]
     /// sharing the catalog `Arc` — what a save/load would produce — never a structural
@@ -180,7 +180,7 @@ impl SceneEditContext {
         Ok(())
     }
 
-    /// Pauses simulation, holding the play duplicate (the C++ `pausePlay`).
+    /// Pauses simulation, holding the play duplicate.
     ///
     /// # Errors
     ///
@@ -195,8 +195,7 @@ impl SceneEditContext {
         Ok(())
     }
 
-    /// Resumes simulation from paused, dropping any pending stepped frames (the C++
-    /// `resumePlay`).
+    /// Resumes simulation from paused, dropping any pending stepped frames.
     ///
     /// # Errors
     ///
@@ -210,8 +209,7 @@ impl SceneEditContext {
         Ok(())
     }
 
-    /// Grants `frames` single-step ticks, consumed by [`Self::tick_play`] while paused
-    /// (the C++ `stepPlay`).
+    /// Grants `frames` single-step ticks, consumed by [`Self::tick_play`] while paused.
     ///
     /// # Errors
     ///
@@ -229,7 +227,7 @@ impl SceneEditContext {
         Ok(())
     }
 
-    /// Stops play and returns to Edit, dropping the duplicate (the C++ `stopPlay`).
+    /// Stops play and returns to Edit, dropping the duplicate.
     ///
     /// Idempotent in Edit (a no-op success). The discard *is* the restore: the authored
     /// scene was never writable through [`active_scene`](Self::active_scene) during play,
@@ -267,7 +265,7 @@ impl SceneEditContext {
         Ok(())
     }
 
-    /// The camera to render through this frame (the C++ `renderCameraView`).
+    /// The camera to render through this frame.
     ///
     /// In Edit it is always the fly-camera. During play it cuts to the active scene's
     /// primary [`Camera`](saffron_scene::Camera), falling back to the fly-camera (never
@@ -280,7 +278,7 @@ impl SceneEditContext {
         self.active_scene().primary_camera().unwrap_or(fly)
     }
 
-    /// Advances the simulation one frame, the gated driver (the C++ `tickPlay`).
+    /// Advances the simulation one frame, the gated driver.
     ///
     /// No-ops in Edit. Runs when Playing, or while a stepped frame is pending (consuming
     /// one at the fixed [`PLAY_FIXED_STEP`]). `dt` clamps to [`PLAY_MAX_DELTA`] so a hitch
@@ -311,8 +309,7 @@ impl SceneEditContext {
         }
     }
 
-    /// Records one contained script failure in the bounded error ring (the C++
-    /// `pushScriptError`).
+    /// Records one contained script failure in the bounded error ring.
     ///
     /// Stamps a monotonic `seq` and the current `play_tick`, dropping the oldest entry at
     /// [`SCRIPT_ERROR_RING_CAP`]. The seq survives `enter_play`'s clear so the drain cursor
@@ -331,7 +328,7 @@ impl SceneEditContext {
         });
     }
 
-    /// Records one `sa.log(...)` line in the bounded log ring (the C++ `pushScriptLog`).
+    /// Records one `sa.log(...)` line in the bounded log ring.
     ///
     /// Stamps a monotonic `seq`, a display-only wall-clock millisecond timestamp (never
     /// used for determinism), and the current `play_tick`, dropping the oldest entry at
@@ -372,8 +369,7 @@ mod tests {
     }
 
     /// A fresh context with a `Cube` selected (translated to `(1,2,3)`), plus its uuid and
-    /// the authored entity count — the shared fixture the play-mode tests build on, mirroring
-    /// the head of the C++ `runPlayModeSelfTest`.
+    /// the authored entity count — the shared fixture the play-mode tests build on.
     fn fixture() -> (SceneEditContext, Entity, u64, usize) {
         let mut ctx = SceneEditContext::new();
         let cube = ctx.scene.create_entity("Cube");

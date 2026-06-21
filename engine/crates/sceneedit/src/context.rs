@@ -1,9 +1,7 @@
 //! [`SceneEditContext`] — the editor's mutable session state core.
 //!
-//! The C++ heap-owned this struct (`newSceneEditContext` / `destroySceneEditContext`) only
-//! to keep its heavy entt/json destructor out of the client TU. Rust has no header/TU
-//! split, so the context is just an owned struct with [`SceneEditContext::new`] and an
-//! automatic `Drop` — the `new*`/`destroy*` pair is gone.
+//! An owned struct constructed with [`SceneEditContext::new`] and torn down by its automatic
+//! `Drop`.
 
 use glam::{Mat3, Quat, Vec3};
 
@@ -210,8 +208,7 @@ impl Default for SceneEditContext {
 
 impl SceneEditContext {
     /// Constructs a seeded context: the registry is populated, a `Camera` looking at the
-    /// origin and a `Sun` directional light are spawned, and the camera is selected (the
-    /// C++ `newSceneEditContext`).
+    /// origin and a `Sun` directional light are spawned, and the camera is selected.
     #[must_use]
     pub fn new() -> Self {
         let mut ctx = Self::default();
@@ -234,8 +231,7 @@ impl SceneEditContext {
     }
 
     /// The scene every consumer addresses: the asset preview while it is the active view,
-    /// the play duplicate while playing/paused, the authored scene in Edit (the C++
-    /// `activeScene`).
+    /// the play duplicate while playing/paused, the authored scene in Edit.
     ///
     /// Preview takes precedence (it is entered only from Edit). This is the single place
     /// that branches to pick a scene — nothing else may branch on `play_state` /
@@ -252,8 +248,7 @@ impl SceneEditContext {
         self.play_scene.as_mut().expect("play scene present")
     }
 
-    /// The component registry paired with the active scene, borrowed disjointly (the C++
-    /// handlers held `ctx.sceneEdit.registry` and `activeScene(ctx.sceneEdit)` at once).
+    /// The component registry paired with the active scene, borrowed disjointly.
     ///
     /// [`Self::active_scene`] borrows all of `self`, so a registry method that also takes the
     /// active scene (`component_order`, `set_component_order`, `append_component_order`, …)
@@ -277,7 +272,7 @@ impl SceneEditContext {
         (registry, scene)
     }
 
-    /// `true` while the asset preview is the ACTIVE view (the C++ `previewing`).
+    /// `true` while the asset preview is the ACTIVE view.
     ///
     /// Commands that mutate the authored scene or project must refuse while this holds —
     /// [`Self::active_scene`] routes to the preview. With the scene view active this reads
@@ -287,8 +282,7 @@ impl SceneEditContext {
         self.preview_scene.is_some() && self.preview_active_view
     }
 
-    /// Sets the selection, bumps `selection_version`, and publishes the change (the C++
-    /// `setSelection`).
+    /// Sets the selection, bumps `selection_version`, and publishes the change.
     pub fn set_selection(&mut self, entity: Entity) {
         self.selected = entity;
         self.selection_version += 1;
@@ -296,8 +290,8 @@ impl SceneEditContext {
     }
 }
 
-/// A quaternion looking in `direction` with the given `up`, in GLM's right-handed
-/// convention (a port of `glm::quatLookAt`): the camera's forward maps to `-Z`.
+/// A quaternion looking in `direction` with the given `up`, in the right-handed
+/// convention where the camera's forward maps to `-Z`.
 fn quat_look_at(direction: Vec3, up: Vec3) -> Quat {
     let z = -direction;
     let x = up.cross(z).normalize();
@@ -305,7 +299,7 @@ fn quat_look_at(direction: Vec3, up: Vec3) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(x, y, z))
 }
 
-/// The Euler-XYZ angles of `q`, in GLM's convention (a port of `glm::eulerAngles`).
+/// The Euler-XYZ angles of `q`.
 ///
 /// This is the inverse of [`saffron_scene::quat_from_euler_xyz`] up to the gimbal pole, so
 /// feeding the result back through the engine's `Transform` rotation rebuilds `q`.

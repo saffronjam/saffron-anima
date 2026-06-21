@@ -50,8 +50,8 @@ pub struct DebugOverlayOptions {
     pub colliders: bool,
 }
 
-/// Serializes the debug overlays to their `project.json` object (the C++
-/// `debugOverlaysToJson`). The keys are the frozen wire spellings.
+/// Serializes the debug overlays to their `project.json` object. The keys are the frozen
+/// wire spellings.
 #[must_use]
 pub fn debug_overlays_to_json(opts: &DebugOverlayOptions) -> Value {
     json!({
@@ -63,7 +63,7 @@ pub fn debug_overlays_to_json(opts: &DebugOverlayOptions) -> Value {
     })
 }
 
-/// Reads the debug overlays from a `project.json` object (the C++ `debugOverlaysFromJson`).
+/// Reads the debug overlays from a `project.json` object.
 ///
 /// A non-object value leaves `opts` untouched; each missing or mistyped field keeps its
 /// current value (the load is additive over the defaults the caller passes in).

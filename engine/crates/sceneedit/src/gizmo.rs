@@ -49,7 +49,7 @@ impl GizmoOp {
     }
 
     /// The op for a control-plane name, defaulting to [`GizmoOp::Translate`] on any
-    /// unknown spelling (the C++ `gizmoOpFromName` falls through to translate).
+    /// unknown spelling.
     #[must_use]
     pub fn from_name(name: &str) -> Self {
         match name {
@@ -81,7 +81,7 @@ impl GizmoSpace {
     }
 
     /// The space for a control-plane name, defaulting to [`GizmoSpace::World`] on any
-    /// unknown spelling (the C++ `gizmoSpaceFromName` falls through to world).
+    /// unknown spelling.
     #[must_use]
     pub fn from_name(name: &str) -> Self {
         match name {
@@ -213,8 +213,7 @@ pub struct GizmoProjection {
 /// The drag-begin world-up axis, shared by the rotation-ring basis fallback.
 const WORLD_UP: Vec3 = Vec3::Y;
 
-/// Projects a world point through the camera to viewport pixels (top-left origin) + NDC
-/// (the C++ `viewportProject`).
+/// Projects a world point through the camera to viewport pixels (top-left origin) + NDC.
 ///
 /// Returns an invisible projection for a zero-area viewport, a point on or behind the near
 /// plane (`|w|` near zero), or a point outside the `[0, 1]` depth range.
@@ -242,7 +241,7 @@ pub fn viewport_project(cam: &CameraView, width: u32, height: u32, world: Vec3) 
     }
 }
 
-/// A viewport pixel (top-left origin) to clip-space NDC (the C++ `pixelToNdc`).
+/// A viewport pixel (top-left origin) to clip-space NDC.
 #[must_use]
 pub fn pixel_to_ndc(p: Vec2, width: u32, height: u32) -> Vec2 {
     Vec2::new(
@@ -251,13 +250,13 @@ pub fn pixel_to_ndc(p: Vec2, width: u32, height: u32) -> Vec2 {
     )
 }
 
-/// The camera's world position from its view matrix (the C++ `cameraPosition`).
+/// The camera's world position from its view matrix.
 #[must_use]
 pub fn camera_position(cam: &CameraView) -> Vec3 {
     cam.view.inverse().w_axis.truncate()
 }
 
-/// Distance from `p` to the segment `[a, b]`, all in pixels (the C++ `pointSegmentDistance`).
+/// Distance from `p` to the segment `[a, b]`, all in pixels.
 #[must_use]
 pub fn point_segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
     let ab = b - a;
@@ -269,7 +268,7 @@ pub fn point_segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
     (p - (a + ab * t)).length()
 }
 
-/// Whether `p` lies inside the convex quad `quad` (the C++ `pointInConvexQuad`).
+/// Whether `p` lies inside the convex quad `quad`.
 ///
 /// An off-screen corner fails the test outright (a partially clipped plane handle is not
 /// hit-tested), matching the overlay draw which only fills a fully-visible quad.
@@ -294,7 +293,7 @@ fn point_in_convex_quad(p: Vec2, quad: &[GizmoProjection; 4]) -> bool {
 }
 
 /// An orthonormal basis spanning the plane perpendicular to `n` (the rotation-ring plane),
-/// NaN-safe for any axis including world up (the C++ `ringBasis`).
+/// NaN-safe for any axis including world up.
 ///
 /// The raw `cross` is tested *before* normalizing: normalizing a near-zero vector first
 /// would yield NaN, and `NaN < epsilon` is false, so the world-up fallback would never
@@ -310,7 +309,7 @@ pub fn ring_basis(n: Vec3) -> (Vec3, Vec3) {
 }
 
 /// Walks the rotation ring of each axis at `radius`, returning the nearest handle within
-/// the pixel threshold (the C++ `hitRotateRing`).
+/// the pixel threshold.
 fn hit_rotate_ring(
     cam: &CameraView,
     width: u32,
@@ -353,7 +352,7 @@ fn hit_rotate_ring(
 }
 
 /// The display color for a gizmo handle: axis-tinted, highlighted gold when hovered or
-/// active (the C++ `axisColor`). Consumed by the overlay draw in the host.
+/// active. Consumed by the overlay draw in the host.
 #[must_use]
 pub fn axis_color(handle: NativeGizmoHandle, gizmo: &NativeGizmoState) -> Vec4 {
     if gizmo.active == handle
@@ -370,7 +369,7 @@ pub fn axis_color(handle: NativeGizmoHandle, gizmo: &NativeGizmoState) -> Vec4 {
 }
 
 /// The gizmo's X/Y/Z basis: world identity in World space, or the entity's world-rotated
-/// basis in Local space (the C++ `gizmoAxes`).
+/// basis in Local space.
 #[must_use]
 pub fn gizmo_axes(world_rotation: Quat, space: NativeGizmoSpace) -> [Vec3; 3] {
     if space == NativeGizmoSpace::World {
@@ -383,8 +382,7 @@ pub fn gizmo_axes(world_rotation: Quat, space: NativeGizmoSpace) -> [Vec3; 3] {
     ]
 }
 
-/// The world-space axis for a single-axis handle, zero for plane / screen / uniform handles
-/// (the C++ `handleAxis`).
+/// The world-space axis for a single-axis handle, zero for plane / screen / uniform handles.
 #[must_use]
 pub fn handle_axis(handle: NativeGizmoHandle, axes: &[Vec3; 3]) -> Vec3 {
     match handle {
@@ -396,8 +394,7 @@ pub fn handle_axis(handle: NativeGizmoHandle, axes: &[Vec3; 3]) -> Vec3 {
 }
 
 /// The projected corners of a two-axis translate plane handle (the `axes` pair
-/// `(first, second)`), shared by the overlay drawing and the hit-test so they always agree
-/// (the C++ `gizmoPlaneCorners`).
+/// `(first, second)`), shared by the overlay drawing and the hit-test so they always agree.
 #[must_use]
 pub fn gizmo_plane_corners(
     cam: &CameraView,
@@ -439,7 +436,7 @@ pub fn gizmo_plane_corners(
     ]
 }
 
-/// The rotation with its scale divided out of a world matrix (the C++ `rotationOf`).
+/// The rotation with its scale divided out of a world matrix.
 ///
 /// Used to peel a non-root's frozen parent rotation off the world drag result.
 fn rotation_of(m: Mat4) -> Quat {
@@ -459,7 +456,7 @@ fn rotation_of(m: Mat4) -> Quat {
 
 impl SceneEditContext {
     /// Mirrors the backend-neutral [`GizmoOp`] / [`GizmoSpace`] (the single source) onto the
-    /// overlay's `native_gizmo.mode` / `.space` (the C++ `syncNativeGizmo`).
+    /// overlay's `native_gizmo.mode` / `.space`.
     ///
     /// Nothing else writes the mirror; call this each frame so the overlay tracks the source.
     pub fn sync_native_gizmo(&mut self) {
@@ -476,7 +473,7 @@ impl SceneEditContext {
     }
 
     /// Hit-tests the selected entity's gizmo at `mouse` (viewport pixels) for the active
-    /// mode/space, returning the handle under the pointer (the C++ `hitNativeGizmo`).
+    /// mode/space, returning the handle under the pointer.
     ///
     /// Returns [`NativeGizmoHandle::None`] when nothing is selected, the selection has no
     /// [`Transform`], or its origin is off-screen.
@@ -546,7 +543,7 @@ impl SceneEditContext {
     }
 
     /// The resolved parent handle of `entity`, or [`None`] for a root / an entity with no
-    /// [`Relationship`] (the C++ `parentOf`).
+    /// [`Relationship`].
     fn parent_of(&self, entity: Entity) -> Option<Entity> {
         self.scene
             .with_component::<Relationship, _>(entity, |rel| rel.parent_handle)
@@ -554,8 +551,7 @@ impl SceneEditContext {
     }
 
     /// With `preserve_children`, holds each direct child at its drag-begin world pose by
-    /// rebasing its local against the target's freshly written transform (the C++
-    /// `rebasePreservedChildren`).
+    /// rebasing its local against the target's freshly written transform.
     fn rebase_preserved_children(&mut self) {
         if self.native_gizmo.start_child_worlds.is_empty() {
             return;
@@ -580,8 +576,7 @@ impl SceneEditContext {
 
     /// Captures the drag-begin state of `target` (world translation/rotation, local scale,
     /// frozen parent world, and — with `preserve_children` — direct-child worlds), the one
-    /// snapshot both the SDL and control gizmo-pointer paths share (the C++
-    /// `snapshotNativeGizmoStart`).
+    /// snapshot both the SDL and control gizmo-pointer paths share.
     ///
     /// A root keeps the raw authored Euler so rotate-drag continuity survives angles a
     /// matrix extraction would wrap; a non-root stores the world rotation as a ZYX Euler.
@@ -620,7 +615,7 @@ impl SceneEditContext {
     }
 
     /// Applies an in-progress gizmo drag at `mouse` (viewport pixels), writing the dragged
-    /// entity's [`Transform`] (the C++ `applyNativeGizmoDrag`).
+    /// entity's [`Transform`].
     ///
     /// The drag math runs in world space then rebases the result into the parent frame
     /// (identity for a root). It bumps `scene_version` past the guard so the control poll
@@ -749,7 +744,7 @@ impl SceneEditContext {
 
     /// Advances a command-driven drag each rendered frame: exponentially smooths the raw
     /// pointer toward `drag_target` (`tau = 0.025`) and applies the drag, so ~60 Hz control
-    /// samples render fluidly (the C++ `stepNativeGizmoDrag`).
+    /// samples render fluidly.
     ///
     /// A no-op unless a gizmo-pointer drag sample is pending.
     pub fn step_native_gizmo_drag(&mut self, cam: &CameraView, width: u32, height: u32, dt: f32) {
@@ -773,7 +768,7 @@ mod tests {
         for op in [GizmoOp::Translate, GizmoOp::Rotate, GizmoOp::Scale] {
             assert_eq!(GizmoOp::from_name(op.name()), op);
         }
-        // Unknown spellings fall through to translate (the C++ default-on-unknown).
+        // Unknown spellings fall through to translate.
         assert_eq!(GizmoOp::from_name("nonsense"), GizmoOp::Translate);
         assert_eq!(GizmoOp::from_name(""), GizmoOp::Translate);
     }

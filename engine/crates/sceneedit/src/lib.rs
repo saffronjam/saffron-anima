@@ -60,8 +60,7 @@ pub use play::{
 pub use saffron_scene::{ScriptInputState, derive_script_input_edges};
 pub use smoothing::{MaterialSmoothTarget, TransformSmoothTarget};
 
-/// Re-exported from `saffron-scene` (the C++ `registerBuiltinComponents` lived in
-/// `scene_edit_components.cpp`, the editor module): the single canonical registration site
-/// for every built-in serialized component. [`SceneEditContext::new`] calls it to populate
-/// the context's registry.
+/// Re-exported from `saffron-scene`: the single canonical registration site for every
+/// built-in serialized component. [`SceneEditContext::new`] calls it to populate the
+/// context's registry.
 pub use saffron_scene::register_builtin_components;

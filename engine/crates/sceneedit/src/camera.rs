@@ -86,8 +86,7 @@ impl SceneEditCamera {
     /// The camera's forward (world space) from its yaw/pitch.
     ///
     /// Spherical from the degree angles: at yaw 0 / pitch 0 it looks down `-Z`
-    /// (`cos(pitch)·sin(yaw), sin(pitch), -cos(pitch)·cos(yaw)`, the C++
-    /// `sceneEditCameraForward`).
+    /// (`cos(pitch)·sin(yaw), sin(pitch), -cos(pitch)·cos(yaw)`).
     #[must_use]
     pub fn forward(&self) -> Vec3 {
         let yaw = self.yaw.to_radians();
@@ -101,10 +100,9 @@ impl SceneEditCamera {
     }
 
     /// The camera as a scene [`CameraView`] (view + projection params), so `render_scene`
-    /// and the gizmo draw from the same eye (the C++ `sceneEditCameraView`).
+    /// and the gizmo draw from the same eye.
     ///
-    /// The view is `look_at_rh(position, position + forward, +Y)` — glam's `look_at_rh`
-    /// is the `glm::lookAt` analogue.
+    /// The view is `look_at_rh(position, position + forward, +Y)`.
     #[must_use]
     pub fn view(&self) -> CameraView {
         CameraView {
@@ -115,7 +113,7 @@ impl SceneEditCamera {
         }
     }
 
-    /// The persisted editor view, the exact key set the C++ `sceneEditCameraToJson` emits:
+    /// The persisted editor view, the key set
     /// `{ position: {x,y,z}, yaw, pitch, fov }`. Saved into `project.json` by the control
     /// save/load caller so a reopened project shows the same framing.
     #[must_use]
@@ -128,7 +126,7 @@ impl SceneEditCamera {
         ]))
     }
 
-    /// Reads the persisted view back (the C++ `sceneEditCameraFromJson`). A missing field
+    /// Reads the persisted view back. A missing field
     /// keeps the current value, so a partial document does not zero the camera; a non-object
     /// is ignored entirely.
     pub fn from_json(&mut self, j: &Value) {
@@ -144,8 +142,7 @@ impl SceneEditCamera {
     }
 }
 
-/// Flies the editor camera one frame from host-gathered input (the C++
-/// `updateSceneEditCamera`).
+/// Flies the editor camera one frame from host-gathered input.
 ///
 /// The accumulated look delta drains exponentially (`alpha = 1 - exp(-dt/TAU)`, the same
 /// constant as the gizmo drag) so the ~60 Hz control look samples do not staircase; the
@@ -196,13 +193,13 @@ pub fn update_scene_edit_camera(
     }
 }
 
-/// Wraps an `f32` as a JSON number from its f64 promotion (the nlohmann `float → double`
-/// insert) — the byte-equality seam every scalar goes through.
+/// Wraps an `f32` as a JSON number via its f64 promotion — the byte-equality seam every
+/// scalar goes through.
 fn f32_value(value: f32) -> Value {
     Value::from(f64::from(value))
 }
 
-/// A named-object `vec3` → `{"x","y","z"}` (the C++ `vec3ToJson`), matching the scene serde.
+/// A named-object `vec3` → `{"x","y","z"}`, matching the scene serde.
 fn vec3_to_json(v: Vec3) -> Value {
     Value::Object(Map::from_iter([
         ("x".to_string(), f32_value(v.x)),
@@ -211,8 +208,7 @@ fn vec3_to_json(v: Vec3) -> Value {
     ]))
 }
 
-/// Reads a `vec3` from a named object, each component defaulting to `0` (the C++
-/// `vec3FromJson`).
+/// Reads a `vec3` from a named object, each component defaulting to `0`.
 fn vec3_from_json(j: &Value) -> Vec3 {
     Vec3::new(
         json_f32_or(j, "x", 0.0),
@@ -247,8 +243,7 @@ mod tests {
             pitch: -29.0,
             ..SceneEditCamera::default()
         };
-        // cos(pitch)·sin(yaw), sin(pitch), -cos(pitch)·cos(yaw), then normalized — the
-        // C++ `sceneEditCameraForward` values for the default eye angles.
+        // cos(pitch)·sin(yaw), sin(pitch), -cos(pitch)·cos(yaw), then normalized.
         let yaw = (-37.0f32).to_radians();
         let pitch = (-29.0f32).to_radians();
         let expected = Vec3::new(
@@ -258,7 +253,7 @@ mod tests {
         )
         .normalize();
         vec3_close(cam.forward(), expected, 1e-6);
-        // It is a unit vector (the C++ normalizes).
+        // It is a unit vector.
         assert!((cam.forward().length() - 1.0).abs() < 1e-6);
     }
 
