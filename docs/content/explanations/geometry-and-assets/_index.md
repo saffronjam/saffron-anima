@@ -7,21 +7,24 @@ bookCollapseSection = true
 # Geometry & assets
 
 The asset path turns a model on disk into triangles the GPU can draw. Import reads glTF and OBJ
-into one common `Mesh` and bakes it to a versioned `.smesh`; the asset server then keys meshes and
-textures by UUID, caches their GPU resources, names them in a catalog, and feeds the draw list.
+into one common `Mesh` and bakes it into a versioned `.smodel` container (a `.smesh` mesh image
+plus its materials, textures, and clips); the asset server then keys assets by UUID, caches
+their GPU resources, names them in a catalog, and feeds the draw list. The `saffron-geometry`
+crate owns the CPU types and byte codecs; `saffron-assets` owns the catalog, import/bake, and
+`render_scene`.
 
 ## Pages
 
 | Page | Covers | Code |
 |---|---|---|
-| `mesh-and-vertex-layout` | `Vertex` (pos/normal/uv), `Mesh`, `Submesh`, fixed stride | `geometry.cppm` · `Vertex`, `Mesh` |
-| `gltf-and-obj-import` | cgltf + tinyobjloader through their no-throw APIs into a common mesh | `geometry.cppm` · import fns |
-| `smesh-format` | the baked, versioned binary mesh format | `geometry.cppm` · save/load mesh |
-| `sanim-format` | the baked, versioned animation-clip sidecar | `geometry.cppm` · save/load animation |
-| `image-decoding` | stb_image PNG/JPG → RGBA8, embedded glTF textures | `geometry.cppm` · `decodeImage` |
-| `gpu-mesh-upload` | VMA staging, `GpuMesh`, mesh AABB bounds | `renderer_drawlist.cpp` · `uploadMesh` |
-| `asset-server-and-catalog` | `AssetServer`, UUID→GPU caches, the named/renameable catalog | `assets.cppm` · `AssetServer` |
-| `import-pipeline` | `importModel` / `importTexture`, baking, negative caching | `assets.cppm` |
-| `draw-list` | `renderScene` → flat `DrawItem` list, `(mesh, albedo)` buckets, per-submesh materials | `assets.cppm`; `renderer_drawlist.cpp` · `submitDrawList` |
-| `project-serialization` | project folders, `project.json`, app-data startup, local assets | `assets.cppm`; `control_commands_asset.cpp` |
-| `smodel-container` | one self-contained model container; header/TOC/metadata, scan, extract, reimport | `geometry.cppm`; `assets.cppm` · `writeContainer`, `bakeModel`, `scanAssets` |
+| `mesh-and-vertex-layout` | `Vertex` (pos/normal/uv), `Mesh`, `Submesh`, the pinned 32-byte stride | `geometry/src/types.rs` · `Vertex`, `Mesh` |
+| `gltf-and-obj-import` | the `gltf` + `tobj` crates into one common `ImportedModel` | `geometry/src/*_import.rs` · `translate_model` |
+| `smesh-format` | the baked, versioned binary mesh image | `geometry/src/smesh.rs` · `save_mesh_to_buffer`, `load_mesh_from_bytes` |
+| `sanim-format` | the baked, versioned animation-clip image | `geometry/src/sanim.rs` · `save_animation`, `load_animation` |
+| `image-decoding` | the `image` crate → RGBA8 / linear-float, embedded textures | `geometry/src/image_decode.rs` · `decode_image` |
+| `gpu-mesh-upload` | VMA staging, `GpuMesh`, mesh AABB bounds | `rendering/src/upload.rs` · `upload_mesh` |
+| `asset-server-and-catalog` | `AssetServer`, UUID→GPU negative-caches, the named/renameable catalog | `assets/src/lib.rs` · `AssetServer` |
+| `import-pipeline` | `import_model` / `import_texture`, baking, dedup | `assets/src/import.rs` |
+| `draw-list` | `render_scene` → flat `DrawItem` list, `(pipeline, mesh)` buckets, per-submesh materials | `assets/src/render_scene.rs`; `rendering/src/instancing.rs` · `submit_draw_list` |
+| `project-serialization` | project folders, `project.json`, app-data startup, local assets | `assets/src/project.rs`; `control/src/commands_asset.rs` |
+| `smodel-container` | one self-contained model container; header/TOC/metadata, scan, extract, reimport | `geometry/src/smodel.rs`; `assets/src/import.rs` · `write_container`, `bake_model`, `scan_assets` |

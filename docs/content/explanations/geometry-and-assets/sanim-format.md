@@ -7,89 +7,97 @@ weight = 4
 
 `.sanim` is a baked binary animation clip: a 32-byte header, the clip name, then one
 self-describing record per joint track. Each glTF animation is decoded once on import and
-written to its own `.sanim` sidecar; the player reads it back directly at runtime.
+written to its own `.sanim` image; the player reads it back directly at runtime.
 
-A clip is strictly a *sidecar*. It is never folded into the [`.smesh`](../smesh-format/) — the
-mesh format and its version stay untouched, and a rig with no clips bakes exactly as before.
-The two share a shape (a fixed header, raw little-endian arrays, a version field, a defensive
-loader) but carry different magic so neither can be mistaken for the other.
+A clip is strictly a *separate image*. It is never folded into the [`.smesh`](../smesh-format/)
+— the mesh format and its version stay untouched, and a rig with no clips bakes exactly the
+same. The two share a discipline (a fixed `#[repr(C)]` Pod header, raw little-endian arrays,
+a version field, a bounded defensive loader) but carry different magic so neither can be
+mistaken for the other. Both also embed as chunks in a [`.smodel`](../smodel-container/): a
+`SANM` chunk is a standalone `.sanim` image read verbatim.
 
 ## Layout
 
 A fixed 32-byte header, then the clip name bytes, then per track a 20-byte record followed by
 the track's joint name, times, and values:
 
-```cpp
-struct SANimHeader
-{
-    char magic[4];     // 'S','A','N','M'
-    u32 version;
-    u32 trackCount;
-    f32 duration;      // clip length, seconds
-    u32 nameLen;       // clip-name bytes that follow the header
-    u32 reserved[3];
-};
-static_assert(sizeof(SANimHeader) == 32);
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+struct SANimHeader {
+    magic: [u8; 4],     // b"SANM"
+    version: u32,
+    track_count: u32,
+    duration: f32,      // clip length, seconds
+    name_len: u32,      // clip-name bytes that follow the header
+    reserved: [u32; 3],
+}
+const _: () = assert!(size_of::<SANimHeader>() == 32);
 
-struct SANimTrackRecord       // joint name, times, then values follow it
-{
-    i32 joint;                // index into SkinnedMeshComponent.bones
-    u8  path;                 // AnimTrack::Path  (Translation/Rotation/Scale)
-    u8  interp;               // AnimTrack::Interp (Step/Linear/CubicSpline)
-    u16 pad;
-    u32 nameLen;              // the glTF node name (the durable binding key)
-    u32 timeCount;            // keyframe count
-    u32 valueCount;           // flat float count (see the track model)
-};
-static_assert(sizeof(SANimTrackRecord) == 20);
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+struct SANimTrackRecord {   // joint name, times, then values follow it
+    joint: i32,             // index into the skinned mesh's bones
+    path: u8,               // AnimPath  (Translation/Rotation/Scale) discriminant byte
+    interp: u8,             // AnimInterp (Step/Linear/CubicSpline) discriminant byte
+    pad: u16,               // explicit pad to a 4-byte boundary
+    name_len: u32,          // the glTF node name (the durable binding key)
+    time_count: u32,        // keyframe count
+    value_count: u32,       // flat float count (see the track model)
+}
+const _: () = assert!(size_of::<SANimTrackRecord>() == 20);
 ```
 
-The `times` and `values` arrays are written as raw `f32` blobs, in the exact flat layout the
-sampler reads — `vec3` per key for translation/scale, `xyzw` per key for rotation, and the
-`3×(in-tangent, value, out-tangent)` stride for cubic-spline tracks. See the
-[animation data model](../../animation/animation-data-model/) for what those arrays mean.
+The `times` and `values` arrays are written as raw little-endian `f32` blobs, in the exact
+flat layout the sampler reads — `Vec3` per key for translation/scale, a quaternion `xyzw` per
+key for rotation, and the `3×(in-tangent, value, out-tangent)` stride for cubic-spline tracks.
+See the [animation data model](../../animation/animation-data-model/) for what those arrays
+mean. The `AnimPath`/`AnimInterp` discriminant bytes are pinned by unit tests, and their
+`from_u8` maps a byte through an explicit `match` (never a transmute), so a malformed record
+can never produce UB.
 
 ## Binding a track to a joint
 
-A track carries **both** a joint index (its position in `SkinnedMeshComponent.bones`, fast)
-and the source node name (durable). The index is the source-of-truth glTF joint order fixed at
+A track carries **both** a joint index (its position in the skinned mesh's bones, fast) and
+the source node name (durable). The index is the source-of-truth glTF joint order fixed at
 import; the name survives a reorder or reimport, so a later evaluator can re-resolve a stale
 index by name. Both are written so neither binding is lost.
 
 ## Loading defensively
 
-`loadAnimation` reads the whole file once, then walks it with a bounds-checked cursor: every
-field — the clip name, each track record, and each track's name/times/values — is taken only
-if that many bytes remain. A malformed `timeCount` or `valueCount` can never drive a giant
-`resize()`, the same defence [`loadMesh`](../smesh-format/) applies. A short or truncated file
-returns an `Err` rather than reading past the buffer.
+`load_animation_from_bytes` validates the magic and version, then walks the rest with a
+bounded `Cursor`: its `take(n)` returns the next `n` bytes or `Error::Truncated` if fewer
+remain. Every field — the clip name, each track record, and each track's name/times/values —
+is taken only if that many bytes remain, so a lying `time_count` or `value_count` can never
+drive a giant allocation. A short or truncated image returns an `Err` rather than reading
+past the buffer, the same discipline [`load_mesh_from_bytes`](../smesh-format/) applies.
 
-## Self-test
+## Round-trip coverage
 
-`runGeometrySelfTest` imports the rigged `animated-strip.gltf` fixture, confirms it yields a
-skin plus at least one decoded clip, and round-trips that clip through `saveAnimation` /
-`loadAnimation`. The animation module's `runAnimationSelfTest` separately round-trips a
-synthetic two-track clip and asserts every field survives byte-for-byte.
+The codec is covered by unit tests in `sanim.rs`: a synthetic clip round-trips through
+`save_animation_to_buffer` / `load_animation_from_bytes` with every field byte-for-byte, and
+a bad magic / truncated image returns the expected `Err`. The pinned discriminant bytes are
+asserted in `geometry/src/lib.rs`.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Header + track record | `geometry.cppm` | `SANimHeader`, `SANimTrackRecord` |
-| Version constant | `geometry.cppm` | `AnimFormatVersion` |
-| Write path | `geometry.cppm` | `saveAnimation` |
-| Defensive load | `geometry.cppm` | `loadAnimation` |
-| Clip decode on import | `geometry.cppm` | `importGltfModel` |
-| Catalog registration | `assets.cppm` | `importModel` |
+| Header + track record | `geometry/src/sanim.rs` | `SANimHeader`, `SANimTrackRecord` |
+| Version constant | `geometry/src/sanim.rs` | `ANIM_FORMAT_VERSION` |
+| Write path | `geometry/src/sanim.rs` | `save_animation`, `save_animation_to_buffer` |
+| Defensive load | `geometry/src/sanim.rs` | `load_animation`, `load_animation_from_bytes` |
+| Clip decode on import | `geometry/src/gltf_import.rs` | `decode_clips` |
+| Container registration | `assets/src/import.rs` | `bake_model`, `catalog_rows_for_model` |
 
 > [!NOTE]
-> Clips are sidecars by design: importing a rig writes one `.sanim` per glTF animation beside
-> the `.smesh` and registers an `AssetType::Animation` catalog entry, so the `.smesh` format
-> never grows an animation section.
+> Importing a rig writes one `.sanim` image per glTF animation as a `SANM` chunk inside the
+> model's [`.smodel`](../smodel-container/) and registers an `AssetType::Animation` catalog
+> row, so the `.smesh` format never grows an animation section.
 
 ## Related
 
 - [Animation data model](../../animation/animation-data-model/) — the clip/track types this serializes
-- [.smesh format](../smesh-format/) — the mesh sidecar it sits beside
+- [.smesh format](../smesh-format/) — the sibling mesh image
+- [The .smodel container](../smodel-container/) — the file that embeds a `.sanim` as a chunk
 - [Model import](../gltf-and-obj-import/) — where glTF animations are decoded
-- [Asset server & catalog](../asset-server-and-catalog/) — where the clip entry is registered

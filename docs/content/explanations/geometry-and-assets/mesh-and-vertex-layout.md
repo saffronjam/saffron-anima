@@ -16,80 +16,86 @@ path serve glTF and OBJ alike. The format is the same in memory, on disk, and on
 
 A vertex is position, normal, and one UV channel, nothing more:
 
-```cpp
-struct Vertex
-{
-    glm::vec3 position{ 0.0f };
-    glm::vec3 normal{ 0.0f };
-    glm::vec2 uv0{ 0.0f };
-};
-static_assert(sizeof(Vertex) == 32, "Vertex must stay 32 bytes (the .smesh on-disk stride)");
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct Vertex {
+    pub position: Vec3,   // glam's 12-byte Vec3, never the 16-byte Vec3A
+    pub normal: Vec3,
+    pub uv0: Vec2,
+}
 ```
 
-The `static_assert` is load-bearing. The [`.smesh` format](../smesh-format/) writes the
-vertex array as a raw byte blob and the loader reads it straight back, so the in-memory
-stride is the disk stride. Adding a member without bumping the format version would
-misalign every baked mesh on disk.
+The size is pinned at compile time. `saffron-geometry`'s `lib.rs` carries a
+`const _: () = assert!(size_of::<Vertex>() == 32, …)`, so a stray `Vec3A` or a glam bump
+that changed a layout fails the build, not at a torn-mesh runtime. The
+[`.smesh` format](../smesh-format/) writes the vertex array as one raw `bytemuck::cast_slice`
+blob and the loader reads it straight back, so the in-memory stride is the disk stride.
+Adding a member without bumping the format version would misalign every baked mesh on disk.
 
-Tangents are absent, deferred to material time. Normal-mapped PBR needs a tangent basis,
-but that is a later phase; adding it now would widen the stride for geometry that does not
-use it.
+Tangents are absent, deferred to material time. The `#[repr(C)]` Pod derive (the
+`Pod`/`Zeroable` from `bytemuck`) is what lets the byte codec reinterpret the array safely
+under the crate's `#![deny(unsafe_code)]`.
 
 ## Mesh and submeshes
 
 A `Mesh` is three flat vectors: one shared vertex buffer, one shared index buffer, and a
 list of `Submesh` ranges over them.
 
-```cpp
-struct Mesh
-{
-    std::vector<Vertex> vertices;
-    std::vector<u32> indices;
-    std::vector<Submesh> submeshes;
-};
+```rust
+pub struct Mesh {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,
+    pub submeshes: Vec<Submesh>,
+}
 ```
 
 A `Submesh` is one `drawIndexed` call's worth of arguments:
 
-```cpp
-struct Submesh
-{
-    u32 firstIndex = 0;
-    u32 indexCount = 0;
-    i32 vertexOffset = 0;   // signed, matching vkCmdDrawIndexed
-    u32 materialSlot = 0;   // index into the entity's material table
-};
-static_assert(sizeof(Submesh) == 16, "Submesh must stay 16 bytes (baked directly into .smesh)");
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+pub struct Submesh {
+    pub first_index: u32,
+    pub index_count: u32,
+    pub vertex_offset: i32,   // signed, matching vkCmdDrawIndexed
+    pub material_slot: u32,   // index into the model's material table
+}
 ```
 
-`vertexOffset` is signed because that is the type `vkCmdDrawIndexed` takes. The glTF
+`vertex_offset` is signed because that is the type `vkCmdDrawIndexed` takes. The glTF
 importer sets it per primitive so each primitive's indices stay zero-based against its own
 vertex block; the OBJ importer leaves it at 0 and emits indices already relative to the
 shared array. Indices are 32-bit throughout, and the loader rejects any file whose
-`indexWidth` is not `sizeof(u32)`.
+`index_width` is not 4.
+
+A parallel `VertexSkin` stream (24 bytes — `[u16; 4]` joints plus `[f32; 4]` weights, the
+raw array rather than glam's SIMD-aligned `Vec4` so the stride stays fixed) rides alongside
+the vertices for a skinned mesh, and is empty for an unskinned one.
 
 ## Why submeshes
 
 A submesh is one `drawIndexed` call's worth of arguments over the mesh's shared buffers, so
 one logical model can carry several draw ranges. The draw path loops every batch's
-`mesh->submeshes` and issues one `drawIndexed` per submesh. A model with three glTF
-primitives becomes three draw calls against one bound buffer pair.
+submeshes and issues one `drawIndexed` per submesh. A model with three glTF primitives
+becomes three draw ranges against one bound buffer pair.
 
-Each submesh selects a material through `materialSlot`. For a single-material mesh every
+Each submesh selects a material through `material_slot`. For a single-material mesh every
 submesh keeps slot 0 and the whole mesh draws with the entity's
-[`MaterialComponent`](../../scene-and-ecs/built-in-components/). A multi-material import
-instead carries a `MaterialSetComponent`, and the [draw list](../draw-list/) indexes its
-slots by `materialSlot` so each submesh gets its own material.
+[`Material`](../../scene-and-ecs/built-in-components/) component. A multi-material import
+instead carries a `MaterialSet`, and the [draw list](../draw-list/) indexes its slots by
+`material_slot` so each submesh gets its own material.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Vertex + stride assert | `geometry.cppm` | `Vertex` |
-| Mesh + submesh | `geometry.cppm` | `Mesh`, `Submesh` |
-| Normal regeneration | `geometry.cppm` | `generateNormals` |
-| GPU side | `renderer_types.cppm` | `GpuMesh` |
-| Per-submesh draw loop | `renderer_drawlist.cpp` | `recordSceneDrawList` |
+| Vertex + stride assert | `geometry/src/types.rs`; `geometry/src/lib.rs` | `Vertex` |
+| Mesh + submesh | `geometry/src/types.rs` | `Mesh`, `Submesh` |
+| Skin stream | `geometry/src/types.rs` | `VertexSkin` |
+| Normal regeneration | `geometry/src/picking.rs` | `generate_normals` |
+| GPU side | `rendering/src/resources.rs` | `GpuMesh` |
+| Per-submesh draw loop | `rendering/src/scene_pass.rs` | `record_batch_submeshes` |
 
 ## Related
 
