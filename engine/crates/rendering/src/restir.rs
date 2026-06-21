@@ -3,7 +3,7 @@
 //! spatial reuse, and resolve (one shadow ray per pixel via the TLAS, then shade) —
 //! writing a per-pixel direct-radiance image the mesh fragment samples via set 7.
 //!
-//! This is the C++ `Restir` (`renderer_types.cppm:1671`) + `RestirView` (`:1685`) split:
+//! It splits into a device-shared half and a per-view half:
 //!
 //! - [`Restir`] holds the **device-shared** scaffolding — the nearest G-buffer/motion
 //!   sampler, the four descriptor-set *layouts* (initial / reuse / resolve incl. the TLAS
@@ -19,8 +19,8 @@
 //!   reservoirs (README §2's per-view borrow split).
 //!
 //! The three compute PSOs are requested lazily through [`crate::Pipelines`]; the
-//! `do_restir` gate (`rt_supported && tlas_ready && has_gbuffer && do_cull && use_restir`)
-//! is the C++ gate exactly (`renderer.cppm:1891`).
+//! `do_restir` gate is `rt_supported && tlas_ready && has_gbuffer && do_cull &&
+//! use_restir`.
 
 use std::sync::Arc;
 
@@ -33,16 +33,16 @@ use crate::resources::{Buffer, DeviceResources, Image, ImageDesc};
 use crate::ssao::G_NORMAL_FORMAT;
 use crate::{Device, Result, checked};
 
-/// Default initial-candidate count K per pixel (the C++ `Restir::candidateCount`).
+/// Default initial-candidate count K per pixel.
 pub const RESTIR_CANDIDATE_COUNT: u32 = 16;
 
-/// The spatial-reuse neighbour radius in pixels (the C++ reuse push `params.x`).
+/// The spatial-reuse neighbour radius in pixels (the reuse push `params.x`).
 pub const RESTIR_SPATIAL_RADIUS: f32 = 16.0;
 
-/// The temporal-reuse history clamp M (the C++ reuse push `screenSize.z`).
+/// The temporal-reuse history clamp M (the reuse push `screenSize.z`).
 pub const RESTIR_MAX_M: u32 = 20;
 
-/// The resolved-radiance image format (rgba16f, the C++ `GNormalFormat` reuse).
+/// The resolved-radiance image format (rgba16f, reusing `G_NORMAL_FORMAT`).
 pub const RESTIR_RADIANCE_FORMAT: vk::Format = G_NORMAL_FORMAT;
 
 /// One per-pixel reservoir record: two `vec4` (32 B), an SSBO element the three ReSTIR
@@ -63,7 +63,7 @@ pub struct Reservoir {
 const _: () = assert!(size_of::<Reservoir>() == 32);
 const _: () = assert!(std::mem::align_of::<Reservoir>() == 16);
 
-/// The initial-candidate-sampling push (the C++ `restir-initial` pass push). 176 bytes:
+/// The initial-candidate-sampling push for the `restir-initial` pass. 176 bytes:
 /// `2×mat4 + 2×uvec4 + vec4`, matching `restir_initial.slang`'s `Push`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -82,7 +82,7 @@ pub struct InitialPush {
 
 const _: () = assert!(size_of::<InitialPush>() == 176);
 
-/// The temporal + spatial reuse push (the C++ `restir-reuse` pass push). 160 bytes:
+/// The temporal + spatial reuse push for the `restir-reuse` pass. 160 bytes:
 /// `2×mat4 + uvec4 + vec4`, matching `restir_reuse.slang`'s `Push`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -99,7 +99,7 @@ pub struct ReusePush {
 
 const _: () = assert!(size_of::<ReusePush>() == 160);
 
-/// The resolve (one shadow ray + shade) push (the C++ `restir-resolve` pass push). 160
+/// The resolve (one shadow ray + shade) push for the `restir-resolve` pass. 160
 /// bytes: `2×mat4 + uvec4 + vec4`, matching `restir_resolve.slang`'s `Push`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -116,9 +116,9 @@ pub struct ResolvePush {
 
 const _: () = assert!(size_of::<ResolvePush>() == 160);
 
-/// Whether the three ReSTIR passes run this frame. The C++ `doRestir` gate
-/// (`renderer.cppm:1891`): `useRestir && rtSupported && rv.ready && tlasReady && hasGbuffer
-/// && doCull`. Pure logic so the named acceptance test asserts it without a device — a no-op
+/// Whether the three ReSTIR passes run this frame: `use_restir && rt_supported &&
+/// rv.ready && tlas_ready && has_gbuffer && do_cull`. Pure logic so the named acceptance
+/// test asserts it without a device — a no-op
 /// when any input is false (direct lighting then takes the clustered-forward path).
 pub fn wants_restir(
     use_restir: bool,
@@ -131,9 +131,9 @@ pub fn wants_restir(
     use_restir && rt_supported && view_ready && tlas_ready && gbuffer_ran && cull_ran
 }
 
-/// The reservoir SSBO byte size for `pixels` (one [`Reservoir`] per pixel) — the C++
-/// `pixels * 2 * sizeof(glm::vec4)`. Pure so the acceptance test asserts the per-view
-/// buffers size to the view's pixel count without a device.
+/// The reservoir SSBO byte size for `pixels` (one [`Reservoir`] per pixel). Pure so the
+/// acceptance test asserts the per-view buffers size to the view's pixel count without a
+/// device.
 pub fn reservoir_bytes(pixels: u32) -> u64 {
     u64::from(pixels) * size_of::<Reservoir>() as u64
 }
@@ -157,13 +157,13 @@ pub struct Restir {
     /// Whether the device supports the ray-query the resolve pass needs (mirrors
     /// [`Device::rt_supported`]). When false, ReSTIR is inert.
     supported: bool,
-    /// Runtime toggle (the C++ `Restir::useRestir`). Clamped off on a non-RT device.
+    /// Runtime toggle. Clamped off on a non-RT device.
     use_restir: bool,
-    /// K initial candidates sampled per pixel (the C++ `candidateCount`).
+    /// K initial candidates sampled per pixel.
     candidate_count: u32,
 
-    /// Nearest, clamp-to-edge sampler reading the G-buffer + motion (the C++
-    /// `Restir::sampler`). `null` on a software device.
+    /// Nearest, clamp-to-edge sampler reading the G-buffer + motion. `null` on a software
+    /// device.
     sampler: vk::Sampler,
     /// Initial set layout: gbuffer + lightSSBO + clusterSSBO + reservoirOut (4 bindings).
     initial_layout: vk::DescriptorSetLayout,
@@ -179,9 +179,7 @@ pub struct Restir {
 impl Restir {
     /// Creates the device-shared ReSTIR scaffolding. On an RT-capable device: the nearest
     /// sampler + the three compute set layouts (resolving the set-7 mesh layout from
-    /// [`Descriptors`]). On a software device this resolves nothing and stays inert (the
-    /// C++ gates the whole feature on `rtSupported`). The C++ ReSTIR slice of
-    /// `initDescriptorResources` (`renderer_detail.cppm:4185`).
+    /// [`Descriptors`]). On a software device this resolves nothing and stays inert.
     ///
     /// # Errors
     ///
@@ -271,8 +269,7 @@ impl Restir {
 
     /// Sets the ReSTIR toggle (clamped off on a non-RT device). `armed_history_reset` is
     /// returned `true` on an off→on edge so the caller arms the active view's temporal
-    /// reset (the per-view state lives on the [`RestirView`], not here). The C++ `setRestir`
-    /// (`renderer.cppm:2954`) ANDs `rtSupported && activeRestir.ready`; the view-readiness
+    /// reset (the per-view state lives on the [`RestirView`], not here). The view-readiness
     /// half is checked by the caller (it holds the active [`RestirView`]).
     pub fn set_enabled(&mut self, enabled: bool) -> bool {
         let on = enabled && self.supported;
@@ -370,22 +367,22 @@ impl Drop for Restir {
 /// no custom `Drop`; the four descriptor sets are pool-owned (freed with the shared pool),
 /// allocated once and rewritten on a rebuild.
 pub struct RestirView {
-    /// Resources + sets valid for the current extent (the C++ `RestirView::ready`).
+    /// Resources + sets valid for the current extent.
     ready: bool,
-    /// First frame after enable/resize → no temporal blend (the C++ `historyReset`).
+    /// First frame after enable/resize → no temporal blend.
     history_reset: bool,
-    /// Rotates the RNG each frame (the C++ per-view `frameIndex`).
+    /// Rotates the RNG each frame.
     frame_index: u32,
-    /// Pixels the reservoir buffers are sized for (the C++ `reservoirCapacity`).
+    /// Pixels the reservoir buffers are sized for.
     reservoir_capacity: u32,
 
     /// The resolved per-pixel direct radiance (rgba16f), sampled by the mesh via set 7.
     radiance: Option<Image>,
-    /// This frame's candidate-sampling reservoirs (the C++ `initial`).
+    /// This frame's candidate-sampling reservoirs.
     initial: Option<Buffer>,
-    /// After temporal + spatial reuse (the C++ `combined`).
+    /// After temporal + spatial reuse.
     combined: Option<Buffer>,
-    /// Last frame's combined reservoirs — the temporal source (the C++ `previous`).
+    /// Last frame's combined reservoirs — the temporal source.
     previous: Option<Buffer>,
 
     /// The initial-candidate set (gbuffer/lights/clusters/reservoirOut).
@@ -425,7 +422,7 @@ impl RestirView {
     }
 
     /// Allocates this view's four ReSTIR descriptor sets once against [`Restir`]'s layouts
-    /// (the C++ per-view set alloc loop). A no-op on a software device (no layouts exist).
+    /// A no-op on a software device (no layouts exist).
     /// Allocating once (not per resize) avoids churning the pool; the sets are rewritten by
     /// [`RestirView::build`] whenever the buffers + image recreate.
     ///
@@ -449,8 +446,7 @@ impl RestirView {
     /// bindings (the reservoirs, the combined/previous, the radiance storage + the set-7
     /// sample). The per-frame bindings (G-buffer/motion samplers, the light + cluster SSBOs,
     /// the TLAS) are rewritten each frame by [`RestirView::write_frame_bindings`]. A no-op on
-    /// a software device or a zero extent. The C++ `recreateRestirTargets`
-    /// (`renderer_detail.cppm:2598`).
+    /// a software device or a zero extent.
     ///
     /// # Errors
     ///
@@ -472,7 +468,7 @@ impl RestirView {
         }
         let resources = device.resources();
         let pixels = extent.width * extent.height;
-        // Each reservoir is 2× vec4 = 32 B (the C++ `2 * sizeof(glm::vec4)` per pixel).
+        // Each reservoir is 2× vec4 = 32 B per pixel.
         let bytes = reservoir_bytes(pixels);
 
         let initial = make_device_storage_buffer(resources, bytes)?;
@@ -510,7 +506,7 @@ impl RestirView {
         self.ready
     }
 
-    /// Pixels the reservoir buffers are sized for (the C++ `reservoirCapacity`).
+    /// Pixels the reservoir buffers are sized for.
     pub fn reservoir_capacity(&self) -> u32 {
         self.reservoir_capacity
     }
@@ -527,8 +523,7 @@ impl RestirView {
     }
 
     /// Arms a temporal history reset — the next frame's reuse blends with no history (an
-    /// enable edge, a resize, or an explicit view-temporal reset). The C++
-    /// `historyReset = true`.
+    /// enable edge, a resize, or an explicit view-temporal reset).
     pub fn reset_history(&mut self) {
         self.history_reset = true;
     }
@@ -577,10 +572,9 @@ impl RestirView {
 
     /// Advances the per-view temporal state after this frame's three passes are recorded:
     /// bumps the RNG index, clears the history reset, and ping-pongs `combined` → `previous`
-    /// for next frame's temporal source. The C++ `frameIndex + 1; historyReset = false` (the
-    /// resolve writes `previousOut` = `previous` so the ping-pong is implicit there; here the
-    /// buffers are the same handles across frames, so only the flags advance — the resolve's
-    /// `previousOut` write already seeds next frame's `previous`).
+    /// for next frame's temporal source. The buffers are the same handles across frames, so
+    /// only the flags advance — the resolve's `previousOut` write already seeds next frame's
+    /// `previous`.
     pub fn advance_frame(&mut self) {
         self.frame_index = self.frame_index.wrapping_add(1);
         self.history_reset = false;
@@ -589,8 +583,7 @@ impl RestirView {
     /// Writes the STABLE bindings (the buffers/image never reallocate between rebuilds): the
     /// reservoir SSBOs into each set, the radiance storage into the resolve set, and the
     /// radiance sampler into the set-7 mesh set. The per-frame bindings are written by
-    /// [`RestirView::write_frame_bindings`]. The C++ stable-binding block in
-    /// `recreateRestirTargets`.
+    /// [`RestirView::write_frame_bindings`].
     fn write_stable_bindings(&self, device: &Device, descriptors: &Descriptors) {
         let raw = device.raw();
         let initial = self.initial.as_ref().expect("initial reservoir built");
@@ -628,8 +621,7 @@ impl RestirView {
     /// Writes the PER-FRAME bindings before the three passes: the G-buffer + motion samplers
     /// (they recreate with the offscreen and motion may be absent → fall back to the
     /// G-buffer), the punctual-light + cluster SSBOs (they regrow per frame), and the TLAS
-    /// into the resolve set (it is a per-frame ring slot). A no-op when not ready. The C++
-    /// `writeRestirFrameBindings` (`renderer_detail.cppm:2724`).
+    /// into the resolve set (it is a per-frame ring slot). A no-op when not ready.
     #[allow(clippy::too_many_arguments)]
     pub fn write_frame_bindings(
         &self,
@@ -755,8 +747,8 @@ fn make_device_storage_buffer(
     )
 }
 
-/// The nearest, clamp-to-edge sampler the per-view sets read the G-buffer + motion with (the
-/// C++ ReSTIR sampler — point sampling so the G-buffer reconstruct is exact).
+/// The nearest, clamp-to-edge sampler the per-view sets read the G-buffer + motion with —
+/// point sampling so the G-buffer reconstruct is exact.
 fn create_nearest_clamp_sampler(raw: &ash::Device) -> Result<vk::Sampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::NEAREST)
@@ -874,7 +866,7 @@ mod tests {
         assert_eq!(size_of::<InitialPush>(), 176);
         assert_eq!(size_of::<ReusePush>(), 160);
         assert_eq!(size_of::<ResolvePush>(), 160);
-        // The PSO push-range sizes mirror the C++ `initialPush`/`reusePush`/`resolvePush`.
+        // The PSO push-range sizes match the initial/reuse/resolve push structs.
         assert_eq!(RESTIR_INITIAL_PUSH_SIZE, 176);
         assert_eq!(RESTIR_REUSE_PUSH_SIZE, 160);
         assert_eq!(RESTIR_RESOLVE_PUSH_SIZE, 160);
@@ -894,7 +886,7 @@ mod tests {
     /// ReSTIR runs only when EVERY gate holds: `useRestir` + RT supported + the view's
     /// reservoirs are built + a TLAS was built + the G-buffer prepass ran + the froxel cull
     /// ran. Absent any one, it is a no-op and direct lighting falls back to clustered forward
-    /// (the acceptance gate's first bullet). The C++ `doRestir` gate.
+    /// (the acceptance gate's first bullet).
     #[test]
     fn wants_restir_requires_every_gate() {
         // All gates met → ReSTIR runs.

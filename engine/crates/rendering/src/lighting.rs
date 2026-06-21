@@ -2,21 +2,18 @@
 //! punctual-light storage buffer, the clustered-forward froxel cull state, and the
 //! directional / spot / point shadow transforms.
 //!
-//! This is the C++ `Lighting` sub-state (`renderer_types.cppm:1141`) plus
-//! `renderer_lighting.cpp` (`setSceneLighting`, `setClusterCamera`, `ensureLightCapacity`)
-//! and the shadow setters (`renderer.cppm:3101`/`:3107`/`:3114`). Per the borrow
-//! discipline (README §2) the device is shared-immutable; this sub-state owns its
-//! Vulkan handles and mutates them through `&mut self` methods plus `&Device`. There is
-//! no `Arc<Mutex>` here — the host writes the per-frame UBO/SSBO on the render thread
-//! only, after the frame's fence is waited, and the buffers are frame-indexed so a host
-//! write never races a frame still reading on the GPU (the C++ note on `Lighting`).
+//! Per the borrow discipline (README §2) the device is shared-immutable; this sub-state
+//! owns its Vulkan handles and mutates them through `&mut self` methods plus `&Device`.
+//! There is no `Arc<Mutex>` here — the host writes the per-frame UBO/SSBO on the render
+//! thread only, after the frame's fence is waited, and the buffers are frame-indexed so
+//! a host write never races a frame still reading on the GPU.
 //!
 //! # Clustered forward is the one lighting path
 //!
 //! [`Lighting::use_clustered`] defaults true; the light-cull compute pass fills the
 //! per-cluster count+index SSBO the mesh fragment reads. When off, the fragment loops
-//! all lights — kept only as a correctness oracle behind one bool, exactly as the C++
-//! `useClustered`. The froxel-assignment math the cull pass runs on the GPU
+//! all lights — kept only as a correctness oracle behind one bool. The
+//! froxel-assignment math the cull pass runs on the GPU
 //! ([`light_cull.slang`]) is mirrored here as pure CPU functions ([`cluster_aabb`],
 //! [`light_intersects_cluster`]) so the cull is unit-testable with no device — a wrong
 //! AABB or intersection test is a silently-dark or silently-overlit scene, not a
@@ -35,8 +32,7 @@ use crate::targets::Targets;
 use crate::{Device, Result};
 
 /// Froxel cluster grid: X×Y screen tiles, Z exponential view-space slices. Must match
-/// `light_cull.slang` + `mesh.slang` (the C++ `ClusterGridX/Y/Z`,
-/// `renderer_detail.cppm:1458`).
+/// `light_cull.slang` + `mesh.slang`.
 pub const CLUSTER_GRID_X: u32 = 16;
 /// Cluster grid Y (screen tiles).
 pub const CLUSTER_GRID_Y: u32 = 9;
@@ -44,41 +40,39 @@ pub const CLUSTER_GRID_Y: u32 = 9;
 pub const CLUSTER_GRID_Z: u32 = 24;
 /// Total froxel clusters — the cull dispatch covers `ceil(CLUSTER_COUNT / 64)` groups.
 pub const CLUSTER_COUNT: u32 = CLUSTER_GRID_X * CLUSTER_GRID_Y * CLUSTER_GRID_Z;
-/// Max punctual lights one froxel cluster records — the per-cluster list cap (the C++
-/// `MaxLightsPerCluster`).
+/// Max punctual lights one froxel cluster records — the per-cluster list cap.
 pub const MAX_LIGHTS_PER_CLUSTER: u32 = 64;
 
 /// One cluster's light list in the SSBO: a `count` u32 followed by a fixed
 /// `MAX_LIGHTS_PER_CLUSTER` slot of light indices — matching the shader's `Cluster`
-/// struct (std430, tight u32 array). The C++ `ClusterStride`.
+/// struct (std430, tight u32 array).
 const CLUSTER_STRIDE: vk::DeviceSize =
     (1 + MAX_LIGHTS_PER_CLUSTER as u64) * size_of::<u32>() as u64;
 
 /// Initial punctual-light buffer capacity (in [`GpuLight`] elements), grown on demand
-/// thereafter. The C++ `LightListInitial`.
+/// thereafter.
 const LIGHT_LIST_INITIAL: u32 = 16;
 
-/// Directional / spot shadow-map resolution (the C++ `ShadowMapSize`).
+/// Directional / spot shadow-map resolution.
 pub const SHADOW_MAP_SIZE: u32 = 2048;
 /// Constant depth bias for the shadow depth pass (units of D32 depth) — kills acne
-/// without obvious peter-panning on llvmpipe (the C++ `ShadowDepthBiasConstant`).
+/// without obvious peter-panning on llvmpipe.
 pub const SHADOW_DEPTH_BIAS_CONSTANT: f32 = 1.25;
-/// Slope-scaled depth bias for the shadow depth pass (the C++ `ShadowDepthBiasSlope`).
+/// Slope-scaled depth bias for the shadow depth pass.
 pub const SHADOW_DEPTH_BIAS_SLOPE: f32 = 2.0;
 
-/// Per-face resolution of the omnidirectional point-shadow distance cube (the C++
-/// `PointShadowSize`).
+/// Per-face resolution of the omnidirectional point-shadow distance cube.
 pub const POINT_SHADOW_SIZE: u32 = 512;
 /// The point-shadow cube's color format — `R32_SFLOAT` world distance to the nearest
-/// occluder (the C++ `PointShadowColorFormat`).
+/// occluder.
 pub const POINT_SHADOW_COLOR_FORMAT: vk::Format = vk::Format::R32_SFLOAT;
 
 /// The per-frame directional + ambient + eye + shadow-transform UBO (set 1, binding 0).
 /// std140-compatible: every member is a 16-byte-aligned `vec4`/`uvec4`/`mat4` block, so
 /// the `#[repr(C)]` field sequence lays out with no implicit padding.
 ///
-/// The C++ `LightUbo` (`renderer_detail.cppm:1373`). Byte-matched by the size assert +
-/// the offset test; the mesh fragment reads it by raw bytes.
+/// Byte-matched by the size assert + the offset test; the mesh fragment reads it by raw
+/// bytes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LightUbo {
@@ -139,8 +133,7 @@ impl Default for LightUbo {
 }
 
 /// The clustered-cull params UBO (set 1, binding 3 in the mesh set; binding 0 in the
-/// cull compute set). std140-compatible. The C++ `ClusterParams`
-/// (`renderer_detail.cppm:1468`).
+/// cull compute set). std140-compatible.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ClusterParams {
@@ -174,8 +167,7 @@ impl Default for ClusterParams {
 }
 
 /// The camera + viewport state the per-frame cluster params are derived from. Plain
-/// `Copy` data the host fills from the active camera; the C++ `setClusterCamera`
-/// argument list.
+/// `Copy` data the host fills from the active camera.
 #[derive(Debug, Clone, Copy)]
 pub struct ClusterCamera {
     /// World → view.
@@ -194,8 +186,7 @@ pub struct ClusterCamera {
 
 /// The scene-lighting state the per-frame light UBO is derived from. The directional
 /// light + ambient + eye + the punctual list; the rest of the UBO's flags are folded in
-/// by the renderer (IBL/SSAO/etc.) once those phases land. The C++ `setSceneLighting`
-/// argument list, reduced to the phase-7 inputs.
+/// by the renderer (IBL/SSAO/etc.).
 #[derive(Debug, Clone)]
 pub struct SceneLighting {
     /// The directional light direction (the way the light travels; normalized on write).
@@ -251,7 +242,7 @@ pub struct Lighting {
 
     /// Clustered-forward toggle; false = the fragment loops all lights (reference).
     pub use_clustered: bool,
-    /// Master shadow toggle (the C++ `sa set-shadows`).
+    /// Master shadow toggle (`sa set-shadows`).
     pub use_shadows: bool,
 
     frame_light_count: u32,
@@ -275,15 +266,14 @@ pub struct Lighting {
 
     /// The debug view-mode channel the mesh fragment outputs instead of full shading
     /// (`0` lit/wireframe, `1` albedo, … `5` emissive), folded into the light UBO's
-    /// `point_shadow_meta.w` (the C++ `viewMode` debug-channel switch).
+    /// `point_shadow_meta.w`.
     debug_channel: u32,
 }
 
 impl Lighting {
     /// Builds the per-frame light + cluster buffers and sets, binding the shadow maps
     /// (directional / spot at the compare sampler, the point distance cube at the linear
-    /// sampler) into every light set. The C++ lighting-init slice of
-    /// `initDescriptorResources` (`renderer_detail.cppm:3202`).
+    /// sampler) into every light set.
     ///
     /// # Errors
     ///
@@ -320,8 +310,8 @@ impl Lighting {
         })
     }
 
-    /// Sets the debug view-mode channel folded into the next light UBO write (the C++
-    /// `viewMode` debug-channel; `0` = full shading).
+    /// Sets the debug view-mode channel folded into the next light UBO write (`0` = full
+    /// shading).
     pub fn set_debug_channel(&mut self, channel: u32) {
         self.debug_channel = channel;
     }
@@ -352,16 +342,14 @@ impl Lighting {
 
     /// The frame slot's punctual light SSBO handle + byte size — the ReSTIR passes read it
     /// to sample candidate lights, so they bind this buffer into their sets per frame. The
-    /// buffer regrows with the light count, so it is rebound each frame (the C++
-    /// `writeRestirFrameBindings` light binding).
+    /// buffer regrows with the light count, so it is rebound each frame.
     pub fn light_list_buffer(&self, frame: usize) -> (vk::Buffer, vk::DeviceSize) {
         let buffer = &self.frames[frame].light_list;
         (buffer.handle(), buffer.size())
     }
 
     /// Whether a cull dispatch is armed this frame (clustered on + at least one punctual
-    /// light). Consumed (cleared) by the renderer when it schedules the pass, exactly as
-    /// the C++ `clusterDispatchPending` is reset in `beginFrameGraph`.
+    /// light). Consumed (cleared) by the renderer when it schedules the pass.
     pub fn take_cluster_dispatch_pending(&mut self) -> bool {
         std::mem::take(&mut self.cluster_dispatch_pending)
     }
@@ -408,7 +396,7 @@ impl Lighting {
 
     /// Writes the current frame's directional + ambient + eye + punctual lights. Grows
     /// the punctual SSBO if needed, uploads the light list, and fills the light UBO's
-    /// directional + ambient + counts + shadow-transform fields. The C++ `setSceneLighting`.
+    /// directional + ambient + counts + shadow-transform fields.
     ///
     /// `frame` is the in-flight slot (its fence was already waited, so no GPU read races
     /// the write). The renderer folds in the IBL/SSAO/DDGI/ReSTIR flags via
@@ -463,9 +451,8 @@ impl Lighting {
                 0,
                 self.debug_channel,
             ),
-            // screen_flags = (contact, ssgi, ddgi, restir). Only the DDGI bit is fed in
-            // this phase (the contact/ssgi/restir folds land with their own phases); the
-            // mesh gates the DDGI sample on `screen_flags.z`.
+            // screen_flags = (contact, ssgi, ddgi, restir); the mesh gates the DDGI
+            // sample on `screen_flags.z`.
             screen_flags: UVec4::new(0, 0, u32::from(self.frame_ddgi_flag), 0),
             ddgi_volume_min: self.frame_ddgi_volume_min,
             ddgi_volume_extent: self.frame_ddgi_volume_extent,
@@ -482,9 +469,9 @@ impl Lighting {
     }
 
     /// Folds the IBL-ambient flag (`counts.z`) + the reflection-probe count
-    /// (`ambient_color.w`) into the next [`Lighting::set_scene_lighting`] write. The C++
-    /// folds these from the `Ibl`/`ReflectionProbes` state into the light UBO; in Rust the
-    /// renderer reads its sibling sub-state and pushes them here before the UBO write.
+    /// (`ambient_color.w`) into the next [`Lighting::set_scene_lighting`] write. The
+    /// renderer reads its sibling `Ibl`/`ReflectionProbes` sub-state and pushes them here
+    /// before the UBO write.
     pub fn set_frame_ibl(&mut self, ibl_enabled: bool, probe_count: u32) {
         self.frame_ibl_flag = ibl_enabled;
         self.frame_probe_count = probe_count;
@@ -493,9 +480,8 @@ impl Lighting {
     /// Folds this frame's DDGI flag (`screen_flags.z`) + the fitted probe-volume
     /// placement (`ddgi_volume_min`/`extent`) + the probe grid (`ddgi_probe_count`) into
     /// the next [`Lighting::set_scene_lighting`] write, so the mesh fragment samples the
-    /// DDGI atlases when the volume ran this frame. The C++ folds these from the `Ddgi`
-    /// state into the light UBO; in Rust the renderer reads its `Ddgi` sub-state and
-    /// pushes them here before the UBO write.
+    /// DDGI atlases when the volume ran this frame. The renderer reads its `Ddgi`
+    /// sub-state and pushes them here before the UBO write.
     pub fn set_frame_ddgi(
         &mut self,
         ddgi_enabled: bool,
@@ -510,8 +496,7 @@ impl Lighting {
     }
 
     /// Writes the current frame's cluster params from the camera + viewport, and arms
-    /// the cull dispatch when clustered is on and at least one punctual light exists. The
-    /// C++ `setClusterCamera`.
+    /// the cull dispatch when clustered is on and at least one punctual light exists.
     ///
     /// The clustered-valid flag (`screen_size.z`) means "the froxel lists are valid this
     /// frame": with zero lights the dispatch is skipped, the buffers hold stale lists,
@@ -539,14 +524,14 @@ impl Lighting {
     }
 
     /// Sets the directional shadow caster's light-space transform; `casting` arms the
-    /// `shadow` pass (gated by the master `use_shadows`). The C++ `setDirectionalShadow`.
+    /// `shadow` pass (gated by the master `use_shadows`).
     pub fn set_directional_shadow(&mut self, light_view_proj: Mat4, casting: bool) {
         self.shadow_view_proj = light_view_proj;
         self.shadow_pending = casting && self.use_shadows;
     }
 
     /// Sets the shadowed spot light's perspective transform + its index in the per-frame
-    /// light list; `casting` arms the `spot-shadow` pass. The C++ `setSpotShadow`.
+    /// light list; `casting` arms the `spot-shadow` pass.
     pub fn set_spot_shadow(&mut self, light_view_proj: Mat4, light_index: u32, casting: bool) {
         self.spot_shadow_view_proj = light_view_proj;
         self.spot_shadow_light_index = light_index;
@@ -554,7 +539,7 @@ impl Lighting {
     }
 
     /// Sets the shadowed point light's world position + far plane + its index; `casting`
-    /// arms the `point-shadow` pass. The C++ `setPointShadow`.
+    /// arms the `point-shadow` pass.
     pub fn set_point_shadow(
         &mut self,
         light_pos: Vec3,
@@ -571,7 +556,7 @@ impl Lighting {
     /// Ensures the frame's punctual-light SSBO holds at least `count` [`GpuLight`]
     /// elements, growing to the next power of two (never shrinking) and rewriting both
     /// the fragment light set (binding 1) and the compute cluster set (binding 1) — both
-    /// read this buffer. The C++ `ensureLightCapacity`.
+    /// read this buffer.
     fn ensure_light_capacity(
         &mut self,
         descriptors: &Descriptors,
@@ -734,7 +719,7 @@ fn make_mapped_uniform_buffer(
 }
 
 /// A host-visible, persistently-mapped storage buffer of `size` bytes — the punctual
-/// light list backing (the C++ `makeMappedStorageBuffer`).
+/// light list backing.
 fn make_mapped_storage_buffer(
     resources: &Arc<DeviceResources>,
     size: vk::DeviceSize,
@@ -754,7 +739,7 @@ fn make_mapped_storage_buffer(
 }
 
 /// A device-local storage buffer of `size` bytes — the cluster lists the cull compute
-/// writes (the C++ `makeDeviceStorageBuffer`).
+/// writes.
 fn make_device_storage_buffer(
     resources: &Arc<DeviceResources>,
     size: vk::DeviceSize,
@@ -773,8 +758,7 @@ fn make_device_storage_buffer(
 
 /// The 6 cube-face world→clip transforms for an omnidirectional point shadow at `pos`
 /// with `far_plane`. A 90° perspective per face with the Vulkan Y-flip, in the +X, −X,
-/// +Y, −Y, +Z, −Z face order (matching `pointShadowFaceMatrices`,
-/// `renderer_detail.cppm:1079`).
+/// +Y, −Y, +Z, −Z face order.
 pub fn point_shadow_face_matrices(pos: Vec3, far_plane: f32) -> [Mat4; 6] {
     let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.05, far_plane.max(0.1));
     // Vulkan framebuffer Y is down; flip so faces match cube sampling.

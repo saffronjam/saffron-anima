@@ -2,12 +2,9 @@
 //! instances, per-skinned-instance refit BLAS, and the set-6 TLAS descriptor the mesh
 //! fragment binds for inline ray-query shadows.
 //!
-//! This ports the C++ `Rt` sub-state (`renderer_types.cppm:1631`) plus the build path
-//! split across `renderer.cppm` (`buildTlas`, `setRtScene`, `setRtShadows`) and the
-//! `:Detail` partition (`createAccelStructure`, `buildBlas`, `recordSkinnedBlasBuilds`,
-//! `ensureTlasCapacity`, `recordTlasBuild`, `seedEmptyTlas`). Everything is feature-gated
-//! on [`Device::rt_supported`]: on a software device [`Rt::new`] resolves no layout and
-//! every method is a no-op, and the engine renders via the shadow-map path (phase 7).
+//! Everything is feature-gated on [`Device::rt_supported`]: on a software device
+//! [`Rt::new`] resolves no layout and every method is a no-op, and the engine renders
+//! via the shadow-map path.
 //!
 //! # Why the TLAS is per-frame-in-flight and the skinned BLAS per-slot
 //!
@@ -33,7 +30,7 @@ use crate::frame::MAX_FRAMES_IN_FLIGHT;
 use crate::resources::{AccelerationStructure, Buffer, DeviceResources, GpuMesh};
 use crate::{Device, Result, checked};
 
-/// Initial TLAS instance-buffer capacity (the C++ `ensureTlasCapacity` seed).
+/// Initial TLAS instance-buffer capacity ([`Rt::ensure_tlas_capacity`] seed).
 const INITIAL_TLAS_CAPACITY: u32 = 64;
 
 /// The size in bytes of one `VkAccelerationStructureInstanceKHR` (64 bytes: a 3×4
@@ -41,8 +38,7 @@ const INITIAL_TLAS_CAPACITY: u32 = 64;
 const INSTANCE_STRIDE: vk::DeviceSize = size_of::<vk::AccelerationStructureInstanceKHR>() as u64;
 
 /// One skinned instance's per-slot refit BLAS: the AS and whether it has been built once
-/// (the gate between a full `MODE_BUILD` and an in-place `MODE_UPDATE`). The C++
-/// `SkinnedBlas` (`renderer_types.cppm:1621`).
+/// (the gate between a full `MODE_BUILD` and an in-place `MODE_UPDATE`).
 struct SkinnedBlas {
     accel: Arc<AccelerationStructure>,
     built: bool,
@@ -166,7 +162,7 @@ impl Rt {
     }
 
     /// Whether inline ray-query shadows should run this frame: the toggle is on, RT is
-    /// supported, and a TLAS was built. The C++ `rtShadowsEnabled` (`renderer.cppm:2855`).
+    /// supported, and a TLAS was built.
     pub fn shadows_enabled(&self) -> bool {
         self.use_rt_shadows && self.supported && self.tlas_ready
     }
@@ -176,13 +172,12 @@ impl Rt {
         self.use_rt_shadows
     }
 
-    /// Sets the ray-query-shadows toggle (clamped off on a non-RT device). The C++
-    /// `setRtShadows` (`renderer.cppm:2850`).
+    /// Sets the ray-query-shadows toggle (clamped off on a non-RT device).
     pub fn set_rt_shadows(&mut self, enabled: bool) {
         self.use_rt_shadows = enabled && self.supported;
     }
 
-    /// The built per-mesh BLAS count (rt-stats). The C++ `rtBlasCount`.
+    /// The built per-mesh BLAS count (rt-stats).
     pub fn blas_count(&self) -> u32 {
         self.blas_count
     }
@@ -203,7 +198,7 @@ impl Rt {
     }
 
     /// Whether the `tlas-build` pass should be scheduled this frame: RT shadows are on and
-    /// at least one static or skinned RT instance exists. The C++ `rt.buildPending`.
+    /// at least one static or skinned RT instance exists.
     pub fn build_pending(&self) -> bool {
         self.build_pending
     }
@@ -220,7 +215,7 @@ impl Rt {
 
     /// `frame`'s top-level acceleration structure handle, or `null` when none is built yet
     /// (a software device, or before the empty-TLAS seed). The ReSTIR resolve set binds this
-    /// per frame for its visibility ray (the C++ `rt.tlas[frame]->handle`).
+    /// per frame for its visibility ray.
     pub fn frame_tlas(&self, frame: usize) -> vk::AccelerationStructureKHR {
         self.frames[frame]
             .tlas
@@ -229,7 +224,7 @@ impl Rt {
     }
 
     /// Captures this frame's static instance transforms + meshes for the `tlas-build` pass,
-    /// arming the build when RT shadows are on. The C++ `setRtScene` (`renderer.cppm:2865`).
+    /// arming the build when RT shadows are on.
     pub fn set_rt_scene(&mut self, models: Vec<Mat4>, meshes: Vec<Arc<GpuMesh>>) {
         self.scene.models = models;
         self.scene.meshes = meshes;
@@ -243,7 +238,7 @@ impl Rt {
 
     /// Clears the per-frame static-scene capture + the ready/pending flags at the top of a
     /// frame, before the host repopulates via [`Rt::set_rt_scene`]. The static meshes pin
-    /// `Arc<GpuMesh>` across the frame; clearing here mirrors the C++ `beginFrame` reset. The
+    /// `Arc<GpuMesh>` across the frame; clearing here releases them for the next frame. The
     /// per-slot skinned-BLAS maps are intentionally *not* cleared — they are grow-only across
     /// frames (an entity keeps its AS and refits in place).
     pub fn begin_frame(&mut self) {
@@ -275,9 +270,8 @@ impl Rt {
     /// TLAS + scratch on a capacity change, and writes the TLAS into set 6 — every step that
     /// touches `&mut self`. Returns an owned, `'static` [`TlasBuildPlan`] of device-address
     /// build descriptors the `tlas-build` pass replays via [`record_tlas_build_plan`]; the
-    /// plan holds the `Arc<AccelerationStructure>`s so they outlive the recording. The C++
-    /// `buildTlas` (`renderer.cppm:2876`), split prep/record to fit the `'static` graph
-    /// closure (the C++ captured `Renderer&` directly).
+    /// plan holds the `Arc<AccelerationStructure>`s so they outlive the recording. The prep
+    /// and record halves are split to fit the `'static` graph closure.
     ///
     /// Returns `None` (and leaves `tlas_ready` false) when RT is unsupported, no instances
     /// exist, or a build resource cannot be created.
@@ -378,8 +372,7 @@ impl Rt {
 
     /// Plans each skinned instance's BLAS refit: creates the AS on first sight, sizes the
     /// shared scratch, and records the build mode (`BUILD` first, then in-place `UPDATE`).
-    /// The recording is deferred to [`record_tlas_build_plan`]. The C++
-    /// `recordSkinnedBlasBuilds` prep half (`renderer_detail.cppm:572`).
+    /// The recording is deferred to [`record_tlas_build_plan`].
     fn plan_skinned_blas_refits(
         &mut self,
         device: &Device,
@@ -489,8 +482,7 @@ impl Rt {
     }
 
     /// Sizes + (re)creates the frame's TLAS on a capacity change, writing it into set 6, and
-    /// returns the build op (handle + instance/scratch addresses + count). The C++
-    /// `recordTlasBuild` prep half (`renderer_detail.cppm:766`).
+    /// returns the build op (handle + instance/scratch addresses + count).
     fn prepare_tlas(
         &mut self,
         device: &Device,
@@ -580,7 +572,7 @@ impl Rt {
     }
 
     /// Ensures `frame`'s instance buffer holds `count` instances (host-visible AS-build
-    /// input + BDA), growing to the next power of two. The C++ `ensureTlasCapacity`.
+    /// input + BDA), growing to the next power of two.
     fn ensure_tlas_capacity(&mut self, frame: usize, count: u32) -> Result<()> {
         if self.frames[frame].instance_buffer.is_some()
             && self.frames[frame].instance_capacity >= count
@@ -655,8 +647,7 @@ impl Rt {
     }
 
     /// Builds a 0-instance empty TLAS (synchronous one-off submit) and writes it into every
-    /// frame's set 6, so set 6 always references a valid AS before any per-frame build. The
-    /// C++ `seedEmptyTlas` (`renderer_detail.cppm:863`).
+    /// frame's set 6, so set 6 always references a valid AS before any per-frame build.
     fn seed_empty_tlas(&mut self, device: &Device) -> Result<()> {
         let dispatch = self
             .dispatch
@@ -701,7 +692,7 @@ impl Rt {
         let ranges = [range];
 
         // A synchronous one-off submit on a private transient command pool, then `wait_idle`
-        // (an init-time path; never per-frame). The C++ uses frame 0's pool + `waitIdle`.
+        // (an init-time path; never per-frame).
         record_and_submit_oneoff(device, |cmd| {
             // SAFETY: the ash seam. One build info; the range slice length equals its
             // `geometry_count` (1).
@@ -766,7 +757,7 @@ unsafe impl Send for TlasBuildPlan {}
 /// Replays a [`TlasBuildPlan`] into `cmd`: each skinned BLAS refit serialized on the shared
 /// scratch (AS-build → AS-build barrier between them), an AS-build → AS-build-read barrier
 /// handing them to the TLAS build, the TLAS build itself, then the AS-build → fragment
-/// ray-query barrier. The record half of the C++ `buildTlas`. Issues commands only — no
+/// ray-query barrier. The record half of the TLAS build. Issues commands only — no
 /// resource creation, no `&mut self`.
 pub fn record_tlas_build_plan(raw: &ash::Device, cmd: vk::CommandBuffer, plan: &TlasBuildPlan) {
     let dispatch = &plan.dispatch;
@@ -879,7 +870,7 @@ pub struct MeshBlasBuild {
 }
 
 /// Records a one-geometry BLAS build for `mesh` into `cmd` and returns the AS + scratch.
-/// `PREFER_FAST_TRACE`, no compaction (correctness-first, the C++ `buildBlas`). The caller
+/// `PREFER_FAST_TRACE`, no compaction (correctness-first). The caller
 /// submits `cmd` and waits, then drops the returned [`MeshBlasBuild::scratch`]. The mesh's
 /// vertex + index buffers must carry `SHADER_DEVICE_ADDRESS` + AS-build-input usage.
 ///
@@ -1080,8 +1071,8 @@ fn accel_build_to_fragment_barrier() -> vk::MemoryBarrier2<'static> {
 }
 
 /// Allocates a transient command buffer, records `record`, submits it, and blocks on a
-/// fresh fence — the init-time one-off path for the empty-TLAS seed (the C++ `seedEmptyTlas`
-/// uses frame 0's pool + `waitIdle`; here a private pool keeps it self-contained).
+/// fresh fence — the init-time one-off path for the empty-TLAS seed (a private pool keeps it
+/// self-contained, never touching a per-frame pool).
 fn record_and_submit_oneoff<R: FnOnce(vk::CommandBuffer)>(
     device: &Device,
     record: R,

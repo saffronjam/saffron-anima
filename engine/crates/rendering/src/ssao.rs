@@ -2,8 +2,7 @@
 //! the two compute set layouts every screen-space pass binds, and the camera
 //! transforms + toggles the GTAO / contact-shadow / SSGI passes read.
 //!
-//! This is the C++ `Ssao` sub-state (`renderer_types.cppm:1488`). It owns the
-//! *device-shared* state only — the nearest sampler, the 2-binding
+//! It owns the *device-shared* state only — the nearest sampler, the 2-binding
 //! (sampler+storage) and 3-binding (sampler+sampler+storage) compute layouts, the
 //! mesh set-4 layout, and the per-frame camera matrices. The descriptor *sets* that
 //! bind per-view images live in [`crate::ViewTarget`] (one set of each per editor
@@ -23,16 +22,14 @@ use crate::descriptors::Descriptors;
 use crate::resources::DeviceResources;
 use crate::{Device, Result, checked};
 
-/// The view-normal + view-Z G-buffer format (rgb = view normal, a = view-Z). The C++
-/// `GNormalFormat` (`renderer_detail.cppm:1405`). Also the SSGI radiance format.
+/// The view-normal + view-Z G-buffer format (rgb = view normal, a = view-Z). Also the
+/// SSGI radiance format.
 pub const G_NORMAL_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
-/// The AO + contact single-channel map format. The C++ `AoFormat`
-/// (`renderer_detail.cppm:1406`).
+/// The AO + contact single-channel map format.
 pub const AO_FORMAT: vk::Format = vk::Format::R8_UNORM;
 
-/// The SSGI temporal-history EMA weight reused by the ssgi-accum pass (the C++
-/// `TaaHistoryWeight`, `renderer_detail.cppm:1410`).
+/// The SSGI temporal-history EMA weight reused by the ssgi-accum pass.
 pub const SSGI_HISTORY_WEIGHT: f32 = 0.9;
 
 /// The gtao push constant: `invProjection` (clip → view) + a params vec4
@@ -116,13 +113,13 @@ const _: () = assert!(size_of::<GbufferPush>() == 128);
 pub struct Ssao {
     resources: Arc<DeviceResources>,
 
-    /// GTAO ambient occlusion toggle (the C++ `useSsao`).
+    /// GTAO ambient occlusion toggle.
     pub use_ssao: bool,
-    /// Screen-space directional contact-shadow toggle (the C++ `useContact`).
+    /// Screen-space directional contact-shadow toggle.
     pub use_contact: bool,
-    /// Screen-space one-bounce GI toggle (the C++ `useSsgi`).
+    /// Screen-space one-bounce GI toggle.
     pub use_ssgi: bool,
-    /// Sets/views valid — built after the per-view targets exist (the C++ `ready`).
+    /// Sets/views valid — built after the per-view targets exist.
     pub ready: bool,
 
     view: Mat4,
@@ -135,7 +132,7 @@ pub struct Ssao {
     ssgi_intensity: f32,
     ssgi_frame: u32,
 
-    /// Nearest, clamp sampler reading the G-buffer (the C++ `Ssao::sampler`).
+    /// Nearest, clamp sampler reading the G-buffer.
     nearest_sampler: vk::Sampler,
     /// The 2-binding (sampler + storage image) compute layout.
     compute2_layout: vk::DescriptorSetLayout,
@@ -145,8 +142,7 @@ pub struct Ssao {
 
 impl Ssao {
     /// Builds the nearest sampler + the two compute set layouts. The toggles default
-    /// on (the C++ `Ssao` field defaults); `ready` stays false until the per-view
-    /// targets + sets are built.
+    /// on; `ready` stays false until the per-view targets + sets are built.
     ///
     /// # Errors
     ///
@@ -230,8 +226,7 @@ impl Ssao {
 
     /// Writes this frame's camera transforms + the world-space incoming sun direction
     /// (the contact-shadow ray marches toward the light, so the direction TO the light
-    /// is the negation, transformed to view space). The C++ `setSsaoCamera`
-    /// (`renderer.cppm:3054`).
+    /// is the negation, transformed to view space).
     pub fn set_camera(&mut self, view: Mat4, proj: Mat4, sun_direction_world: Vec3) {
         self.view = view;
         self.view_proj = proj * view;
@@ -258,7 +253,7 @@ impl Ssao {
     }
 
     /// The contact-shadow push (projection + invProjection + view-space light dir +
-    /// the ray-march params the C++ hard-codes: 0.2 length, 12 steps, 0.1 thickness).
+    /// the hard-coded ray-march params: 0.2 length, 12 steps, 0.1 thickness).
     pub fn contact_push(&self) -> ContactPush {
         ContactPush {
             projection: self.projection,
@@ -270,7 +265,7 @@ impl Ssao {
 
     /// Bumps the monotonic SSGI frame index (rotating the trace hash so the denoiser
     /// has decorrelated noise) and returns this frame's SSGI trace push. Called once
-    /// per frame at graph-build time, matching the C++ `ssgiFrame` bump.
+    /// per frame at graph-build time.
     pub fn next_ssgi_push(&mut self) -> SsgiPush {
         self.ssgi_frame = self.ssgi_frame.wrapping_add(1);
         SsgiPush {
@@ -300,8 +295,7 @@ impl Drop for Ssao {
     }
 }
 
-/// The nearest, clamp-to-edge sampler the screen-space passes read the G-buffer with
-/// (the C++ `Ssao::sampler`, a `vk::Filter::eNearest` clamp sampler).
+/// The nearest, clamp-to-edge sampler the screen-space passes read the G-buffer with.
 fn create_nearest_sampler(raw: &ash::Device) -> Result<vk::Sampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::NEAREST)
@@ -320,8 +314,7 @@ fn create_nearest_sampler(raw: &ash::Device) -> Result<vk::Sampler> {
 /// Whether the thin G-buffer prepass runs this frame: it runs when the chain is ready
 /// (sub-state built + the active view's screen-space targets exist) AND any of GTAO /
 /// contact / SSGI is on. Pure logic, so the named acceptance test ("`has_gbuffer`
-/// matches the toggle set") can assert it without a device. The C++ `doScreen` gate
-/// (`renderer.cppm:~1410`).
+/// matches the toggle set") can assert it without a device.
 pub(crate) fn wants_gbuffer_prepass(
     gbuf_ready: bool,
     use_ssao: bool,
@@ -399,8 +392,7 @@ mod tests {
     }
 
     /// The thin G-buffer prepass runs only when the chain is ready AND at least one
-    /// effect is on — `has_gbuffer` matches the toggle set (the phase-9 acceptance gate).
-    /// Pure gate logic, no device.
+    /// effect is on — `has_gbuffer` matches the toggle set. Pure gate logic, no device.
     #[test]
     fn gbuffer_prepass_runs_only_when_an_effect_needs_it() {
         // Not ready → never, whatever the toggles.

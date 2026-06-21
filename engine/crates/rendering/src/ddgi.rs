@@ -2,11 +2,10 @@
 //! frame by a software voxel-ray trace, sampled in the mesh fragment for
 //! multi-bounce indirect.
 //!
-//! This is the C++ `Ddgi` sub-state (`renderer_types.cppm:1583`). It owns a 3D voxel
-//! scene proxy ([`crate::Image3D`]), two octahedral atlases (irradiance rgba16f +
-//! distance/moment rg16f), a per-frame ray radiance+distance image, the grow-only
-//! per-frame scene-box SSBO, the linear-clamp atlas sampler, and the six
-//! descriptor-set layouts + sets the five compute passes bind. Unlike the
+//! It owns a 3D voxel scene proxy ([`crate::Image3D`]), two octahedral atlases
+//! (irradiance rgba16f + distance/moment rg16f), a per-frame ray radiance+distance
+//! image, the grow-only per-frame scene-box SSBO, the linear-clamp atlas sampler, and
+//! the six descriptor-set layouts + sets the five compute passes bind. Unlike the
 //! screen-space sub-state, there is exactly one DDGI volume, so the descriptor sets
 //! are device-shared (pool-owned), not per-view.
 //!
@@ -37,33 +36,31 @@ use crate::descriptors::Descriptors;
 use crate::resources::{DeviceResources, Image, Image3D, ImageDesc};
 use crate::{Device, Result, checked};
 
-/// Probes per axis (the C++ `DdgiProbesX/Y/Z`, `renderer_detail.cppm:1414`).
+/// Probes per axis (X).
 pub const DDGI_PROBES_X: u32 = 8;
 /// Probes per axis (Y).
 pub const DDGI_PROBES_Y: u32 = 4;
 /// Probes per axis (Z).
 pub const DDGI_PROBES_Z: u32 = 8;
-/// Rays traced per probe per frame (the C++ `DdgiRaysPerProbe`).
+/// Rays traced per probe per frame.
 pub const DDGI_RAYS_PER_PROBE: u32 = 64;
-/// Octahedral irradiance tile interior size (the C++ `DdgiIrrInterior`).
+/// Octahedral irradiance tile interior size.
 pub const DDGI_IRR_INTERIOR: u32 = 8;
-/// Octahedral distance (moment) tile interior size (the C++ `DdgiDistInterior`).
+/// Octahedral distance (moment) tile interior size.
 pub const DDGI_DIST_INTERIOR: u32 = 16;
-/// The voxel proxy is `DDGI_VOXEL_RES`³ (the C++ `DdgiVoxelRes`).
+/// The voxel proxy is `DDGI_VOXEL_RES`³.
 pub const DDGI_VOXEL_RES: u32 = 32;
-/// Maximum scene boxes the per-frame proxy SSBO holds (the C++ `DdgiMaxBoxes`).
+/// Maximum scene boxes the per-frame proxy SSBO holds.
 pub const DDGI_MAX_BOXES: u32 = 256;
-/// Temporal blend weight — the fraction of last frame's value kept each update (the
-/// C++ `DdgiHysteresis`).
+/// Temporal blend weight — the fraction of last frame's value kept each update.
 pub const DDGI_HYSTERESIS: f32 = 0.95;
 
 /// The voxel proxy + per-frame ray image format (rgba16f: albedo/radiance + occupancy/
-/// distance). The C++ `DdgiVoxelFormat`.
+/// distance).
 pub const DDGI_VOXEL_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
-/// The irradiance atlas format (rgba16f). The C++ `DdgiIrrFormat`.
+/// The irradiance atlas format (rgba16f).
 pub const DDGI_IRR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 /// The distance (moment) atlas format (rg16f: mean distance, mean squared distance).
-/// The C++ `DdgiDistFormat`.
 pub const DDGI_DIST_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
 
 /// The total probe count across the volume (one octahedral tile per probe).
@@ -167,11 +164,11 @@ pub const fn distance_atlas_height() -> u32 {
 pub struct Ddgi {
     resources: Arc<DeviceResources>,
 
-    /// Off by default — it adds five compute passes per frame (the C++ `useDdgi`).
+    /// Off by default — it adds five compute passes per frame.
     pub use_ddgi: bool,
-    /// Resources + sets valid (the C++ `ready`). True after [`Ddgi::new`].
+    /// Resources + sets valid. True after [`Ddgi::new`].
     pub ready: bool,
-    /// First frame after enable/resize → no temporal blend (the C++ `historyReset`).
+    /// First frame after enable/resize → no temporal blend.
     history_reset: bool,
 
     voxels: Image3D,
@@ -181,7 +178,7 @@ pub struct Ddgi {
     box_buffer: crate::resources::Buffer,
     box_capacity: u32,
     frame_box_count: u32,
-    /// Rotates the trace ray set each frame (the C++ `frameIndex`).
+    /// Rotates the trace ray set each frame.
     frame_index: u32,
 
     volume_min: Vec3,
@@ -211,9 +208,9 @@ impl Ddgi {
     /// sampler, the five compute set layouts + the mesh set 5, the six sets, writes the
     /// static descriptors (the images/buffer never reallocate after init), and
     /// init-transitions the atlases into `SHADER_READ_ONLY_OPTIMAL` (their resting state
-    /// for the mesh sample). The C++ `createDdgiResources` (`renderer_detail.cppm:3863`).
+    /// for the mesh sample).
     ///
-    /// `ready` is set true on success; `use_ddgi` defaults off (the C++ field default).
+    /// `ready` is set true on success; `use_ddgi` defaults off.
     ///
     /// # Errors
     ///
@@ -444,7 +441,7 @@ impl Ddgi {
     }
 
     /// Toggles DDGI; turning it on re-converges the probes from scratch by arming a
-    /// history reset (the C++ `setDdgi`).
+    /// history reset.
     pub fn set_enabled(&mut self, enabled: bool) {
         if enabled && !self.use_ddgi {
             self.history_reset = true;
@@ -453,7 +450,7 @@ impl Ddgi {
     }
 
     /// Arms a temporal history reset — the first frame after an enable or a resize blends
-    /// with no history. The C++ sets `historyReset = true` on enable/resize.
+    /// with no history.
     pub fn reset_history(&mut self) {
         self.history_reset = true;
     }
@@ -469,7 +466,7 @@ impl Ddgi {
         self.frame_box_count
     }
 
-    /// The scene-box SSBO capacity (the C++ `boxCapacity` = `DdgiMaxBoxes`).
+    /// The scene-box SSBO capacity (`DDGI_MAX_BOXES`).
     pub fn box_capacity(&self) -> u32 {
         self.box_capacity
     }
@@ -484,14 +481,13 @@ impl Ddgi {
         (self.volume_min, self.volume_extent)
     }
 
-    /// Whether DDGI runs this frame: on + ready + the five PSOs are present. The C++
-    /// `doDdgi` gate (`renderer.cppm:1685`). Pure logic, so the named acceptance test can
-    /// assert it without a device.
+    /// Whether DDGI runs this frame: on + ready + the five PSOs are present. Pure logic,
+    /// so the named acceptance test can assert it without a device.
     pub fn wants_ddgi(&self, pipelines_ready: bool) -> bool {
         self.use_ddgi && self.ready && pipelines_ready
     }
 
-    /// Whether DDGI is on and ready (the mesh-sample gate / the C++ `ddgiEnabled`).
+    /// Whether DDGI is on and ready (the mesh-sample gate).
     pub fn enabled(&self) -> bool {
         self.use_ddgi && self.ready
     }
@@ -509,7 +505,7 @@ impl Ddgi {
 
     /// Uploads this frame's scene-box proxy (interleaved `[min, max, albedo]` per box,
     /// clamped to the SSBO capacity) and stores the volume placement + sun/sky for the
-    /// trace. A no-op when not ready. The C++ `setDdgiScene` (`renderer.cppm:3018`).
+    /// trace. A no-op when not ready.
     ///
     /// `box_mins`/`box_maxs`/`box_albedos` are world-space AABBs + base colors, one per
     /// scene draw. The volume is fit to the scene AABB by the caller each frame.
@@ -555,7 +551,7 @@ impl Ddgi {
 
     /// Advances the temporal state after a frame's five passes are recorded: bumps the
     /// trace ray-set index and clears the history-reset flag (so the next frame blends
-    /// with history). The C++ post-pass `frameIndex + 1; historyReset = false`.
+    /// with history).
     pub fn advance_frame(&mut self) {
         self.frame_index = self.frame_index.wrapping_add(1);
         self.history_reset = false;
@@ -636,8 +632,7 @@ impl Ddgi {
     }
 
     /// Writes the (image/buffer never reallocate) static descriptors into the six sets:
-    /// the voxelize/trace/blend/border compute sets + the mesh set 5. The C++ static
-    /// descriptor writes in `createDdgiResources`.
+    /// the voxelize/trace/blend/border compute sets + the mesh set 5.
     fn write_static_descriptors(&self) {
         let raw = self.resources.device();
         let general = vk::ImageLayout::GENERAL;
@@ -707,7 +702,7 @@ impl Ddgi {
     /// One-shot init barrier transitioning the two atlases from `UNDEFINED` into
     /// `SHADER_READ_ONLY_OPTIMAL` (their resting state for the mesh sample + the trace's
     /// prev-irradiance bind), waited idle. The voxel proxy + ray image stay `UNDEFINED`
-    /// until the graph's first storage barrier. The C++ one-shot DDGI init barrier.
+    /// until the graph's first storage barrier.
     fn init_transition_atlases(&mut self, device: &Device) -> Result<()> {
         let raw = device.raw();
         let pool_info =
@@ -978,8 +973,7 @@ fn make_storage_image(
     )
 }
 
-/// The linear, clamp-to-edge sampler the mesh + trace passes read the atlases with (the
-/// C++ DDGI sampler).
+/// The linear, clamp-to-edge sampler the mesh + trace passes read the atlases with.
 fn create_linear_clamp_sampler(raw: &ash::Device) -> Result<vk::Sampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)

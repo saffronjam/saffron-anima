@@ -8,11 +8,6 @@
 //! fullscreen pass before the scene; reflection probes capture + prefilter local
 //! environments into the same IBL set (bindings 3-5).
 //!
-//! This is the C++ `Ibl` / `ReflectionProbes` / `Sky` sub-state
-//! (`renderer_types.cppm:1402`/`:1451`/`:1468`) plus `renderer_detail_ibl.cpp`
-//! (`bakeEnvironment`, `captureReflectionProbe`) and the `submitSky` / `requestEnvBake` /
-//! `submitReflectionProbes` setters in `renderer_lighting.cpp`.
-//!
 //! # The re-bake is editor-time, not per-frame
 //!
 //! [`Ibl::rebake_pending`] is set by [`Ibl::request_env_bake`] when the sky inputs change
@@ -35,35 +30,34 @@ use crate::resources::{Buffer, DeviceResources, GpuTexture};
 use crate::{Device, Error, Result, checked};
 
 /// The IBL cube / LUT format — `R16G16B16A16_SFLOAT`, sampled and storage-written by the
-/// convolution compute passes (the C++ `IblColorFormat`).
+/// convolution compute passes.
 pub const IBL_COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
-/// Source environment cube resolution per face (the C++ `IblEnvSize`).
+/// Source environment cube resolution per face.
 pub const IBL_ENV_SIZE: u32 = 128;
-/// Diffuse irradiance cube resolution per face (the C++ `IblIrradianceSize`).
+/// Diffuse irradiance cube resolution per face.
 pub const IBL_IRRADIANCE_SIZE: u32 = 32;
-/// Prefiltered specular cube base resolution per face (the C++ `IblPrefilterSize`).
+/// Prefiltered specular cube base resolution per face.
 pub const IBL_PREFILTER_SIZE: u32 = 128;
-/// Prefiltered specular mip count — `mesh.slang`'s `IblPrefilterMaxMip` must be this − 1
-/// (the C++ `IblPrefilterMips`).
+/// Prefiltered specular mip count — `mesh.slang`'s `IblPrefilterMaxMip` must be this − 1.
 pub const IBL_PREFILTER_MIPS: u32 = 5;
-/// Split-sum BRDF LUT resolution (the C++ `IblLutSize`).
+/// Split-sum BRDF LUT resolution.
 pub const IBL_LUT_SIZE: u32 = 256;
 
-/// Atmosphere transmittance LUT width (view-zenith) (the C++ `AtmosTransmittanceW`).
+/// Atmosphere transmittance LUT width (view-zenith).
 pub const ATMOS_TRANSMITTANCE_W: u32 = 256;
-/// Atmosphere transmittance LUT height (altitude) (the C++ `AtmosTransmittanceH`).
+/// Atmosphere transmittance LUT height (altitude).
 pub const ATMOS_TRANSMITTANCE_H: u32 = 64;
-/// Atmosphere isotropic multiple-scattering LUT size (the C++ `AtmosMultiScatterSize`).
+/// Atmosphere isotropic multiple-scattering LUT size.
 pub const ATMOS_MULTI_SCATTER_SIZE: u32 = 32;
-/// Atmosphere sky-view LUT width (azimuth) (the C++ `AtmosSkyViewW`).
+/// Atmosphere sky-view LUT width (azimuth).
 pub const ATMOS_SKY_VIEW_W: u32 = 192;
-/// Atmosphere sky-view LUT height (elevation) (the C++ `AtmosSkyViewH`).
+/// Atmosphere sky-view LUT height (elevation).
 pub const ATMOS_SKY_VIEW_H: u32 = 108;
 
 /// Which shader fills the IBL environment cube before the convolution chain.
 ///
-/// The C++ `EnvSource` (`renderer_types.cppm:1348`). The bake dispatches on it; a missing
-/// [`EnvSource::Equirect`] panorama degrades to [`EnvSource::Procedural`].
+/// The bake dispatches on it; a missing [`EnvSource::Equirect`] panorama degrades to
+/// [`EnvSource::Procedural`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EnvSource {
     /// `ibl_skygen.slang` from [`SkygenParams`] (the default).
@@ -76,8 +70,7 @@ pub enum EnvSource {
 }
 
 /// Renderer-side mirror of the scene's atmosphere settings (the renderer does not import
-/// the scene). A plain aggregate compared memberwise (`!=`) to gate the re-bake — the C++
-/// `AtmosphereParams` (`renderer_types.cppm:1358`).
+/// the scene). A plain aggregate compared memberwise (`!=`) to gate the re-bake.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AtmosphereParams {
     /// Gates the atmosphere LUT chain (false = the source falls back to procedural).
@@ -123,9 +116,9 @@ impl Default for AtmosphereParams {
 }
 
 /// Inputs that drive the procedural-sky bake (`ibl_skygen`). The sun follows the scene's
-/// directional light, so a re-bake re-tints the visible sky AND the IBL together. The C++
-/// `SkygenParams` (`renderer_types.cppm:1376`); derives [`PartialEq`] so the "did the
-/// inputs change" check is a `!=`, not a hand-written memberwise compare.
+/// directional light, so a re-bake re-tints the visible sky AND the IBL together. Derives
+/// [`PartialEq`] so the "did the inputs change" check is a `!=`, not a hand-written
+/// memberwise compare.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkygenParams {
     /// Direction TO the sun (= −lightDir); the shader normalizes.
@@ -149,7 +142,7 @@ impl Default for SkygenParams {
     }
 }
 
-/// The visible-sky settings the host pushes each frame (the C++ `SkyRenderSettings`).
+/// The visible-sky settings the host pushes each frame.
 /// Carried as POD so the renderer never imports the scene; `mode` matches `SkyMode`'s
 /// values (0 = Color, 1 = Texture, 2 = Procedural).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -182,8 +175,7 @@ impl Default for SkyRenderSettings {
 }
 
 /// A per-frame snapshot of one reflection-probe component, passed from the host without
-/// the renderer depending on the scene (the C++ `ReflectionProbeUpload`,
-/// `renderer_types.cppm:1387`). `dirty` arms a (re)capture.
+/// the renderer depending on the scene. `dirty` arms a (re)capture.
 #[derive(Debug, Clone, Copy)]
 pub struct ReflectionProbeUpload {
     /// Owning entity id (the capture re-uses the slot when re-armed).
@@ -217,7 +209,7 @@ impl Default for ReflectionProbeUpload {
 }
 
 /// The per-probe metadata record the mesh fragment reads (IBL set binding 5 SSBO). std430:
-/// three 16-byte vec4/uvec4 blocks. The C++ `ProbeMetaGpu` (`renderer_detail.cppm:1449`).
+/// three 16-byte vec4/uvec4 blocks.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ProbeMetaGpu {
@@ -251,7 +243,7 @@ struct EquirectPush {
 }
 
 /// The push the atmosphere LUT + skygen passes share (`atmos_*.slang`): five vec4s packing
-/// [`AtmosphereParams`] + the sun. The C++ inline `AtmosPush`.
+/// [`AtmosphereParams`] + the sun.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct AtmosPush {
@@ -286,7 +278,7 @@ impl AtmosPush {
 }
 
 /// The push the visible-sky fragment reads (`sky.slang`'s `SkyPush`): the inverse
-/// view-projection + params + clear color. The C++ inline `SkyPush`.
+/// view-projection + params + clear color.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SkyPush {
@@ -303,9 +295,9 @@ const _: () = assert!(size_of::<SkyPush>() == 64 + 16 + 16);
 /// `CUBE` sampling view, and the VMA allocation. The convolution passes write it through
 /// transient per-mip `TYPE_2D_ARRAY` storage views the bake creates and frees itself.
 ///
-/// The C++ `newCubeImage` cube. A move-only Drop type — its view goes through the device,
-/// its image through the allocator (the `Image::reset()` order). `layout` tracks the
-/// cross-bake layout (the bake's `UNDEFINED → GENERAL → SHADER_READ_ONLY` cycle).
+/// A move-only Drop type — its view goes through the device, its image through the
+/// allocator (the `Image::reset()` order). `layout` tracks the cross-bake layout (the
+/// bake's `UNDEFINED → GENERAL → SHADER_READ_ONLY` cycle).
 struct IblCube {
     resources: Arc<DeviceResources>,
     image: vk::Image,
@@ -419,7 +411,7 @@ impl Drop for IblCube {
 }
 
 /// A 2D color image (sampled + storage), the IBL BRDF LUT and the three atmosphere LUTs.
-/// A move-only Drop type — the C++ `newColorImage(.., storage=true)`.
+/// A move-only Drop type.
 struct IblImage {
     resources: Arc<DeviceResources>,
     image: vk::Image,
@@ -512,7 +504,7 @@ impl Drop for IblImage {
 /// atmosphere LUT chain. Sampled as the mesh ambient (set 3, bindings 0-2). Baked at
 /// startup, re-baked on demand when the sky inputs change.
 ///
-/// The C++ `Ibl` (`renderer_types.cppm:1402`). Owns its Vulkan handles + an
+/// Owns its Vulkan handles + an
 /// [`Arc`]`<`[`DeviceResources`]`>` so the images (Drop types) free without a live
 /// `&Device`; the sampler/set-layout free in [`Drop`], the descriptor set with the pool.
 pub struct Ibl {
@@ -533,8 +525,7 @@ pub struct Ibl {
     set: vk::DescriptorSet,
     /// Whether the bake has run and set 3 is written.
     pub ready: bool,
-    /// Master IBL ambient toggle; false = the flat scalar ambient fallback (the C++
-    /// `useIbl`).
+    /// Master IBL ambient toggle; false = the flat scalar ambient fallback.
     pub use_ibl: bool,
 
     baked_params: SkygenParams,
@@ -543,15 +534,14 @@ pub struct Ibl {
     pub rebake_pending: bool,
     source: EnvSource,
     baked_source: EnvSource,
-    /// The equirect source panorama, held alive across the bake (the C++ `envPanorama`).
+    /// The equirect source panorama, held alive across the bake.
     env_panorama: Option<Arc<GpuTexture>>,
 }
 
 impl Ibl {
     /// Allocates the IBL images, the linear/clamp/mipped sampler, and the persistent set 3
     /// from the shared pool, then runs the first bake (procedural sky) so set 3 is valid
-    /// before the first frame. The C++ IBL slice of `initDescriptorResources` +
-    /// `bakeEnvironment(firstBake=true)`.
+    /// before the first frame.
     ///
     /// # Errors
     ///
@@ -632,8 +622,8 @@ impl Ibl {
         self.prefiltered_cube.view
     }
 
-    /// Re-arms the environment bake when the source / panorama / params change (the C++
-    /// `requestEnvBake`). An exact `!=` over the POD params flags only real user changes —
+    /// Re-arms the environment bake when the source / panorama / params change. An exact
+    /// `!=` over the POD params flags only real user changes —
     /// no per-frame float drift, no churn. The bake fires at the next idle point.
     pub fn request_env_bake(
         &mut self,
@@ -660,8 +650,8 @@ impl Ibl {
         self.pending_params = params;
     }
 
-    /// Fires the armed re-bake (the C++ `beginFrameGraph` rebake block): bakes the pending
-    /// params, then commits them as the baked set on success. Clears `rebake_pending`
+    /// Fires the armed re-bake: bakes the pending params, then commits them as the baked
+    /// set on success. Clears `rebake_pending`
     /// regardless (a failed bake is logged, not retried in a tight loop).
     ///
     /// # Errors
@@ -679,7 +669,7 @@ impl Ibl {
     /// convolve it into the diffuse-irradiance + roughness-mipped prefiltered cubes,
     /// integrate the split-sum BRDF LUT, and (on the first bake) write the persistent set
     /// 3. Synchronous one-shot work on its own command pool + `wait_idle` — an editor-time
-    /// event, not per-frame. The C++ `bakeEnvironment`.
+    /// event, not per-frame.
     ///
     /// # Errors
     ///
@@ -970,7 +960,7 @@ impl Ibl {
 
     /// Records the atmosphere LUT chain (transmittance → multiscatter → skyview), each
     /// `UNDEFINED → GENERAL`, dispatch, `GENERAL → SHADER_READ` so the next stage samples
-    /// it. The C++ atmosphere block.
+    /// it.
     ///
     /// The caller holds an open command buffer; the pipelines/sets/images live for the
     /// recording. Every transition is an explicit sync2 barrier (the barrier/dispatch
@@ -1074,12 +1064,12 @@ impl Drop for Ibl {
     }
 }
 
-/// `(n + 7) / 8` — the 8×8 compute group count covering `n` (the C++ bake `group`).
+/// `(n + 7) / 8` — the 8×8 compute group count covering `n`.
 fn group(n: u32) -> u32 {
     n.div_ceil(8)
 }
 
-/// The re-bake decision (the C++ `requestEnvBake` gate), pure so it is unit-testable
+/// The re-bake decision, pure so it is unit-testable
 /// without a device. A re-bake is armed on a source change, a panorama change (Equirect),
 /// a sun change (Procedural/Atmosphere), or an atmosphere-param change (Atmosphere only).
 /// Identical inputs → no re-bake (the exact `!=` over the POD params is the whole point).
@@ -1156,8 +1146,7 @@ struct BakeScratch {
 impl BakeScratch {
     /// Allocates the bake's command pool/buffer/fence, the transient descriptor pool + the
     /// three set layouts (A = 1 storage, B = sampler + storage, C = 2 samplers + storage),
-    /// and every compute pipeline (the atmosphere chain only when `atmosphere`). The C++
-    /// `bakeEnvironment` transient-resource setup.
+    /// and every compute pipeline (the atmosphere chain only when `atmosphere`).
     fn new(raw: &ash::Device, device: &Device, atmosphere: bool) -> Result<Self> {
         let resources = Arc::clone(device.resources());
         let pool_info =
@@ -1292,8 +1281,7 @@ impl BakeScratch {
         Ok(copy)
     }
 
-    /// Allocates + writes every descriptor set the bake binds (the C++ allocSet +
-    /// writeStorage / writeSampler block).
+    /// Allocates + writes every descriptor set the bake binds.
     fn write_sets(
         &mut self,
         raw: &ash::Device,
@@ -1455,8 +1443,8 @@ impl ComputePso {
     }
 }
 
-/// The transient descriptor pool the bake's sets allocate against (the C++ bake pool: 16
-/// storage images + 16 samplers, 32 sets).
+/// The transient descriptor pool the bake's sets allocate against (16 storage images +
+/// 16 samplers, 32 sets).
 fn create_bake_pool(raw: &ash::Device) -> Result<vk::DescriptorPool> {
     let pool_sizes = [
         vk::DescriptorPoolSize::default()
@@ -1544,8 +1532,7 @@ fn create_layout_c(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
 }
 
 /// Builds a transient compute pipeline from `dir/shader` over `set_layout` with an optional
-/// compute-stage push of `push_size` bytes (0 = none). Entry point `computeMain`. The C++
-/// `newComputePipeline`, inlined for the bake's transient lifetime.
+/// compute-stage push of `push_size` bytes (0 = none). Entry point `computeMain`.
 fn build_compute_pipeline(
     raw: &ash::Device,
     dir: &std::path::Path,
@@ -1751,10 +1738,10 @@ fn write_sampler(
 
 /// The visible-sky pass: a fullscreen graphics pass before the scene that fills the scene
 /// color target. Procedural mode samples the IBL env cube (set 1), Texture mode a bindless
-/// panorama (set 0), Color mode a flat fill. The C++ `Sky` (`renderer_types.cppm:1468`).
+/// panorama (set 0), Color mode a flat fill.
 ///
 /// Owns its set layout + descriptor set (allocated from the shared pool) + the fullscreen
-/// PSO. The PSO bakes the sample count, so it is rebuilt on an AA change (a later phase).
+/// PSO. The PSO bakes the sample count, so it is rebuilt on an AA change.
 pub struct Sky {
     resources: Arc<DeviceResources>,
     /// 0 = Color, 1 = Texture, 2 = Procedural (matches `SkyMode`).
@@ -1780,7 +1767,7 @@ pub struct Sky {
 impl Sky {
     /// Creates the sky set layout (set 1: the env cube), allocates the set from the shared
     /// pool, and builds the fullscreen PSO over the bindless set + the sky set. The bake
-    /// writes the env-cube descriptor + marks [`Sky::ready`]. The C++ sky-init slice.
+    /// writes the env-cube descriptor + marks [`Sky::ready`].
     ///
     /// # Errors
     ///
@@ -1844,7 +1831,7 @@ impl Sky {
         })
     }
 
-    /// Folds the host-supplied [`SkyRenderSettings`] in (the C++ `submitSky`).
+    /// Folds the host-supplied [`SkyRenderSettings`] in.
     pub fn submit(&mut self, settings: &SkyRenderSettings) {
         self.mode = settings.mode;
         self.clear_color = settings.clear_color;
@@ -1875,9 +1862,9 @@ impl Sky {
     /// Rebuilds the fullscreen sky PSO for a new MSAA sample count, replacing the prior one.
     /// The PSO bakes `rasterizationSamples`, so an AA change must rebuild it or the sky pass
     /// draws into the MSAA scene color with a mismatched 1× pipeline
-    /// (`VUID-vkCmdDraw-multisampledRenderToSingleSampled-07285`). The C++ `setAa` rebuilt
-    /// the sky PSO for the same reason (`renderer_aa.cpp:105`). The caller idles the device
-    /// first (the live PSO may be in flight), so the old handle is free to destroy here.
+    /// (`VUID-vkCmdDraw-multisampledRenderToSingleSampled-07285`). The caller idles the
+    /// device first (the live PSO may be in flight), so the old handle is free to destroy
+    /// here.
     ///
     /// # Errors
     ///
@@ -1946,7 +1933,7 @@ pub struct SkyDraw {
 
 /// Records the fullscreen sky into `cmd`: bind the bindless array (set 0) + the env-cube set
 /// (set 1), push the inverse view-projection + sky params, draw one fullscreen triangle. The
-/// graph sets the dynamic viewport/scissor. The C++ `recordSky`.
+/// graph sets the dynamic viewport/scissor.
 pub fn record_sky(
     raw: &ash::Device,
     cmd: vk::CommandBuffer,
@@ -1999,8 +1986,8 @@ impl Drop for Sky {
 
 /// One captured + prefiltered local reflection probe. Mirrors the [`Ibl`] cube layout but
 /// per-probe: a captured env cube + 6 face render views + a depth scratch, convolved into a
-/// per-probe irradiance + prefiltered cube. The C++ `ReflectionProbe`
-/// (`renderer_types.cppm:1430`). Sampled via the IBL set (bindings 3-4) at this slot.
+/// per-probe irradiance + prefiltered cube. Sampled via the IBL set (bindings 3-4) at
+/// this slot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReflectionProbe {
     /// World-space origin (the entity translation).
@@ -2041,8 +2028,8 @@ impl Default for ReflectionProbe {
 }
 
 /// The reflection-probe array + the metadata SSBO (IBL set bindings 3-5) + the per-frame
-/// capture state. The C++ `ReflectionProbes` (`renderer_types.cppm:1451`). Every array slot
-/// is seeded with the global IBL cubes so the bind is always valid; real probes overwrite
+/// capture state. Every array slot is seeded with the global IBL cubes so the bind is
+/// always valid; real probes overwrite
 /// their slot on capture.
 pub struct ReflectionProbes {
     resources: Arc<DeviceResources>,
@@ -2052,7 +2039,7 @@ pub struct ReflectionProbes {
     mesh_set: vk::DescriptorSet,
     sampler: vk::Sampler,
     meta_buffer: Buffer,
-    /// Master probe toggle (the C++ `useProbes`).
+    /// Master probe toggle.
     pub use_probes: bool,
     /// Any probe dirty this frame → capture at the next idle point.
     pub capture_pending: bool,
@@ -2063,7 +2050,7 @@ pub struct ReflectionProbes {
 impl ReflectionProbes {
     /// Allocates the per-probe metadata SSBO, the probe sampler, and seeds the meta buffer
     /// to zero. The `mesh_set` is the shared [`Ibl::set`]; seeding the array slots happens
-    /// after the first IBL bake via [`ReflectionProbes::seed`]. The C++ probe-init slice.
+    /// after the first IBL bake via [`ReflectionProbes::seed`].
     ///
     /// # Errors
     ///
@@ -2113,7 +2100,7 @@ impl ReflectionProbes {
 
     /// Seeds every probe array slot (IBL set bindings 3/4) with the global IBL cubes and
     /// writes the metadata-SSBO binding (5), so the mesh bind is valid before any capture.
-    /// Called once after the first IBL bake. The C++ `seedReflectionProbeSet`.
+    /// Called once after the first IBL bake.
     pub fn seed(&self, ibl: &Ibl) {
         let raw = self.resources.device();
         for slot in 0..MAX_REFLECTION_PROBES {
@@ -2134,10 +2121,10 @@ impl ReflectionProbes {
 
     /// Writes one probe slot's prefiltered (binding 3) + irradiance (binding 4) cube into
     /// the IBL set. A slot with no captured probe falls back to the global IBL cubes, so
-    /// every array element is always valid. The C++ `writeReflectionProbeSlot`.
+    /// every array element is always valid.
     fn write_slot(&self, raw: &ash::Device, ibl: &Ibl, slot: usize) {
-        // No per-slot cube storage in this phase's capture path yet — every slot resolves to
-        // the global IBL cubes (a real capture overwrites the slot via `write_captured`).
+        // There is no per-slot cube storage — every slot resolves to the global IBL cubes
+        // (a real capture overwrites the slot via `write_captured`).
         let pre = ibl.prefiltered_cube.view;
         let irr = ibl.irradiance_cube.view;
         let infos = [
@@ -2168,7 +2155,7 @@ impl ReflectionProbes {
         unsafe { raw.update_descriptor_sets(&writes, &[]) };
     }
 
-    /// Folds the host's per-frame probe uploads in (the C++ `submitReflectionProbes`):
+    /// Folds the host's per-frame probe uploads in:
     /// re-arms a slot on a real change (new/moved/resized probe, or an explicit dirty flag),
     /// drops removed slots, and re-uploads the metadata SSBO. Overflow past
     /// `MAX_REFLECTION_PROBES` is logged once.
@@ -2269,8 +2256,8 @@ impl Drop for ReflectionProbes {
 
 /// Builds the fullscreen sky PSO from `sky.slang`: no vertex input, a triangle-list
 /// fullscreen triangle, no depth test/write, the scene color format, sets 0 (bindless) + 1
-/// (env cube), the `SkyPush` in the fragment stage, the scene's sample count baked in. The
-/// C++ `makeSkyPipeline`. Returns `(pipeline, layout)`.
+/// (env cube), the `SkyPush` in the fragment stage, the scene's sample count baked in.
+/// Returns `(pipeline, layout)`.
 fn build_sky_pipeline(
     device: &Device,
     bindless_layout: vk::DescriptorSetLayout,
@@ -2390,8 +2377,8 @@ fn build_sky_pipeline(
     Ok((pipeline, layout))
 }
 
-/// The IBL linear/clamp/mipped sampler — all three cubes + the LUT sample through it (the
-/// C++ `iblSampler`). `eClampToEdge` so cube faces do not seam.
+/// The IBL linear/clamp/mipped sampler — all three cubes + the LUT sample through it.
+/// `eClampToEdge` so cube faces do not seam.
 fn create_ibl_sampler(raw: &ash::Device) -> Result<vk::Sampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)

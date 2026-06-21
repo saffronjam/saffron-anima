@@ -460,8 +460,8 @@ uint clusterIndexFor(float2 pixel, float viewZ)
 }
 
 // The material seam: evalSurface turns interpolated vertex data + bound textures into the
-// surface inputs the lighting consumes. Today it is the fixed glTF metallic-roughness path;
-// later phases (and the node graph) replace its body while the lighting below is unchanged.
+// surface inputs the lighting consumes. Its body is the fixed glTF metallic-roughness path,
+// or node-graph codegen; the lighting below it is shared across material variants.
 public struct SurfaceData
 {
     public float3 albedo;
@@ -576,7 +576,7 @@ public float4 evalLighting(VertexOutput input, SurfaceData surf)
     float2 screenUv = input.position.xy / float2(clusterParams.screenSize.xy);
 
     // Directional light, evaluated through the same BRDF as the punctual lights, then
-    // attenuated by the shadow map + screen-space contact shadows (directional only in v1).
+    // attenuated by the shadow map + screen-space contact shadows (directional only).
     float3 lDir = -normalize(globals.directionAmbient.xyz);
     float shadow = 1.0;
     if (globals.pointShadowMeta.z != 0)
@@ -672,7 +672,7 @@ public float4 evalLighting(VertexOutput input, SurfaceData surf)
     {
         ambient = albedo * (1.0 - metallic) * globals.ambientColor.rgb;
     }
-    ambient *= surf.occlusion;  // material occlusion (1.0 until per-material AO lands)
+    ambient *= surf.occlusion;  // material occlusion (1.0 = none)
     // Screen-space AO darkens only the indirect (ambient) term, sampled at this pixel.
     if (globals.counts.w != 0)
     {
