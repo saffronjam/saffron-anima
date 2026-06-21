@@ -17,7 +17,7 @@ its cost, and the seam that anticipates it.
 ## Single graphics queue
 
 Every pass records into one command buffer on one graphics queue, in declaration order.
-`executeRenderGraph` walks `graph.passes` start to finish and submits one command buffer. A pass
+`RenderGraph::execute` walks `passes` start to finish into one command buffer. A pass
 has no queue selection and there is no second timeline.
 
 This rules out async compute, where a compute pass runs concurrently on a dedicated compute queue
@@ -31,15 +31,15 @@ timeline splits is the work; the usage declarations would not change.
 ## No transient resources, no aliasing
 
 The graph allocates nothing. Every resource is imported — an existing renderer-owned handle
-registered with `importImage` / `importBuffer` each frame. There are no graph-created images and
+registered with `import_image` / `import_buffer` each frame. There are no graph-created images and
 no memory aliasing, which reuses one allocation for two resources whose lifetimes do not overlap.
 
 The cost is memory. The G-buffer normal target, the AO maps, the FXAA scratch, and the TAA history
 and motion targets each hold their own allocation for the whole frame, though many never overlap in
 time. A graph that allocated transients could fold several into one backing allocation.
 
-The seam is the separation of imports from tracked state: `importImage` builds an `RgResourceState`,
-and the resource table is a plain vector. A transient would be a resource the graph allocates lazily
+The seam is the separation of imports from tracked state: `import_image` builds an `RgResourceState`,
+and the resource table is a plain `Vec`. A transient would be a resource the graph allocates lazily
 and frees at end of frame, slotting into the same table. The right-sized targets that exist today
 are the first candidates to alias.
 
@@ -47,8 +47,9 @@ are the first candidates to alias.
 
 The graph records every pass it is given; there is no reachability analysis that drops a pass whose
 outputs nothing reads. In practice this rarely matters, because the engine builds the graph
-conditionally. `beginFrameGraph` adds the shadow pass only when a shadow is pending and the G-buffer
-only when a screen-space effect is on. The construction is pruned even though the graph never culls.
+conditionally. `record_scene_graph` adds the shadow pass only when a shadow is pending and the
+G-buffer only when a screen-space effect is on. The construction is pruned even though the graph
+never culls.
 
 The seam is the read and write declaration on every pass, which is exactly the information a
 dead-pass cull would need. The analysis is unwritten because conditional construction already covers
@@ -57,7 +58,7 @@ the common case.
 ## No scheduling or reordering
 
 Passes execute in the order they were added. The graph does not reorder them to overlap work or
-minimize barriers. This keeps the per-frame state in `applyAccess` a simple running summary that
+minimize barriers. This keeps the per-frame state in `apply_access` a simple running summary that
 reasons only about the previous touch, never about a reordered schedule.
 
 The trade is that a good order is the author's responsibility, not the graph's. For a single-queue
@@ -66,13 +67,13 @@ would benefit from a scheduler.
 
 ## One subresource per barrier
 
-`applyAccess` emits barriers against the full image — a single mip and a single array layer. The
+`apply_access` emits barriers against the full image — a single mip and a single array layer. The
 graph tracks one layout per resource, not per mip or per layer. Images with multiple mips or layers
 that need different layouts at once cannot be expressed. The omnidirectional point-shadow cube, for
 instance, is handled outside the graph rather than as a six-layer attachment.
 
 The seam is the tracked state, which would grow from one layout to a per-subresource set, with
-`applyAccess` comparing ranges. The single-subresource assumption is baked into the barrier
+`apply_access` comparing ranges. The single-subresource assumption is baked into the barrier
 construction, so this is the most invasive of the listed changes.
 
 ```mermaid
@@ -92,11 +93,11 @@ the data they would require already declared.
 
 | What | File | Symbols |
 |---|---|---|
-| Single-queue execution | `render_graph.cppm` | `executeRenderGraph` |
-| Import-only resources | `render_graph.cppm` | `importImage`, `importBuffer` |
-| Full-image subresource | `render_graph.cppm` | `applyAccess` |
-| Pass kind (the async seam) | `render_graph.cppm` | `RgPass::kind`, `RgPassKind` |
-| Conditional construction | `renderer.cppm` | `beginFrameGraph` (the `do*` gates) |
+| Single-queue execution | `render_graph.rs` | `RenderGraph::execute`, `execute_profiled` |
+| Import-only resources | `render_graph.rs` | `RenderGraph::import_image`, `import_buffer` |
+| Full-image subresource | `render_graph.rs` | `apply_access`, `RgResourceState` |
+| Pass kind (the async seam) | `render_graph.rs` | `RgPass::kind`, `RgPassKind` |
+| Conditional construction | `renderer.rs` | `Renderer::record_scene_graph` (the `do_*` gates) |
 
 ## Related
 

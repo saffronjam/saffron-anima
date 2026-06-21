@@ -39,10 +39,10 @@ per-frame signals (frame time, the history ring, VRAM, the throughput counters).
   short ≈ 1 s and long ≈ 10 s over the ring; > 10% → warning, > 50% → critical.
 - **vram.** Usage as a fraction of the device-local budget: ≥ `vramWarnFrac` → warning,
   ≥ `vramCritFrac` → critical (only meaningful while the profiler is on, so the budget is known).
-- **pso-compile (info).** A PSO built mid-frame (`pipelinesCreated > 0`) is a compile hitch on an
-  otherwise steady-state frame → an **info** entry in the log.
+- **pso-compile (info).** A PSO built mid-frame (`RenderStats::pipelines_created > 0`) is a compile
+  hitch on an otherwise steady-state frame → an **info** entry in the log.
 
-All thresholds come from the Phase-2 `PerfConfig`, so they stay data-driven and shared with the HUD.
+All thresholds come from the `PerfConfig`, so they stay data-driven and shared with the HUD.
 
 | Severity | Example | UX (Phase 4) |
 |---|---|---|
@@ -62,7 +62,7 @@ that *held the request open* until an event was ready would block **rendering** 
 duration — exactly wrong here. The fit is the inverse:
 
 - Detectors run each frame and **append** events to a fixed-size engine-side ring
-  (`AlarmEventRingCapacity = 256`). Appending is pure CPU bookkeeping — no stall.
+  (`ALARM_EVENT_RING_CAPACITY = 256`). Appending is pure CPU bookkeeping — no stall.
 - `drain-alarms` returns the queued events *immediately*; its handler only snapshots the ring. The
   editor calls it alongside `render-stats` in the existing ~6 Hz reconcile loop.
 
@@ -105,10 +105,10 @@ sa set-perf-config --targetFps 60    # relax → the next drain shows the RESOLV
 
 | What | File | Symbols |
 |---|---|---|
-| Detectors + the per-frame tick | `renderer.cppm` | `tickAlarms`, `raiseAlarm`, `clearAlarm` |
-| Alarm state: active set, event ring, seq, fingerprint | `renderer_types.cppm` | `AlarmState`, `ActiveAlarm`, `AlarmEvent` |
-| Non-blocking delivery + cursor | `renderer.cppm` | `drainAlarms`, `activeAlarms` |
-| Wire surface | `control_dto.cppm`, `control_commands_render.cpp` | `AlarmEventDto`, `drain-alarms`, `list-active-alarms` |
+| Detectors + the per-frame tick | `frame_history.rs` | `AlarmState::tick`, `raise`, `clear`, `AlarmInputs` |
+| Alarm state: active set, event ring, seq, fingerprint | `frame_history.rs` | `AlarmState`, `ActiveAlarm`, `AlarmEvent`, `AlarmSeverity`, `AlarmEventKind`, `alarm_fingerprint` |
+| Non-blocking delivery + cursor | `frame_history.rs`, `renderer.rs` | `AlarmState::drain`, `AlarmDrain`, `Renderer::drain_alarms`, `active_alarms` |
+| Wire surface | `protocol/src/dto.rs`, `control/src/commands_render.rs` | `AlarmEventDto`, `ActiveAlarmDto`, `drain-alarms`, `list-active-alarms` |
 
 ## Related
 

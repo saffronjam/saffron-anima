@@ -12,26 +12,29 @@ compute effect — at a defined point in the frame without touching engine code.
 
 ## The three windows
 
-The loop in `run` does this per frame, after the `onUi` phase:
+The loop in `run` does this per frame, after the `on_ui` phase: it makes a fresh `RenderGraph`,
+calls the host's `begin_frame_graph` to lay down the engine passes, hands the graph to each
+layer's `on_render_graph`, then moves it into `end_frame` to execute and present.
 
-```cpp
-beginFrameGraph(app.renderer);            // 1. engine: cull → scene → AA → tonemap
-for (Layer& layer : app.layers)
-{
-    if (layer.onRenderGraph) { layer.onRenderGraph(frameGraph(app.renderer)); }  // 2. app passes
+```rust
+let mut graph = RenderGraph::new();
+host.begin_frame_graph(&mut graph);                 // 1. engine: cull → scene → AA → tonemap
+for layer in &mut layers {
+    layer.on_render_graph(app, &mut graph);         // 2. app passes
 }
-endFrame(app.renderer);                   // 3. engine: execute, then blit to swapchain
+host.end_frame(graph)?;                             // 3. engine: execute, then blit to swapchain
 ```
 
-1. **`beginFrameGraph`** rebuilds the graph and adds every engine-internal pass: light culling,
-   shadow depth passes, the optional depth pre-pass, the G-buffer and screen-space effects, the
-   scene pass, the FXAA/TAA resolve, and the mandatory tonemap. By the time it returns, the
-   offscreen holds the finished, tonemapped scene.
-2. **`onRenderGraph`** is the layer hook. Each attached layer that defines it is handed the live
-   `RenderGraph&` and can call `addPass` to insert its work. This runs after the scene and
+1. **`begin_frame_graph`** adds every engine-internal pass: light culling, shadow depth passes, the
+   optional depth pre-pass, the G-buffer and screen-space effects, the scene pass, the FXAA/TAA
+   resolve, and the mandatory tonemap. By the time it returns, the offscreen holds the finished,
+   tonemapped scene. The host implements it on `Renderer::record_scene_graph` and the post passes.
+2. **`on_render_graph`** is the layer hook. Each attached layer that overrides it is handed the live
+   `&mut RenderGraph` and can call `add_pass` to insert its work. This runs after the scene and
    tonemap, before the graph executes.
-3. **`endFrame`** calls `executeRenderGraph` to derive every barrier and record the whole thing,
-   then blits the finished offscreen to the swapchain with `presentViewportToSwapchain`.
+3. **`end_frame`** takes the graph by value, calls `RenderGraph::execute` to derive every barrier
+   and record the whole thing, then blits the finished offscreen to the swapchain with
+   `Renderer::present_active_view_to_swapchain`.
 
 The present blit is last, so anything a layer adds in window 2 is recorded before the offscreen is
 read out. An app post-process sees the engine's finished image and modifies it before it
@@ -39,63 +42,56 @@ reaches the screen.
 
 ```mermaid
 flowchart TD
-    A[beginFrameGraph] --> B["engine passes:<br/>cull · shadows · depth-prepass ·<br/>g-buffer · scene · AA · tonemap"]
-    B --> C[layer.onRenderGraph]
-    C --> D["app passes:<br/>addPass(graph, ...)"]
-    D --> E[endFrame]
-    E --> G[executeRenderGraph]
+    A[begin_frame_graph] --> B["engine passes:<br/>cull · shadows · depth-prepass ·<br/>g-buffer · scene · AA · tonemap"]
+    B --> C[layer.on_render_graph]
+    C --> D["app passes:<br/>graph.add_pass(...)"]
+    D --> E[end_frame]
+    E --> G[RenderGraph::execute]
     G --> F["engine: present blit<br/>(offscreen → swapchain)"]
 ```
 
 ## What a layer gets
 
-`frameGraph(renderer)` returns a reference to the current graph; the layer adds to it with the
-same `addPass` the engine uses. The engine exposes the offscreen color through
-`viewportColorResource(renderer)` — the same `RgResource` it tracks as `sceneColor` — so an
-in-place compute post-process imports nothing new. It declares `StorageImageRWCompute` on the
-offscreen handle, binds its pipeline, and dispatches.
+The layer receives `&mut RenderGraph` and adds to it with the same `add_pass` the engine uses. The
+offscreen color is the `RgResource` the renderer tracks for the active view, so an in-place compute
+post-process imports nothing new: it declares `StorageImageRwCompute` on the offscreen handle, binds
+its pipeline, and dispatches.
 
 A layer pass and an engine pass are identical to the graph. The layer's pass goes through
-`applyAccess` the same way, and its read-modify-write transition (`Color → General →
+`apply_access` the same way, and its read-modify-write transition (`Color → General →
 ShaderReadOnly`) is derived, not coded. The engine's own tonemap uses the same machinery from
-inside `endFrame`.
+inside `record_scene_graph`.
 
 ## Engine passes are conditional
 
-`beginFrameGraph` is not a fixed pipeline. Almost every engine pass is gated on a flag and the
-presence of its pipeline and target:
-
-```cpp
-const bool doCull         = renderer.lighting.clusterDispatchPending && renderer.pipelines.cull;
-const bool doShadow       = renderer.lighting.shadowPending && renderer.pipelines.shadowDepth && ...;
-const bool doDepthPrepass = renderer.useDepthPrepass && renderer.pipelines.depthPrepass;
-const bool doScreen       = doSsao || doContact || doSsgi || wantRestir;
-```
-
-The graph for a given frame contains only the passes that frame needs. With shadows off, the
-shadow pass is not added; the scene pass declares a `SampledRead` on the shadow map only when
-`doShadow` is true, so no barrier references a resource that was never imported. Conditional
-construction keeps the declared usage and the imported resources in lockstep.
+`record_scene_graph` is not a fixed pipeline. Almost every engine pass is gated on a flag and the
+presence of its pipeline and target — a `do_cull` / `do_shadow` / `do_depth_prepass` / `do_skin`
+boolean built from a pending request plus the compiled pipeline. The graph for a given frame
+contains only the passes that frame needs. With shadows off, the shadow pass is not added; the
+scene pass declares a `SampledRead` on the shadow map only when the shadow ran, so no barrier
+references a resource that was never imported. Conditional construction keeps the declared usage and
+the imported resources in lockstep.
 
 ## The submit() seam
 
-App geometry reaches the GPU two coexisting ways. The `onRenderGraph` hook adds whole passes. The
-`submit(renderer, fn)` seam pushes a closure *replayed inside* the scene pass body:
+App geometry reaches the GPU two coexisting ways. The `on_render_graph` hook adds whole passes. The
+`Renderer::submit(closure)` seam pushes a closure *replayed inside* the scene pass body — the
+editor gizmo / native-overlay seam. The scene pass's body records the batched draw list, then
+replays each stashed `RenderFn` against the same command buffer:
 
-```cpp
-scene.execute = [&renderer](vk::CommandBuffer cmd)
-{
-    recordSceneDrawList(renderer, cmd);
-    for (RenderFn& fn : renderer.frame.sceneSubmissions) { fn(cmd); }
-};
+```rust
+record_scene_draw_list(/* … */);
+for body in submissions {
+    body(cmd);
+}
 ```
 
 A layer that draws more geometry into the scene uses `submit`; a layer that needs its own
-synchronized pass — a compute effect, a separate target — uses `onRenderGraph`. The first rides
+synchronized pass — a compute effect, a separate target — uses `on_render_graph`. The first rides
 inside the engine's barriers; the second gets its own, derived.
 
 > [!NOTE]
-> The tonemap is added inside `beginFrameGraph`, so it runs before `onRenderGraph`. A layer
+> The tonemap is added inside `record_scene_graph`, so it runs before `on_render_graph`. A layer
 > post-process therefore operates on already-tonemapped, display-referred color, not linear HDR.
 > A layer that needs linear radiance must insert its pass another way; the engine's own linear-HDR
 > consumers (SSGI history capture) are added before the tonemap.
@@ -104,16 +100,15 @@ inside the engine's barriers; the second gets its own, derived.
 
 | What | File | Symbols |
 |---|---|---|
-| The three-window order | `app.cppm` | `run` (`beginFrameGraph` → `onRenderGraph` → `endFrame`) |
-| The layer hook | `app.cppm` | `Layer::onRenderGraph` |
-| Engine passes | `renderer.cppm` | `beginFrameGraph` (`do*` flags + `addPass`) |
-| Handing the graph to layers | `renderer.cppm` | `frameGraph`, `viewportColorResource` |
-| Execute + present blit | `renderer.cppm` | `endFrame`, `executeRenderGraph`, `presentViewportToSwapchain` |
-| Replay-into-pass seam | `renderer.cppm` | `submit`, `sceneSubmissions` |
+| The three-window order | `app/src/lib.rs` | `run`, the per-frame render/ui/graph hook pass |
+| The host hook + the layer hook | `app/src/lib.rs` | `begin_frame_graph`, `end_frame`, `Layer::on_render_graph` |
+| Engine passes | `renderer.rs` | `Renderer::record_scene_graph` (the `do_*` gates + `add_pass`) |
+| Execute + present blit | `renderer.rs` | `RenderGraph::execute`, `Renderer::present_active_view_to_swapchain` |
+| Replay-into-pass seam | `renderer.rs` | `Renderer::submit`, `RenderFn`, `submissions` |
 
 ## Related
 
 - [Render graph](../render-graph-overview/) — the model the passes are added to
-- [Passes](../passes-and-attachments/) — what `addPass` takes
+- [Passes](../passes-and-attachments/) — what `add_pass` takes
 - [Limits](../limits-and-seams/) — what app passes still can't do
 - [Compute post-process](../../screen-space-and-post/) — the RMW shape a layer pass follows

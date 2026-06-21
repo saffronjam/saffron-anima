@@ -75,14 +75,14 @@ optimizations that graphs may or may not implement:
 Saffron's graph implements the core job and leaves the optimizations as seams. A pass is a small
 struct — a name, its resource accesses, its attachments, and a closure that records the draw or
 dispatch. Each access carries one `RgUsage` value (`ColorWrite`, `SampledRead`,
-`StorageImageRWCompute`, …), and a table maps each case to the stage, access mask, and layout a
+`StorageImageRwCompute`, …), and a table maps each case to the stage, access mask, and layout a
 barrier needs.
 
-The graph allocates nothing. Resources are *imported*: `importImage` and `importBuffer` register an
-existing Vulkan handle and return an index the passes refer to. The graph is rebuilt from scratch
-each frame, which costs little and keeps the per-frame state simple to reason about. There are no
-`VkRenderPass` or `VkFramebuffer` objects — Saffron targets Vulkan 1.4 and binds attachments
-per-pass through dynamic rendering.
+The graph allocates nothing. Resources are *imported*: `import_image` and `import_buffer` register an
+existing Vulkan handle and return an `RgResource` index the passes refer to. The graph is rebuilt
+from scratch each frame, which costs little and keeps the per-frame state simple to reason about.
+There are no `VkRenderPass` or `VkFramebuffer` objects — Saffron targets Vulkan 1.4 and binds
+attachments per-pass through dynamic rendering.
 
 Engine passes (light culling, the scene pass, shadows, post-processing) are added at the start of
 the frame; an application adds its own afterward. Both use the same declaration mechanism, so their
@@ -98,12 +98,12 @@ barriers are derived identically.
 
 | What | File | Symbols |
 |---|---|---|
-| Usage vocabulary | `render_graph.cppm` | `RgUsage`, `usageInfo` |
-| Pass + attachment data | `render_graph.cppm` | `RgPass`, `RgAttachment`, `RgAccess` |
-| Import resources | `render_graph.cppm` | `importImage`, `importBuffer`, `addPass` |
-| Barrier derivation | `render_graph.cppm` | `applyAccess`, `RgResourceState` |
-| Execution | `render_graph.cppm` | `executeRenderGraph` |
-| Where engine passes are added | `renderer.cppm` | `beginFrameGraph`, `frameGraph` |
+| Usage vocabulary | `render_graph.rs` | `RgUsage`, `usage_info` |
+| Pass + attachment data | `render_graph.rs` | `RgPass`, `RgAttachment`, `RgAccess`, `RgResource` |
+| Import resources | `render_graph.rs` | `RenderGraph::import_image`, `import_buffer`, `add_pass` |
+| Barrier derivation | `render_graph.rs` | `apply_access`, `RgResourceState` |
+| Execution | `render_graph.rs` | `RenderGraph::execute`, `execute_profiled` |
+| Where engine passes are added | `renderer.rs` | `Renderer::record_scene_graph` |
 
 ## Related
 
