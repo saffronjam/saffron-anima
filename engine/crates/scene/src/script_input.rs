@@ -1,9 +1,9 @@
 //! The gameplay-input snapshot scripts read: raw held keys + mouse, the derived per-tick
 //! key/button edges, and the pointer deltas.
 //!
-//! Lives in `saffron-scene` exactly as the C++ kept it in `Saffron.Scene` (`scene.cppm`):
-//! both `saffron-script` and `saffron-sceneedit` import Scene, so the shared snapshot
-//! avoids a cross-crate edge (script depends only on core + scene). `saffron-sceneedit`
+//! Lives in `saffron-scene` because both `saffron-script` and `saffron-sceneedit` import
+//! Scene, so the shared snapshot avoids a cross-crate edge (script depends only on core +
+//! scene). `saffron-sceneedit`
 //! re-exports these from here and holds the live snapshot on its `SceneEditContext`; the
 //! host forwards raw input over the script-input command, then calls
 //! [`derive_script_input_edges`] once per tick (before the script tick) to compute the

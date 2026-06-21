@@ -1,10 +1,7 @@
 //! The `register_component!` declarative macro: the one-line component registration
 //! surface.
 //!
-//! The C++ collapsed the per-type serde/has/add/remove/copy closure boilerplate into the
-//! `registerComponent<C>` template, but registration itself stayed a four-place hand-sync
-//! (`scene/AGENTS.md`: "Register it once … miss step 3 and the component silently never
-//! serializes"). This macro makes **one line per component the entire registration**: it
+//! This macro makes **one line per component the entire registration**: it
 //! expands `register_component!(reg, C, "Name", to_json, from_json [, removable])` into the
 //! [`ComponentRegistry::register`](crate::ComponentRegistry::register) call that builds the
 //! fn-pointer [`ComponentTraits`](crate::ComponentTraits) row, with the serde supplied at
@@ -30,8 +27,8 @@
 ///   `<Type as SceneSerialize>::to_json`).
 /// - `from_json` — a path to `fn(&mut Type, &Value) -> crate::Result<()>` (e.g.
 ///   `<Type as SceneSerialize>::load_json`).
-/// - `removable` — optional `bool` (defaults to `true`, mirroring the C++ template default);
-///   the durable `Name` / `Transform` / `Relationship` rows pass `false`.
+/// - `removable` — optional `bool` (defaults to `true`); the durable `Name` / `Transform` /
+///   `Relationship` rows pass `false`.
 ///
 /// When the serde paths are omitted — `register_component!(reg, Type, "Name" [, removable])` —
 /// they default to the type's [`SceneSerialize`](crate::SceneSerialize) impl
@@ -46,7 +43,7 @@
 /// The serialize/deserialize closures reference only the serde *paths* (they capture
 /// nothing), so they coerce to the bare `fn` pointers [`ComponentTraits`](crate::ComponentTraits)
 /// holds — the row stays `Copy`. The deserialize trampoline default-constructs the component
-/// when absent, then fills it in place (the C++ `traits.deserialize`).
+/// when absent, then fills it in place.
 #[macro_export]
 macro_rules! register_component {
     // Serde defaulted to the SceneSerialize impl, removable defaulted to true.

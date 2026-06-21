@@ -1,10 +1,9 @@
 //! The wrapped ECS world, the `Entity` handle, and the `Scene` access surface.
 //!
-//! The ECS crate behind the world (`hecs` by default, the PP-4 benchmark-gated call)
-//! is an *internal* detail: every downstream crate goes through [`Scene`] and
-//! [`Entity`], never through `hecs::` directly. That is what keeps the fallback to
-//! `bevy_ecs` a one-crate change, and it mirrors the C++ where `Entity` is "a bare
-//! entt handle" but every consumer goes through the `sa::` free functions.
+//! The ECS crate behind the world (`hecs` by default) is an *internal* detail: every
+//! downstream crate goes through [`Scene`] and [`Entity`], never through `hecs::`
+//! directly. That is what keeps the fallback to `bevy_ecs` a one-crate change. `Entity`
+//! is a bare handle, but every consumer goes through the `Scene` methods.
 
 use std::sync::Arc;
 
@@ -38,7 +37,7 @@ pub use hecs::Query;
 pub struct Entity(hecs::Entity);
 
 impl Entity {
-    /// The sentinel non-entity, the analogue of the C++ `entt::null`.
+    /// The sentinel non-entity.
     ///
     /// Used inside the runtime hierarchy caches that store a flat `Vec<Entity>` (the
     /// skinned-mesh `bone_handles`) where an unresolved slot needs a value rather than an
@@ -49,11 +48,8 @@ impl Entity {
 
 /// The scene: the ECS world, the environment, and a borrowed asset catalog.
 ///
-/// This keeps the C++ `{ registry, environment, catalog }` field shape. `catalog`
-/// was a borrowed raw pointer set per-frame and never serialized; it becomes an
-/// `Option<Arc<AssetCatalog>>` (the read-shared `Ref` policy) so there is no
-/// dangling-pointer or lifetime tangle — the asset layer hands the scene a shared
-/// handle. It is never serialized.
+/// `catalog` is an `Option<Arc<AssetCatalog>>` (a read-shared handle the asset layer
+/// hands the scene). It is never serialized.
 #[derive(Default)]
 pub struct Scene {
     world: hecs::World,
@@ -70,14 +66,13 @@ impl Scene {
         Self::default()
     }
 
-    /// Whether `entity` is a live handle in this scene (the C++ `valid`).
+    /// Whether `entity` is a live handle in this scene.
     #[must_use]
     pub fn valid(&self, entity: Entity) -> bool {
         self.world.contains(entity.0)
     }
 
-    /// Adds component `c` to `entity`, replacing any existing one of the same type
-    /// (the C++ `addComponent` / `emplace_or_replace`).
+    /// Adds component `c` to `entity`, replacing any existing one of the same type.
     ///
     /// # Errors
     ///
@@ -88,22 +83,21 @@ impl Scene {
             .map_err(|_| crate::Error::InvalidEntity)
     }
 
-    /// Whether `entity` carries a component of type `C` (the C++ `hasComponent` /
-    /// `all_of`). A stale handle reports `false`.
+    /// Whether `entity` carries a component of type `C`. A stale handle reports `false`.
     #[must_use]
     pub fn has_component<C: Component>(&self, entity: Entity) -> bool {
         self.world.satisfies::<&C>(entity.0)
     }
 
-    /// Removes the component of type `C` from `entity` if present (the C++
-    /// `removeComponent`). A missing component or a stale handle is a no-op.
+    /// Removes the component of type `C` from `entity` if present. A missing component or
+    /// a stale handle is a no-op.
     pub fn remove_component<C: Component>(&mut self, entity: Entity) {
         let _ = self.world.remove_one::<C>(entity.0);
     }
 
     /// Runs `f` with a shared reference to `entity`'s component of type `C`, returning
-    /// its result (the C++ `getComponent`, scoped to a borrow rather than handing out
-    /// a long-lived reference into the ECS storage).
+    /// its result. Scoped to a borrow rather than handing out a long-lived reference into
+    /// the ECS storage.
     ///
     /// # Errors
     ///
@@ -122,7 +116,7 @@ impl Scene {
     }
 
     /// Runs `f` with a mutable reference to `entity`'s component of type `C`, returning
-    /// its result (the C++ `getComponent` write path).
+    /// its result.
     ///
     /// # Errors
     ///
@@ -152,13 +146,12 @@ impl Scene {
     }
 
     /// Iterates every entity carrying the query components, invoking `f` with the
-    /// entity handle and its component references (the C++ `forEach<C…>`).
+    /// entity handle and its component references.
     ///
     /// `Q` is a tuple of component references — `(&Transform,)`, `(&Transform, &mut
     /// Camera)` — so the callback receives `(Entity, &C…)` or `(Entity, &mut C…)`
-    /// exactly as the query tuple spells. Iteration order is unspecified (the C++ note
-    /// "entt views are unordered" carries; roots-first ordering comes from the
-    /// hierarchy walk, not the view).
+    /// exactly as the query tuple spells. Iteration order is unspecified; roots-first
+    /// ordering comes from the hierarchy walk, not the view.
     pub fn for_each<Q, F>(&mut self, mut f: F)
     where
         Q: Query,
@@ -169,10 +162,9 @@ impl Scene {
         }
     }
 
-    /// Creates an entity seeded with the standard authored component set (the C++
-    /// `createEntity`): a freshly minted [`IdComponent`], a [`Name`], a default
-    /// [`Transform`], a root [`Relationship`], and a [`ComponentOrder`] of
-    /// `["Name", "Transform"]`.
+    /// Creates an entity seeded with the standard authored component set: a freshly minted
+    /// [`IdComponent`], a [`Name`], a default [`Transform`], a root [`Relationship`], and a
+    /// [`ComponentOrder`] of `["Name", "Transform"]`.
     pub fn create_entity(&mut self, name: impl Into<String>) -> Entity {
         let handle = self.world.spawn((
             IdComponent::new(Uuid::new()),
@@ -186,8 +178,7 @@ impl Scene {
         Entity(handle)
     }
 
-    /// Creates a bare entity carrying only an [`IdComponent`] for the given uuid (the C++
-    /// `registry.create()` + `emplace<IdComponent>`).
+    /// Creates a bare entity carrying only an [`IdComponent`] for the given uuid.
     ///
     /// Unlike [`Scene::create_entity`], the id is *preserved*, not minted, and none of the
     /// authored seed components (`Name` / `Transform` / `Relationship` / `ComponentOrder`)
@@ -198,7 +189,7 @@ impl Scene {
         Entity(self.world.spawn((IdComponent::new(id),)))
     }
 
-    /// Removes every entity from the scene (the C++ `registry.clear`).
+    /// Removes every entity from the scene.
     ///
     /// Leaves the environment and the catalog handle untouched; only the ECS world is
     /// emptied. Used by the scene loader before repopulating from a document.
@@ -206,7 +197,7 @@ impl Scene {
         self.world.clear();
     }
 
-    /// Destroys `entity` and its whole subtree (the C++ `destroyEntity`).
+    /// Destroys `entity` and its whole subtree.
     ///
     /// Descendants are gathered through the children caches *before* any destroy, since
     /// despawning invalidates handles. The entity is also detached from its parent's
@@ -242,7 +233,7 @@ impl Scene {
         }
     }
 
-    /// The entity carrying `uuid`, or `None` (the C++ `findEntityByUuid`).
+    /// The entity carrying `uuid`, or `None`.
     ///
     /// Cross-scene lookups must go by uuid — ECS handles can coincide between worlds
     /// and alias silently, so the id is the only stable cross-entity reference.

@@ -3,11 +3,10 @@
 //! skinning joint palette, the sanctioned reparent, and the numerically-stable ZYX
 //! Euler extraction.
 //!
-//! This is the pure-CPU math the renderer, animation, and gizmo all sit on top of, a
-//! faithful glam port of the C++ `scene.cppm` hierarchy functions. Two pieces are
-//! hand-ported rather than delegated to glam because glam's conventions do not match
-//! GLM's: the Euler-XYZ → quaternion composition in [`transform_matrix`] and the
-//! numerically-stable Rz·Ry·Rx extraction in [`quat_to_euler_zyx`]. Getting either
+//! This is the pure-CPU math the renderer, animation, and gizmo all sit on top of. Two
+//! pieces are hand-rolled rather than delegated to glam because glam's conventions do not
+//! match the engine's: the Euler-XYZ → quaternion composition in [`transform_matrix`] and
+//! the numerically-stable Rz·Ry·Rx extraction in [`quat_to_euler_zyx`]. Getting either
 //! wrong silently corrupts every gizmo-rotate and reparent-rebase that round-trips a
 //! quaternion through the `Transform`'s Euler, so both carry dedicated round-trip tests.
 
@@ -26,8 +25,7 @@ use crate::scene::{Entity, Scene};
 ///
 /// The projection is left un-flipped; the renderer applies the Vulkan Y-flip where it
 /// samples and the editor gizmo consumes it as-is, so there is one source of truth for
-/// both. A scene with no primary camera yields `None` from [`Scene::primary_camera`]
-/// rather than an invalid-flagged value (the C++ `valid` bool becomes the `Option`).
+/// both. A scene with no primary camera yields `None` from [`Scene::primary_camera`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraView {
     /// The view matrix (inverse of the camera's world matrix).
@@ -43,11 +41,10 @@ pub struct CameraView {
 /// The local matrix `T · R · S` for a [`Transform`], with `R` built from the Euler-XYZ
 /// triple.
 ///
-/// The Euler → quaternion step is hand-ported from GLM's `quat(vec3)` constructor rather
-/// than delegated to glam's `Quat::from_euler`, whose `EulerRot` conventions do not match
-/// GLM for a generic (non-axis-aligned) rotation. This is the single place the authored
-/// Euler becomes a rotation, so the convention here is load-bearing across the whole
-/// engine.
+/// The Euler → quaternion step is hand-rolled rather than delegated to glam's
+/// `Quat::from_euler`, whose `EulerRot` conventions do not match the engine's for a generic
+/// (non-axis-aligned) rotation. This is the single place the authored Euler becomes a
+/// rotation, so the convention here is load-bearing across the whole engine.
 #[must_use]
 pub fn transform_matrix(transform: &Transform) -> Mat4 {
     Mat4::from_translation(transform.translation)
@@ -57,8 +54,8 @@ pub fn transform_matrix(transform: &Transform) -> Mat4 {
 
 /// A quaternion from an Euler-XYZ triple in the engine's GLM-compatible convention.
 ///
-/// A direct port of GLM's `qua<T>::qua(vec<3>)` constructor (the half-angle product),
-/// which is the inverse of [`quat_to_euler_zyx`] up to the degenerate gimbal case.
+/// The half-angle product, which is the inverse of [`quat_to_euler_zyx`] up to the
+/// degenerate gimbal case.
 /// The scene owns this convention so consumers ([`Transform`]-reading animation rest
 /// poses) build the rest rotation identically to [`transform_matrix`] rather than
 /// re-deriving the Euler order.
@@ -83,17 +80,14 @@ pub fn quat_from_euler_xyz(euler: Vec3) -> Quat {
 
 /// A quaternion in the engine's stable Rz·Ry·Rx Euler convention (radians, XYZ order).
 ///
-/// glam has no `extractEulerAngleZYX`, and `Quat::to_euler` is unstable at yaw ±90°
-/// (its asin/atan2 split poisons pitch/roll), so this is a faithful hand-port of GLM's
-/// `extractEulerAngleZYX` matrix extraction. The degenerate branch is implicit in the
+/// glam's `Quat::to_euler` is unstable at yaw ±90° (its asin/atan2 split poisons
+/// pitch/roll), so this hand-rolls the `Rz·Ry·Rx` matrix extraction. The degenerate branch is implicit in the
 /// `atan2` formulation: at the gimbal pole the recovered triple differs from the input
 /// triple but reproduces the same rotation matrix, which is exactly what the
 /// reparent-rebase needs. This is the one place a quaternion becomes a [`Transform`]
 /// Euler.
 #[must_use]
 pub fn quat_to_euler_zyx(q: Quat) -> Vec3 {
-    // GLM indexes `M[col][row]`; glam exposes columns as `x_axis`/`y_axis`/`z_axis`
-    // (each a `Vec4`), so `M[c][r]` reads as the matching column's `.x`/`.y`/`.z`.
     let m = Mat4::from_quat(q);
     let m00 = m.x_axis.x;
     let m01 = m.x_axis.y;
@@ -112,7 +106,7 @@ pub fn quat_to_euler_zyx(q: Quat) -> Vec3 {
     let c1 = t1.cos();
     let t3 = (s1 * m20 - c1 * m21).atan2(c1 * m11 - s1 * m10);
 
-    // GLM fills `(t1, t2, t3)` into `(euler.z, euler.y, euler.x)`.
+    // Fill `(t1, t2, t3)` into `(euler.z, euler.y, euler.x)`.
     Vec3::new(t3, t2, t1)
 }
 
@@ -398,9 +392,8 @@ impl Scene {
     ///
     /// TRS-only: under a sheared source matrix the shear is lost (accepted — a
     /// [`Transform`] stores Euler + scale, no shear). Returns `false`, leaving the
-    /// transform untouched, when the matrix does not decompose (glam's
-    /// `to_scale_rotation_translation` is the `glm::decompose` analogue). The rotation is
-    /// stored as the stable ZYX Euler via [`quat_to_euler_zyx`].
+    /// transform untouched, when the matrix does not decompose. The rotation is stored as
+    /// the stable ZYX Euler via [`quat_to_euler_zyx`].
     pub fn set_local_from_matrix(&mut self, entity: Entity, local: Mat4) -> bool {
         let (scale, rotation, translation) = local.to_scale_rotation_translation();
         if !scale.is_finite() || !translation.is_finite() || !rotation.is_finite() {
@@ -571,7 +564,7 @@ mod tests {
     use super::*;
     use crate::component::SkinnedMesh;
 
-    /// The C++ `1e-4` matrix tolerance, applied element-wise (column-major).
+    /// A `1e-4` matrix tolerance, applied element-wise (column-major).
     fn near_equal(a: Mat4, b: Mat4) -> bool {
         let cols = [
             (a.x_axis, b.x_axis),
@@ -597,11 +590,10 @@ mod tests {
         scene.component::<IdComponent>(e).unwrap().id
     }
 
-    /// The full port of `runSceneHierarchySelfTest` (`scene.cppm:1854`): the parent/
-    /// child/grandchild composition, the cycle + self-parent guards, the `keep_world`
-    /// rebase under axis-aligned and generic rotations, the recursive destroy, the
-    /// two-roots-after-reparent count, the parented camera view, and the bind-pose +
-    /// moved-joint palette (the research-gate CPU half).
+    /// The full hierarchy self-test: the parent/child/grandchild composition, the cycle +
+    /// self-parent guards, the `keep_world` rebase under axis-aligned and generic rotations,
+    /// the recursive destroy, the two-roots-after-reparent count, the parented camera view,
+    /// and the bind-pose + moved-joint palette.
     #[test]
     fn scene_hierarchy_self_test() {
         let mut scene = Scene::new();

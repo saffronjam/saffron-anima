@@ -1,14 +1,10 @@
 //! The ECS world, components, and the JSON project serde format.
 //!
-//! The world model is built on an internal ECS (`hecs` by default — the PP-4
-//! benchmark-gated call). That choice is *wrapped, never exposed*: the public surface
-//! is [`Scene`], [`Entity`], the component-access methods, and the `for_each` family.
-//! No downstream crate names `hecs::` (or a future `bevy_ecs::`) directly, so swapping
-//! the ECS is a one-crate change. This mirrors the C++ where `Entity` is "a bare entt
-//! handle" but every consumer goes through the `sa::` free functions.
-//!
-//! The component set, the hierarchy/transform math, the component registry, and the
-//! byte-compatible JSON project serde land in later phases behind this same surface.
+//! The world model is built on an internal ECS (`hecs` by default). That choice is
+//! *wrapped, never exposed*: the public surface is [`Scene`], [`Entity`], the
+//! component-access methods, and the `for_each` family. No downstream crate names
+//! `hecs::` (or a future `bevy_ecs::`) directly, so swapping the ECS is a one-crate
+//! change. `Entity` is a bare handle, but every consumer goes through the `Scene` methods.
 //!
 //! Depends on `saffron-core`, `saffron-json`.
 

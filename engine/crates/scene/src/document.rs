@@ -6,8 +6,8 @@
 //! `project.json` scene block and the control-plane scene payloads must stay
 //! byte-identical, so every key spelling and the migration behavior are load-bearing.
 //!
-//! The single reader [`Scene::scene_from_json`] carries every migration branch (NO LEGACY:
-//! one code path, the migration is part of the one reader, not a per-version reader zoo):
+//! The single reader [`Scene::scene_from_json`] carries every migration branch in one code
+//! path, the migration is part of the one reader, not a per-version reader zoo:
 //!
 //! - **v1** has no `environment` block → defaulted via `environment_from_json({})`.
 //! - **pre-v3** has no per-entity `Relationship` → every entity loads as a root (the
@@ -53,12 +53,11 @@ pub const SCENE_VERSION: i64 = 4;
 
 impl Scene {
     /// Serializes the scene to a `{version, environment, entities:[{id, components,
-    /// componentOrder}]}` document (no file IO), embeddable in a larger project document
-    /// (the C++ `sceneToJson`).
+    /// componentOrder}]}` document (no file IO), embeddable in a larger project document.
     ///
     /// `&mut self` because reconciling each entity's [`ComponentOrder`] (via
     /// [`ComponentRegistry::component_order`]) writes the reconciled order back onto the
-    /// entity, exactly as the C++ `componentOrder` mutates while reading.
+    /// entity.
     #[must_use]
     pub fn scene_to_json(&mut self, reg: &ComponentRegistry) -> Value {
         let mut ids: Vec<(Uuid, crate::Entity)> = Vec::new();
@@ -87,7 +86,7 @@ impl Scene {
     }
 
     /// Replaces the scene's entities from a [`Scene::scene_to_json`] document, migrating
-    /// older versions forward (the C++ `sceneFromJson`).
+    /// older versions forward.
     ///
     /// The world is cleared, then each entry creates a raw entity preserving its uuid and
     /// deserializes its components; cross-entity references resolve in the post-loop
@@ -161,8 +160,7 @@ impl Scene {
         Ok(())
     }
 
-    /// Writes the scene to `path` as a pretty-printed (2-space) document (the C++
-    /// `writeScene`).
+    /// Writes the scene to `path` as a pretty-printed (2-space) document.
     ///
     /// # Errors
     ///
@@ -176,7 +174,7 @@ impl Scene {
         })
     }
 
-    /// Reads a scene document from `path`, parses it, and loads it (the C++ `readScene`).
+    /// Reads a scene document from `path`, parses it, and loads it.
     ///
     /// # Errors
     ///
@@ -214,7 +212,7 @@ mod tests {
         register_builtin_components()
     }
 
-    /// Finds an entity by its `Name`, the C++ `findByEntityName` helper.
+    /// Finds an entity by its `Name`.
     fn find_by_name(scene: &mut Scene, name: &str) -> Entity {
         let mut found = Entity::NULL;
         let target = name.to_string();
@@ -231,7 +229,7 @@ mod tests {
     }
 
     /// Basic round-trip: a two-entity scene survives `scene_to_json` → `scene_from_json`
-    /// with the entity count and the cube translation intact (the C++ self-test head).
+    /// with the entity count and the cube translation intact.
     #[test]
     fn basic_round_trip_count_and_cube_position() {
         let reg = registry();
@@ -564,9 +562,9 @@ mod tests {
     }
 
     /// Byte-equality against a hand-assembled full document — version, environment, and
-    /// the per-entity `id` / `components` / `componentOrder` — built from the verified C++
-    /// component fixtures. This pins the whole-document shape (key order, decimal-string
-    /// ids, the environment block) to the frozen `project.json` scene block.
+    /// the per-entity `id` / `components` / `componentOrder`. This pins the whole-document
+    /// shape (key order, decimal-string ids, the environment block) to the frozen
+    /// `project.json` scene block.
     #[test]
     fn document_bytes_match_captured_block() {
         let reg = registry();
@@ -588,7 +586,7 @@ mod tests {
 
         // The expected document: alphabetical keys (no preserve_order), decimal-string id,
         // default environment, default Name/Transform/Relationship components, and the
-        // canonical component order. Built verbatim from the verified component fixtures.
+        // canonical component order.
         const EXPECT: &str = concat!(
             r#"{"entities":[{"componentOrder":["Name","Transform"],"components":{"#,
             r#""Name":{"name":"Cube"},"#,

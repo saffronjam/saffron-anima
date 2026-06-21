@@ -1,18 +1,14 @@
-//! Byte-equality of the component JSON serde against the C++
-//! `scene_component_serde.generated.cpp` wire bytes.
+//! Byte-equality of the component JSON serde against the frozen wire bytes.
 //!
-//! Every `EXPECT_*` constant is the verbatim compact dump produced by the C++ engine's
-//! `nlohmann::json` for the matching component value — captured from a standalone oracle
-//! that reproduces the C++ serde bodies against the same library and default values. The
-//! tests construct the Rust component, serialize it through the registry's per-type
+//! Every `EXPECT_*` constant is the verbatim compact dump for the matching component value.
+//! The tests construct the component, serialize it through the registry's per-type
 //! fn-pointer, and assert the compact bytes match. Each also round-trips the fixture
 //! (parse → re-serialize → compare) to prove the read path is byte-stable.
 //!
-//! The keys are alphabetically sorted in every fixture (the `nlohmann::json` / `std::map`
-//! default); since `serde_json` is built with `preserve_order` for the control wire, the
-//! scene-save path and these tests serialize via `saffron_json::dump_json_sorted` to keep
-//! that sorted byte shape. The float scalars carry the full f64-promotion of the stored f32
-//! (e.g. `0.1f` → `0.10000000149011612`), the byte form both libraries emit.
+//! The keys are alphabetically sorted in every fixture; since `serde_json` is built with
+//! `preserve_order` for the control wire, the scene-save path and these tests serialize via
+//! `saffron_json::dump_json_sorted` to keep that sorted byte shape. The float scalars carry
+//! the full f64-promotion of the stored f32 (e.g. `0.1f` → `0.10000000149011612`).
 
 use glam::{BVec3, Mat4, Vec3};
 use serde_json::{Map, Value};
@@ -414,8 +410,6 @@ fn environment_matches_cpp() {
     );
 }
 
-// --- Enum unknown-string → C++ default, per the acceptance gate. ---
-
 #[test]
 fn unknown_enum_strings_default_to_cpp_value() {
     let reg = ComponentRegistry::default_builtins();
@@ -465,8 +459,7 @@ fn unknown_enum_strings_default_to_cpp_value() {
     assert_eq!(bp, Joint::SwingTwist);
 }
 
-// --- The frozen-wire contract: no Uuid field ever emits a JSON number. ---
-
+/// The frozen-wire contract: no Uuid field ever emits a JSON number.
 #[test]
 fn no_uuid_field_emits_a_json_number() {
     // Serialize every component that carries a Uuid with a large, past-2^53 value and

@@ -8,14 +8,13 @@
 //!   (`update_world_transforms`), draw enumeration (`for_each::<(&Mesh, &Material)>`),
 //!   the light gather (`for_each::<(&PointLight,)>`), and the primary-camera resolve
 //!   (`for_each::<(&Transform, &Camera)>`).
-//! - **Structural paths** (entt's sparse-set strength): the `enter_play` JSON-roundtrip
-//!   duplicate, `relink_hierarchy` (rebuild the parent/children caches over N entities),
-//!   and the decisive measurement — `PoseOverride` `add_component`/`remove_component` on
-//!   every animated bone every frame, the one site where archetype moves could cost.
+//! - **Structural paths**: the `enter_play` JSON-roundtrip duplicate, `relink_hierarchy`
+//!   (rebuild the parent/children caches over N entities), and the decisive measurement —
+//!   `PoseOverride` `add_component`/`remove_component` on every animated bone every frame,
+//!   the one site where archetype moves could cost.
 //!
-//! The component structs here mirror the C++ shapes (`scene.cppm:42,52,61,128,260,268,354,
-//! 377`) but are bench-local: the production 24-component set lands in phase 3, and the
-//! gate measures the *access-pattern cost through the wrapper*, not the production structs.
+//! The component structs here are bench-local stand-ins for the production set: the gate
+//! measures the *access-pattern cost through the wrapper*, not the production structs.
 //! Every operation goes through the public `Scene` methods, so the number reflects what a
 //! consumer actually pays.
 //!
@@ -33,7 +32,6 @@ use serde::{Deserialize, Serialize};
 
 /// A node in the scene tree. `parent` (a uuid; 0 == root) is the only durable field;
 /// `parent_handle` and `children` are runtime caches rebuilt by `relink_hierarchy`.
-/// Mirrors the C++ `RelationshipComponent` (`scene.cppm:52`).
 #[derive(Clone, Debug, Default)]
 struct Relationship {
     parent: u64,
@@ -41,8 +39,7 @@ struct Relationship {
     children: Vec<Entity>,
 }
 
-/// Authored local TRS. Mirrors `TransformComponent` (`scene.cppm:42`); rotation is the
-/// Euler XYZ the editor edits directly.
+/// Authored local TRS; rotation is the Euler XYZ the editor edits directly.
 #[derive(Clone, Copy, Debug)]
 struct Transform {
     translation: Vec3,
@@ -61,7 +58,7 @@ impl Default for Transform {
 }
 
 impl Transform {
-    /// The local matrix `T * R * S` (the C++ `transformMatrix`, `scene.cppm:410`).
+    /// The local matrix `T * R * S`.
     fn matrix(&self) -> Mat4 {
         Mat4::from_translation(self.translation)
             * Mat4::from_quat(Quat::from_euler(
@@ -74,16 +71,14 @@ impl Transform {
     }
 }
 
-/// Cached world matrix, overwritten each frame by `update_world_transforms`
-/// (`WorldTransformComponent`, `scene.cppm:61`).
+/// Cached world matrix, overwritten each frame by `update_world_transforms`.
 #[derive(Clone, Copy, Debug)]
 struct WorldTransform {
     matrix: Mat4,
 }
 
 /// The runtime-only animated local TRS the evaluator writes onto a driven bone each frame,
-/// then removes when the rig stops. The single per-frame add/remove churn site
-/// (`PoseOverrideComponent`, `scene.cppm:128`; `animation.cpp:68,754`; `physics.cpp:1366`).
+/// then removes when the rig stops. The single per-frame add/remove churn site.
 #[derive(Clone, Copy, Debug)]
 struct PoseOverride {
     translation: Vec3,
@@ -91,14 +86,13 @@ struct PoseOverride {
     scale: Vec3,
 }
 
-/// A renderable mesh reference (`MeshComponent`, `scene.cppm:260`).
+/// A renderable mesh reference.
 #[derive(Clone, Copy, Debug)]
 struct Mesh {
     mesh: u64,
 }
 
-/// A PBR material (a trimmed `MaterialComponent`, `scene.cppm:268`). Sized like the real
-/// one so the archetype column width is representative.
+/// A PBR material. Sized like the real one so the archetype column width is representative.
 #[derive(Clone, Copy, Debug)]
 struct Material {
     base_color: Vec4,
@@ -108,7 +102,7 @@ struct Material {
     emissive: Vec3,
 }
 
-/// A perspective camera (`CameraComponent`, `scene.cppm:354`).
+/// A perspective camera.
 #[derive(Clone, Copy, Debug)]
 struct Camera {
     fov: f32,
@@ -117,7 +111,7 @@ struct Camera {
     primary: bool,
 }
 
-/// An omnidirectional light (`PointLightComponent`, `scene.cppm:377`).
+/// An omnidirectional light.
 #[derive(Clone, Copy, Debug)]
 struct PointLight {
     color: Vec3,
@@ -129,10 +123,10 @@ struct PointLight {
 #[derive(Clone, Copy, Debug)]
 struct Bone;
 
-/// The serialized form of one entity, the analogue of the C++ `serializeEntity` row that
-/// `sceneToJson`/`sceneFromJson` round-trips (`scene_edit_play.cpp:83`). Runtime caches
-/// (`parent_handle`, `children`, `WorldTransform`, `PoseOverride`) are deliberately absent —
-/// they are rebuilt by `relink_hierarchy`, never serialized, exactly as in C++.
+/// The serialized form of one entity, the row that `scene_to_json`/`scene_from_json`
+/// round-trips. Runtime caches (`parent_handle`, `children`, `WorldTransform`,
+/// `PoseOverride`) are deliberately absent — they are rebuilt by `relink_hierarchy`, never
+/// serialized.
 #[derive(Serialize, Deserialize, Default)]
 struct EntitySnapshot {
     id: u64,
@@ -304,9 +298,8 @@ fn seed_transform(scene: &mut Scene, e: Entity, seed: usize) {
 }
 
 /// Rebuilds the `parent_handle`/`children` caches from the durable parent uuids — the
-/// structural rebuild the C++ `relinkHierarchy` (`scene.cppm:762`) runs after any load /
-/// reparent / play-duplicate. O(N): one pass to map uuid→handle, one to clear caches, one
-/// to resolve parents, one to fill children.
+/// structural rebuild run after any load / reparent / play-duplicate. O(N): one pass to map
+/// uuid→handle, one to clear caches, one to resolve parents, one to fill children.
 fn relink_hierarchy(scene: &mut Scene) {
     let mut uuid_to_handle: HashMap<u64, Entity> = HashMap::new();
     scene.for_each::<&IdComponent, _>(|e, id| {
@@ -340,9 +333,8 @@ fn relink_hierarchy(scene: &mut Scene) {
 }
 
 /// Writes the cached `WorldTransform` for every transformable entity, roots-first then down
-/// the children caches (the C++ `updateWorldTransforms`, `scene.cppm:920`). A `PoseOverride`,
-/// when present, supersedes the authored `Transform` for the local matrix
-/// (`localMatrix`, `scene.cppm:858`). Relies on `relink_hierarchy`-fresh caches.
+/// the children caches. A `PoseOverride`, when present, supersedes the authored `Transform`
+/// for the local matrix. Relies on `relink_hierarchy`-fresh caches.
 fn update_world_transforms(scene: &mut Scene) {
     // Gather roots without holding a query borrow across the recursive walk.
     let mut roots: Vec<Entity> = Vec::new();
@@ -390,8 +382,8 @@ fn local_matrix(scene: &Scene, entity: Entity) -> Mat4 {
     }
 }
 
-/// The resolved primary camera's view matrix, or `None` (the C++ `primaryCamera`,
-/// `scene.cppm:1093`). Scans `(&Transform, &Camera)` for the first primary one.
+/// The resolved primary camera's view matrix, or `None`. Scans `(&Transform, &Camera)` for
+/// the first primary one.
 fn primary_camera(scene: &mut Scene) -> Option<Mat4> {
     let mut result = None;
     scene.for_each::<(&Transform, &Camera), _>(|_, (transform, camera)| {
@@ -402,8 +394,7 @@ fn primary_camera(scene: &mut Scene) -> Option<Mat4> {
     result
 }
 
-/// Serializes every entity's components into a snapshot list, the analogue of `sceneToJson`
-/// (`scene_edit_play.cpp:83`). Runtime caches are skipped, matching the C++ serde set.
+/// Serializes every entity's components into a snapshot list. Runtime caches are skipped.
 fn scene_to_snapshots(scene: &mut Scene) -> Vec<EntitySnapshot> {
     let mut snaps: HashMap<Entity, EntitySnapshot> = HashMap::new();
     scene.for_each::<&IdComponent, _>(|e, id| {
@@ -452,9 +443,9 @@ fn scene_to_snapshots(scene: &mut Scene) -> Vec<EntitySnapshot> {
     snaps.into_values().collect()
 }
 
-/// Rebuilds a fresh scene from the snapshot list, the analogue of `sceneFromJson`: spawn an
-/// entity per row, re-add each component, then `relink_hierarchy`. Note `create_entity`
-/// mints a *new* id, so each row's durable id is restored explicitly (the C++ loader path).
+/// Rebuilds a fresh scene from the snapshot list: spawn an entity per row, re-add each
+/// component, then `relink_hierarchy`. Note `create_entity` mints a *new* id, so each row's
+/// durable id is restored explicitly.
 fn snapshots_to_scene(snaps: &[EntitySnapshot]) -> Scene {
     let mut scene = Scene::new();
     for snap in snaps {
@@ -534,7 +525,7 @@ fn snapshots_to_scene(snaps: &[EntitySnapshot]) -> Scene {
 }
 
 /// The `enter_play` duplicate: serialize the authored scene to JSON, parse it back, and
-/// rebuild a fresh play scene — the full C++ `enterPlay` JSON-roundtrip (`scene_edit_play.cpp:83`).
+/// rebuild a fresh play scene.
 fn enter_play(scene: &mut Scene) -> Scene {
     let snaps = scene_to_snapshots(scene);
     let json = serde_json::to_string(&snaps).unwrap();
@@ -544,7 +535,7 @@ fn enter_play(scene: &mut Scene) -> Scene {
 
 /// One frame of pose-override churn: `add_component` (emplace-or-replace) a `PoseOverride`
 /// onto every animated bone, then `remove_component` it — the only component added/removed
-/// per frame, and the decisive archetype-move measurement (`animation.cpp:68,754`).
+/// per frame, and the decisive archetype-move measurement.
 fn pose_override_churn(scene: &mut Scene, bones: &[Entity]) {
     for &bone in bones {
         scene

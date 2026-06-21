@@ -3,8 +3,8 @@
 //! [`SceneEnvironment`] is global frame state (no transform, not picked, not in the
 //! hierarchy) so it lives on the [`crate::Scene`] rather than as an entity component.
 //! [`AssetCatalog`] maps imported assets by id; the asset layer constructs it and hands
-//! the scene a shared read-only handle. Neither the catalog port here changes the
-//! never-serialized rule on `Scene.catalog`.
+//! the scene a shared read-only handle. The catalog is never serialized with the scene
+//! (`Scene.catalog`).
 
 use std::collections::HashMap;
 
@@ -233,13 +233,13 @@ pub struct AssetCatalog {
 }
 
 impl AssetCatalog {
-    /// The entry carrying `id`, or `None` (the C++ `findAsset`).
+    /// The entry carrying `id`, or `None`.
     #[must_use]
     pub fn find(&self, id: Uuid) -> Option<&AssetEntry> {
         self.by_id.get(&id.value()).map(|&i| &self.entries[i])
     }
 
-    /// Inserts or replaces the entry for its id (the C++ `putAsset`).
+    /// Inserts or replaces the entry for its id.
     ///
     /// An entry whose id already exists overwrites it in place; a new id appends and
     /// records its position in `by_id`.
@@ -252,7 +252,7 @@ impl AssetCatalog {
         self.entries.push(entry);
     }
 
-    /// Renames the entry for `id`, returning whether it existed (the C++ `renameAsset`).
+    /// Renames the entry for `id`, returning whether it existed.
     pub fn rename(&mut self, id: Uuid, name: impl Into<String>) -> bool {
         match self.by_id.get(&id.value()) {
             Some(&i) => {
@@ -263,7 +263,7 @@ impl AssetCatalog {
         }
     }
 
-    /// A name not already used by another entry (the C++ `uniqueName`).
+    /// A name not already used by another entry.
     ///
     /// Appends `" (2)"`, `" (3)"`, … on collision, scanning suffixes upward until one
     /// is free.

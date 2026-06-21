@@ -1,14 +1,13 @@
 //! The component structs the world holds.
 //!
-//! The 24 serialized components plus the runtime-only caches, ported one-to-one from
-//! the C++ `scene.cppm` structs. Every `glm::vec3`/`vec4`/`quat`/`mat4`/`bvec3` becomes
-//! the matching `glam` type, with `Vec3` pinned at 12 bytes (the geometry-area pin) so
-//! the downstream std430/byte layouts stay correct.
+//! The 24 serialized components plus the runtime-only caches. Vectors use the matching
+//! `glam` type, with `Vec3` pinned at 12 bytes (the geometry-area pin) so the downstream
+//! std430/byte layouts stay correct.
 //!
 //! The data-carrying enums (`Wrap`, `Transition`, `Motion`, `Shape`, `Joint`) are plain
 //! Rust enums; their wire spelling lives in the serde phase, not on the enum repr. The
-//! C++ in-struct member initializers are carried exactly as `Default` impls — a wrong
-//! default silently changes loaded data, so the values here are load-bearing.
+//! in-struct member initializers are the `Default` impls — a wrong default silently
+//! changes loaded data, so the values here are load-bearing.
 //!
 //! The runtime-only components (the [`Relationship`] caches, [`WorldTransform`],
 //! [`PoseOverride`], [`SkinnedMesh::bone_handles`]) are a distinct set: they never
@@ -509,8 +508,8 @@ impl Default for CharacterController {
     fn default() -> Self {
         Self {
             max_speed: 4.0,
-            // The C++ default is the hand-typed literal `0.785398f` (~45°), not
-            // `FRAC_PI_4`; keep it verbatim so a loaded default reads byte-identically.
+            // The literal `0.785398` (~45°), not `FRAC_PI_4`, so a loaded default reads
+            // byte-identically.
             #[allow(clippy::approx_constant)]
             max_slope_angle: 0.785_398,
             max_step_height: 0.3,
@@ -1079,7 +1078,7 @@ mod tests {
     #[test]
     fn bone_carries_one_byte_of_storage() {
         // The ECS elides zero-sized types from generic access; the byte tag keeps the
-        // type bindable. Its default is the C++ `tag = 0`.
+        // type bindable. Its default is `tag = 0`.
         assert_eq!(Bone::default().tag, 0);
         assert_eq!(std::mem::size_of::<Bone>(), 1);
     }

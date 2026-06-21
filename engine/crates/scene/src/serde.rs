@@ -1,37 +1,32 @@
-//! The byte-compatible component JSON serde — the Rust port of the hand-maintained
-//! C++ `scene_component_serde.generated.cpp`.
+//! The byte-compatible component JSON serde.
 //!
-//! Every body here reproduces the C++ wire bytes exactly: the frozen `project.json`
-//! and the control-plane scene payloads must stay byte-identical so the unchanged
-//! editor and any existing project files keep working. Each key spelling, each
-//! per-field default, the decimal-string uuid encoding, the lowercase enum-name
-//! spellings, the named-vector shape, and the flat column-major matrix layout are
-//! load-bearing — a single drift fails silently as corrupted data.
+//! Every body here pins the frozen wire bytes: the `project.json` scene block and the
+//! control-plane scene payloads must stay byte-identical so the editor and project files
+//! keep working. Each key spelling, each per-field default, the decimal-string uuid
+//! encoding, the lowercase enum-name spellings, the named-vector shape, and the flat
+//! column-major matrix layout are load-bearing — a single drift fails silently as
+//! corrupted data.
 //!
-//! The C++ "generated" file was authored by hand in `gen.ts`'s `emitSceneSerde` (not
-//! schema-driven); this port replaces it with imperative bodies built on the
-//! `saffron-json` lenient readers (`json_f32_or`, `json_u64_or`, …) and `uuid_to_json`,
-//! plumbed into the registry's [`SceneSerialize`] trait. The choice of imperative
-//! bodies over serde derives is deliberate: the contract is key-order- and
-//! default-sensitive, and the readers' "absent/mistyped → fallback" semantics are the
-//! exact C++ `*Or` behavior that a `#[derive(Deserialize)]` would not reproduce.
+//! The bodies are imperative, built on the `saffron-json` lenient readers (`json_f32_or`,
+//! `json_u64_or`, …) and `uuid_to_json`, plumbed into the registry's [`SceneSerialize`]
+//! trait. Imperative bodies over serde derives is deliberate: the contract is key-order-
+//! and default-sensitive, and the readers' "absent/mistyped → fallback" semantics are
+//! exactly what a `#[derive(Deserialize)]` would not reproduce.
 //!
 //! ## Float byte-equality
 //!
-//! The C++ stores component scalars as `float` (f32) and `nlohmann::json` promotes each
-//! to `double` (f64) on insert, then dumps the shortest round-trippable decimal of that
-//! f64. serde_json's Ryū does the same for an f64, so every f32 scalar is inserted here
-//! as `f64::from(value)` ([`f32_value`]) — formatting the f64-promotion of the f32, which
-//! is byte-identical to nlohmann (verified against the C++ engine's output).
+//! Component scalars are stored as `float` (f32) but the wire format promotes each to
+//! `double` (f64), then dumps the shortest round-trippable decimal of that f64. serde_json's
+//! Ryū does the same for an f64, so every f32 scalar is inserted here as `f64::from(value)`
+//! ([`f32_value`]) — formatting the f64-promotion of the f32.
 //!
 //! ## Key ordering
 //!
 //! The scene document (like the asset `.smat`/`.smodel` formats) is byte-frozen with
-//! **sorted** object keys — the C++ `nlohmann::json` (`std::map`) default. `serde_json` is
-//! built workspace-wide with `preserve_order` (the control wire needs insertion order = field
-//! order), so the save path sorts keys explicitly via `saffron_json::dump_json_sorted`. The
-//! emit order of the `insert` calls below is therefore incidental to the output bytes; it is
-//! kept in the C++ listing order purely for readability.
+//! **sorted** object keys. `serde_json` is built workspace-wide with `preserve_order` (the
+//! control wire needs insertion order = field order), so the save path sorts keys explicitly
+//! via `saffron_json::dump_json_sorted`. The emit order of the `insert` calls below is
+//! therefore incidental to the output bytes.
 
 use glam::{BVec3, Mat4, Vec3, Vec4};
 use serde_json::{Map, Value};
@@ -50,15 +45,14 @@ use crate::environment::{AtmosphereSettings, SceneEnvironment, SkyMode};
 use crate::error::Result;
 use crate::registry::SceneSerialize;
 
-/// Wraps an `f32` as a JSON number formatted from its f64 promotion (the nlohmann
-/// `float → double` insert). This is the byte-equality seam — every component scalar is
-/// inserted through it.
+/// Wraps an `f32` as a JSON number formatted from its f64 promotion. This is the
+/// byte-equality seam — every component scalar is inserted through it.
 fn f32_value(value: f32) -> Value {
     Value::from(f64::from(value))
 }
 
-/// A named-object `vec3` → `{"x","y","z"}` (the C++ `vec3ToJson`). Never positional —
-/// quat/vec storage order is config-dependent.
+/// A named-object `vec3` → `{"x","y","z"}`. Never positional — quat/vec storage order is
+/// config-dependent.
 fn vec3_to_json(v: Vec3) -> Value {
     Value::Object(Map::from_iter([
         ("x".to_string(), f32_value(v.x)),
@@ -67,8 +61,7 @@ fn vec3_to_json(v: Vec3) -> Value {
     ]))
 }
 
-/// Reads a `vec3` from a named object, each component defaulting to `0` (the C++
-/// `vec3FromJson`).
+/// Reads a `vec3` from a named object, each component defaulting to `0`.
 fn vec3_from_json(j: &Value) -> Vec3 {
     Vec3::new(
         json_f32_or(j, "x", 0.0),
@@ -77,7 +70,7 @@ fn vec3_from_json(j: &Value) -> Vec3 {
     )
 }
 
-/// A named-object `bvec3` → `{"x","y","z"}` booleans (the C++ `bvec3ToJson`).
+/// A named-object `bvec3` → `{"x","y","z"}` booleans.
 fn bvec3_to_json(v: BVec3) -> Value {
     Value::Object(Map::from_iter([
         ("x".to_string(), Value::Bool(v.x)),
@@ -86,8 +79,7 @@ fn bvec3_to_json(v: BVec3) -> Value {
     ]))
 }
 
-/// Reads a `bvec3` from a named object, each component defaulting to `false` (the C++
-/// `bvec3FromJson`).
+/// Reads a `bvec3` from a named object, each component defaulting to `false`.
 fn bvec3_from_json(j: &Value) -> BVec3 {
     BVec3::new(
         json_bool_or(j, "x", false),
@@ -96,7 +88,7 @@ fn bvec3_from_json(j: &Value) -> BVec3 {
     )
 }
 
-/// A named-object `vec4` → `{"x","y","z","w"}` (the C++ `vec4ToJson`).
+/// A named-object `vec4` → `{"x","y","z","w"}`.
 fn vec4_to_json(v: Vec4) -> Value {
     Value::Object(Map::from_iter([
         ("x".to_string(), f32_value(v.x)),
@@ -106,8 +98,8 @@ fn vec4_to_json(v: Vec4) -> Value {
     ]))
 }
 
-/// Reads a `vec4` from a named object, each component defaulting to `1` (the C++
-/// `vec4FromJson`). Note the default differs from `vec3` (`1`, not `0`).
+/// Reads a `vec4` from a named object, each component defaulting to `1`. Note the default
+/// differs from `vec3` (`1`, not `0`).
 fn vec4_from_json(j: &Value) -> Vec4 {
     Vec4::new(
         json_f32_or(j, "x", 1.0),
@@ -123,7 +115,7 @@ fn field<'a>(j: &'a Value, key: &str) -> Option<&'a Value> {
 }
 
 /// A nested object field for a vector read, or an empty object so the per-field defaults
-/// apply (the C++ `j.value(key, nlohmann::json::object())`).
+/// apply.
 fn object_field(j: &Value, key: &str) -> Value {
     field(j, key)
         .cloned()
@@ -138,7 +130,7 @@ fn object<const N: usize>(entries: [(&str, Value); N]) -> Value {
     ))
 }
 
-/// The lowercase wire name for a [`SkyMode`] (the C++ `skyModeName`).
+/// The lowercase wire name for a [`SkyMode`].
 fn sky_mode_name(mode: SkyMode) -> &'static str {
     match mode {
         SkyMode::Color => "color",
@@ -148,7 +140,7 @@ fn sky_mode_name(mode: SkyMode) -> &'static str {
 }
 
 /// Reads a [`SkyMode`] from its wire name, warning and defaulting to `Procedural` on an
-/// unknown spelling (the C++ `skyModeFromName`).
+/// unknown spelling.
 fn sky_mode_from_name(name: &str) -> SkyMode {
     match name {
         "color" => SkyMode::Color,
@@ -225,10 +217,10 @@ impl SceneSerialize for Camera {
     }
 }
 
-/// Emits the shared material field set as a JSON object (the C++ material body, reused by
-/// `Material` and each `MaterialSlot` — identical field sets, so one serializer over
-/// `MaterialSlot` covers both). `uv_tiling` / `uv_offset` are intentionally absent — the
-/// C++ serde never wrote them, so they must not appear on the wire.
+/// Emits the shared material field set as a JSON object, reused by `Material` and each
+/// `MaterialSlot` — identical field sets, so one serializer over `MaterialSlot` covers
+/// both. `uv_tiling` / `uv_offset` are intentionally absent — they must not appear on the
+/// wire.
 fn material_slot_to_json(s: &MaterialSlot) -> Value {
     object([
         ("baseColor", vec4_to_json(s.base_color)),
@@ -257,7 +249,7 @@ fn material_slot_to_json(s: &MaterialSlot) -> Value {
 }
 
 /// Projects a [`Material`] onto the shared [`MaterialSlot`] field set so both serialize
-/// through one body (the C++ `Material`/`MaterialSlot` share identical serde).
+/// through one body.
 fn material_as_slot(m: &Material) -> MaterialSlot {
     MaterialSlot {
         base_color: m.base_color,
@@ -307,7 +299,7 @@ impl SceneSerialize for Material {
     }
 }
 
-/// Reads a [`MaterialSlot`] from one entry of the `slots` array (the C++ slot read).
+/// Reads a [`MaterialSlot`] from one entry of the `slots` array.
 fn material_slot_from_json(sj: &Value) -> MaterialSlot {
     MaterialSlot {
         base_color: vec4_from_json(&object_field(sj, "baseColor")),
@@ -351,15 +343,13 @@ impl SceneSerialize for MaterialSet {
 
 impl SceneSerialize for MaterialAsset {
     fn to_json(&self) -> Value {
-        // The C++ inlined `std::to_string` rather than `uuidToJson`; both emit a decimal
-        // string, so the bytes match.
+        // A decimal-string uuid, not `uuid_to_json` — both emit the same bytes.
         object([("material", Value::String(self.material.value().to_string()))])
     }
 
     fn load_json(&mut self, value: &Value) -> Result<()> {
-        // The C++ inline read accepts a string or an unsigned number; `json_u64_or`'s
-        // lenient union is the exact same contract, defaulting to the existing value when
-        // the key is absent.
+        // Accepts a string or an unsigned number; `json_u64_or`'s lenient union defaults to
+        // the existing value when the key is absent.
         self.material = Uuid(json_u64_or(value, "material", self.material.value()));
         Ok(())
     }
@@ -411,7 +401,7 @@ impl SceneSerialize for Script {
     }
 }
 
-/// The lowercase wire name for a [`Wrap`] (the C++ `wrap` ternary).
+/// The lowercase wire name for a [`Wrap`].
 fn wrap_name(wrap: Wrap) -> &'static str {
     match wrap {
         Wrap::Once => "once",
@@ -420,7 +410,7 @@ fn wrap_name(wrap: Wrap) -> &'static str {
     }
 }
 
-/// The lowercase wire name for a [`Transition`] (the C++ `transition` ternary).
+/// The lowercase wire name for a [`Transition`].
 fn transition_name(transition: Transition) -> &'static str {
     match transition {
         Transition::Inertialize => "inertialize",
@@ -538,7 +528,7 @@ impl SceneSerialize for ReflectionProbe {
         self.intensity = json_f32_or(value, "intensity", 1.0);
         self.box_projection = json_bool_or(value, "boxProjection", false);
         self.box_extent = vec3_from_json(&object_field(value, "boxExtent"));
-        // Capture pending on every read (the C++ `c.dirty = true`).
+        // Capture pending on every read.
         self.dirty = true;
         Ok(())
     }
@@ -557,7 +547,7 @@ impl SceneSerialize for Relationship {
 
 impl SceneSerialize for Bone {
     fn to_json(&self) -> Value {
-        // A bone serializes as an empty object (the C++ `boneComponentToJson`).
+        // A bone serializes as an empty object.
         Value::Object(Map::new())
     }
 
@@ -573,8 +563,7 @@ impl SceneSerialize for SkinnedMesh {
             .inverse_bind
             .iter()
             .map(|m| {
-                // Column-major flat 16, matching `glm::mat4`'s storage (the C++
-                // `&m[0][0]` walk). Each element promotes f32 → f64 for byte-equality.
+                // Column-major flat 16. Each element promotes f32 → f64 for byte-equality.
                 Value::Array(m.to_cols_array().iter().map(|&f| f32_value(f)).collect())
             })
             .collect();
@@ -619,7 +608,7 @@ impl SceneSerialize for SkinnedMesh {
 }
 
 /// A bare JSON value read as a `u64` with the lenient wire union: unsigned number, or a
-/// decimal string parsed in full (the C++ `u64FromJson`). Anything else is `0`.
+/// decimal string parsed in full. Anything else is `0`.
 fn wire_u64(value: &Value) -> u64 {
     match value {
         Value::Number(n) => n.as_u64().unwrap_or(0),
@@ -667,15 +656,14 @@ impl SceneSerialize for FootIk {
     }
 }
 
-/// Reads an `i32` field, defaulting when absent or non-numeric (the C++
-/// `entry.value(key, fallback)` for an int). nlohmann truncates the wire f64 toward zero.
+/// Reads an `i32` field, defaulting when absent or non-numeric.
 fn json_i32_or(j: &Value, key: &str, fallback: i32) -> i32 {
     field(j, key)
         .and_then(serde_json::Value::as_i64)
         .map_or(fallback, |v| v as i32)
 }
 
-/// The lowercase wire name for a ragdoll [`Joint`] (the C++ `jointName`).
+/// The lowercase wire name for a ragdoll [`Joint`].
 fn joint_name(joint: Joint) -> &'static str {
     match joint {
         Joint::Fixed => "fixed",
@@ -731,7 +719,7 @@ impl SceneSerialize for BonePhysicsComponent {
     }
 }
 
-/// The lowercase wire name for a [`Motion`] type (the C++ `motionName`).
+/// The lowercase wire name for a [`Motion`] type.
 fn motion_name(motion: Motion) -> &'static str {
     match motion {
         Motion::Static => "static",
@@ -774,7 +762,7 @@ impl SceneSerialize for Rigidbody {
     }
 }
 
-/// The lowercase wire name for a collider [`Shape`] (the C++ `shapeName`).
+/// The lowercase wire name for a collider [`Shape`].
 fn shape_name(shape: Shape) -> &'static str {
     match shape {
         Shape::Box => "box",
@@ -815,8 +803,8 @@ impl SceneSerialize for Collider {
             _ => Shape::Box,
         };
         self.half_extents = vec3_from_json(&object_field(value, "halfExtents"));
-        // The C++ reads `sourceMesh` as a bare value through `u64FromJson` (string or
-        // unsigned number; anything else → 0).
+        // `sourceMesh` is a bare value read through `wire_u64` (string or unsigned number;
+        // anything else → 0).
         self.source_mesh = Uuid(field(value, "sourceMesh").map_or(0, wire_u64));
         self.offset = vec3_from_json(&object_field(value, "offset"));
         let material = object_field(value, "material");
@@ -866,7 +854,7 @@ impl SceneSerialize for CharacterController {
 
     fn load_json(&mut self, value: &Value) -> Result<()> {
         self.max_speed = json_f32_or(value, "maxSpeed", 4.0);
-        // The C++ literal is the hand-typed `0.785398f`, not `FRAC_PI_4` — kept verbatim.
+        // The literal `0.785398`, not `FRAC_PI_4`, so a loaded default reads byte-identically.
         #[allow(clippy::approx_constant)]
         let slope_default = 0.785_398_f32;
         self.max_slope_angle = json_f32_or(value, "maxSlopeAngle", slope_default);
@@ -880,7 +868,7 @@ impl SceneSerialize for CharacterController {
     }
 }
 
-/// The `AtmosphereSettings` block (the C++ `atmosphereToJson`), nested inside the
+/// The `AtmosphereSettings` block, nested inside the
 /// environment.
 fn atmosphere_to_json(a: &AtmosphereSettings) -> Value {
     object([
@@ -899,7 +887,7 @@ fn atmosphere_to_json(a: &AtmosphereSettings) -> Value {
 }
 
 /// Reads an [`AtmosphereSettings`] block, defaulting per field and leaving the vector
-/// fields at their struct defaults when absent (the C++ `atmosphereFromJson`).
+/// fields at their struct defaults when absent.
 fn atmosphere_from_json(j: &Value) -> AtmosphereSettings {
     let mut a = AtmosphereSettings::default();
     if !j.is_object() {
@@ -923,7 +911,7 @@ fn atmosphere_from_json(j: &Value) -> AtmosphereSettings {
     a
 }
 
-/// Serializes the [`SceneEnvironment`] block (the C++ `environmentToJson`).
+/// Serializes the [`SceneEnvironment`] block.
 ///
 /// The scene-document phase writes this under the document's `environment` key; it is a
 /// free function (not a [`SceneSerialize`] impl) because the environment lives on the
@@ -949,7 +937,7 @@ pub fn environment_to_json(env: &SceneEnvironment) -> Value {
 }
 
 /// Reads a [`SceneEnvironment`] block, defaulting per field and leaving the vector fields
-/// at their struct defaults when absent (the C++ `environmentFromJson`).
+/// at their struct defaults when absent.
 #[must_use]
 pub fn environment_from_json(j: &Value) -> SceneEnvironment {
     let mut env = SceneEnvironment::default();

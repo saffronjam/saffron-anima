@@ -35,8 +35,7 @@ pub enum Error {
     /// not an object, an entity missing its `id`).
     #[error("malformed scene document: {0}")]
     Document(String),
-    /// A `saffron-json` parse failure lifted into the scene error via `?` (the C++
-    /// `readScene` restringing the parse error becomes a typed `#[from]`).
+    /// A `saffron-json` parse failure lifted into the scene error via `?`.
     #[error(transparent)]
     JsonGateway(#[from] saffron_json::Error),
     /// A file read/write failed, naming the path that could not be opened.
