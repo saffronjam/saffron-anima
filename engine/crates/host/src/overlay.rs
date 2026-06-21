@@ -1,19 +1,18 @@
 //! The native gizmo overlay geometry: the CPU builder set the editor's in-viewport chrome
 //! is drawn from.
 //!
-//! Ports the overlay geometry builders that `host.cppm` carried (because they touch the
-//! renderer's [`OverlayVertex`] / `submit_overlay`). Every builder is pure CPU geometry that
-//! pushes into a `&mut Vec<OverlayVertex>` — no shared accumulator, no `Rc<RefCell>` (README
-//! §1.3 records this as a measured non-use of the PP-1 overlay-state bucket). The
-//! hit-test / projection / drag math lives in `saffron-sceneedit` (the gizmo module); these
-//! builders only *consume* it to emit geometry, so the 03 edit-logic split is preserved.
+//! The overlay geometry builders live here because they touch the renderer's [`OverlayVertex`]
+//! / `submit_overlay`. Every builder is pure CPU geometry that pushes into a
+//! `&mut Vec<OverlayVertex>` — no shared accumulator. The hit-test / projection / drag math
+//! lives in `saffron-sceneedit` (the gizmo module); these builders only *consume* it to emit
+//! geometry.
 //!
-//! The two-range layout ports verbatim: [`submit_scene_edit_overlay`] builds a
-//! `depth_tested` range (camera frustums, debug overlays, colliders — occluded by scene
-//! geometry) and an `on_top` range (entity billboards, the active gizmo, the skeleton),
-//! handing both to [`Renderer::submit_overlay`] so the overlay pass draws each with its own
-//! pipeline from one buffer. `edit_chrome` gates the Edit-only chrome (hidden in Play and the
-//! asset preview); colliders + the skeleton sit outside the gate with their own preview guards.
+//! [`build_scene_edit_overlay`] builds a `depth_tested` range (camera frustums, debug
+//! overlays, colliders — occluded by scene geometry) and an `on_top` range (entity billboards,
+//! the active gizmo, the skeleton), handing both to [`Renderer::submit_overlay`] so the overlay
+//! pass draws each with its own pipeline from one buffer. `edit_chrome` gates the Edit-only
+//! chrome (hidden in Play and the asset preview); colliders + the skeleton sit outside the gate
+//! with their own preview guards.
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
@@ -42,16 +41,14 @@ enum BillboardKind {
     Camera,
 }
 
-/// Pushes a flat-colored triangle (the C++ `addTriangle`). Edge + depth are zero (no
-/// feather, on top).
+/// Pushes a flat-colored triangle. Edge + depth are zero (no feather, on top).
 fn add_triangle(vertices: &mut Vec<OverlayVertex>, a: Vec2, b: Vec2, c: Vec2, color: Vec4) {
     vertices.push(OverlayVertex::new(a, color, Vec4::ZERO, 0.0));
     vertices.push(OverlayVertex::new(b, color, Vec4::ZERO, 0.0));
     vertices.push(OverlayVertex::new(c, color, Vec4::ZERO, 0.0));
 }
 
-/// Pushes a thick line as two triangles (six vertices) between two pixel-space endpoints
-/// (the C++ `addLine`).
+/// Pushes a thick line as two triangles (six vertices) between two pixel-space endpoints.
 ///
 /// The quad is widened 1px per side for the shader's analytic feather: `edge.x` carries the
 /// signed cross-edge coordinate (±`ext/half` at the expanded rim where coverage reaches zero)
@@ -91,7 +88,7 @@ fn add_line(
     vertices.push(OverlayVertex::new(a1, color, edge_neg, a_depth));
 }
 
-/// A flat 2D line at zero NDC depth (the common on-top case; the C++ `addLine` defaults).
+/// A flat 2D line at zero NDC depth (the common on-top case).
 fn add_line_flat(
     vertices: &mut Vec<OverlayVertex>,
     a_px: Vec2,
@@ -107,7 +104,7 @@ fn add_line_flat(
 }
 
 /// Pushes a filled quad from four pixel-space corners (a convex loop), feathered
-/// analytically in both directions (the C++ `addQuad`).
+/// analytically in both directions.
 ///
 /// Each corner is pushed 1px outward along the quad's edge directions and carries signed
 /// coords + half-extents for the shader's coverage alpha. Corner order mirrors
@@ -164,8 +161,8 @@ fn add_quad(
     vertices.push(quad[3]);
 }
 
-/// Pushes an axis-aligned filled box of `size` pixels centered at `center_px` (the C++
-/// `addBox`): two triangles, no feather.
+/// Pushes an axis-aligned filled box of `size` pixels centered at `center_px`: two triangles,
+/// no feather.
 fn add_box(
     vertices: &mut Vec<OverlayVertex>,
     center_px: Vec2,
@@ -183,7 +180,7 @@ fn add_box(
     add_triangle(vertices, a, c, d, color);
 }
 
-/// Pushes a four-line rectangle outline centered at `center_px` (the C++ `addRectOutline`).
+/// Pushes a four-line rectangle outline centered at `center_px`.
 fn add_rect_outline(
     vertices: &mut Vec<OverlayVertex>,
     center_px: Vec2,
@@ -203,7 +200,7 @@ fn add_rect_outline(
     add_line_flat(vertices, bl, tl, 2.0, color, width, height);
 }
 
-/// Pushes a filled circle (24-segment fan) of `radius` pixels (the C++ `addCircleFill`).
+/// Pushes a filled circle (24-segment fan) of `radius` pixels.
 fn add_circle_fill(
     vertices: &mut Vec<OverlayVertex>,
     center_px: Vec2,
@@ -231,7 +228,7 @@ fn add_circle_fill(
     }
 }
 
-/// Pushes a 32-segment circle outline of `radius` pixels (the C++ `addCircleOutline`).
+/// Pushes a 32-segment circle outline of `radius` pixels.
 fn add_circle_outline(
     vertices: &mut Vec<OverlayVertex>,
     center_px: Vec2,
@@ -250,8 +247,7 @@ fn add_circle_outline(
     }
 }
 
-/// Pushes a light-bulb glyph (a filled dome over two base lines) at `center_px` (the C++
-/// `addBulbIcon`).
+/// Pushes a light-bulb glyph (a filled dome over two base lines) at `center_px`.
 fn add_bulb_icon(
     vertices: &mut Vec<OverlayVertex>,
     center_px: Vec2,
@@ -287,8 +283,7 @@ fn add_bulb_icon(
     );
 }
 
-/// Pushes a camera glyph (body rect + lens circle + a trapezoidal viewfinder) at `center_px`
-/// (the C++ `addCameraIcon`).
+/// Pushes a camera glyph (body rect + lens circle + a trapezoidal viewfinder) at `center_px`.
 fn add_camera_icon(
     vertices: &mut Vec<OverlayVertex>,
     center_px: Vec2,
@@ -322,7 +317,7 @@ fn add_camera_icon(
 }
 
 /// The billboard glyph an entity is drawn with: none for a mesh, otherwise by its light /
-/// camera component (the C++ `billboardKind`).
+/// camera component.
 fn billboard_kind(scene: &Scene, entity: Entity) -> BillboardKind {
     if scene.has_component::<Mesh>(entity) {
         return BillboardKind::None;
@@ -339,7 +334,7 @@ fn billboard_kind(scene: &Scene, entity: Entity) -> BillboardKind {
     BillboardKind::None
 }
 
-/// Builds the active-mode gizmo geometry for the selected entity (the C++ `build_native_gizmo`).
+/// Builds the active-mode gizmo geometry for the selected entity.
 ///
 /// Reads the projected handle positions from the `saffron-sceneedit` gizmo math; this only
 /// emits geometry. A no-op when nothing transformable is selected or the origin is off-screen.
@@ -471,9 +466,8 @@ fn build_native_gizmo(
     }
 }
 
-/// Draws a line skeleton over the selected rig (the C++ `build_skeleton_overlay`): a bone
-/// segment to each joint's parent, a screen-constant joint dot, and (when enabled) three
-/// short RGB axis lines per joint.
+/// Draws a line skeleton over the selected rig: a bone segment to each joint's parent, a
+/// screen-constant joint dot, and (when enabled) three short RGB axis lines per joint.
 ///
 /// Always on top. Renders in Edit and Play so a playing clip shows its bones move; scoped to
 /// the selected (or previewed root) entity to bound the vertex count.
@@ -594,8 +588,7 @@ fn build_skeleton_overlay(
     }
 }
 
-/// Colored screen-space glyphs for meshless light/camera entities (the C++
-/// `build_scene_edit_billboards`).
+/// Colored screen-space glyphs for meshless light/camera entities.
 fn build_scene_edit_billboards(
     editor: &mut SceneEditContext,
     cam: &CameraView,
@@ -667,13 +660,12 @@ fn build_scene_edit_billboards(
     }
 }
 
-/// Clips a clip-space line segment to the six clip planes (the C++ `clip_overlay_line`),
-/// mutating the endpoints in place. Returns `false` when the segment is fully outside.
+/// Clips a clip-space line segment to the six clip planes, mutating the endpoints in place.
+/// Returns `false` when the segment is fully outside.
 ///
 /// The near plane is `z + w >= 0` (the GL `[-1, 1]` clip convention `camera_projection`
-/// produces) rather than the C++ `z >= 0` (GLM's `GLM_FORCE_DEPTH_ZERO_TO_ONE`): the Rust
-/// projection is `perspective_rh_gl`, so the line clips against the same frustum the scene's
-/// depth buffer was rasterized with.
+/// produces): the projection is `perspective_rh_gl`, so the line clips against the same frustum
+/// the scene's depth buffer was rasterized with.
 fn clip_overlay_line(a: &mut Vec4, b: &mut Vec4) -> bool {
     let clip_plane = |a: &mut Vec4, b: &mut Vec4, distance: fn(Vec4) -> f32| -> bool {
         let da = distance(*a);
@@ -701,7 +693,7 @@ fn clip_overlay_line(a: &mut Vec4, b: &mut Vec4) -> bool {
         && clip_plane(a, b, |p| p.w - p.z)
 }
 
-/// A clip-space point to viewport pixels (top-left origin) (the C++ `clip_to_pixel`).
+/// A clip-space point to viewport pixels (top-left origin).
 fn clip_to_pixel(clip: Vec4, width: u32, height: u32) -> Vec2 {
     let ndc = clip.truncate() / clip.w;
     Vec2::new(
@@ -711,7 +703,7 @@ fn clip_to_pixel(clip: Vec4, width: u32, height: u32) -> Vec2 {
 }
 
 /// Projects a world-space line, clips it to the near plane (and the rest of the frustum), and
-/// emits a depth-tested overlay line (the C++ `add_clipped_overlay_line`).
+/// emits a depth-tested overlay line.
 ///
 /// A line crossing the near plane is clipped, not dropped; a line fully behind the camera (or
 /// with a degenerate `w`) emits nothing. After clipping, `clip.z / clip.w` is the Vulkan
@@ -764,7 +756,7 @@ const BOX_EDGES: [(usize, usize); 12] = [
     (3, 7),
 ];
 
-/// A world-space AABB as 12 depth-tested edges (the C++ `add_world_aabb`).
+/// A world-space AABB as 12 depth-tested edges.
 fn add_world_aabb(
     vertices: &mut Vec<OverlayVertex>,
     view_projection: &Mat4,
@@ -798,8 +790,7 @@ fn add_world_aabb(
     }
 }
 
-/// A world-space ring of `radius` in the plane spanned by unit axes `a`, `b` (the C++
-/// `add_world_ring`).
+/// A world-space ring of `radius` in the plane spanned by unit axes `a`, `b`.
 #[allow(clippy::too_many_arguments)]
 fn add_world_ring(
     vertices: &mut Vec<OverlayVertex>,
@@ -831,8 +822,8 @@ fn add_world_ring(
     }
 }
 
-/// A world-space arc of `radius` over `[t0, t1]` in the plane spanned by unit axes `a`, `b`
-/// (the C++ `add_world_arc`). Used for the capsule's pole hemispheres.
+/// A world-space arc of `radius` over `[t0, t1]` in the plane spanned by unit axes `a`, `b`.
+/// Used for the capsule's pole hemispheres.
 #[allow(clippy::too_many_arguments)]
 fn add_world_arc(
     vertices: &mut Vec<OverlayVertex>,
@@ -866,8 +857,8 @@ fn add_world_arc(
     }
 }
 
-/// An oriented box: the 8 local ±`he` corners transformed by `model`, drawn as 12 edges (the
-/// C++ `add_world_oriented_box`). Unlike [`add_world_aabb`] this keeps the box oriented.
+/// An oriented box: the 8 local ±`he` corners transformed by `model`, drawn as 12 edges.
+/// Unlike [`add_world_aabb`] this keeps the box oriented.
 fn add_world_oriented_box(
     vertices: &mut Vec<OverlayVertex>,
     view_projection: &Mat4,
@@ -915,8 +906,8 @@ fn add_world_oriented_box(
     }
 }
 
-/// The camera-frustum overlays: a clipped 12-edge wireframe per `show_frustum` camera (the
-/// C++ `build_scene_edit_camera_frustums`). Depth-tested, Edit-only.
+/// The camera-frustum overlays: a clipped 12-edge wireframe per `show_frustum` camera.
+/// Depth-tested, Edit-only.
 fn build_scene_edit_camera_frustums(
     editor: &mut SceneEditContext,
     cam: &CameraView,
@@ -981,7 +972,7 @@ fn build_scene_edit_camera_frustums(
 
 /// The viewport debug overlays (`set-debug-overlays`): per-entity bounds (the exact box
 /// `pick_entity` tests, static + skinned joint-union), the whole-scene AABB the shadow fit
-/// uses, and point/spot light volumes (the C++ `build_debug_overlays`). Depth-tested, Edit-only.
+/// uses, and point/spot light volumes. Depth-tested, Edit-only.
 fn build_debug_overlays(
     editor: &mut SceneEditContext,
     assets: &mut AssetServer,
@@ -1187,7 +1178,7 @@ fn build_debug_overlays(
 
 /// The physics collider overlay (`set-debug-overlays {colliders}`): a world-space wireframe
 /// per [`Collider`] — oriented box / sphere / capsule, or the cook-source mesh AABB for
-/// hull/mesh (the C++ `build_collider_overlays`).
+/// hull/mesh.
 ///
 /// Drawn SCALE-FREE to match the Jolt body: position + rotation only, with the collider offset
 /// in the rotated body-local frame (never `world_matrix`, which carries entity scale). Reads
@@ -1423,8 +1414,7 @@ fn build_collider_overlays(
     }
 }
 
-/// Builds the editor overlay's two ranges and submits them once per frame (the C++
-/// `submit_scene_edit_overlay`).
+/// Builds the editor overlay's two ranges, returned for the caller to submit once per frame.
 ///
 /// Camera frustums + debug overlays are depth-tested against the scene (occluded by
 /// geometry); billboards, the active gizmo, and the skeleton always draw on top. The gizmo +
@@ -1432,9 +1422,8 @@ fn build_collider_overlays(
 /// during play and the asset preview). Colliders + the skeleton sit outside the gate (they
 /// read authored state and draw in Edit AND Play) with their own preview guards.
 ///
-/// Returns `(depth_tested, on_top)` so the caller submits them to the renderer (the C++ calls
-/// `submit_overlay` directly; the Rust split lets the host's `render_ui` own the renderer
-/// borrow and unit tests assert the ranges without a GPU).
+/// Returns `(depth_tested, on_top)` so the host's `render_ui` owns the renderer borrow when it
+/// submits, and unit tests assert the ranges without a GPU.
 #[must_use]
 pub fn build_scene_edit_overlay(
     editor: &mut SceneEditContext,

@@ -3,26 +3,21 @@
 //! the live world / editor without `saffron-script` importing `saffron-physics` or
 //! `saffron-sceneedit`.
 //!
-//! Ports the eleven C++ `state->script.raycast = …` closures (`host.cppm:1200`–1308): each
-//! captured the shared host state and re-borrowed `state->physics` / `state->editor` at
-//! call time. The Rust shape is one [`HostScriptBridge`] holding the host handles the
-//! closures reached — the live play world and the play scene (for the scene-reading
-//! `enable_ragdoll`) — as `Rc<RefCell<…>>` cells the host shares with it, plus a
-//! [`SharedScriptSink`] log buffer.
+//! One [`HostScriptBridge`] holds the host handles the bindings reach — the live play world
+//! and the play scene (for the scene-reading `enable_ragdoll`) — as `Rc<RefCell<…>>` cells
+//! the host shares with it, plus a [`SharedScriptSink`] log buffer.
 //!
-//! `Rc<RefCell>` is the single-thread shared-mutable idiom (conventions §3 bucket 4): the
-//! VM is `!Send`, so no `Mutex` is needed, and the bridge is a *host-installed callback
-//! object*, not one of the value-owned `HostLayer` fields the 08-host "no `Rc<RefCell>`
-//! for host state" rule protects. The host installs it onto the [`ScriptHost`] on the play
-//! edge (`ScriptHost::install_bridge`) and shares the same cells so the bridge sees the
-//! live world while it exists (a no-op `None` world in Edit, exactly the C++
-//! `state->physics.has_value()` guard).
+//! `Rc<RefCell>` is the single-thread shared-mutable idiom: the VM is `!Send`, so no `Mutex`
+//! is needed, and the bridge is a host-installed callback object, not one of the value-owned
+//! `HostLayer` fields. The host installs it onto the [`ScriptHost`] on the play edge
+//! (`ScriptHost::install_bridge`) and shares the same cells so the bridge sees the live
+//! world while it exists (a no-op `None` world in Edit).
 //!
 //! `sa.log` cannot write straight into the editor: while a script tick runs the editor is
-//! borrowed by `tick_play` (the `sim_tick` seam), so the C++ `pushScriptLog(*state->editor,
-//! …)` aliasing is forbidden in Rust. The line is appended to [`SharedScriptSink`] (a tiny
-//! cell the editor does not alias) and the host drains it into the editor's script-log ring
-//! once each call batch returns and the editor is freely borrowable again.
+//! borrowed by `tick_play` (the `sim_tick` seam), so that aliasing is forbidden. The line is
+//! appended to [`SharedScriptSink`] (a tiny cell the editor does not alias) and the host
+//! drains it into the editor's script-log ring once each call batch returns and the editor
+//! is freely borrowable again.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -43,7 +38,7 @@ pub type SharedScene = Rc<RefCell<Scene>>;
 /// script-log ring after the script call batch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptLogLine {
-    /// The uuid of the instance that logged the line (the C++ `currentSenderUuid`).
+    /// The uuid of the instance that logged the line.
     pub sender: u64,
     /// The logged message.
     pub message: String,
@@ -53,27 +48,25 @@ pub struct ScriptLogLine {
 /// script-log ring once the tick releases the editor borrow.
 pub type SharedScriptSink = Rc<RefCell<Vec<ScriptLogLine>>>;
 
-/// The host's [`ScriptHostBridge`], over the shared cells the C++ closures reached.
+/// The host's [`ScriptHostBridge`], over the shared world / scene / log cells.
 ///
 /// Construct it from the host's own cells with [`HostScriptBridge::new`], box it as
 /// `Rc<dyn ScriptHostBridge>`, and install it onto the play session's [`ScriptHost`].
-/// Every method guards a `None` world / dead lookup as a safe no-op (the C++
-/// `if (state->physics.has_value())` / `if (host.raycast)` pattern), so an Edit-mode call
+/// Every method guards a `None` world / dead lookup as a safe no-op, so an Edit-mode call
 /// or a call between worlds never panics.
 pub struct HostScriptBridge {
     /// The live play physics world (`None` in Edit). Shared with the host so the bridge
     /// reaches whatever world is current without owning it.
     physics: SharedPhysics,
     /// The play scene, shared so the scene-reading `enable_ragdoll` resolves the rig
-    /// entity (the C++ `activeScene(editor)` reach).
+    /// entity.
     scene: SharedScene,
     /// The buffered `sa.log` lines the host drains into the editor's script-log ring.
     sink: SharedScriptSink,
 }
 
 impl HostScriptBridge {
-    /// Wires the bridge to the host's shared world / scene cells and the log sink (the C++
-    /// `state->script.<bridge> = …` wiring).
+    /// Wires the bridge to the host's shared world / scene cells and the log sink.
     #[must_use]
     pub fn new(physics: SharedPhysics, scene: SharedScene, sink: SharedScriptSink) -> Self {
         Self {
@@ -84,7 +77,7 @@ impl HostScriptBridge {
     }
 
     /// Flattens a physics [`RayHit`](saffron_physics::RayHit) into the script-side POD —
-    /// a plain field copy (the C++ `ScriptRayHit{ .hit = hit.hit, … }`).
+    /// a plain field copy.
     fn flatten(hit: saffron_physics::RayHit) -> ScriptRayHit {
         ScriptRayHit {
             hit: hit.hit,
@@ -145,8 +138,8 @@ impl ScriptHostBridge for HostScriptBridge {
             world.disable_ragdoll(rig);
             return true;
         }
-        // Enabling reads the rig's SkinnedMesh + BonePhysics off the play scene (the C++
-        // `activeScene(editor)` reach); the scene cell is a separate borrow from physics.
+        // Enabling reads the rig's SkinnedMesh + BonePhysics off the play scene; the scene
+        // cell is a separate borrow from physics.
         let scene = self.scene.borrow();
         let Some(entity) = scene.find_entity_by_uuid(rig) else {
             return false;
@@ -208,7 +201,7 @@ mod tests {
     }
 
     /// With no world (Edit mode), the physics calls are safe no-ops: a missed raycast,
-    /// zero velocity, a false ragdoll toggle — the C++ `state->physics.has_value()` guard.
+    /// zero velocity, a false ragdoll toggle.
     #[test]
     fn no_world_is_a_safe_noop() {
         let (physics, scene, sink) = cells();

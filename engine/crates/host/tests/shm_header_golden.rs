@@ -1,13 +1,12 @@
-//! The shm-ABI header golden snapshot (13-testing-and-verification phase 2; the *static*
-//! half of the shm-ABI gate, paired with the live byte-exact reader-oracle gate in
-//! `shm_abi_gate.rs`).
+//! The shm-ABI header golden snapshot: the *static* half of the shm-ABI gate, paired with the
+//! live byte-exact reader-oracle gate in `shm_abi_gate.rs`.
 //!
 //! The frame transport's 32-byte header is `[magic, width, height, seq, ringSlots,
 //! slotCapacity, 0, 0]` (eight native-endian `u32` words), written at segment creation
 //! with width/height/seq = 0 and the capacity floored at 4K RGBA. A change to any of those
 //! words — a magic, a ring depth, a header size — is an ABI break the editor reader cannot
-//! tolerate, and it never throws. The detector is a golden header layout generated once
-//! from the C++ `renderer_capture.cpp` segment-init code (`fixtures/golden/gen/`).
+//! tolerate, and it never throws. The detector is a golden header layout in
+//! `fixtures/golden/gen/`.
 //!
 //! This test rebuilds the header from the Rust constants, renders the same
 //! `word N <field> <value>` / `hexdump:` text the generator emits, matches it byte-for-byte

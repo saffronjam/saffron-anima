@@ -1,17 +1,17 @@
 //! Host-side wiring of the viewport shm publisher.
 //!
-//! Ports `host.cppm:1043-1052`: the editor sets a per-view shm-segment environment
-//! variable (`SAFFRON_VIEWPORT_SHM_SCENE` / `SAFFRON_VIEWPORT_SHM_ASSET`); each named
-//! view publishes its rendered frames into its own POSIX-shm segment for the
-//! compositor-side presenter (`wayland_viewport.rs`) instead of presenting to the hidden
-//! swapchain. Both segments are created at startup so both panes have a ring the
-//! presenter can block-open; only the active view bumps a new sequence each frame.
+//! The editor sets a per-view shm-segment environment variable
+//! (`SAFFRON_VIEWPORT_SHM_SCENE` / `SAFFRON_VIEWPORT_SHM_ASSET`); each named view publishes
+//! its rendered frames into its own POSIX-shm segment for the compositor-side presenter
+//! (`wayland_viewport.rs`) instead of presenting to the hidden swapchain. Both segments are
+//! created at startup so both panes have a ring the presenter can block-open; only the
+//! active view bumps a new sequence each frame.
 //!
 //! The byte-exact producer is [`saffron_rendering::ShmPublish`] (the mmap + seqlock +
 //! release fence). This module owns only the *selection*: which views to enable, under
-//! which segment names, from the environment — the pure decision the C++ host made
-//! inline. The view tokens are the FROZEN wire strings the reader's `View::from_wire`
-//! expects (`"scene"` / `"assetPreview"`), kept identical end-to-end.
+//! which segment names, from the environment. The view tokens are the FROZEN wire strings
+//! the reader's `View::from_wire` expects (`"scene"` / `"assetPreview"`), kept identical
+//! end-to-end.
 
 use saffron_rendering::ShmPublish;
 
@@ -40,7 +40,7 @@ impl ShmView {
         }
     }
 
-    /// The dense slot index, mirroring the C++ `ViewId` ordering (`Scene` = 0).
+    /// The dense slot index (`Scene` = 0).
     fn index(self) -> usize {
         match self {
             ShmView::Scene => 0,
@@ -66,10 +66,10 @@ pub struct ShmViewConfig {
     pub name: String,
 }
 
-/// Resolves the per-view shm publish configuration from the environment, exactly as the
-/// C++ host does (`host.cppm:1043-1052`): a view is enabled only when its variable is
-/// present and non-empty. A standalone / CLI / headless run may set neither (or only the
-/// scene view); the returned vector preserves the C++ scene-then-asset order.
+/// Resolves the per-view shm publish configuration from the environment: a view is enabled
+/// only when its variable is present and non-empty. A standalone / CLI / headless run may
+/// set neither (or only the scene view); the returned vector preserves scene-then-asset
+/// order.
 pub fn configs_from_env() -> Vec<ShmViewConfig> {
     [ShmView::Scene, ShmView::AssetPreview]
         .into_iter()
@@ -85,7 +85,7 @@ pub fn configs_from_env() -> Vec<ShmViewConfig> {
 /// Holds a [`ShmPublish`] per enabled view (created at startup so both panes have a ring
 /// the presenter can block-open). The host drives `publish` for the active view each
 /// frame from the renderer's BGRA8 readback. `Drop` on each [`ShmPublish`] unmaps and
-/// `shm_unlink`s its segment, in the C++ `destroyShmPublish` order.
+/// `shm_unlink`s its segment.
 #[derive(Default)]
 pub struct ViewportShmPublisher {
     /// One slot per view index (`Scene` = 0, `AssetPreview` = 1); `None` when that view
@@ -117,7 +117,7 @@ impl ViewportShmPublisher {
     }
 
     /// Enables one view's segment, creating it immediately. Replaces any prior segment
-    /// for the same view (the new name's segment supersedes the old, NO LEGACY).
+    /// for the same view (the new name's segment supersedes the old).
     ///
     /// # Errors
     ///
@@ -136,7 +136,7 @@ impl ViewportShmPublisher {
             .is_some_and(ShmPublish::enabled)
     }
 
-    /// Whether any view publishes (the C++ `state->shmPublish` flag).
+    /// Whether any view publishes.
     pub fn any_enabled(&self) -> bool {
         self.views.iter().flatten().any(ShmPublish::enabled)
     }
@@ -203,7 +203,7 @@ mod tests {
             ]
         );
 
-        // An empty value disables that view (the `shm[0] != '\0'` guard).
+        // An empty value disables that view.
         // SAFETY: serialized by ENV_LOCK.
         unsafe {
             std::env::set_var(ENV_SHM_ASSET, "");

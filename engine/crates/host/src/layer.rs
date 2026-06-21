@@ -1,10 +1,8 @@
 //! The [`HostLayer`] apex: the single [`Layer`] that owns the editor session and wires
 //! every subsystem into the run loop.
 //!
-//! Ports `host.cppm`'s `HostState` + the twelve lifecycle closures into one owned struct.
-//! The C++ shared `HostState` (a `shared_ptr` captured by every closure) becomes plain
-//! fields on this layer: the run loop owns the layer, the layer owns its state, and the
-//! lifecycle is methods on it — no `Arc`, no `Rc<RefCell>`, single-threaded throughout.
+//! The host state lives as plain fields on this layer: the run loop owns the layer, the
+//! layer owns its state, and the lifecycle is methods on it — single-threaded throughout.
 //!
 //! The per-frame work splits cleanly in two:
 //!
@@ -50,10 +48,9 @@ use crate::viewport_shm::{ShmView, ViewportShmPublisher};
 
 /// The host's apex layer: the editor session plus the wired subsystems.
 ///
-/// Owns its state by value (the C++ `HostState`, de-`shared_ptr`'d). The load-bearing
-/// teardown (worker join, control-socket close, physics drop, GPU-cache clear) is sequenced
-/// explicitly in [`HostLayer::on_detach`], which the run loop calls after `wait_gpu_idle`
-/// and before the renderer drops.
+/// Owns its state by value. The load-bearing teardown (worker join, control-socket close,
+/// physics drop, GPU-cache clear) is sequenced explicitly in [`HostLayer::on_detach`], which
+/// the run loop calls after `wait_gpu_idle` and before the renderer drops.
 pub struct HostLayer {
     /// The editor's mutable session state (scene / selection / play / gizmo / smoothing).
     editor: SceneEditContext,
@@ -63,11 +60,11 @@ pub struct HostLayer {
     animation: AnimationRuntime,
     /// The control plane: the command registry + the once-per-frame socket drain.
     control: ControlContext,
-    /// The play session's script VM + instances (the C++ `state->script`). Empty between
-    /// plays; `start_scripts`/`tick_scripts` run on the play edge / each tick. Behind an
-    /// `Rc<RefCell>` because the `sim_tick` seam closure (stored in the editor, invoked while
-    /// the editor is borrowed by `tick_play`) must reach it without capturing `&mut self` —
-    /// the single-thread shared-mutable idiom the C++ shared `HostState` expressed.
+    /// The play session's script VM + instances. Empty between plays; `start_scripts`/
+    /// `tick_scripts` run on the play edge / each tick. Behind an `Rc<RefCell>` because the
+    /// `sim_tick` seam closure (stored in the editor, invoked while the editor is borrowed by
+    /// `tick_play`) must reach it without capturing `&mut self` — the single-thread
+    /// shared-mutable idiom.
     script: Rc<RefCell<ScriptHost>>,
     /// The component reflection table the script start/tick/contact calls bind, built once
     /// (`register_builtin_components`); the editor's own registry is not `Clone`, and this is
@@ -77,7 +74,7 @@ pub struct HostLayer {
     /// The live play physics world, present exactly while play is active (`None` in Edit).
     /// Behind the shared cell so the bridge's `sa.raycast`/impulse bindings and the `sim_tick`
     /// closure reach it, and `poll_control` lends `borrow_mut().as_mut()` into the
-    /// `EngineContext::physics` borrow (the C++ `state->physics`).
+    /// `EngineContext::physics` borrow.
     physics: SharedPhysics,
     /// The gameplay-input snapshot the `sim_tick` closure derives edges on and ticks scripts
     /// with. Shared so the closure reaches it; the host syncs the editor's authored input into
@@ -86,7 +83,7 @@ pub struct HostLayer {
     script_input: Rc<RefCell<ScriptInputState>>,
     /// This frame's ragdoll pose targets, snapshotted from the animation runtime's `last_pose`
     /// after `tick_animation` and before `tick_play`, so the `sim_tick` closure motors active
-    /// ragdolls toward the animated pose (the C++ `simTick` iterating `animation.lastPose`).
+    /// ragdolls toward the animated pose.
     pose_targets: Rc<RefCell<Vec<PoseTarget>>>,
     /// The `sa.log` lines the bridge buffers during a script call; drained into the editor's
     /// script-log ring after `tick_play` releases the editor borrow.
@@ -95,33 +92,31 @@ pub struct HostLayer {
     /// drained into the editor's error ring after `tick_play`, then the deferred pause fires.
     script_error_sink: Rc<RefCell<Vec<ScriptRunError>>>,
     /// The host-owned bridge, kept alive across plays so the same `Rc` is re-installed each
-    /// play edge (the C++ `state->script.raycast = …` closures, installed once).
+    /// play edge.
     bridge: Rc<dyn ScriptHostBridge>,
     /// The play state the host last reconciled, for the edge detection that builds/tears the
-    /// world + VM (the C++ `onPlayStateChanged` hooks, run host-side after `poll_control`
-    /// releases the editor borrow rather than inside the published transition).
+    /// world + VM (run host-side after `poll_control` releases the editor borrow rather than
+    /// inside the published transition).
     last_play_state: PlayState,
     /// The host-built one-off uploader the scene-render path resolves assets through,
     /// constructed lazily from the renderer's device on the first rendered frame.
     uploader: Option<Uploader>,
     /// The per-view viewport shm segments (empty until `run_host` attaches them from the
-    /// editor-set environment). The per-frame publish from the renderer's BGRA8 readback is
-    /// wired when 06-rendering lands that readback seam; the segments exist at startup so the
-    /// editor's presenter can block-open both panes.
+    /// editor-set environment). The segments exist at startup so the editor's presenter can
+    /// block-open both panes.
     shm: ViewportShmPublisher,
 
     /// Seq high-water for per-tick contact → script dispatch. Shared so the `sim_tick`
-    /// closure advances it across ticks (the C++ `state->contactCursor`).
+    /// closure advances it across ticks.
     contact_cursor: Rc<Cell<u64>>,
     /// A script VM exists (Playing/Paused); stop destroys it.
     script_vm_active: bool,
     /// The Jolt process globals (`Factory` + registered types) are installed — set true the first
-    /// time a play world is built (the C++ `physicsInit`). They outlive every world, so teardown
-    /// shuts them down once, *after* the last world drops.
+    /// time a play world is built. They outlive every world, so teardown shuts them down once,
+    /// *after* the last world drops.
     physics_init: bool,
     /// Set inside the `sim_tick` closure on a contained script failure; drives the deferred
-    /// pause once per `update`. Shared so the closure flips it (the C++
-    /// `state->scriptErrorPending`).
+    /// pause once per `update`. Shared so the closure flips it.
     script_error_pending: Rc<Cell<bool>>,
     /// Frames publish to shared memory; the editor owns the render size.
     shm_publish: bool,
@@ -152,12 +147,12 @@ pub enum ParentWatch {
 
 /// One step of the host's teardown sequence, in the order it runs. The cross-object ordering is a
 /// runtime UAF if wrong (not a compile error), so [`HostLayer::teardown`] emits each step into a
-/// record a test reads to assert the order matches the C++ `config.onExit` (`host.cppm:1574`).
+/// record a test reads to assert the order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TeardownStep {
     /// Drain + join the thumbnail worker (it borrows the renderer, still alive here).
     WorkerJoined,
-    /// Close the control socket (the C++ `destroyControlContext`).
+    /// Close the control socket.
     ControlClosed,
     /// Stop the script VM (it never touches the scene, so it tears down before the world).
     ScriptsStopped,
@@ -196,11 +191,11 @@ impl HostLayer {
         let mut control = ControlContext::new();
         Self::register_script_schema_command(&mut control);
 
-        // The play-session shared cells (conventions §3 bucket 4): the `sim_tick` seam closure
-        // is stored in the editor and invoked while the editor is borrowed by `tick_play`, so
-        // it cannot capture `&mut self`; it reaches the world / VM / cursors through these
-        // single-thread cells instead (the Rust shape of the C++ shared `HostState`). The host
-        // holds an `Rc::clone` of each so it can build/tear the session and drain the sinks.
+        // The play-session shared cells: the `sim_tick` seam closure is stored in the editor
+        // and invoked while the editor is borrowed by `tick_play`, so it cannot capture
+        // `&mut self`; it reaches the world / VM / cursors through these single-thread cells
+        // instead. The host holds an `Rc::clone` of each so it can build/tear the session and
+        // drain the sinks.
         let physics: SharedPhysics = Rc::new(RefCell::new(None));
         let script_log_sink: Rc<RefCell<Vec<ScriptLogLine>>> = Rc::new(RefCell::new(Vec::new()));
         // The bridge's scene cell backs only the script-driven `sa.set_ragdoll_enabled(rig)` rig
@@ -253,8 +248,8 @@ impl HostLayer {
     /// Registers the one host-owned control command (`get-script-schema`).
     ///
     /// Lives on the host, not in `saffron-control`, because the handler needs the Lua schema
-    /// reader and only the host may depend on `saffron-script`, per the NO-LEGACY
-    /// one-registration-site rule. It rejects a bad path up front (the frozen guard), resolves
+    /// reader and only the host may depend on `saffron-script`. It rejects a bad path up front
+    /// (the frozen guard), resolves
     /// `<project>/src/<path>`, reads the script's declared `properties` in a throwaway sandboxed
     /// VM, and maps each [`ScriptField`](saffron_script::ScriptField) to a `ScriptFieldDto`.
     fn register_script_schema_command(control: &mut ControlContext) {
@@ -289,14 +284,14 @@ impl HostLayer {
     /// Subscribes the script-VM and physics-world lifecycle markers on the editor's
     /// `on_play_state_changed` signal, storing their tokens for `on_detach` to unsubscribe.
     ///
-    /// The C++ hooks built the VM / Jolt world *inside* the published transition. Rust cannot:
-    /// `publish_transition` is `&mut self` on the editor, so a subscribed closure runs while
-    /// the editor is borrowed and cannot reach the play scene / project root / registry it
-    /// needs to build with. So the host detects the Edit↔Playing edge itself in
-    /// [`HostLayer::reconcile_play_edge`], right after `poll_control` releases the editor
-    /// borrow — behaviorally identical (the world exists before the next poll / tick), and
-    /// the only borrow-sound shape. The subscriptions stay as the lifecycle seam markers (the
-    /// "play hooks are live" invariant the editor exposes), torn down cleanly on detach.
+    /// The VM / Jolt world cannot be built inside the published transition: `publish_transition`
+    /// is `&mut self` on the editor, so a subscribed closure runs while the editor is borrowed
+    /// and cannot reach the play scene / project root / registry it needs to build with. So the
+    /// host detects the Edit↔Playing edge itself in [`HostLayer::reconcile_play_edge`], right
+    /// after `poll_control` releases the editor borrow — the only borrow-sound shape, and the
+    /// world exists before the next poll / tick. The subscriptions stay as the lifecycle seam
+    /// markers (the "play hooks are live" invariant the editor exposes), torn down cleanly on
+    /// detach.
     fn install_play_state_hooks(&mut self) {
         self.script_subscription = self
             .editor
@@ -328,8 +323,7 @@ impl HostLayer {
 
     /// Attaches the viewport shm publisher `run_host` builds from the editor-set
     /// environment (both segments created at startup so the presenter can block-open each
-    /// pane). The per-frame publish from the renderer's BGRA8 readback is wired when that
-    /// readback seam lands (06-rendering); the host holds the segments meanwhile.
+    /// pane).
     pub fn attach_shm_publisher(&mut self, shm: ViewportShmPublisher) {
         self.shm = shm;
     }
@@ -348,7 +342,7 @@ impl HostLayer {
         self.physics.borrow().is_some()
     }
 
-    /// Whether a script VM is live (Playing/Paused); the seam 12-scripting flips.
+    /// Whether a script VM is live (Playing/Paused).
     #[must_use]
     pub fn script_vm_active(&self) -> bool {
         self.script_vm_active
@@ -405,11 +399,10 @@ impl HostLayer {
         }
     }
 
-    /// The renderer-independent per-frame spine (the C++ `layer.onUpdate` body minus the
-    /// renderer reads): the parent-death verdict, the asset-preview prune on its transition
-    /// edge, `tick_animation` then `tick_play` (control runs before this, so a play/step
-    /// command lands the same frame), the deferred script-error pause, the fly-camera
-    /// look-delta drain, and the edit smoothing. Returns the parent-death verdict.
+    /// The renderer-independent per-frame spine: the parent-death verdict, the asset-preview
+    /// prune on its transition edge, `tick_animation` then `tick_play` (control runs before
+    /// this, so a play/step command lands the same frame), the deferred script-error pause, the
+    /// fly-camera look-delta drain, and the edit smoothing. Returns the parent-death verdict.
     pub fn update_session(
         &mut self,
         dt: TimeSpan,
@@ -442,9 +435,9 @@ impl HostLayer {
             AnimMode::Play
         };
         // The animation evaluator sits below `saffron-assets`, so the host hands it a loader
-        // resolving a clip id through the **live** catalog (the C++ `clipLoader` capturing the
-        // live `assets&`). `editor`, `animation`, and `assets` are distinct fields, so the three
-        // borrows are disjoint; the loader closure is the per-tick injected dependency.
+        // resolving a clip id through the **live** catalog. `editor`, `animation`, and `assets`
+        // are distinct fields, so the three borrows are disjoint; the loader closure is the
+        // per-tick injected dependency.
         let assets = &mut self.assets;
         let mut load = |id: Uuid| {
             assets
@@ -456,8 +449,8 @@ impl HostLayer {
 
         // Snapshot this frame's animated poses into the shared cell (after `tick_animation`,
         // before `tick_play`), so the `sim_tick` closure motors each active ragdoll toward the
-        // pose without reaching the animation runtime it cannot capture (the C++ `simTick`
-        // building `PoseTarget`s from `state->animation.lastPose`). Cheap when no rig is driven.
+        // pose without reaching the animation runtime it cannot capture. Cheap when no rig is
+        // driven.
         if self.editor.play_state != PlayState::Edit && self.script_vm_active {
             let mut targets = self.pose_targets.borrow_mut();
             targets.clear();
@@ -502,8 +495,8 @@ impl HostLayer {
     }
 
     /// Builds the `EngineContext` borrow from the host's own fields and drains the control
-    /// socket once (the C++ `pollControl`). The borrow struct is assembled here and never
-    /// stored; `physics` crosses as the live play world or `None`.
+    /// socket once. The borrow struct is assembled here and never stored; `physics` crosses as
+    /// the live play world or `None`.
     fn poll_control(&mut self, window: &mut Window, renderer: &mut Renderer) {
         // The control plane's GPU-upload seam needs the host-owned one-off uploader; build
         // it before assembling the borrow (the asset commands resolve/upload through it).
@@ -513,8 +506,8 @@ impl HostLayer {
         };
         let mut control_renderer = HostControlRenderer::new(renderer, uploader);
         // Lend the live play world into the `EngineContext::physics` borrow: a `RefMut` on the
-        // shared cell, held for the drain's duration (the C++ `state->physics` passed by
-        // pointer). No `sim_tick` runs during the drain, so the cell is free to borrow here.
+        // shared cell, held for the drain's duration. No `sim_tick` runs during the drain, so
+        // the cell is free to borrow here.
         let mut physics = self.physics.borrow_mut();
         self.control.poll(
             window,
@@ -526,15 +519,13 @@ impl HostLayer {
     }
 
     /// Reconciles the play world + script VM against the editor's play state on the Edit↔Playing
-    /// edge (the C++ `onPlayStateChanged` hooks).
+    /// edge.
     ///
     /// Runs each `on_update` right after `poll_control` releases the editor borrow — the only
     /// borrow-sound place, since the published transition holds `&mut editor`. On Edit→Playing it
     /// builds the Jolt world from the play scene, starts the script VM, installs the bridge, and
-    /// sets the `sim_tick` seam; on →Edit it drops the world, stops the VM, and clears the seam
-    /// (the `#98` teardown order). Pause/Resume keep the session — only the Edit boundary builds
-    /// or tears it (matching the C++ `!state->physics.has_value()` / `state->scriptVmActive`
-    /// guards).
+    /// sets the `sim_tick` seam; on →Edit it drops the world, stops the VM, and clears the seam in
+    /// teardown order. Pause/Resume keep the session — only the Edit boundary builds or tears it.
     fn reconcile_play_edge(&mut self) {
         let now = self.editor.play_state;
         if now == self.last_play_state {
@@ -551,8 +542,7 @@ impl HostLayer {
         }
     }
 
-    /// Builds the play world + starts the script VM on the Edit→Playing edge (the C++
-    /// `onPlayStateChanged` Playing branch).
+    /// Builds the play world + starts the script VM on the Edit→Playing edge.
     ///
     /// Turns the play scene's collider/rigidbody components into Jolt bodies (`World::populate`
     /// cooking `.smesh` through the asset reader), adds per-bone kinematic bodies and a
@@ -568,7 +558,7 @@ impl HostLayer {
                 return;
             }
         };
-        self.physics_init = true; // globals installed by `World::new`; teardown shuts them down.
+        self.physics_init = true; // globals installed by `World::new`; teardown shuts them down once.
         *self.physics.borrow_mut() = Some(world);
         self.contact_cursor.set(0);
         self.populate_play_world();
@@ -581,8 +571,7 @@ impl HostLayer {
 
     /// Populates the live world from the play scene's components: collider/rigidbody bodies
     /// (cooking convex-hull/mesh shapes through the asset reader), per-bone kinematic bodies for
-    /// bone-following rigs, and a `CharacterVirtual` per controller entity (the C++
-    /// `populatePhysicsWorld` + `buildBoneBodies` + the `addCharacter` `forEach`).
+    /// bone-following rigs, and a `CharacterVirtual` per controller entity.
     fn populate_play_world(&mut self) {
         let assets = &mut self.assets;
         let mut world_ref = self.physics.borrow_mut();
@@ -610,8 +599,7 @@ impl HostLayer {
         }
     }
 
-    /// Starts the play session's script VM and installs the host bridge (the C++ `startScripts`
-    /// + the `state->script.<bridge> = …` install).
+    /// Starts the play session's script VM and installs the host bridge.
     ///
     /// Loads each `Script` slot's class from `<project>/src`, injects its declared fields, and
     /// runs `on_create` per instance. A start failure is logged and leaves the VM inactive (no
@@ -643,11 +631,10 @@ impl HostLayer {
         self.drain_script_sinks();
     }
 
-    /// Tears the play session down on the Playing/Paused→Edit edge (the C++ `onPlayStateChanged`
-    /// Edit branch), in the `#98` teardown order: stop the VM (it never touches the scene), then
-    /// drop the world (RAII frees its Jolt bodies), then clear the `sim_tick` seam. The Jolt
-    /// globals outlive every world, so they shut down only in the host teardown, after the last
-    /// world is gone.
+    /// Tears the play session down on the Playing/Paused→Edit edge, in teardown order: stop the
+    /// VM (it never touches the scene), then drop the world (RAII frees its Jolt bodies), then
+    /// clear the `sim_tick` seam. The Jolt globals outlive every world, so they shut down only in
+    /// the host teardown, after the last world is gone.
     fn exit_play_session(&mut self) {
         self.script.borrow_mut().stop_scripts();
         self.script_vm_active = false;
@@ -660,15 +647,15 @@ impl HostLayer {
         self.contact_cursor.set(0);
     }
 
-    /// Installs the `sim_tick` seam closure on the editor (the C++ `state->editor->simTick = …`).
+    /// Installs the `sim_tick` seam closure on the editor.
     ///
     /// The closure captures the play-session shared cells (it cannot capture `&mut self`: it runs
     /// while the editor is borrowed by `tick_play`). Per fixed step it drives ragdolls to the
     /// snapshotted animated pose, advances the per-bone blend, steps physics (which writes
     /// Dynamic body poses back into the play scene), writes ragdoll poses, drains the tick's new
     /// contacts and dispatches them to scripts, derives input edges, and runs `on_update` —
-    /// physics-then-scripts, so a script reads this frame's settled transforms (the C++ `simTick`
-    /// composition). A contained script failure is buffered for the host's deferred pause.
+    /// physics-then-scripts, so a script reads this frame's settled transforms. A contained
+    /// script failure is buffered for the host's deferred pause.
     fn install_sim_tick(&mut self) {
         let physics = Rc::clone(&self.physics);
         let script = Rc::clone(&self.script);
@@ -771,10 +758,10 @@ impl HostLayer {
     }
 
     /// Brings the project up from the editor-set environment once at attach time, before the
-    /// first frame (the C++ host `config.onCreate` project block). Routes through the control
-    /// context's one project-bring-up path, against the renderer's upload seam — so a host
-    /// launched with `SAFFRON_PROJECT` / `SAFFRON_AUTO_EMPTY_PROJECT` / a `project.json` has a
-    /// loaded scene before the loop starts, instead of an empty one waiting on the editor.
+    /// first frame. Routes through the control context's one project-bring-up path, against the
+    /// renderer's upload seam — so a host launched with `SAFFRON_PROJECT` /
+    /// `SAFFRON_AUTO_EMPTY_PROJECT` / a `project.json` has a loaded scene before the loop starts,
+    /// instead of an empty one waiting on the editor.
     fn bootstrap_project(&mut self, window: &mut Window, renderer: &mut Renderer) {
         self.ensure_uploader(renderer);
         let Some(uploader) = self.uploader.as_ref() else {
@@ -789,9 +776,9 @@ impl HostLayer {
         );
     }
 
-    /// Renders the scene through the active camera and submits the native gizmo overlay
-    /// (the C++ `layer.onUi`): track the viewport size in present mode, sync the gizmo, render
-    /// the scene, then build + submit the edit overlay geometry.
+    /// Renders the scene through the active camera and submits the native gizmo overlay: track
+    /// the viewport size in present mode, sync the gizmo, render the scene, then build + submit
+    /// the edit overlay geometry.
     fn render_ui(&mut self, window: Option<&Window>, renderer: &mut Renderer) {
         // Publish mode: the editor owns the render size (set-viewport-size); the hidden
         // window's size is meaningless. Present mode tracks the window.
@@ -827,17 +814,16 @@ impl HostLayer {
         self.submit_scene_edit_overlay(renderer, &cam, view_width, view_height);
 
         // Tell the renderer whether to fold the active view's BGRA8 shm readback into this
-        // frame's command buffer (the C++ `shmPublish[view].enabled` gate), so it records the
-        // blit/copy inline — no separate submit, no synchronous stall.
+        // frame's command buffer, so it records the blit/copy inline — no separate submit, no
+        // synchronous stall.
         if self.shm_publish {
             self.arm_active_view_shm(renderer);
         }
 
-        // Execute the offscreen scene graph (the C++ `endFrame` pass 1: scene → offscreen).
-        // The editor/headless host never presents a swapchain — the BGRA8 read-back into the
-        // shared-memory ring is its frame transport (the C++ `recordShmPublishCopy`). The copy
-        // is recorded into the frame command buffer above; this submits it. A failure is
-        // logged, not fatal.
+        // Execute the offscreen scene graph (pass 1: scene → offscreen). The editor/headless
+        // host never presents a swapchain — the BGRA8 read-back into the shared-memory ring is
+        // its frame transport. The copy is recorded into the frame command buffer above; this
+        // submits it. A failure is logged, not fatal.
         if let Err(err) = renderer.render_scene_offscreen() {
             log_error!("render_scene_offscreen: {err}");
             return;
@@ -849,7 +835,7 @@ impl HostLayer {
 
     /// Arms the renderer's per-view shm-publish flags from the host's segment wiring, so
     /// [`Renderer::render_scene_offscreen`] knows whether to fold the active view's readback
-    /// into the frame command buffer (the C++ `shmPublish[view].enabled`).
+    /// into the frame command buffer.
     fn arm_active_view_shm(&mut self, renderer: &mut Renderer) {
         for (view, shm_view) in [
             (saffron_rendering::ViewId::Scene, ShmView::Scene),
@@ -864,8 +850,7 @@ impl HostLayer {
 
     /// Drains the renderer's pipelined BGRA8 bytes (a frame whose GPU work completed a few
     /// frames ago, read back stall-free at the begin-frame fence wait) and publishes them
-    /// into the view's shm segment (the C++ pipelined `publishShmPublishSlot`). A no-op when
-    /// no completed slot is staged.
+    /// into the view's shm segment. A no-op when no completed slot is staged.
     fn publish_pipelined_view(&mut self, renderer: &mut Renderer) {
         let Some((view_id, width, height, pixels)) = renderer.pending_shm_view() else {
             return;
@@ -880,9 +865,9 @@ impl HostLayer {
         self.shm.publish(view, width, height, pixels);
     }
 
-    /// Builds the native gizmo overlay geometry and submits it (the C++
-    /// `submitSceneEditOverlay`). `edit_chrome` (Edit and not previewing) gates the gizmo /
-    /// billboards / frustums / debug overlays; colliders + the skeleton draw outside it.
+    /// Builds the native gizmo overlay geometry and submits it. `edit_chrome` (Edit and not
+    /// previewing) gates the gizmo / billboards / frustums / debug overlays; colliders + the
+    /// skeleton draw outside it.
     fn submit_scene_edit_overlay(
         &mut self,
         renderer: &mut Renderer,
@@ -914,7 +899,7 @@ impl HostLayer {
     }
 
     /// Starts the off-frame-loop thumbnail worker over a [`WorkerThumbnailGpu`] sharing the
-    /// renderer's device + bindless table (the C++ `startThumbnailWorker`).
+    /// renderer's device + bindless table.
     ///
     /// The renderer prewarms its own thumbnail pipelines first (the synchronous control-drain
     /// path still uses them); the worker then builds + prewarms its **own** thumbnail renderer
@@ -945,8 +930,7 @@ impl HostLayer {
 
     /// Lazily builds the host-owned one-off [`Uploader`] from the renderer's device + queue.
     /// The uploader is `Arc`-rooted in the device resources, so it outlives any single-frame
-    /// `&mut Renderer` borrow (the C++ "the host constructs an uploader alongside the
-    /// renderer").
+    /// `&mut Renderer` borrow.
     fn ensure_uploader(&mut self, renderer: &Renderer) {
         if self.uploader.is_some() {
             return;
@@ -958,9 +942,9 @@ impl HostLayer {
         }
     }
 
-    /// The load-bearing teardown sequence (the C++ `config.onExit`), run from `on_detach`
-    /// after the loop's `wait_gpu_idle` and before the renderer drops. Discards the step
-    /// record; [`HostLayer::teardown_recording`] is the same sequence with the order observable.
+    /// The load-bearing teardown sequence, run from `on_detach` after the loop's `wait_gpu_idle`
+    /// and before the renderer drops. Discards the step record; [`HostLayer::teardown_recording`]
+    /// is the same sequence with the order observable.
     fn teardown(&mut self) {
         let mut steps = Vec::new();
         self.teardown_recording(&mut steps);
@@ -971,11 +955,11 @@ impl HostLayer {
     /// wrong, not a compile error), so the order is pinned here and asserted by a test reading
     /// `steps`. The production [`HostLayer::teardown`] passes a throwaway vec.
     ///
-    /// The order mirrors `host.cppm:1574` exactly:
+    /// The order:
     /// 1. Drain + join the thumbnail worker first — it borrows the renderer, which is still
     ///    alive (the run loop drops the renderer only after `on_detach` returns), so it MUST
     ///    join before `wait_gpu_idle`/the renderer drop.
-    /// 2. Close the control socket (the C++ `destroyControlContext`).
+    /// 2. Close the control socket.
     /// 3. Quit can land mid-play: stop the script VM (it never touches the scene), drop the
     ///    physics world (RAII frees its Jolt bodies + detaches ragdolls before they destruct),
     ///    then shut down the Jolt globals **after** that last world is gone (the
@@ -1078,9 +1062,8 @@ impl Layer for HostLayer {
 
     fn on_ui(&mut self, app: &mut App) {
         // The scene reads its catalog through an `Arc<AssetCatalog>` shared from the asset
-        // server (the asset ops keep it in sync), so there is no per-frame raw-pointer rebind
-        // the C++ `live.catalog = &assets.catalog` did. The remaining `on_ui` work is the
-        // scene render + overlay submit, which needs the renderer.
+        // server (the asset ops keep it in sync). The remaining `on_ui` work is the scene render
+        // + overlay submit, which needs the renderer.
         if let Some(renderer) = app.frame_host.renderer_mut() {
             let window = app.window.as_ref();
             self.render_ui(window, renderer);
@@ -1094,8 +1077,8 @@ impl Layer for HostLayer {
 
 #[cfg(test)]
 impl HostLayer {
-    /// Marks the host as mid-play with the Jolt globals installed and a live world: the seam the
-    /// play edge fills (05-physics), set directly so a teardown test can drive a real play→quit.
+    /// Marks the host as mid-play with the Jolt globals installed and a live world, set directly
+    /// so a teardown test can drive a real play→quit.
     fn set_play_session_for_test(&mut self, physics: World) {
         *self.physics.borrow_mut() = Some(physics);
         self.physics_init = true;
@@ -1282,8 +1265,8 @@ mod tests {
     /// The play-edge wiring proper, CPU-only: entering Play builds a Jolt world from the play
     /// scene, the per-frame `update_session` steps it (the `sim_tick` seam) and writes the
     /// dynamic body's pose back into the play scene, and stopping drops the world and restores
-    /// Edit. This is the unit-level mirror of `physics-falling-box.test.ts` — the seam that was
-    /// a stub is exercised end to end without a renderer.
+    /// Edit. This is the unit-level mirror of `physics-falling-box.test.ts`, exercised end to
+    /// end without a renderer.
     #[test]
     fn play_edge_builds_a_world_and_steps_the_box() {
         use saffron_scene::{Collider, Rigidbody, Transform};
@@ -1400,7 +1383,7 @@ mod tests {
             "the Jolt globals are installed"
         );
 
-        // Record the teardown order and assert it matches the C++ `config.onExit` sequence.
+        // Record the teardown order and assert it matches the pinned sequence.
         let mut steps = Vec::new();
         host.teardown_recording(&mut steps);
         assert_eq!(
@@ -1415,7 +1398,7 @@ mod tests {
                 TeardownStep::PlayHooksUnsubscribed,
                 TeardownStep::GpuCachesCleared,
             ],
-            "the teardown order matches the C++ host.cppm onExit sequence"
+            "the teardown order drops every subsystem before the device"
         );
 
         // The world drops strictly before the Jolt-globals shutdown (a live world holds Jolt
@@ -1491,7 +1474,7 @@ mod tests {
         // Dropping the viewport shm publisher after the renderer is gone must still munmap +
         // shm_unlink cleanly — its `Drop` touches no device. Here there is no renderer at all, so
         // a host carrying an enabled segment that is dropped proves the shm teardown is fully
-        // independent of any GPU state (the munmap/unlink path is the same one phase-2 tests).
+        // independent of any GPU state.
         use crate::viewport_shm::{ShmView, ShmViewConfig, ViewportShmPublisher};
         use std::ffi::CString;
 

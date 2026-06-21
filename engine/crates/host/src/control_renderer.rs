@@ -281,8 +281,8 @@ impl ControlRenderer for HostControlRenderer<'_> {
     }
 
     fn request_window_capture(&mut self, path: &Path) -> Result<(), String> {
-        // Arms the swapchain (composited window output) capture for the next present, the
-        // C++ `requestWindowCapture`. Distinct from `capture_viewport`'s offscreen path.
+        // Arms the swapchain (composited window output) capture for the next present.
+        // Distinct from `capture_viewport`'s offscreen path.
         self.renderer
             .request_window_capture(path)
             .map_err(|e| e.to_string())
@@ -320,14 +320,14 @@ impl ControlRenderer for HostControlRenderer<'_> {
 }
 
 /// The generated `sa.*` LuaLS type defs written into every project's `library/` on
-/// create/open (the C++ `SaLuaDefs ++ SaComponentDefs`, now one generated artifact).
+/// create/open.
 ///
 /// The committed `schemas/control/sa.generated.luau` is the single source — emitted by
 /// `xtask gen-protocol` from the `saffron-script` binding table (the `sa.*` API surface) plus
 /// the registered-component wire shapes (the `:get_component` snapshots). Embedding the
 /// committed file matches the `@saffron/protocol` discipline: the gate's regen-freshness diff
 /// keeps it in lockstep with the live bindings, so the def file the editor type-checks against
-/// can never silently drift (NO LEGACY: no hand-written overlay, no drift tripwire).
+/// can never silently drift.
 const SA_LUA_DEFS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../schemas/control/sa.generated.luau"
@@ -445,7 +445,7 @@ impl ThumbnailGpu for HostThumbnailGpu<'_> {
     ) -> saffron_rendering::Result<Arc<GpuTexture>> {
         // `shader_spv` of `None` drives the cached default studio preview pipeline; a
         // non-foldable graph material passes its compiled `_preview.spv` for a per-call
-        // codegen pipeline (the C++ `renderMaterialPreview`'s `shaderSpv` argument).
+        // codegen pipeline.
         self.renderer
             .borrow_mut()
             .render_material_preview(material, size, shader_spv)
@@ -462,8 +462,7 @@ fn into_assets_png(png: saffron_rendering::ThumbnailPng) -> ThumbnailPng {
     }
 }
 
-/// The off-frame-loop thumbnail worker's GPU seam (the C++ `thumbnailWorkerLoop`'s
-/// `&renderer` reach).
+/// The off-frame-loop thumbnail worker's GPU seam.
 ///
 /// The worker thread owns this `Send` object for its whole life and decodes the image bytes
 /// on its own thread, then drives the GPU through it. The renderer's `Device` + bindless
@@ -491,8 +490,8 @@ unsafe impl Send for WorkerThumbnailGpu {}
 impl WorkerThumbnailGpu {
     /// Builds the worker GPU seam from the renderer's shared device + descriptors, with its own
     /// uploader + thumbnail renderer prewarmed on the calling thread. Built on the **worker**
-    /// thread (the C++ prewarmed on the main thread, then the worker reused; here each worker
-    /// owns its own resources, so prewarming on the worker thread is race-free).
+    /// thread: each worker owns its own resources, so prewarming on the worker thread is
+    /// race-free.
     ///
     /// # Errors
     ///
@@ -555,7 +554,7 @@ impl GpuUploader for WorkerThumbnailGpu {
 impl ThumbnailGpu for WorkerThumbnailGpu {
     fn bind_worker_thread(&self) {
         // The worker's uploader + thumbnail renderer own their command pools, so there is no
-        // thread-local pool to bind (the C++ `bindThumbnailWorkerThread` set a TLS pool).
+        // thread-local pool to bind.
     }
 
     fn encode_texture_thumbnail_png(

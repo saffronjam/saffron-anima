@@ -1,4 +1,4 @@
-//! The `SaffronAnima` headless viewport host: the integration apex that wires every
+//! The `saffron-host` headless viewport host: the integration apex that wires every
 //! subsystem, renders offscreen, publishes frames into shared memory, and serves the
 //! control plane.
 //!
@@ -8,19 +8,17 @@
 //!
 //! # The `unsafe` seam
 //!
-//! `#![allow(unsafe_code)]` is set crate-wide because the host is one of the three FFI
-//! seams in the engine (the README §4 / 08-host phase-2 shm seam). The frame transport
-//! to the editor is the POSIX shared-memory seqlock publisher: a `MAP_SHARED` mapping
-//! whose 32-byte header + BGRA8 ring the producer writes through a raw pointer, bumping
-//! the sequence last under a [`std::sync::atomic::fence`] `Release`. The byte-exact
-//! producer ([`saffron_rendering::ShmPublish`]) is a renderer type — the renderer's
-//! frame loop publishes the offscreen→BGRA8 readback through it, matching the C++ where
-//! `ShmPublish` lives in `renderer_capture.cpp` and `beginFrame` publishes. This crate
-//! owns the *wiring*: which views are enabled and under which segment names, decided from
-//! the editor-set environment ([`viewport_shm`]). The `unsafe` itself (mmap + the
-//! pointer-level header/ring writes + `shm_unlink`) is confined to that producer; the
-//! host carries the crate-root `allow` because it owns the seam end-to-end and the parent
-//! -death watch / control-socket wiring (later phases) also reaches for raw syscalls.
+//! `#![allow(unsafe_code)]` is set crate-wide because the host owns one of the engine's FFI
+//! seams. The frame transport to the editor is the POSIX shared-memory seqlock publisher: a
+//! `MAP_SHARED` mapping whose 32-byte header + BGRA8 ring the producer writes through a raw
+//! pointer, bumping the sequence last under a [`std::sync::atomic::fence`] `Release`. The
+//! byte-exact producer ([`saffron_rendering::ShmPublish`]) is a renderer type — the
+//! renderer's frame loop publishes the offscreen→BGRA8 readback through it. This crate owns
+//! the *wiring*: which views are enabled and under which segment names, decided from the
+//! editor-set environment ([`viewport_shm`]). The `unsafe` itself (mmap + the pointer-level
+//! header/ring writes + `shm_unlink`) is confined to that producer; the host carries the
+//! crate-root `allow` because it owns the seam end-to-end and the parent-death watch /
+//! control-socket wiring also reaches for raw syscalls.
 
 #![allow(unsafe_code)]
 
@@ -44,7 +42,7 @@ use saffron_core::{log_error, log_info, log_warn};
 use saffron_window::WindowConfig;
 
 /// Builds the editor host (window or headless device + renderer + the editor session), runs
-/// the main loop, and returns the process exit code — the C++ `runHost`.
+/// the main loop, and returns the process exit code.
 ///
 /// Reads the editor-spawn / shm environment the editor sets, attaches the [`HostLayer`] in
 /// the app's `on_create` (wiring the renderer's present-only mode + default AA + the shm
@@ -75,8 +73,7 @@ pub fn run_host(title: impl Into<String>, width: u32, height: u32) -> i32 {
             width,
             height,
             // Headless editor mode creates no window, so `hidden` is moot; the standalone
-            // windowed path shows its window. The C++ hid the window in editor mode because
-            // it still created one; the Rust headless path skips the window entirely.
+            // windowed path shows its window.
             hidden: false,
         },
         on_create: Box::new(move |app: &mut App| {

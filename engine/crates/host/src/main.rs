@@ -1,4 +1,4 @@
-//! The `SaffronAnima` host binary entry point: `int main(){ return runHost(...); }`.
+//! The `saffron-host` present-only viewport host binary entry point.
 //!
 //! Builds the editor host (the [`saffron_host::run_host`] apex), runs the loop, and exits
 //! with its process exit code. The mode (headless editor vs standalone windowed) is decided

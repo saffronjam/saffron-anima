@@ -1,13 +1,12 @@
-//! The PP-10 shm-ABI go/no-go gate (08-host-and-viewport phase-3).
+//! The shm-ABI go/no-go gate.
 //!
-//! Proves the frozen frame transport: the Rust producer publishes BGRA8 frames that the
-//! **unchanged** editor reader `editor/src-tauri/src/wayland_viewport.rs` accepts
-//! byte-for-byte. The acceptance is byte-level agreement with the *actual* reader's read /
-//! accept / reject rules, not a hand-waved mirror — so this test embeds an oracle reader
-//! ([`OracleReader`]) that replicates `step_view` / `open_shm` / `stat_shm` field-for-field
-//! (the same header words, the same magic + capacity + ring-fits checks, the same
-//! `seq % slots` slot index, the same `buffer_dims` rebuild trigger) and consumes the
-//! producer's segment exactly as the editor would.
+//! Proves the frozen frame transport: the producer publishes BGRA8 frames that the editor
+//! reader `editor/src-tauri/src/wayland_viewport.rs` accepts byte-for-byte. The acceptance is
+//! byte-level agreement with the *actual* reader's read / accept / reject rules, so this test
+//! embeds an oracle reader ([`OracleReader`]) that replicates `step_view` / `open_shm` /
+//! `stat_shm` field-for-field (the same header words, the same magic + capacity + ring-fits
+//! checks, the same `seq % slots` slot index, the same `buffer_dims` rebuild trigger) and
+//! consumes the producer's segment exactly as the editor would.
 //!
 //! The gate runs the host's [`ViewportShmPublisher`] (the same wiring the run loop drives),
 //! publishes N frames sized by `set-viewport-size`, and asserts the oracle:
@@ -22,14 +21,13 @@
 //! stall): the asset-preview segment is present with `seq 0` even when only the scene view
 //! renders, found by the same read-only `shm_open` probe `stat_shm` uses.
 //!
-//! The full live present (the editor displaying the frame on a Wayland subsurface) needs
-//! the GTK/WebKit/Wayland editor stack, which does not run headless in the toolbox; that
-//! half is DEFERRED-NEEDS-DISPLAY. The gate PASSES on the byte-exact ABI match against the
-//! reader oracle, which is the transport contract PP-10 conditions the rewrite on.
+//! This gate covers the byte-exact ABI match against the reader oracle. The full live present
+//! (the editor displaying the frame on a Wayland subsurface) needs the GTK/WebKit/Wayland
+//! editor stack, which does not run headless in the toolbox, so it is not covered here.
 //!
-//! `#![allow(unsafe_code)]` covers the edition-2024 `unsafe { set_var }` the env-contract
-//! sub-test needs to reproduce the editor's `SAFFRON_VIEWPORT_SHM_*` startup contract; the
-//! mutation is serialized by `ENV_LOCK` so no other thread reads the vars concurrently.
+//! `#![allow(unsafe_code)]` covers the `unsafe { set_var }` the env-contract sub-test needs to
+//! reproduce the editor's `SAFFRON_VIEWPORT_SHM_*` startup contract; the mutation is serialized
+//! by `ENV_LOCK` so no other thread reads the vars concurrently.
 #![allow(unsafe_code)]
 
 use std::ffi::CString;
