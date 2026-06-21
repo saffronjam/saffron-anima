@@ -1,14 +1,13 @@
-//! The one JSON-over-unix-socket control client, shared by the `sa` CLI and the Rust e2e
+//! The JSON-over-unix-socket control client, shared by the `sa` CLI and the Rust e2e
 //! harness.
 //!
-//! There is a single wire implementation in the tree (NO LEGACY): the framing
-//! (newline-delimited `<json>\n` requests, one reply line per request), the request envelope
-//! (`{ "id", "cmd", "params" }`), the reply envelope (`{ "ok", "result", "error" }`), and the
-//! socket-path resolution all live here. The `sa` CLI's argument coercion (`build_params`) is
+//! The framing (newline-delimited `<json>\n` requests, one reply line per request), the request
+//! envelope (`{ "id", "cmd", "params" }`), the reply envelope (`{ "ok", "result", "error" }`), and
+//! the socket-path resolution all live here. The `sa` CLI's argument coercion (`build_params`) is
 //! *argument* parsing, not wire framing, so it stays in the CLI; everything the wire touches is
 //! this crate.
 //!
-//! It links only `saffron-protocol` (the frozen DTOs + the `Uuid` decimal-string encoding) and
+//! It links only `saffron-protocol` (the DTOs + the `Uuid` decimal-string encoding) and
 //! `serde`/`serde_json`, so it runs on the host outside the build toolbox — no renderer, no Jolt.
 
 #![deny(unsafe_code)]
@@ -87,8 +86,8 @@ pub fn resolve_socket_path(
 
 /// Builds the request envelope `{ "cmd": <name>, "params": <obj>, "id": <id> }` the engine reads.
 ///
-/// `params` is forced to a JSON object (an empty object when `Null`), matching the C++ envelope
-/// shape; a non-object/non-null value is preserved for the (rare) caller that builds a custom body.
+/// `params` is forced to a JSON object (an empty object when `Null`); a non-object/non-null value
+/// is preserved for the (rare) caller that builds a custom body.
 #[must_use]
 pub fn request_envelope(id: u64, cmd: &str, params: Value) -> Value {
     let params = match params {

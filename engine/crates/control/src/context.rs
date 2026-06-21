@@ -16,11 +16,10 @@ use crate::server::{ControlServer, control_socket_path, start_control_server};
 
 /// Owns the command registry and the listening socket. The registry is built
 /// once at startup (it has no per-frame mutation); the `EngineContext` is rebuilt
-/// each frame in [`ControlContext::poll`] — the C++ `ControlContext`.
+/// each frame in [`ControlContext::poll`].
 ///
 /// A bind failure is non-fatal: the context is constructed with `server: None`
-/// and runs inactive, so the engine still runs without a control socket (the C++
-/// "control socket disabled" warning path).
+/// and runs inactive, so the engine still runs without a control socket.
 pub struct ControlContext {
     registry: CommandRegistry,
     server: Option<ControlServer>,
@@ -62,9 +61,9 @@ impl ControlContext {
 
     /// Closes the listening socket (dropping its [`ControlServer`]) so it stops serving.
     ///
-    /// The host calls this during teardown to release the socket promptly (the C++
-    /// `destroyControlContext`), before the renderer is dropped; the registry stays so a
-    /// late palette/manifest read still resolves. Idempotent.
+    /// The host calls this during teardown to release the socket promptly, before the
+    /// renderer is dropped; the registry stays so a late palette/manifest read still
+    /// resolves. Idempotent.
     pub fn shutdown(&mut self) {
         self.server = None;
     }
@@ -92,11 +91,11 @@ impl ControlContext {
     }
 
     /// Brings the host's project up from the editor-set environment once at startup, before
-    /// the first frame (the C++ host's `config.onCreate` project block): `SAFFRON_PROJECT`
-    /// opens/creates a named project, else `SAFFRON_AUTO_EMPTY_PROJECT` makes a per-shell
-    /// scratch project, else a working-directory `project.json` opens; otherwise nothing
-    /// loads and the host waits for the editor's picker. Runs the same project-bring-up path
-    /// the lifecycle commands use, against the live subsystem borrows.
+    /// the first frame: `SAFFRON_PROJECT` opens/creates a named project, else
+    /// `SAFFRON_AUTO_EMPTY_PROJECT` makes a per-shell scratch project, else a
+    /// working-directory `project.json` opens; otherwise nothing loads and the host waits
+    /// for the editor's picker. Runs the same project-bring-up path the lifecycle commands
+    /// use, against the live subsystem borrows.
     pub fn bootstrap_project_from_env(
         &mut self,
         window: &mut Window,
@@ -115,8 +114,8 @@ impl ControlContext {
     }
 
     /// Drains and runs any pending control requests on the calling (main) thread.
-    /// Call once per frame with the live subsystem borrows (the C++
-    /// `pollControl`). A no-op when the socket failed to bind.
+    /// Call once per frame with the live subsystem borrows. A no-op when the socket
+    /// failed to bind.
     ///
     /// `physics` is the live play world (non-owning) or `None` in Edit.
     pub fn poll(
@@ -142,7 +141,7 @@ impl ControlContext {
             Ok(request) => saffron_json::dump_json(&registry.dispatch(&mut ctx, &request), -1),
             Err(_) => {
                 // A non-JSON line gets the frozen invalid-request envelope, with
-                // no `id` to echo (the C++ `drainControlServer` invalid path).
+                // no `id` to echo.
                 r#"{"ok":false,"error":"invalid JSON request"}"#.to_owned()
             }
         });

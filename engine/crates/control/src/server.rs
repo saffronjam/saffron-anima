@@ -1,10 +1,9 @@
 //! The synchronous, single-threaded, non-blocking `AF_UNIX` socket server.
 //!
-//! A direct port of the C++ `control_server.cpp` loop onto `rustix`: a listening
-//! socket polled once per frame from the host's main loop. There is no async
-//! runtime, no worker pool, no background thread — `drain` accepts pending
-//! clients, reads readable bytes, splits on `\n`, runs each request on the
-//! calling thread, and writes one compact JSON line back, never blocking.
+//! A listening socket polled once per frame from the host's main loop. There is
+//! no async runtime, no worker pool, no background thread — `drain` accepts
+//! pending clients, reads readable bytes, splits on `\n`, runs each request on
+//! the calling thread, and writes one compact JSON line back, never blocking.
 
 use std::os::fd::{AsFd, OwnedFd};
 
@@ -18,12 +17,12 @@ use rustix::net::{
 
 use crate::error::{Error, Result};
 
-/// The C++ `recv` scratch buffer size (`control_server.cpp:265`).
+/// The `recv` scratch buffer size.
 const RECV_CHUNK: usize = 4096;
 
 /// One connected client: its socket, the bytes accumulated awaiting a `\n`, and
 /// whether the peer has gone (closing is by dropping the `OwnedFd`, so death is
-/// flagged explicitly — an `OwnedFd` cannot be the C++ sentinel `-1`).
+/// flagged explicitly).
 struct Client {
     fd: OwnedFd,
     inbuf: Vec<u8>,
@@ -48,8 +47,8 @@ impl ControlServer {
 
 impl Drop for ControlServer {
     /// Closes the listening socket (clients drop with the vec) and unlinks the
-    /// bound path — the C++ `stopControlServer`. The `OwnedFd`s close themselves;
-    /// only the path needs explicit removal.
+    /// bound path. The `OwnedFd`s close themselves; only the path needs explicit
+    /// removal.
     fn drop(&mut self) {
         if !self.path.is_empty() {
             let _ = unlink(self.path.as_str());
@@ -57,9 +56,8 @@ impl Drop for ControlServer {
     }
 }
 
-/// Resolves the control socket path (the C++ `controlSocketPath`):
-/// `SAFFRON_CONTROL_SOCK` if set, else `$XDG_RUNTIME_DIR/saffron-control.sock`,
-/// else `/tmp/saffron-control-<uid>.sock`.
+/// Resolves the control socket path: `SAFFRON_CONTROL_SOCK` if set, else
+/// `$XDG_RUNTIME_DIR/saffron-control.sock`, else `/tmp/saffron-control-<uid>.sock`.
 #[must_use]
 pub fn control_socket_path() -> String {
     resolve_socket_path(
@@ -81,9 +79,8 @@ fn resolve_socket_path(override_path: Option<&str>, runtime_dir: Option<&str>, u
     format!("/tmp/saffron-control-{uid}.sock")
 }
 
-/// Binds and listens on `path` (the C++ `startControlServer`): a non-blocking,
-/// close-on-exec `AF_UNIX` stream socket, the stale path unlinked first, mode
-/// `0600`, backlog 8.
+/// Binds and listens on `path`: a non-blocking, close-on-exec `AF_UNIX` stream
+/// socket, the stale path unlinked first, mode `0600`, backlog 8.
 ///
 /// # Errors
 ///
@@ -98,7 +95,7 @@ pub fn start_control_server(path: String) -> Result<ControlServer> {
     )
     .map_err(|e| Error::Socket(format!("socket: {e}")))?;
 
-    // Remove any stale socket before binding (the C++ ::unlink before bind).
+    // Remove any stale socket before binding.
     let _ = unlink(path.as_str());
 
     let addr = SocketAddrUnix::new(path.as_str()).map_err(|_| Error::PathTooLong(path.clone()))?;
@@ -120,7 +117,7 @@ impl ControlServer {
     /// Accepts pending clients, drains their readable bytes, splits the buffered
     /// input on `\n`, and for each complete line calls `handle(line) -> reply`,
     /// flushing the reply (plus a trailing `\n`) back with the short-write loop.
-    /// Closed clients are dropped at the end (the C++ `drainControlServer`).
+    /// Closed clients are dropped at the end.
     ///
     /// `handle` is the request→reply seam: the per-frame caller wires it to parse
     /// the line and dispatch through the registry against the live
@@ -189,7 +186,7 @@ fn read_into(client: &mut Client) {
     }
 }
 
-/// Sends `out` in full, looping over short writes (the C++ send flush loop).
+/// Sends `out` in full, looping over short writes.
 ///
 /// The client socket is non-blocking, so a single `send` short-writes any reply
 /// larger than the socket buffer and silently drops the tail — the client then

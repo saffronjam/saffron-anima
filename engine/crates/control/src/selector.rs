@@ -1,11 +1,10 @@
 //! The shared entity selector + small wire conversions every domain handler reuses.
 //!
-//! The C++ control layer carries one [`resolve_entity`] (`control_server.cpp:87`) and
-//! one [`entity_ref_dto`] (`:145`); the scene/asset/animation/physics phases all call
-//! them rather than re-deriving the id-or-name lookup. The port keeps that single
-//! translation place: a numeric selector (or a fully-numeric string) is a UUID, parsed
-//! whole-string, resolved against the **active** scene so it finds runtime entities
-//! during play; a non-numeric string falls back to a [`Name`] scan.
+//! The scene/asset/animation/physics phases call [`resolve_entity`] and
+//! [`entity_ref_dto`] rather than re-deriving the id-or-name lookup. A numeric
+//! selector (or a fully-numeric string) is a UUID, parsed whole-string, resolved
+//! against the **active** scene so it finds runtime entities during play; a
+//! non-numeric string falls back to a [`Name`] scan.
 
 use saffron_geometry::glam;
 use saffron_protocol::{EntityRef, Uuid, Vec3};
@@ -15,7 +14,7 @@ use serde_json::Value;
 use crate::error::Error;
 use crate::registry::EngineContext;
 
-/// Converts a glam vector into the wire `Vec3` (the C++ `fromGlm`).
+/// Converts a glam vector into the wire `Vec3`.
 #[must_use]
 pub fn to_vec3(v: glam::Vec3) -> Vec3 {
     Vec3 {
@@ -31,8 +30,7 @@ pub fn from_vec3(v: Vec3) -> glam::Vec3 {
     glam::Vec3::new(v.x, v.y, v.z)
 }
 
-/// The entity's `IdComponent` uuid, or `0` when it carries none (the C++
-/// `hasComponent<IdComponent> ? ... : 0` guard repeated at every body).
+/// The entity's `IdComponent` uuid, or `0` when it carries none.
 #[must_use]
 pub fn entity_uuid(scene: &Scene, entity: Entity) -> u64 {
     scene
@@ -42,12 +40,11 @@ pub fn entity_uuid(scene: &Scene, entity: Entity) -> u64 {
 }
 
 /// Resolves an [`EntitySelector`](saffron_protocol::EntitySelector) (a raw JSON value:
-/// a uuid number, a numeric string, or a name) to a live [`Entity`] in the active scene
-/// (the C++ `resolveEntity`).
+/// a uuid number, a numeric string, or a name) to a live [`Entity`] in the active scene.
 ///
 /// UUID first (stable across reloads; a fully-numeric string counts as a UUID, parsed
 /// whole-string), then a [`Name`] scan. A `null` selector is the "missing 'entity'"
-/// error; an unresolved selector dumps the selector JSON, byte-for-byte the C++ message.
+/// error; an unresolved selector dumps the selector JSON.
 ///
 /// # Errors
 ///
@@ -84,7 +81,7 @@ pub fn resolve_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<E
 }
 
 /// The uuid a selector names, if any: an unsigned number, or a fully-numeric string
-/// (the C++ `strtoull` whole-string parse). A non-numeric string is `None`.
+/// (whole-string parse). A non-numeric string is `None`.
 fn wanted_uuid(selector: &Value) -> Option<u64> {
     if let Some(number) = selector.as_u64() {
         return Some(number);
@@ -92,11 +89,11 @@ fn wanted_uuid(selector: &Value) -> Option<u64> {
     selector.as_str().and_then(|text| text.parse::<u64>().ok())
 }
 
-/// Re-fits an entity's `Collider` to its mesh AABB through the asset reader (the C++
-/// `fitColliderToMesh(ctx, entity)`): a thin wrapper that binds the
-/// [`MeshCook`](saffron_physics::MeshCook) seam to [`AssetServer::load_mesh_cpu_asset`]
-/// and forwards to the shared [`saffron_physics::fit_collider_to_mesh`]. Returns `false`
-/// when there is no collider, no resolvable mesh, or a degenerate shape.
+/// Re-fits an entity's `Collider` to its mesh AABB through the asset reader: a thin
+/// wrapper that binds the [`MeshCook`](saffron_physics::MeshCook) seam to
+/// [`AssetServer::load_mesh_cpu_asset`] and forwards to the shared
+/// [`saffron_physics::fit_collider_to_mesh`]. Returns `false` when there is no
+/// collider, no resolvable mesh, or a degenerate shape.
 ///
 /// [`AssetServer`]: saffron_assets::AssetServer
 /// [`AssetServer::load_mesh_cpu_asset`]: saffron_assets::AssetServer::load_mesh_cpu_asset
@@ -110,8 +107,8 @@ pub fn fit_collider(ctx: &mut EngineContext<'_>, entity: Entity) -> bool {
     saffron_physics::fit_collider_to_mesh(ctx.scene_edit.active_scene(), entity, &mut cook)
 }
 
-/// Builds the `{ id: decimal-string, name }` reply for a resolved entity (the C++
-/// `entityRefDto`). A missing `Name` reads as empty, a missing id as `0`.
+/// Builds the `{ id: decimal-string, name }` reply for a resolved entity. A missing
+/// `Name` reads as empty, a missing id as `0`.
 #[must_use]
 pub fn entity_ref_dto(scene: &Scene, entity: Entity) -> EntityRef {
     let name = scene

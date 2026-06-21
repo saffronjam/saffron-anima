@@ -1,10 +1,7 @@
 //! The command registry, the `EngineContext` live-state seam, dispatch, and the
 //! two builtin commands (`ping`, `help`).
 //!
-//! The C++ `CommandRegistry` is a `vector<CommandTraits>` plus a `byName` map,
-//! and `registerCommand<Params, Result>` wraps a typed handler in a closure that
-//! parses params, runs, and serializes the result. The port keeps that shape: a
-//! [`CommandRegistry`] is a `Vec<Command>` (insertion order preserved, so `help`
+//! A [`CommandRegistry`] is a `Vec<Command>` (insertion order preserved, so `help`
 //! and the generated manifest iterate it in registration order) plus a
 //! `HashMap<&'static str, usize>` index. The typed [`CommandRegistry::register`]
 //! is the single place the wire encoding (serde-driven, decimal-string ids) is
@@ -36,14 +33,13 @@ use crate::error::{Error, Result};
 /// The renderer seam every render-, scene-, and asset-domain command reaches
 /// through.
 ///
-/// The C++ `EngineContext` holds a bare `Renderer&`; in Rust the concrete
-/// `Renderer` cannot be built headless (its swapchain WSI has no offscreen backing
-/// on lavapipe), so the borrow is taken behind this object-safe trait. The live
-/// implementation is the host's `HostControlRenderer`, which bundles the renderer
-/// with the host-owned one-off `Uploader` (the renderer owns none) so the
-/// GPU-upload / scene-render seam below can be handed to the asset loaders; a
-/// unit-test stub implements it over plain in-memory state. Growing this trait is
-/// the only renderer coupling the control plane has.
+/// The concrete `Renderer` cannot be built headless (its swapchain WSI has no
+/// offscreen backing on lavapipe), so the borrow is taken behind this object-safe
+/// trait. The live implementation is the host's `HostControlRenderer`, which
+/// bundles the renderer with the host-owned one-off `Uploader` (the renderer owns
+/// none) so the GPU-upload / scene-render seam below can be handed to the asset
+/// loaders; a unit-test stub implements it over plain in-memory state. Growing
+/// this trait is the only renderer coupling the control plane has.
 ///
 /// Beyond the render-domain query/toggle methods, three asset/scene-domain seams
 /// live here: **view-select** ([`ControlRenderer::set_active_view`] + the
@@ -53,7 +49,7 @@ use crate::error::{Error, Result};
 /// `load_mesh_asset`, `ensure_preview_floor_mesh`, `resolve_material_asset`,
 /// `pick_entity`, …) the asset/scene handlers drive.
 pub trait ControlRenderer {
-    /// The full per-frame draw + timing + telemetry snapshot (the C++ `renderStats`).
+    /// The full per-frame draw + timing + telemetry snapshot.
     fn render_stats(&self) -> RenderStatsFull;
 
     /// Whether clustered-forward light culling is on.
@@ -194,14 +190,14 @@ pub trait ControlRenderer {
     /// Whether the device is a software rasterizer.
     fn software_gpu(&self) -> bool;
 
-    /// Blocks until the GPU has finished every in-flight frame (the C++ `waitGpuIdle`).
+    /// Blocks until the GPU has finished every in-flight frame.
     ///
     /// The asset handlers idle before a destructive cache mutation (`scan-assets`,
     /// `reimport-model`, `delete-unused`) so dropping a cached `Arc<GpuMesh>`/
     /// `Arc<GpuTexture>` never frees a resource a frame still reads.
     fn wait_gpu_idle(&mut self);
 
-    /// Switches the active view the engine renders + publishes (the C++ `setActiveView`).
+    /// Switches the active view the engine renders + publishes.
     ///
     /// Routes the per-view render target + temporal state + shm publisher; the
     /// scene/camera swap that follows a preview enter/exit is the `SceneEditContext`'s
@@ -209,11 +205,9 @@ pub trait ControlRenderer {
     fn set_active_view(&mut self, view: ViewId);
     /// The render size a view last requested (device pixels), `(0, 0)` until it has been
     /// sized at least once. Read to tell whether a not-yet-shown preview pane needs
-    /// seeding before a `set-active-view assetPreview` (the C++ `desiredWidth == 0`
-    /// check).
+    /// seeding before a `set-active-view assetPreview`.
     fn view_desired_size(&self, view: ViewId) -> (u32, u32);
-    /// Sets a view's desired offscreen render size, recreating its targets (the C++
-    /// `setViewportDesiredSize`).
+    /// Sets a view's desired offscreen render size, recreating its targets.
     ///
     /// # Errors
     ///
@@ -226,9 +220,9 @@ pub trait ControlRenderer {
         height: u32,
     ) -> std::result::Result<(), String>;
 
-    /// Captures the active view's offscreen scene color to a PNG file (the C++
-    /// `captureViewport`, the `screenshot {target:viewport}` path). Synchronous: idles,
-    /// reads back, and writes the file before returning.
+    /// Captures the active view's offscreen scene color to a PNG file (the
+    /// `screenshot {target:viewport}` path). Synchronous: idles, reads back, and
+    /// writes the file before returning.
     ///
     /// # Errors
     ///
@@ -236,16 +230,15 @@ pub trait ControlRenderer {
     fn capture_viewport(&mut self, path: &Path) -> std::result::Result<(), String>;
 
     /// Requests a window-surface (swapchain) capture written at the end of the current
-    /// frame (the C++ `requestWindowCapture`, the `screenshot {target:window}` path).
-    /// Returns immediately — the `screenshot` reply carries `pending: true`.
+    /// frame (the `screenshot {target:window}` path). Returns immediately — the
+    /// `screenshot` reply carries `pending: true`.
     ///
     /// # Errors
     ///
     /// Returns the device / file error message if the capture cannot be armed.
     fn request_window_capture(&mut self, path: &Path) -> std::result::Result<(), String>;
 
-    /// Runs `with` against a transient [`GpuUploader`] over the live renderer (the C++
-    /// loaders' bare `Renderer&` upload seam).
+    /// Runs `with` against a transient [`GpuUploader`] over the live renderer.
     ///
     /// The upload seam borrows the renderer plus the host-owned one-off uploader for the
     /// call's duration; it never escapes the closure. Every asset handler that resolves
@@ -256,8 +249,7 @@ pub trait ControlRenderer {
     fn with_gpu_uploader(&mut self, with: &mut dyn FnMut(&dyn GpuUploader));
 
     /// Runs `with` against a transient [`ThumbnailGpu`] over the live renderer — the
-    /// upload trio plus the render-to-PNG / material-preview primitives (the C++
-    /// thumbnail/material-preview `Renderer&` seam).
+    /// upload trio plus the render-to-PNG / material-preview primitives.
     ///
     /// `get-thumbnail` / `view-asset` drive [`saffron_assets::request_thumbnail`] through
     /// it, and `preview-render` drives [`ThumbnailGpu::render_material_preview`] +
@@ -281,8 +273,8 @@ pub trait ControlRenderer {
 /// The slice of live engine state a command may touch.
 ///
 /// References only, assembled fresh each frame in `poll_control` and dropped at
-/// the end of the drain — never stored past it (the C++ `EngineContext`). Because
-/// the fields are distinct, a handler that needs `&mut` to two subsystems at once
+/// the end of the drain — never stored past it. Because the fields are distinct,
+/// a handler that needs `&mut` to two subsystems at once
 /// borrows them disjointly through the struct, no `RefCell` required. `physics`
 /// is the live play world or `None` in Edit / before the first play.
 pub struct EngineContext<'a> {
@@ -300,7 +292,7 @@ pub struct EngineContext<'a> {
 
 /// The boxed handler type: a closure run on the calling (main) thread that maps
 /// `(ctx, params)` to a result `Value` or a typed error. `!Send` and
-/// single-thread-confined, like the C++ `std::function`.
+/// single-thread-confined.
 type HandlerFn = Box<dyn Fn(&mut EngineContext<'_>, &Value) -> Result<Value>>;
 
 /// A registered control command: a name, one-line help, and its handler.
@@ -339,8 +331,8 @@ impl CommandRegistry {
     }
 
     /// Registers an untyped command whose handler receives the raw params
-    /// `Value` (the C++ untyped `registerCommand` overload). `help` is the one
-    /// builtin that needs this — it reflects over the registry.
+    /// `Value`. `help` is the one builtin that needs this — it reflects over the
+    /// registry.
     pub fn register_raw(
         &mut self,
         name: &'static str,
@@ -356,9 +348,8 @@ impl CommandRegistry {
         });
     }
 
-    /// Registers a typed command, mirroring the C++
-    /// `registerCommand<Params, Result>` template: deserialize `P` from the
-    /// params `Value`, run the typed handler, serialize `R` back to a `Value`.
+    /// Registers a typed command: deserialize `P` from the params `Value`, run the
+    /// typed handler, serialize `R` back to a `Value`.
     ///
     /// This is the single site the frozen wire encoding is applied — the typed
     /// DTOs carry the decimal-string-`u64` and kebab-case-enum derives, so every
@@ -381,7 +372,7 @@ impl CommandRegistry {
         });
     }
 
-    /// Looks up a command by name (the C++ `findCommand`).
+    /// Looks up a command by name.
     #[must_use]
     pub fn find(&self, name: &str) -> Option<&Command> {
         self.by_name.get(name).map(|&index| &self.rows[index])
@@ -393,9 +384,8 @@ impl CommandRegistry {
         &self.rows
     }
 
-    /// Dispatches one parsed request envelope to a reply envelope (the C++
-    /// `dispatch`): echo `id`, find the command, run it, and build
-    /// `{ id, ok, result | error }`.
+    /// Dispatches one parsed request envelope to a reply envelope: echo `id`, find
+    /// the command, run it, and build `{ id, ok, result | error }`.
     ///
     /// `id` echoes whatever the request carried (any JSON, absent → `null`);
     /// `ok` is always present; exactly one of `result` / `error` accompanies it.
@@ -424,7 +414,7 @@ impl CommandRegistry {
     }
 
     /// The `{ commands: [{ name, help }] }` listing in registration order — the
-    /// body of the `help` command (the C++ untyped `help` lambda).
+    /// body of the `help` command.
     fn help_listing(&self) -> Value {
         let commands: Vec<Value> = self
             .rows
@@ -436,7 +426,7 @@ impl CommandRegistry {
 }
 
 /// `params[name]` if present, else the index-th element of `params["args"]`,
-/// else `Null` (the C++ `positionalOr`).
+/// else `Null`.
 ///
 /// This is the lenient read every handler shares so a command accepts either
 /// `--name value` (an object key) or a bare positional. Domain handlers use it
@@ -474,8 +464,8 @@ fn field_order<P: JsonSchema + 'static>() -> &'static [String] {
     })
 }
 
-/// Folds a request's positional `args` array onto DTO `P`'s named fields before deserializing
-/// (the C++ per-field `positional = true` contract: `args[i]` fills the `i`-th declared field).
+/// Folds a request's positional `args` array onto DTO `P`'s named fields before deserializing:
+/// `args[i]` fills the `i`-th declared field.
 ///
 /// A named key always wins over its positional slot. With no `args` array the params pass
 /// through untouched, so the common object-form call costs nothing past the field-order lookup.
@@ -499,12 +489,8 @@ fn fold_positional_args<P: JsonSchema + 'static>(params: &Value) -> Value {
     Value::Object(object)
 }
 
-/// Registers the builtin commands: `ping` then `help`, in that order.
-///
-/// The C++ registers render → scene → asset → animation → physics; the five
-/// domain phases add their `register_*_commands` here. Phase 1 lands only the two
-/// builtins (`ping`, `help`), which live at the head of the render group in C++
-/// (`registerRenderCommands`).
+/// Registers the builtin commands: `ping` then `help`, in that order, then the
+/// domain phases' `register_*_commands`.
 pub fn register_builtin_commands(reg: &mut CommandRegistry) {
     reg.register::<PingParams, PingResult>("ping", "liveness + engine info", |_ctx, _params| {
         Ok(PingResult {
@@ -526,7 +512,7 @@ pub fn register_builtin_commands(reg: &mut CommandRegistry) {
     // The domain groups register in the frozen order render → scene → animation → physics
     // → asset. `help` and the manifest-completeness check iterate the registry as a set, so
     // the asset group is the manifest tail (`get-project` … `quit`); the scene group lands
-    // between render and animation, mirroring the C++ registration sequence.
+    // between render and animation.
     crate::commands_render::register_render_commands(reg);
     crate::commands_scene::register_scene_commands(reg);
     crate::commands_animation::register_animation_commands(reg);
@@ -534,7 +520,7 @@ pub fn register_builtin_commands(reg: &mut CommandRegistry) {
     crate::commands_asset::register_asset_commands(reg);
 }
 
-/// The process id, for the `ping` reply (the C++ `::getpid()`).
+/// The process id, for the `ping` reply.
 fn process_id() -> i32 {
     i32::try_from(std::process::id()).unwrap_or(0)
 }
@@ -573,10 +559,9 @@ mod tests {
     /// handler in the builtin registry — except `get-script-schema`, which the host registers
     /// (it needs the Lua schema reader) — and the registry registers nothing the manifest does
     /// not declare. This is the manifest-completeness contract (set equality, not order: the
-    /// registry iterates in C++ registration order while the manifest table is the generation
+    /// registry iterates in registration order while the manifest table is the generation
     /// order, and each domain's intra-order is locked by its own per-file order test). A
-    /// command added to the protocol table without a matching handler — the exact gap that
-    /// dropped `get/set-debug-overlays` — trips here.
+    /// command added to the protocol table without a matching handler trips here.
     #[test]
     fn registry_covers_the_protocol_manifest() {
         use std::collections::BTreeSet;
@@ -613,8 +598,8 @@ mod tests {
         let reply = with_ctx(|ctx| reg.dispatch(ctx, &json!({ "cmd": "help" })));
         assert_eq!(reply["ok"], json!(true));
         let commands = reply["result"]["commands"].as_array().unwrap();
-        // ping is registered first, help second, then the render domain (the frozen
-        // C++ order). The two builtins lead; render-stats opens the render group.
+        // ping is registered first, help second, then the render domain. The two
+        // builtins lead; render-stats opens the render group.
         assert!(commands.len() >= 3);
         assert_eq!(commands[0]["name"], json!("ping"));
         assert_eq!(commands[0]["help"], json!("liveness + engine info"));
