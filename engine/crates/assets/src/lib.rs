@@ -15,8 +15,8 @@
 //!
 //! # GPU-resource lifetime: `Arc` + `Drop`, idle-before-clear
 //!
-//! The C++ "clear caches only after `wait_gpu_idle`" rule survives as a *call-site
-//! discipline*, not a manual teardown loop. [`AssetServer::clear_asset_caches`] drops
+//! The "clear caches only after `wait_gpu_idle`" rule is a *call-site discipline*, not
+//! a manual teardown loop. [`AssetServer::clear_asset_caches`] drops
 //! the three `HashMap`s; the last `Arc<GpuMesh>`/`Arc<GpuTexture>` drop runs the
 //! resource's `Drop`, freeing the VMA allocation and returning the bindless slot.
 //! Because an in-flight frame may still reference an `Arc<GpuTexture>`, the caller
@@ -156,7 +156,7 @@ pub struct AssetServer {
 impl AssetServer {
     /// Creates an asset server rooted at `root`, seeding the standard asset
     /// subdirectories and an empty catalog. The catalog is populated from a project
-    /// file via `load_project` (phase 10).
+    /// file via `load_project`.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let assets = Self {
             root: root.into(),
@@ -183,8 +183,8 @@ impl AssetServer {
     /// `models/`, `textures/`, `materials/` live under the asset root; the
     /// thumbnail cache lives at `<projectRoot>/cache/thumbnails/` — a sibling of the
     /// root, so the catalog scan and project save/load never see it. Directory
-    /// creation errors are swallowed (the C++ `std::error_code` ignore): a missing
-    /// dir surfaces later as the real I/O failure that needs it.
+    /// creation errors are swallowed: a missing dir surfaces later as the real I/O
+    /// failure that needs it.
     pub fn ensure_asset_directories(&self) {
         for sub in ["models", "textures", "materials"] {
             let _ = std::fs::create_dir_all(self.root.join(sub));
@@ -224,7 +224,7 @@ impl AssetServer {
 
     /// Abandons the worker's queued/failed jobs and un-drained handbacks on a project
     /// switch (the GPU is idle at the call site, so dropping the handback `Arc`s frees
-    /// them safely). A no-op when no worker is running. The C++ `clearThumbnailQueue`.
+    /// them safely). A no-op when no worker is running.
     ///
     /// It stays a method on `AssetServer` so [`AssetServer::clear_asset_caches`] calls one
     /// stable seam.

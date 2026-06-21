@@ -8,11 +8,9 @@
 //!   load inserts `None` so the asset is not retried — or re-warned — every frame.
 //! - Only an *absent* key triggers a load attempt.
 //!
-//! The C++ encodes this with `find() != end()` returning a null `Ref`; Rust
-//! expresses it as the `Option` returned by [`HashMap::get`] (presence) wrapping an
-//! `Option<Arc<T>>` (success). [`resolve_cached`] is the one place the
-//! get-or-load-or-negative-cache shape lives, so the five resolve functions in the
-//! later phases share a single code path.
+//! Presence is the `Option` returned by [`HashMap::get`], wrapping an `Option<Arc<T>>`
+//! (success). [`resolve_cached`] is the one place the get-or-load-or-negative-cache
+//! shape lives, so the five resolve functions share a single code path.
 
 use std::collections::HashMap;
 use std::sync::Arc;

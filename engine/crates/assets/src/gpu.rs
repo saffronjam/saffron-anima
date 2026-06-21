@@ -1,10 +1,9 @@
 //! The GPU-upload seam the resolve/load paths reach through.
 //!
-//! The C++ loaders take a `Renderer&` and call its free-function uploaders directly
-//! (`uploadMesh`, `uploadTexture`, `uploadTextureFloat`). Rendering owns those calls
-//! (README §1); this crate reaches them through the [`GpuUploader`] trait so the
-//! loaders are one code path over either the live renderer or a test stub — the
-//! upload is genuinely performed by rendering's ash seam, not stubbed in the engine.
+//! Rendering owns the upload calls (README §1); this crate reaches them through the
+//! [`GpuUploader`] trait so the loaders are one code path over either the live renderer
+//! or a test stub — the upload is genuinely performed by rendering's ash seam, not
+//! stubbed in the engine.
 //!
 //! The trait carries exactly the three upload entry points the loaders need plus the
 //! `skinning_enabled` gate `render_scene` reads (the skinned draw path is byte-identical
@@ -23,7 +22,7 @@ use saffron_rendering::{Descriptors, GpuMesh, GpuTexture, Uploader};
 /// without a Vulkan device while the production path still performs the real upload.
 pub trait GpuUploader {
     /// Uploads a mesh (with its optional parallel [`VertexSkin`] stream) into
-    /// device-local buffers, returning the shared [`GpuMesh`]. The C++ `uploadMesh`.
+    /// device-local buffers, returning the shared [`GpuMesh`].
     ///
     /// # Errors
     ///
@@ -36,7 +35,7 @@ pub trait GpuUploader {
     ) -> saffron_rendering::Result<Arc<GpuMesh>>;
 
     /// Uploads tightly packed RGBA8 (already decoded by the caller) as an sRGB or unorm
-    /// sampled texture. The C++ `uploadTexture`.
+    /// sampled texture.
     ///
     /// # Errors
     ///
@@ -51,7 +50,7 @@ pub trait GpuUploader {
     ) -> saffron_rendering::Result<Arc<GpuTexture>>;
 
     /// Uploads tightly packed linear-float RGBA as an `R16G16B16A16_SFLOAT` sampled
-    /// texture (HDR panoramas / env sources). The C++ `uploadTextureFloat`.
+    /// texture (HDR panoramas / env sources).
     ///
     /// # Errors
     ///
@@ -66,7 +65,7 @@ pub trait GpuUploader {
 
     /// Whether the compute-skinning path is built and on. The skinned draw list is
     /// gathered only when this is true, so a build with skinning off is byte-identical
-    /// to one without the skinned path. The C++ `skinningEnabled`.
+    /// to one without the skinned path.
     fn skinning_enabled(&self) -> bool;
 }
 

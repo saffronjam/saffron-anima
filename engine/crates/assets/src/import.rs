@@ -199,10 +199,9 @@ const FNV_OFFSET: u64 = 1469598103934665603;
 /// The FNV-1a prime (64-bit).
 const FNV_PRIME: u64 = 1099511628211;
 
-/// The FNV-1a fold over a source file's bytes, as a decimal string (the C++
-/// `hashFileFnv`). The reimport recipe stores this — a **content** hash, not the mtime —
-/// so a touched-but-unchanged source is a content-addressed skip. An unreadable path
-/// hashes to the empty string (the C++ returns `{}`).
+/// The FNV-1a fold over a source file's bytes, as a decimal string. The reimport recipe
+/// stores this — a **content** hash, not the mtime — so a touched-but-unchanged source is
+/// a content-addressed skip. An unreadable path hashes to the empty string.
 #[must_use]
 pub fn hash_file_fnv(path: &str) -> String {
     let Ok(bytes) = std::fs::read(path) else {
@@ -217,7 +216,7 @@ pub fn hash_file_fnv(path: &str) -> String {
 }
 
 /// The import node forest as the META `nodes` block (glTF-shaped; the quaternion in
-/// `w,x,y,z` order — the C++ `importedNodesToJson`).
+/// `w,x,y,z` order).
 fn imported_nodes_to_json(nodes: &[ImportedNode]) -> Value {
     let array = nodes
         .iter()
@@ -235,8 +234,7 @@ fn imported_nodes_to_json(nodes: &[ImportedNode]) -> Value {
 }
 
 /// The skin descriptor as the META `skin` block; inverse-bind matrices are 16 floats
-/// each, column-major (the glam layout) so the reader can memcpy them straight back (the
-/// C++ `importedSkinToJson`).
+/// each, column-major (the glam layout) so the reader can memcpy them straight back.
 fn imported_skin_to_json(skin: &ImportedSkin) -> Value {
     let inverse_bind: Vec<Value> = skin
         .inverse_bind
@@ -256,10 +254,10 @@ fn imported_skin_to_json(skin: &ImportedSkin) -> Value {
 
 /// The `.smat`-JSON bytes for one baked material chunk.
 ///
-/// Emits the frozen `.smat` document shape (the C++ `materialAssetToJson`): a `factors`
+/// Emits the frozen `.smat` document shape: a `factors`
 /// block from the imported PBR factors, a `textures` block of the assigned sub-ids
 /// (decimal strings; `"0"` for an absent slot), and the defaults for the remaining
-/// fields. The byte format is the contract the material loader (phase 2) reads back.
+/// fields. The byte format is the contract the material loader reads back.
 fn material_chunk_json(material: &ImportedMaterial, textures: &MaterialTextureIds) -> Vec<u8> {
     let base = material.base_color;
     let emissive = material.emissive;
@@ -562,7 +560,7 @@ impl AssetServer {
 
     /// Translates a model source, bakes it into one `.smodel`, and adds the catalog rows
     /// it contributes. Produces an asset; does not upload to the GPU or spawn an entity —
-    /// pair with `instantiate_model` (phase 9) to place it.
+    /// pair with `instantiate_model` to place it.
     ///
     /// # Errors
     ///
@@ -605,7 +603,7 @@ impl AssetServer {
 }
 
 /// The META `nodes` block for a graph: a skinned import carries its node forest; an
-/// unskinned import has an empty forest (the C++ `graph.nodes` is the skin's forest).
+/// unskinned import has an empty forest (the node forest is the skin's forest).
 fn nodes_for_graph(graph: &ImportedModel) -> Value {
     match graph.skin.as_ref() {
         Some(SkinPayload { nodes, .. }) => imported_nodes_to_json(nodes),

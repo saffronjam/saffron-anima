@@ -39,7 +39,7 @@ use crate::{AssetServer, PREVIEW_FLOOR_MESH_ID};
 ///
 /// The container writes the [`Colorspace`] discriminant straight into the chunk flags
 /// (`Auto = 0`, `Srgb = 1`, `Linear = 2`, `Hdr = 3`), so the reader maps it back. An
-/// unknown value falls back to [`Colorspace::Srgb`] (the C++ default before the cast).
+/// unknown value falls back to [`Colorspace::Srgb`].
 fn colorspace_from_flags(flags: u32) -> Colorspace {
     match flags {
         0 => Colorspace::Auto,
@@ -55,7 +55,7 @@ fn colorspace_from_flags(flags: u32) -> Colorspace {
 /// walking up to find one that holds the relative path (a test binary runs from
 /// `target/<profile>/deps/`, one level below the `models/` the xtask copies into
 /// `target/<profile>/`). Mirrors rendering's shader-dir resolution. An absolute
-/// `relative` is returned as-is. The C++ `assetPath`.
+/// `relative` is returned as-is.
 pub fn engine_asset_path(relative: &str) -> PathBuf {
     if relative.starts_with('/') {
         return PathBuf::from(relative);
@@ -81,8 +81,7 @@ impl AssetServer {
     ///
     /// A cache hit returns the stored entry (live or negative). On a miss each failure
     /// mode — bytes unreadable, mesh decode failed, upload failed — negative-caches with
-    /// a one-time warn so the broken sub-asset is not retried each frame. The C++
-    /// `loadMeshFromSource`.
+    /// a one-time warn so the broken sub-asset is not retried each frame.
     pub fn load_mesh_from_source(
         &mut self,
         gpu: &dyn GpuUploader,
@@ -134,7 +133,7 @@ impl AssetServer {
     /// Loads + uploads a texture from any byte source, picking the upload format from
     /// the colorspace ([`Colorspace::Hdr`] → float; [`Colorspace::Linear`] → unorm;
     /// [`Colorspace::Srgb`]/[`Colorspace::Auto`] → sRGB). Caches the GPU `Arc` under
-    /// `sub_id`. The C++ `loadTextureFromSource`.
+    /// `sub_id`.
     pub fn load_texture_from_source(
         &mut self,
         gpu: &dyn GpuUploader,
@@ -151,7 +150,7 @@ impl AssetServer {
     }
 
     /// Resolves an embedded mesh sub-asset to a live GPU mesh, honoring the remap table;
-    /// keyed by sub-id. The C++ `resolveMesh`.
+    /// keyed by sub-id.
     pub fn resolve_mesh(
         &mut self,
         gpu: &dyn GpuUploader,
@@ -179,7 +178,7 @@ impl AssetServer {
     }
 
     /// Resolves an embedded texture sub-asset to a live GPU texture (colorspace from the
-    /// chunk flags). The C++ `resolveTexture`.
+    /// chunk flags).
     pub fn resolve_texture(
         &mut self,
         gpu: &dyn GpuUploader,
@@ -212,9 +211,8 @@ impl AssetServer {
 
     /// Resolves a mesh id to a GPU mesh, loading + uploading the baked `.smesh` on a
     /// cache miss. An embedded sub-asset routes through its container; a standalone file
-    /// reads its path (with the legacy `meshes/` → `models/` path fixup). Returns `None`
-    /// (negative-cached) for an unregistered, wrong-type, or unreadable asset. The C++
-    /// `loadMeshAsset`.
+    /// reads its path (with the `meshes/` → `models/` path fixup). Returns `None`
+    /// (negative-cached) for an unregistered, wrong-type, or unreadable asset.
     pub fn load_mesh_asset(&mut self, gpu: &dyn GpuUploader, id: Uuid) -> Option<Arc<GpuMesh>> {
         if let Some(cached) = self.mesh_by_uuid.get(&id.value()) {
             return cached.clone();
@@ -242,8 +240,7 @@ impl AssetServer {
     /// cache miss. An embedded sub-asset routes through its container's chunk; a
     /// standalone file picks its colorspace from an explicit `.smeta` (the row's
     /// `colorspace`) else the `hdr`/`linear` provenance. A dangling id warns once and
-    /// negative-caches; the draw path substitutes the default-white slot. The C++
-    /// `loadTextureAsset`.
+    /// negative-caches; the draw path substitutes the default-white slot.
     pub fn load_texture_asset(
         &mut self,
         gpu: &dyn GpuUploader,
@@ -288,7 +285,7 @@ impl AssetServer {
     /// Loads an animation clip by id into a CPU [`AnimClip`]. An embedded clip reads its
     /// `SANM` chunk through the owning container; a standalone clip reads its file. A
     /// `Result`-returning one-shot (not cache-backed) the animation runtime calls on a
-    /// cache miss. The C++ `loadAnimationClipAsset`.
+    /// cache miss.
     ///
     /// # Errors
     ///
@@ -334,7 +331,7 @@ impl AssetServer {
     ///
     /// A catalog lookup + bytes read + decode; no GPU upload, no cache entry — cooking is
     /// a one-shot at Edit→Playing, not the draw path. Mirrors [`Self::load_anim_clip`]'s
-    /// resolve fork. The C++ `loadMeshCpuAsset`.
+    /// resolve fork.
     ///
     /// # Errors
     ///
@@ -388,7 +385,7 @@ impl AssetServer {
     /// [`Self::load_mesh_asset`] resolves it cache-first, so it never serializes into the
     /// project. A `None` left on failure is a negative-cache marker;
     /// [`AssetServer::clear_asset_caches`] drops it on project load. Returns whether a
-    /// live mesh is in the cache. The C++ `ensurePreviewFloorMesh`.
+    /// live mesh is in the cache.
     pub fn ensure_preview_floor_mesh(&mut self, gpu: &dyn GpuUploader) -> bool {
         if let Some(cached) = self.mesh_by_uuid.get(&PREVIEW_FLOOR_MESH_ID.value()) {
             return cached.is_some();
@@ -424,8 +421,7 @@ impl AssetServer {
     /// A failed attempt sets `attempted` and does not re-translate; a later call returns
     /// `false` directly without re-translating. The skinned editor-camera variant uploads
     /// with its skin stream. The caller reads the visual back through
-    /// [`AssetServer::editor_camera_model`]. The C++ `loadEditorCameraModel` (which
-    /// returned a `SystemMeshVisual*` into the same field).
+    /// [`AssetServer::editor_camera_model`].
     pub fn load_editor_camera_model(&mut self, gpu: &dyn GpuUploader) -> bool {
         if self.editor_camera_model.attempted {
             return self.editor_camera_model.mesh.is_some();
@@ -456,9 +452,9 @@ impl AssetServer {
         true
     }
 
-    /// The standalone-mesh path with the legacy `meshes/` → `models/` fixup: a row whose
-    /// file is absent under `assets/<path>` but begins `meshes/` is retried under
-    /// `assets/models/` (where the importer now writes baked `.smesh` siblings).
+    /// The standalone-mesh path with the `meshes/` → `models/` fixup: a row whose file is
+    /// absent under `assets/<path>` but begins `meshes/` is retried under `assets/models/`
+    /// (where the importer writes baked `.smesh` siblings).
     fn standalone_mesh_path(&self, rel: &str) -> String {
         let full_path = format!("{}/{}", self.root.display(), rel);
         if !Path::new(&full_path).exists() {
@@ -757,7 +753,7 @@ mod tests {
         assert_eq!(colorspace_from_flags(1), Colorspace::Srgb);
         assert_eq!(colorspace_from_flags(2), Colorspace::Linear);
         assert_eq!(colorspace_from_flags(3), Colorspace::Hdr);
-        // An unknown flag falls back to sRGB (the C++ default before the cast).
+        // An unknown flag falls back to sRGB.
         assert_eq!(colorspace_from_flags(99), Colorspace::Srgb);
     }
 

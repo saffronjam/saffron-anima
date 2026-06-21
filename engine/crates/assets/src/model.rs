@@ -156,10 +156,9 @@ fn or_default(value: &Value, fallback: Value) -> Value {
 
 /// Builds the META-chunk bytes from a populated [`ContainerMetadata`].
 ///
-/// Object keys serialize in a stable (sorted) order via [`dump_json_sorted`], matching the
-/// C++ nlohmann sorted-key default — so the bytes are deterministic for source hashing and
-/// the contract test. The output is compact (no indent), exactly as the C++ `dumpJson(doc)`
-/// default.
+/// Object keys serialize in a stable (sorted) order via [`dump_json_sorted`], so the bytes
+/// are deterministic for source hashing and the contract test. The output is compact (no
+/// indent).
 #[must_use]
 pub fn encode_container_metadata(meta: &ContainerMetadata) -> Vec<u8> {
     let mut subs = Vec::with_capacity(meta.sub_assets.len());
@@ -206,7 +205,7 @@ pub fn encode_container_metadata(meta: &ContainerMetadata) -> Vec<u8> {
         "remap": or_default(&meta.remap, Value::Object(serde_json::Map::new())),
     });
 
-    // `skin` is emitted only when present (the C++ omits a null skin key entirely).
+    // `skin` is emitted only when present; a null skin key is omitted entirely.
     let doc = if meta.skin.is_null() {
         doc
     } else {
@@ -781,7 +780,7 @@ mod tests {
 
     #[test]
     fn meta_encoding_is_compact_not_pretty() {
-        // The C++ `dumpJson(doc)` default is compact (indent = -1): no newlines.
+        // The META encoding is compact (indent = -1): no newlines.
         let bytes = encode_container_metadata(&sample_metadata());
         let text = std::str::from_utf8(&bytes).unwrap();
         assert!(!text.contains('\n'), "META encoding must be compact");
@@ -789,8 +788,7 @@ mod tests {
 
     #[test]
     fn unskinned_metadata_omits_the_skin_key() {
-        // A null skin is omitted from the doc entirely (the C++ behavior), and reads
-        // back as null.
+        // A null skin is omitted from the doc entirely, and reads back as null.
         let mut meta = sample_metadata();
         meta.skin = Value::Null;
         let bytes = encode_container_metadata(&meta);
@@ -830,8 +828,8 @@ mod tests {
 
     #[test]
     fn oversized_meta_length_is_rejected_not_crashed() {
-        // Reproduce the C++ check: a header claiming a META span larger than the file is
-        // rejected by the bounds check (and `read_container_header`'s total-length check).
+        // A header claiming a META span larger than the file is rejected by the bounds
+        // check (and `read_container_header`'s total-length check).
         let dir = scratch("badlen");
         let meta_bytes = encode_container_metadata(&sample_metadata());
         let chunks = [ContainerChunk {

@@ -14,15 +14,11 @@
 //!   `// @graph-end` markers, compiles with `-I <shaders dir>` so `import lighting`
 //!   resolves → `materials/<uuid>_mesh.spv`.
 //!
-//! # No shell string (the one named NO-LEGACY simplification)
+//! # The slangc invocation
 //!
-//! The C++ built a single hand-quoted shell command —
-//! `"\"" + slangc + "\" \"" + path + "\" -profile … -o \"" + spv + "\" > /dev/null 2>&1"`
-//! — and ran `std::system`. That is fragile (path-quoting bug surface, a shell
-//! dependency, a baked-in `/dev/null 2>&1` redirection). This port deletes the string:
 //! [`build_slangc_command`] uses [`Command::new`] with discrete [`Command::arg`] calls
 //! for the flag set, [`Stdio::null`] for both pipes, and inspects `status.success()`
-//! plus the `.spv` existence. There is one code path and it is the argv.
+//! plus the `.spv` existence — no shell string, no path-quoting surface.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -42,8 +38,7 @@ const GRAPH_BEGIN: &str = "// @graph-begin";
 const GRAPH_END: &str = "// @graph-end";
 
 /// Locates `slangc`: the `SAFFRON_SLANGC` env override, else the prebuilt slang cache
-/// (`~/.cache/saffron-slang/slang/bin/slangc`), else bare `slangc` on `PATH` (the C++
-/// `findSlangc`).
+/// (`~/.cache/saffron-slang/slang/bin/slangc`), else bare `slangc` on `PATH`.
 #[must_use]
 pub fn find_slangc() -> PathBuf {
     resolve_slangc(
@@ -118,8 +113,7 @@ fn slangc_argv(
 }
 
 /// Builds the [`Command`] that compiles `slang_path` to `spv_path` (the argv from
-/// [`slangc_argv`]), with both stdout and stderr silenced — the no-shell replacement for
-/// the C++ `> /dev/null 2>&1`.
+/// [`slangc_argv`]), with both stdout and stderr silenced.
 fn build_slangc_command(
     slangc: &Path,
     slang_path: &Path,
@@ -167,7 +161,7 @@ fn write_and_compile(
 
 /// The self-contained fragment shader for a material graph: a `[[vk::push_constant]] Mat`
 /// push, bindless `textures[]`, and the 5-field `SurfaceData`, with `evalSurface` filled
-/// by the emitted surface body. The C++ `compileMaterialGraph` template.
+/// by the emitted surface body.
 fn graph_shader_source(surface_body: &str) -> String {
     format!(
         "[[vk::binding(0, 0)]] Sampler2D textures[1024];\n\
@@ -184,7 +178,7 @@ fn graph_shader_source(surface_body: &str) -> String {
 
 /// The studio-lit sphere preview shader. Its `PreviewPush` and vertex layout match the
 /// renderer's preview pipeline so `render_material_preview` drives it with the same push
-/// and sphere. The C++ `compileMaterialPreviewShader` template.
+/// and sphere.
 fn preview_shader_source(surface_body: &str) -> String {
     format!(
         "[[vk::binding(0, 0)]] Sampler2D textures[1024];\n\
@@ -210,9 +204,8 @@ fn preview_shader_source(surface_body: &str) -> String {
 
 /// Splices the emitted surface `body` into the übershader `src` between the
 /// `// @graph-begin` / `// @graph-end` markers: keeps the begin-marker line, drops the
-/// default body, inserts `body`, then resumes at the end marker (the C++
-/// `compileMaterialMeshShader` splice). Errors if either marker is missing or out of
-/// order.
+/// default body, inserts `body`, then resumes at the end marker. Errors if either marker
+/// is missing or out of order.
 fn splice_mesh_source(src: &str, body: &str) -> Result<String> {
     let begin = src.find(GRAPH_BEGIN);
     let end = src.find(GRAPH_END);
@@ -237,8 +230,8 @@ fn splice_mesh_source(src: &str, body: &str) -> Result<String> {
 
 impl AssetServer {
     /// Emits a self-contained fragment shader for a material's node graph and compiles it
-    /// with `slangc` to `materials/<uuid>.spv`, returning the `.spv` path (the C++
-    /// `compileMaterialGraph`). This proves the graph → compilable-Slang pipeline.
+    /// with `slangc` to `materials/<uuid>.spv`, returning the `.spv` path. This proves
+    /// the graph → compilable-Slang pipeline.
     pub fn compile_material_graph(&self, graph: &Value, id: Uuid) -> Result<PathBuf> {
         let slangc = find_slangc();
         let source = graph_shader_source(&emit_graph_surface(graph, false));
@@ -256,8 +249,7 @@ impl AssetServer {
     }
 
     /// Emits the studio-lit sphere preview shader for a material's node graph and compiles
-    /// it to `materials/<uuid>_preview.spv`, returning the `.spv` path (the C++
-    /// `compileMaterialPreviewShader`).
+    /// it to `materials/<uuid>_preview.spv`, returning the `.spv` path.
     pub fn compile_material_preview_shader(&self, graph: &Value, id: Uuid) -> Result<PathBuf> {
         let slangc = find_slangc();
         let source = preview_shader_source(&emit_graph_surface(graph, false));
@@ -277,8 +269,7 @@ impl AssetServer {
     /// Splices the graph's emitted surface body into the runtime `mesh.slang` übershader
     /// and compiles a per-material variant (with `-I <shaders dir>` so `import lighting`
     /// resolves) to `materials/<uuid>_mesh.spv`, returning the `.spv` path. `render_scene`
-    /// points a codegen material's `shader` at this `.spv` (the C++
-    /// `compileMaterialMeshShader`).
+    /// points a codegen material's `shader` at this `.spv`.
     pub fn compile_material_mesh_shader(&self, graph: &Value, id: Uuid) -> Result<PathBuf> {
         let slangc = find_slangc();
         let shaders_dir = engine_asset_path("shaders");
@@ -355,8 +346,7 @@ mod tests {
         "-matrix-layout-column-major",
     ];
 
-    /// No argv element may contain a shell quote or a redirection token — the proof the
-    /// hand-quoted shell string is gone.
+    /// No argv element may contain a shell quote or a redirection token.
     fn assert_no_shell_tokens(argv: &[OsString]) {
         for element in argv {
             let text = element.to_string_lossy();
@@ -534,7 +524,7 @@ mod tests {
 
     #[test]
     fn graph_shader_source_is_byte_exact_with_an_empty_body() {
-        // Byte-for-byte the C++ `compileMaterialGraph` template (empty surfaceBody).
+        // Byte-for-byte the graph shader template (empty surfaceBody).
         let expected = concat!(
             "[[vk::binding(0, 0)]] Sampler2D textures[1024];\n",
             "struct SurfaceData { float3 albedo; float metallic; float roughness; float3 normal; float3 emissive; };\n",
@@ -559,7 +549,7 @@ mod tests {
 
     #[test]
     fn preview_shader_source_is_byte_exact_with_an_empty_body() {
-        // Byte-for-byte the C++ `compileMaterialPreviewShader` template (empty surfaceBody).
+        // Byte-for-byte the preview shader template (empty surfaceBody).
         let expected = concat!(
             "[[vk::binding(0, 0)]] Sampler2D textures[1024];\n",
             "struct PreviewPush { float4x4 viewProj; float4 baseColor; uint4 tex; float4 pbr; };\n",

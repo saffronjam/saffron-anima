@@ -89,7 +89,7 @@ pub struct MaterialAsset {
     /// The authored normal convention: `gl` | `dx` (baked to `gl` at import; kept for
     /// provenance).
     pub normal_convention: String,
-    /// The resolved feature bitset (populated from the PBR-slots phase).
+    /// The resolved feature bitset.
     pub features: u32,
     /// The optional node graph — the editable source of truth for a graph-authored
     /// material. Empty (`{}` or null) = no graph. Opaque editor-shaped JSON.
@@ -134,9 +134,8 @@ impl Default for MaterialAsset {
     }
 }
 
-/// The built-in default material: white albedo, fully rough, non-metallic (the C++
-/// `defaultMaterialAsset`). Returned by the resolve path when a referenced material is
-/// missing.
+/// The built-in default material: white albedo, fully rough, non-metallic. Returned by
+/// the resolve path when a referenced material is missing.
 #[must_use]
 pub fn default_material_asset() -> MaterialAsset {
     MaterialAsset::default()
@@ -147,13 +146,13 @@ fn empty_object() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
-/// A uuid emitted as a decimal JSON *string* (`std::to_string(id.value)`).
+/// A uuid emitted as a decimal JSON *string*.
 fn uuid_string(id: Uuid) -> Value {
     Value::String(id.value().to_string())
 }
 
 /// Reads a [`Uuid`] from a JSON value, accepting a decimal string *or* an unsigned number
-/// (the C++ `uuid` lambda — the frozen lenient read). Anything else is `0`.
+/// (the frozen lenient read). Anything else is `0`.
 fn uuid_from_value(value: &Value) -> Uuid {
     match value {
         Value::String(s) => Uuid(s.parse::<u64>().unwrap_or(0)),
@@ -176,14 +175,12 @@ fn read_fixed_array<const N: usize>(object: &Value, key: &str) -> Option<[f32; N
     Some(out)
 }
 
-/// Serializes a [`MaterialAsset`] to the frozen `.smat` JSON document (the C++
-/// `materialAssetToJson`).
+/// Serializes a [`MaterialAsset`] to the frozen `.smat` JSON document.
 ///
 /// Uuid fields are emitted as decimal strings, never numbers; `version` is pinned to `1`;
 /// `graph` / `overrides` ride through verbatim (an empty object when unset). Object key
 /// order is incidental: the `.smat` write path serializes via `dump_json_sorted`
-/// (alphabetically sorted keys, the C++ nlohmann `std::map` default), so the byte shape is
-/// stable regardless of insertion order.
+/// (alphabetically sorted keys), so the byte shape is stable regardless of insertion order.
 #[must_use]
 pub fn material_asset_to_json(material: &MaterialAsset) -> Value {
     let graph = if material.graph.is_null() {
@@ -233,8 +230,7 @@ pub fn material_asset_to_json(material: &MaterialAsset) -> Value {
     })
 }
 
-/// Rebuilds a [`MaterialAsset`] from a `.smat` JSON document (the C++
-/// `materialAssetFromJson`).
+/// Rebuilds a [`MaterialAsset`] from a `.smat` JSON document.
 ///
 /// Lenient: every field defaults to the [`MaterialAsset::default`] value when absent or
 /// mistyped; uuid fields accept a decimal string *or* a number. `features` is not read
@@ -308,11 +304,11 @@ fn is_non_empty_object(value: &Value) -> bool {
 }
 
 /// Applies a sparse override map `{ field: value }` onto a base material — the instance
-/// path (the C++ `applyOverrides`).
+/// path.
 ///
 /// Writes only the named, well-typed fields and leaves the rest untouched. A
-/// non-object `overrides` is a no-op. The field set matches the C++: the scalar factors,
-/// the two color vectors, and the five texture ids.
+/// non-object `overrides` is a no-op. The field set is the scalar factors, the two color
+/// vectors, and the five texture ids.
 pub fn apply_overrides(material: &mut MaterialAsset, overrides: &Value) {
     let Some(map) = overrides.as_object() else {
         return;
@@ -388,8 +384,8 @@ fn read_array3(value: &Value) -> Option<[f32; 3]> {
     ])
 }
 
-/// Reads the stored `.smat` as-is — no parent resolution, no graph fold (the C++
-/// `loadMaterialAssetRaw`). The editor's edit path: it mutates this and writes it back via
+/// Reads the stored `.smat` as-is — no parent resolution, no graph fold. The editor's
+/// edit path: it mutates this and writes it back via
 /// [`update_material_asset`].
 ///
 /// [`DEFAULT_MATERIAL_ID`] short-circuits to [`default_material_asset`].
@@ -418,13 +414,13 @@ pub fn load_material_asset_raw(assets: &AssetServer, id: Uuid) -> Result<Materia
     Ok(material_asset_from_json(&doc))
 }
 
-/// Reads a `.smat` resolved for rendering (the C++ `loadMaterialAsset`).
+/// Reads a `.smat` resolved for rendering.
 ///
 /// An instance (`parent != 0`) resolves to its parent's resolved params with this
 /// material's `overrides` applied on top, keeping `parent` + `overrides` so the editor
 /// still sees an instance. Resolution recurses to a depth cap of [`MAX_INSTANCE_DEPTH`];
 /// a missing or cyclic parent (or hitting the cap) falls back to this material's own
-/// stored params. Graph folding is the phase-5 path and is wired in there.
+/// stored params.
 ///
 /// # Errors
 ///
@@ -449,7 +445,7 @@ fn load_material_asset_at(assets: &AssetServer, id: Uuid, depth: u32) -> Result<
     Ok(material)
 }
 
-/// Writes a new `.smat` and registers a catalog row for it (the C++ `saveMaterialAsset`).
+/// Writes a new `.smat` and registers a catalog row for it.
 ///
 /// Mints a fresh id, writes `materials/<id>.smat`, and puts an [`AssetType::Material`]
 /// catalog entry under `folder` with a unique name. Returns the minted id.
@@ -480,7 +476,7 @@ pub fn save_material_asset(
     Ok(id)
 }
 
-/// Overwrites an existing `.smat` in place — same id + path (the C++ `updateMaterialAsset`).
+/// Overwrites an existing `.smat` in place — same id + path.
 ///
 /// The edit path, distinct from [`save_material_asset`] which mints a new asset.
 ///
@@ -597,18 +593,17 @@ mod tests {
 
     #[test]
     fn byte_equal_to_captured_smat_fixture() {
-        // A captured C++ `.smat` document: alphabetically-sorted keys (nlohmann's
-        // `std::map`, reproduced by `dump_json_sorted`), uuid fields as decimal strings,
-        // `version: 1`. The default material with two texture ids assigned.
+        // A `.smat` document: alphabetically-sorted keys (via `dump_json_sorted`), uuid
+        // fields as decimal strings, `version: 1`. The default material with two texture
+        // ids assigned.
         let material = MaterialAsset {
             albedo_texture: Uuid(5),
             normal_texture: Uuid(6),
             ..MaterialAsset::default()
         };
         let serialized = saffron_json::dump_json_sorted(&material_asset_to_json(&material), -1);
-        // `heightScale` (f32 `0.05`) carries its f64-promoted long decimal — the exact
-        // bytes nlohmann emits for a `float` field (verified against the C++ engine's
-        // scene output; an exactly-representable value like `0.5` stays short).
+        // `heightScale` (f32 `0.05`) carries its f64-promoted long decimal (an
+        // exactly-representable value like `0.5` stays short).
         let expected = concat!(
             r#"{"blend":"opaque","doubleSided":false,"#,
             r#""factors":{"alphaCutoff":0.5,"baseColor":[1.0,1.0,1.0,1.0],"#,

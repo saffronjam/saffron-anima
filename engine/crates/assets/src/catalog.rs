@@ -1,9 +1,8 @@
-//! Catalog ↔ JSON serde (the C++ `catalogToJson` / `catalogFromJson` and the folder
-//! lists).
+//! Catalog ↔ JSON serde (entries and folder lists).
 //!
 //! The catalog is the live id → `{name, type, path, …}` table the renderer and pick
-//! read from. It serializes into the regenerable catalog cache (this phase) and the
-//! `project.json` `assets` block (phase 10), so the byte shape is a frozen contract:
+//! read from. It serializes into the regenerable catalog cache and the `project.json`
+//! `assets` block, so the byte shape is a frozen contract:
 //! every row carries `id`/`name`/`type`/`path`/`folder`/`hdr`/`linear`, and the
 //! optional `duration`/`tracks`/`container`/`chunk`/`colorspace`/`rigged` fields are
 //! omitted when default so a standalone row stays minimal. The reader is lenient
@@ -15,7 +14,7 @@ use saffron_scene::{AssetCatalog, AssetEntry, AssetType, Colorspace};
 
 use crate::names::{asset_type_from_name, asset_type_name, colorspace_from_name, colorspace_name};
 
-/// Serializes a catalog's entries to the `assets` JSON array (the C++ `catalogToJson`).
+/// Serializes a catalog's entries to the `assets` JSON array.
 ///
 /// Each row always carries `id`/`name`/`type`/`path`/`folder`/`hdr`/`linear`. The
 /// container linkage (`container`/`chunk`), the texture `colorspace`, the animation
@@ -63,7 +62,7 @@ pub fn catalog_to_json(catalog: &AssetCatalog) -> Value {
     Value::Array(assets)
 }
 
-/// Rebuilds a catalog's entries from an `assets` JSON array (the C++ `catalogFromJson`).
+/// Rebuilds a catalog's entries from an `assets` JSON array.
 ///
 /// Clears the catalog's entries + index first, then re-inserts every well-formed row
 /// (an `id` of `0` or a non-object element is skipped). Lenient: missing keys take
@@ -107,8 +106,7 @@ pub fn catalog_from_json(catalog: &mut AssetCatalog, assets: &Value) {
     }
 }
 
-/// Serializes a catalog's folder list to a JSON string array (the C++
-/// `catalogFoldersToJson`).
+/// Serializes a catalog's folder list to a JSON string array.
 #[must_use]
 pub fn catalog_folders_to_json(catalog: &AssetCatalog) -> Value {
     Value::Array(
@@ -120,8 +118,8 @@ pub fn catalog_folders_to_json(catalog: &AssetCatalog) -> Value {
     )
 }
 
-/// Rebuilds a catalog's folder list from a JSON string array (the C++
-/// `catalogFoldersFromJson`). Non-string elements are skipped.
+/// Rebuilds a catalog's folder list from a JSON string array. Non-string elements are
+/// skipped.
 pub fn catalog_folders_from_json(catalog: &mut AssetCatalog, folders: &Value) {
     catalog.folders.clear();
     let Some(records) = folders.as_array() else {
@@ -138,9 +136,8 @@ pub fn catalog_folders_from_json(catalog: &mut AssetCatalog, folders: &Value) {
 mod tests {
     use super::*;
 
-    /// The C++ `runCatalogLinkageSelfTest`, re-expressed: a model parent + embedded
-    /// sub-assets + a standalone asset round-trips through JSON with container linkage,
-    /// chunk index, and colorspace intact.
+    /// A model parent + embedded sub-assets + a standalone asset round-trips through JSON
+    /// with container linkage, chunk index, and colorspace intact.
     #[test]
     fn catalog_model_and_sub_asset_linkage_round_trips() {
         let mut catalog = AssetCatalog::default();

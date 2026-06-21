@@ -64,9 +64,9 @@ fn quad_mesh() -> Mesh {
     }
 }
 
-/// The C++ `runBakeRoundTripSelfTest` graph: a quad mesh, two materials (one with an
-/// albedo + normal texture, one with a metallic-roughness texture), and one clip — all
-/// riding the skin payload so the clip is baked (clips live on the skin in the Rust port).
+/// The bake round-trip graph: a quad mesh, two materials (one with an albedo + normal
+/// texture, one with a metallic-roughness texture), and one clip — all riding the skin
+/// payload so the clip is baked (clips live on the skin).
 fn town_graph() -> ImportedModel {
     let stone = ImportedMaterial {
         name: "stone".to_owned(),
@@ -358,7 +358,7 @@ fn hash_file_fnv_is_content_addressed() {
     // A different content hashes differently.
     std::fs::write(&b, b"goodbye world").unwrap();
     assert_ne!(ha, hash_file_fnv(b.to_str().unwrap()));
-    // A missing file hashes to the empty string (the C++ contract).
+    // A missing file hashes to the empty string.
     assert_eq!(hash_file_fnv("/nonexistent/path/xyz"), "");
     let _ = std::fs::remove_dir_all(&dir);
 }

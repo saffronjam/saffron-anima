@@ -22,7 +22,7 @@ use saffron_json::Value;
 use crate::material::MaterialAsset;
 
 /// Reads a [`Uuid`] from a node-prop value, accepting a decimal string *or* an unsigned
-/// number (the C++ `uuidOf` lambda). Anything else is `0`.
+/// number. Anything else is `0`.
 fn uuid_of(value: &Value) -> Uuid {
     match value {
         Value::String(s) => Uuid(s.parse::<u64>().unwrap_or(0)),
@@ -31,8 +31,8 @@ fn uuid_of(value: &Value) -> Uuid {
     }
 }
 
-/// Coerces a constant-node `value` to a scalar (the C++ `scalar` lambda): the first
-/// element of a non-empty array, a bare number as-is, else `0`.
+/// Coerces a constant-node `value` to a scalar: the first element of a non-empty array,
+/// a bare number as-is, else `0`.
 fn scalar(value: &Value) -> f32 {
     match value {
         Value::Array(elements) => elements.first().and_then(Value::as_f64).unwrap_or(0.0) as f32,
@@ -42,7 +42,7 @@ fn scalar(value: &Value) -> f32 {
 }
 
 /// Reads the `i`-th element of a JSON array as `f32`, returning `default` when the array
-/// is shorter (the C++ `at` lambda in the constant-node emit).
+/// is shorter.
 fn array_at(value: &Value, i: usize, default: f32) -> f32 {
     value
         .as_array()
@@ -52,14 +52,13 @@ fn array_at(value: &Value, i: usize, default: f32) -> f32 {
 }
 
 /// Reads a string member of a JSON object, returning the empty string when absent or not
-/// a string (the C++ `value("key", std::string{})`).
+/// a string.
 fn str_member<'a>(object: &'a Value, key: &str) -> &'a str {
     object.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
 /// Folds a constant/texture-only node graph into the flat [`MaterialAsset`] factor /
-/// texture fields, returning `true` when the whole graph folded (the C++
-/// `lowerGraphToParams`).
+/// texture fields, returning `true` when the whole graph folded.
 ///
 /// Walks `material.graph`-shaped JSON: the `materialOutput` node's incoming edges decide
 /// each channel. A `constant` source folds into the matching factor field; a `texture`
@@ -67,8 +66,8 @@ fn str_member<'a>(object: &'a Value, key: &str) -> &'a str {
 /// hits a procedural/math node, an unrecognized channel, or a source it cannot resolve —
 /// that graph routes to the Slang codegen path instead.
 ///
-/// Mutation is in place as the walk proceeds, exactly as the C++ does: a caller commits
-/// the folded result only when this returns `true` (clone, fold, keep-if-folded).
+/// Mutation is in place as the walk proceeds: a caller commits the folded result only
+/// when this returns `true` (clone, fold, keep-if-folded).
 pub fn lower_graph_to_params(graph: &Value, material: &mut MaterialAsset) -> bool {
     if !graph.is_object() {
         return false;
@@ -161,7 +160,7 @@ pub fn lower_graph_to_params(graph: &Value, material: &mut MaterialAsset) -> boo
 
 /// Emits the body of `evalSurface` for a node graph: one Slang statement per node (in
 /// array order — inputs must precede consumers), then the `materialOutput` channel
-/// assignments (the C++ `emitGraphSurface`).
+/// assignments.
 ///
 /// `mesh == false` targets the self-contained preview/shell shader (a `Mat mat` push +
 /// `textures[]` + a `uv` param, the 5-field `SurfaceData`); `mesh == true` targets the
@@ -298,7 +297,7 @@ fn texture_slot_index(slot: &str, mesh: bool) -> &'static str {
 
 /// Emits the Slang statement for a math / utility node. Inputs are the source node ids
 /// wired to the `a` / `b` / `t` pins; all values are `float4` (an unwired pin yields the
-/// empty-source `n_` reference the C++ produces verbatim).
+/// empty-source `n_` reference).
 fn emit_math_node(node_type: &str, id: &str, a: &str, b: &str, t: &str) -> String {
     match node_type {
         "multiply" => format!("    float4 n_{id} = n_{a} * n_{b};\n"),

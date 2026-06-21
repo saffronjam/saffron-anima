@@ -1,16 +1,14 @@
-//! The `.smat` byte-exact golden snapshot (13-testing-and-verification phase 2; the
-//! 07-assets-and-materials phase-2 golden gate).
+//! The `.smat` byte-exact golden snapshot.
 //!
 //! `MaterialParamsData` (the GPU side) is hashed by raw bytes for per-frame dedup, and the
 //! `.smat` (the CPU side) is the editor's on-disk contract — both fail silently on a byte
 //! shift (a mis-deduped material; a `.smat` the editor parses wrong without erroring). The
-//! detector is a byte compare against a fixture generated once from the C++
-//! `materialAssetToJson(...).dump(2)` (`fixtures/golden/gen/`), which carries nlohmann's
-//! f64-promoted float formatting and `std::map` sorted keys — the exact bytes the Rust
+//! detector is a byte compare against a fixture in `fixtures/golden/gen/`, which carries
+//! f64-promoted float formatting and sorted keys — the exact bytes
 //! `material_asset_to_json` + `dump_json_sorted` must reproduce.
 //!
-//! This test rebuilds the same populated material the C++ generator used and matches the
-//! serialized bytes. A float-format or key-order drift surfaces as a hexdump mismatch.
+//! This test rebuilds a populated material and matches the serialized bytes. A
+//! float-format or key-order drift surfaces as a hexdump mismatch.
 //! Reseed with `UPDATE_GOLDEN=1` only on an intentional format change.
 
 use saffron_assets::{MaterialAsset, material_asset_to_json};
@@ -18,9 +16,8 @@ use saffron_core::Uuid;
 use saffron_geometry::glam::{Vec2, Vec3, Vec4};
 use saffron_test_support::assert_bytes_match_golden;
 
-/// The populated material the C++ generator's `populatedMaterial()` builds, field-for-field.
-/// `graph`/`overrides` are `Null` so `material_asset_to_json` emits `{}` (the C++
-/// `is_null() ? object()` path).
+/// The populated material the golden fixture covers, field-for-field. `graph`/`overrides`
+/// are `Null` so `material_asset_to_json` emits `{}`.
 fn populated_material() -> MaterialAsset {
     MaterialAsset {
         shader: "mesh".to_owned(),

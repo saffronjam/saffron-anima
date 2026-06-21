@@ -3,10 +3,8 @@
 /// Errors raised by the asset layer: project I/O, import/bake, material codegen,
 /// and the container reader.
 ///
-/// The variants seed the whole area up front (project I/O in phase 10, codegen in
-/// phase 6, the container reader in phase 3) so the public signatures compile as
-/// each phase lands. The negative-cache *load* path never surfaces an `Error` — a
-/// failed load is a logged warn plus a cached `None`, not a fallible result.
+/// The negative-cache *load* path never surfaces an `Error` — a failed load is a logged
+/// warn plus a cached `None`, not a fallible result.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A filesystem read or write failed. The payload is the OS message.

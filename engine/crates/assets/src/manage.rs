@@ -5,9 +5,7 @@
 //! These sit on top of the container reader ([`crate::model`]) and the material/import
 //! layers, and are the substrate the `extract-subasset`, `clear-extraction`,
 //! `reimport-model`, `asset-references`, `clean-assets`, `delete-unused`, and
-//! `material-import` control commands call. They are the C++ `extractSubAsset` /
-//! `clearExtraction` / `reimportModel` / `buildDependencyGraph` / `analyzeClean` /
-//! `deleteUnused` / `importMaterialFolder`.
+//! `material-import` control commands call.
 
 use std::collections::HashSet;
 
@@ -31,7 +29,7 @@ use crate::{AssetServer, Error, Result};
 
 /// The standalone destination path an extracted sub-asset defaults to, by type. Mesh →
 /// `models/<id>.smesh`, material → `materials/<id>.smat`, animation → `models/<id>.sanim`,
-/// texture → `textures/<id>.<ext>`. The C++ `defaultExtractDest`.
+/// texture → `textures/<id>.<ext>`.
 fn default_extract_dest(asset_type: AssetType, sub_id: Uuid, image_ext: &str) -> String {
     let id = sub_id.value();
     match asset_type {
@@ -50,7 +48,7 @@ fn default_extract_dest(asset_type: AssetType, sub_id: Uuid, image_ext: &str) ->
 }
 
 /// The image extension implied by a texture chunk's leading bytes (png/jpg/hdr), default
-/// png. The C++ `imageExtFromBytes`.
+/// png.
 fn image_ext_from_bytes(bytes: &[u8]) -> &'static str {
     if bytes.len() >= 8 && bytes[..4] == [0x89, 0x50, 0x4E, 0x47] {
         return "png";
@@ -81,7 +79,7 @@ fn chunk_kind_from_fourcc(fourcc: u32) -> Option<ChunkKind> {
 
 /// Rewrites a container with a fresh META chunk, preserving every payload chunk verbatim.
 /// The simplest correct way to grow/shrink the metadata (remap edits) without tracking
-/// payload offsets. The C++ `rewriteContainerMeta`.
+/// payload offsets.
 ///
 /// # Errors
 ///
@@ -122,8 +120,8 @@ fn rewrite_container_meta(
     Ok(())
 }
 
-/// Resolves an embedded material sub-asset by reading + parsing its container chunk (the
-/// C++ `resolveMaterial`). Standalone materials use [`crate::material::load_material_asset`].
+/// Resolves an embedded material sub-asset by reading + parsing its container chunk.
+/// Standalone materials use [`crate::material::load_material_asset`].
 fn resolve_container_material(
     assets: &mut AssetServer,
     model_id: Uuid,
@@ -140,8 +138,7 @@ fn resolve_container_material(
     Some(material_asset_from_json(&doc))
 }
 
-/// The standalone destination path the C++ container `findAsset(catalog, id)->path`
-/// expression resolves to — the container file's project-relative path.
+/// The container file's project-relative path, from its catalog row.
 fn container_path(assets: &AssetServer, model_id: Uuid) -> Option<String> {
     assets.catalog.find(model_id).map(|e| e.path.clone())
 }
@@ -150,7 +147,7 @@ fn container_path(assets: &AssetServer, model_id: Uuid) -> Option<String> {
 /// sub-id), registers a standalone catalog row for it, and writes a remap entry so
 /// resolution prefers the external file. The container's bytes are otherwise untouched;
 /// [`clear_extraction`] reverts. Returns the standalone asset's id (`== sub_id`). `dest`
-/// is project-relative; empty picks the per-type default. The C++ `extractSubAsset`.
+/// is project-relative; empty picks the per-type default.
 ///
 /// # Errors
 ///
@@ -243,7 +240,7 @@ pub fn extract_sub_asset(
 
 /// Drops a sub-asset's extraction: removes the remap entry, deletes the external file (so
 /// its uuid name can never alias the embedded chunk on a later scan), reverts the catalog
-/// row to the embedded chunk, and refreshes caches. The C++ `clearExtraction`.
+/// row to the embedded chunk, and refreshes caches.
 ///
 /// # Errors
 ///
@@ -301,7 +298,7 @@ pub fn clear_extraction(assets: &mut AssetServer, model_id: Uuid, sub_id: Uuid) 
     Ok(())
 }
 
-/// What a reimport changed, diffed by stable sub-id. The C++ `ReimportDelta`.
+/// What a reimport changed, diffed by stable sub-id.
 ///
 /// `skipped` is true when the source bytes + importer version are unchanged (the
 /// content-addressed fast path). `removed_from_source` lists sub-assets the source no
@@ -323,7 +320,7 @@ pub struct ReimportDelta {
 /// matches; an extracted (remapped) sub-asset's external override is preserved — the
 /// freshly baked chunk is the dormant fallback. Live instances resolve by (model_id,
 /// sub_id), so they pick up the new bytes with no re-instantiation. The caller idles the
-/// GPU; this drops sub-id caches. The C++ `reimportModel`.
+/// GPU; this drops sub-id caches.
 ///
 /// # Errors
 ///
@@ -429,7 +426,7 @@ pub struct RefNode {
     pub bytes: u64,
 }
 
-/// How an [`RefEdge`] arises (the C++ `RefEdge::Kind`).
+/// How an [`RefEdge`] arises.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RefEdgeKind {
     /// A container references its embedded sub-asset.
@@ -454,7 +451,7 @@ pub struct RefEdge {
 
 /// The scene → asset → sub-asset reference graph (UE's Reference Viewer + Size Map):
 /// who-references-this, what-this-references, and a byte footprint. Read-only/diagnostic,
-/// rebuilt on demand. The C++ `DependencyGraph`.
+/// rebuilt on demand.
 #[derive(Clone, Debug, Default)]
 pub struct DependencyGraph {
     /// The catalog assets as nodes.
@@ -502,7 +499,7 @@ impl DependencyGraph {
 }
 
 /// The on-disk bytes of a catalog row: a model / standalone file's size, or an embedded
-/// sub-asset's chunk length (read from its container's TOC). The C++ `assetBytes`.
+/// sub-asset's chunk length (read from its container's TOC).
 #[must_use]
 pub fn asset_bytes(assets: &mut AssetServer, entry: &AssetEntry) -> u64 {
     if entry.container.value() == 0 {
@@ -567,8 +564,7 @@ fn entity_asset_pairs(scene: &mut Scene) -> Vec<(Uuid, Uuid)> {
 }
 
 /// Builds the dependency graph: catalog assets as nodes; container→child,
-/// material→texture, and scene-entity→asset edges. A snapshot — rebuilt on demand. The C++
-/// `buildDependencyGraph`.
+/// material→texture, and scene-entity→asset edges. A snapshot — rebuilt on demand.
 pub fn build_dependency_graph(scene: &mut Scene, assets: &mut AssetServer) -> DependencyGraph {
     let mut graph = DependencyGraph::default();
     let entries: Vec<AssetEntry> = assets.catalog.entries.clone();
@@ -629,7 +625,7 @@ pub fn build_dependency_graph(scene: &mut Scene, assets: &mut AssetServer) -> De
 }
 
 /// How a cleanup candidate is classified. Only [`CleanCategory::Unused`] is auto-deletable,
-/// and even then only after explicit confirm. The C++ `CleanCategory`.
+/// and even then only after explicit confirm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CleanCategory {
     /// Unreachable from the active scene + not script-referenced.
@@ -643,7 +639,7 @@ pub enum CleanCategory {
 }
 
 impl CleanCategory {
-    /// The wire name the control layer reports (the C++ `cleanCategoryName`).
+    /// The wire name the control layer reports.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -655,7 +651,7 @@ impl CleanCategory {
     }
 }
 
-/// One asset the cleanup analysis flagged. The C++ `CleanCandidate`.
+/// One asset the cleanup analysis flagged.
 #[derive(Clone, Debug)]
 pub struct CleanCandidate {
     /// The candidate asset id.
@@ -671,7 +667,7 @@ pub struct CleanCandidate {
 }
 
 /// The cleanup analysis report — candidates plus the reclaimable byte total (only `Unused`
-/// candidates count toward it). The C++ `CleanReportData`.
+/// candidates count toward it).
 #[derive(Clone, Debug, Default)]
 pub struct CleanReportData {
     /// Every flagged candidate.
@@ -682,7 +678,7 @@ pub struct CleanReportData {
 
 /// Every catalog-id string referenced (recursively) by a `Script` override field. These
 /// are invisible to the static dependency graph, so an asset only reachable this way is
-/// review, not unused. The C++ `collectScriptReferencedIds`.
+/// review, not unused.
 fn collect_script_referenced_ids(scene: &mut Scene) -> HashSet<u64> {
     fn walk(value: &Value, out: &mut HashSet<u64>) {
         match value {
@@ -717,7 +713,6 @@ fn collect_script_referenced_ids(scene: &mut Scene) -> HashSet<u64> {
 
 /// Classifies every catalog asset as kept or a cleanup candidate, by reachability from the
 /// active scene's asset refs + `exclude`. Read-only — produces a report, deletes nothing.
-/// The C++ `analyzeClean`.
 #[must_use]
 pub fn analyze_clean(
     scene: &mut Scene,
@@ -812,7 +807,7 @@ pub fn analyze_clean(
     report
 }
 
-/// What [`delete_unused`] removed. The C++ `DeleteUnusedData`.
+/// What [`delete_unused`] removed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DeleteUnusedData {
     /// Number of assets deleted.
@@ -823,7 +818,7 @@ pub struct DeleteUnusedData {
 
 /// Deletes only the listed ids that [`analyze_clean`] classifies as `Unused` (refusing
 /// without confirm), then rescans so any newly-orphaned cascade resurfaces. Outward-facing
-/// + irreversible. The caller idles the GPU + clears caches first. The C++ `deleteUnused`.
+/// + irreversible. The caller idles the GPU + clears caches first.
 ///
 /// # Errors
 ///
@@ -870,7 +865,7 @@ pub fn delete_unused(
 }
 
 /// The result of a folder material import: the saved material's id plus the space-joined
-/// detected roles (for the editor's confirmation proposal). The C++ `MaterialImportResult`.
+/// detected roles (for the editor's confirmation proposal).
 #[derive(Clone, Debug, Default)]
 pub struct MaterialImportResult {
     /// The saved `.smat` material id.
@@ -882,7 +877,7 @@ pub struct MaterialImportResult {
 /// Drag-a-folder material import: scans `dir` for textures, detects each map's role by
 /// filename suffix, imports it with the right colorspace, assembles a `.smat`, and saves
 /// it. Normal maps assume OpenGL convention; a packed ARM/ORM also feeds the occlusion
-/// slot. The C++ `importMaterialFolder`.
+/// slot.
 ///
 /// # Errors
 ///
@@ -1383,7 +1378,7 @@ mod tests {
             let folder = dir.join("brick");
             std::fs::create_dir_all(&folder).unwrap();
             // "normal" contains the "orm" substring detect_material_role keys on, so a
-            // normal map is named with the `_nor` token to avoid the (C++-identical) collision.
+            // normal map is named with the `_nor` token to avoid the collision.
             std::fs::write(folder.join("brick_albedo.png"), png_2x2()).unwrap();
             std::fs::write(folder.join("brick_nor.png"), png_2x2()).unwrap();
             std::fs::write(folder.join("brick_roughness.png"), png_2x2()).unwrap();

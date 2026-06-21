@@ -7,7 +7,7 @@
 
 use saffron_scene::{AssetType, Colorspace};
 
-/// The wire string for an [`AssetType`] (the C++ `assetTypeName`).
+/// The wire string for an [`AssetType`].
 #[must_use]
 pub fn asset_type_name(asset_type: AssetType) -> &'static str {
     match asset_type {
@@ -20,8 +20,8 @@ pub fn asset_type_name(asset_type: AssetType) -> &'static str {
     }
 }
 
-/// The [`AssetType`] for a wire `type` string (the C++ `assetTypeFromName`). An unknown
-/// string falls back to [`AssetType::Mesh`], matching the C++ default.
+/// The [`AssetType`] for a wire `type` string. An unknown string falls back to
+/// [`AssetType::Mesh`].
 #[must_use]
 pub fn asset_type_from_name(name: &str) -> AssetType {
     match name {
@@ -34,7 +34,7 @@ pub fn asset_type_from_name(name: &str) -> AssetType {
     }
 }
 
-/// The wire string for a [`Colorspace`] (the C++ `colorspaceName`).
+/// The wire string for a [`Colorspace`].
 #[must_use]
 pub fn colorspace_name(space: Colorspace) -> &'static str {
     match space {
@@ -45,8 +45,8 @@ pub fn colorspace_name(space: Colorspace) -> &'static str {
     }
 }
 
-/// The [`Colorspace`] for a wire string (the C++ `colorspaceFromName`). An unknown
-/// string falls back to [`Colorspace::Auto`], matching the C++ default.
+/// The [`Colorspace`] for a wire string. An unknown string falls back to
+/// [`Colorspace::Auto`].
 #[must_use]
 pub fn colorspace_from_name(name: &str) -> Colorspace {
     match name {
@@ -73,7 +73,7 @@ mod tests {
         ] {
             assert_eq!(asset_type_from_name(asset_type_name(ty)), ty);
         }
-        // An unknown string is the C++ Mesh default.
+        // An unknown string is the Mesh default.
         assert_eq!(asset_type_from_name("nonsense"), AssetType::Mesh);
     }
 
@@ -87,7 +87,7 @@ mod tests {
         ] {
             assert_eq!(colorspace_from_name(colorspace_name(space)), space);
         }
-        // An unknown string is the C++ Auto default.
+        // An unknown string is the Auto default.
         assert_eq!(colorspace_from_name("nonsense"), Colorspace::Auto);
     }
 }
