@@ -1,19 +1,17 @@
-//! OBJ (`.obj`) import onto the `tobj` crate (the `importObjModel` port).
+//! OBJ (`.obj`) import onto the `tobj` crate.
 //!
-//! The load-bearing concern is **dedup determinism**. The C++ dedups
-//! `(vertex, normal, texcoord)` index triples into unique vertices via an *ordered*
-//! `std::map<std::array<int,3>, u32>`, so a given OBJ always emits its vertices in the
-//! same order regardless of input-traversal accidents — which keeps the bytes of the
-//! subsequent `.smesh` bake stable. The Rust equivalent that preserves both the dedup
-//! result **and the emitted vertex order** is [`BTreeMap`] over the `[i32; 3]` key, not
-//! `HashMap`: a `HashMap` would dedup correctly but emit vertices in a nondeterministic
-//! order, silently changing every baked `.smesh`'s bytes. That choice is the reason this
-//! module is split out and is pinned by a re-import-determinism test.
+//! The load-bearing concern is **dedup determinism**. `(vertex, normal, texcoord)`
+//! index triples are deduped into unique vertices via a [`BTreeMap`] over the
+//! `[i32; 3]` key, not a `HashMap`: the ordered map preserves both the dedup result
+//! **and the emitted vertex order**, so a given OBJ always emits its vertices in the
+//! same order and the bytes of the subsequent `.smesh` bake stay stable. A `HashMap`
+//! would dedup correctly but emit vertices in a nondeterministic order, silently
+//! changing every baked `.smesh`'s bytes. That choice is the reason this module is
+//! split out and is pinned by a re-import-determinism test.
 //!
-//! The material-slot grouping (faces grouped into first-seen slots, empty slots
-//! skipped), the OBJ **V-flip** (`uv0.y = 1.0 - v`, because OBJ's texture origin is
-//! bottom-left and Vulkan samples top-left), and the out-of-range-index guard are
-//! reproduced from `importObjModel`.
+//! Faces are grouped into first-seen material slots (empty slots skipped), the OBJ
+//! **V-flip** (`uv0.y = 1.0 - v`) is applied because OBJ's texture origin is
+//! bottom-left and Vulkan samples top-left, and out-of-range indices are guarded.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -58,9 +56,8 @@ pub fn import_obj_model(path: impl AsRef<Path>) -> Result<ImportedModel> {
     for model in &models {
         let m = &model.mesh;
         // tobj splits a `usemtl` change mid-object into a fresh `Model`, so every
-        // model is a run of faces sharing one `material_id`; grouping by that id
-        // reproduces the C++ per-face material grouping (faces of the same OBJ
-        // material land in one slot, even across shapes).
+        // model is a run of faces sharing one `material_id`; grouping by that id lands
+        // faces of the same OBJ material in one slot, even across shapes.
         let obj_material = normalize_material(m.material_id, materials.len());
         let face_count = m.indices.len() / 3;
         for f in 0..face_count {
@@ -143,7 +140,7 @@ impl SlotMap {
     }
 }
 
-/// Normalize a tobj per-model material id to the C++ `-1`-means-none convention,
+/// Normalize a tobj per-model material id to the `-1`-means-none convention,
 /// rejecting an out-of-range id.
 fn normalize_material(material_id: Option<usize>, material_count: usize) -> i32 {
     match material_id {
@@ -216,9 +213,8 @@ fn extract_obj_material(
     let mut material = ImportedMaterial {
         name: mat.name.clone(),
         // tinyobjloader seeds its PBR `metallic`/`roughness` to 0 when the `.mtl`
-        // omits them and the C++ assigns those straight through, so an OBJ material
-        // starts metallic 0 / roughness 0 (overriding the dielectric/full-rough
-        // `ImportedMaterial::default`).
+        // omits them, so an OBJ material starts metallic 0 / roughness 0 (overriding
+        // the dielectric/full-rough `ImportedMaterial::default`).
         metallic: 0.0,
         roughness: 0.0,
         ..Default::default()

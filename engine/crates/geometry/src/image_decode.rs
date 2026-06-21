@@ -1,25 +1,19 @@
-//! Raster image decode onto the `image` crate (the stb `stbi_load*` replacements).
+//! Raster image decode onto the `image` crate.
 //!
-//! The contract is the same as the C++ `STBI_rgb_alpha` decode: the output is
-//! **always 4 channels**, tightly packed `width * height * 4`. The 8-bit path
-//! ([`decode_image`] / [`decode_image_from_memory`]) yields RGBA8; the float path
-//! ([`decode_image_hdr`] / [`decode_image_from_memory_hdr`]) yields linear RGBA f32
-//! for `.hdr`-class sources.
+//! The output is **always 4 channels**, tightly packed `width * height * 4`. The
+//! 8-bit path ([`decode_image`] / [`decode_image_from_memory`]) yields RGBA8; the
+//! float path ([`decode_image_hdr`] / [`decode_image_from_memory_hdr`]) yields linear
+//! RGBA f32 for `.hdr`-class sources.
 //!
-//! **Bit-parity caveat (feasibility §5):** pure-Rust decode can differ from stb at
-//! the bit level. That matters only if the asset catalog must hash decoded bytes
-//! stably against stb-decoded bytes. The decision is to ship the `image` crate now;
-//! if PP-7/assets proves a hash needs stb bit-parity, swap *that one* decode path to
-//! an stb binding behind this unchanged return shape — recorded as an open question,
-//! not built here. The return type (`DecodedImage` / `DecodedImageFloat`) is the
-//! contract; the decoder behind it is not.
+//! The return type (`DecodedImage` / `DecodedImageFloat`) is the contract; the
+//! decoder behind it is not.
 
 use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::types::{DecodedImage, DecodedImageFloat};
 
-/// Decode an image file into tightly packed RGBA8 (`stbi_load` with `STBI_rgb_alpha`).
+/// Decode an image file into tightly packed RGBA8.
 pub fn decode_image(path: impl AsRef<Path>) -> Result<DecodedImage> {
     let path = path.as_ref();
     let img = image::open(path)
@@ -27,14 +21,14 @@ pub fn decode_image(path: impl AsRef<Path>) -> Result<DecodedImage> {
     Ok(to_rgba8(img))
 }
 
-/// Decode encoded image bytes into tightly packed RGBA8 (`stbi_load_from_memory`).
+/// Decode encoded image bytes into tightly packed RGBA8.
 pub fn decode_image_from_memory(encoded: &[u8]) -> Result<DecodedImage> {
     let img = image::load_from_memory(encoded)
         .map_err(|e| Error::Decode(format!("cannot decode image from memory: {e}")))?;
     Ok(to_rgba8(img))
 }
 
-/// Decode an HDR image file into tightly packed linear RGBA f32 (`stbi_loadf`).
+/// Decode an HDR image file into tightly packed linear RGBA f32.
 pub fn decode_image_hdr(path: impl AsRef<Path>) -> Result<DecodedImageFloat> {
     let path = path.as_ref();
     let img = image::open(path)
@@ -42,8 +36,7 @@ pub fn decode_image_hdr(path: impl AsRef<Path>) -> Result<DecodedImageFloat> {
     Ok(to_rgba32f(img))
 }
 
-/// Decode encoded HDR image bytes into tightly packed linear RGBA f32
-/// (`stbi_loadf_from_memory`).
+/// Decode encoded HDR image bytes into tightly packed linear RGBA f32.
 pub fn decode_image_from_memory_hdr(encoded: &[u8]) -> Result<DecodedImageFloat> {
     let img = image::load_from_memory(encoded)
         .map_err(|e| Error::Decode(format!("cannot decode HDR image from memory: {e}")))?;
@@ -106,8 +99,7 @@ mod tests {
 
     #[test]
     fn rgb_source_is_promoted_to_four_channels() {
-        // A 3-channel JPEG-class source still decodes to RGBA (STBI_rgb_alpha), with
-        // alpha filled to 255.
+        // A 3-channel JPEG-class source still decodes to RGBA, with alpha filled to 255.
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
             2,
             2,

@@ -7,13 +7,11 @@
 //! - **`Vec3` is 12 bytes, never `Vec3A`.** All format-bearing fields use
 //!   `Vec3`/`Vec4`/`Vec2`/`Mat4`, never the 16-byte SIMD `A` variants, so the
 //!   byte strides match the frozen disk/GPU layouts (`Vertex` = 32, etc.).
-//! - **Quaternion order is `xyzw`.** glam's `Quat` is the glTF storage order, so
-//!   the C++ `wxyz` importer swizzle is deleted: [`ImportedNode::rotation`] reads
-//!   the four glTF floats in declaration order.
-//! - **No global depth flag.** glam has no `GLM_FORCE_DEPTH_ZERO_TO_ONE`; the
-//!   `[0, 1]` Vulkan clip depth is a per-projection choice (`Mat4::perspective_rh`).
-//!   No projection lives in this crate, so the rule is recorded for downstream
-//!   crates and not exercised here.
+//! - **Quaternion order is `xyzw`.** glam's `Quat` is the glTF storage order:
+//!   [`ImportedNode::rotation`] reads the four glTF floats in declaration order.
+//! - **No global depth flag.** The `[0, 1]` Vulkan clip depth is a per-projection
+//!   choice (`Mat4::perspective_rh`). No projection lives in this crate, so the rule
+//!   is recorded for downstream crates and not exercised here.
 //!
 //! Beyond the types it carries the byte formats (`.smesh`/`.sanim`), the picking
 //! math, the model importers (glTF via the `gltf` crate, OBJ via `tobj`), the raster
@@ -194,8 +192,8 @@ mod tests {
 
     #[test]
     fn quat_reads_gltf_xyzw_in_declaration_order() {
-        // The locked decision: glam's xyzw is the glTF storage order, so the four
-        // source floats map straight through with no wxyz swizzle.
+        // glam's xyzw is the glTF storage order, so the four source floats map
+        // straight through.
         let r = [0.1f32, 0.2, 0.3, 0.9];
         let q = glam::Quat::from_xyzw(r[0], r[1], r[2], r[3]);
         assert_eq!(q.x, r[0]);

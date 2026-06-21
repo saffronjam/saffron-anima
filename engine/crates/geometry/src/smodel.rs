@@ -3,12 +3,10 @@
 //! (STEX), materials (SMAT), animations (SANM), thumbnail (THMB), and a front-loaded
 //! metadata chunk (META) into one file.
 //!
-//! The framing is byte-for-byte identical to the C++ container so an existing
-//! `.smodel` reads back chunk-for-chunk. The header/TOC are reinterpreted with **safe**
-//! `bytemuck` over `#[repr(C)]` Pod structs, so the crate's `#![deny(unsafe_code)]`
-//! holds while the bytes stay identical.
+//! The header/TOC are reinterpreted with **safe** `bytemuck` over `#[repr(C)]` Pod
+//! structs, so the crate's `#![deny(unsafe_code)]` holds.
 //!
-//! Load-bearing framing rules, carried verbatim:
+//! Load-bearing framing rules:
 //!
 //! - **META front-loading.** The META chunk (if present) is placed first after the TOC
 //!   and recorded in `meta_offset`/`meta_length`, so a prefix read reaches the metadata
@@ -132,9 +130,7 @@ pub struct ContainerChunk<'a> {
 /// bytes lazily from disk.
 ///
 /// Holds the path and reads each chunk on demand. It is a plain owned struct, moved to
-/// its single owner and dropped at end of scope; the C++ note about dropping it "before
-/// device teardown like a Ref" is about lifetime ordering in the renderer, not shared
-/// ownership.
+/// its single owner and dropped at end of scope.
 #[derive(Clone, Debug)]
 pub struct ContainerReader {
     path: PathBuf,
@@ -292,7 +288,7 @@ pub fn read_container(path: impl AsRef<Path>) -> Result<ContainerReader> {
 }
 
 impl ContainerReader {
-    /// The container file path the reader slices chunks from (the C++ `reader.path`).
+    /// The container file path the reader slices chunks from.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -379,8 +375,8 @@ mod tests {
         assert_eq!(align16(17), 32);
     }
 
-    /// Reproduces `runContainerSelfTest` (geometry.cppm:2024): MESH first in caller
-    /// order so META front-loading is actually exercised, plus META and STEX.
+    /// MESH first in caller order so META front-loading is actually exercised, plus
+    /// META and STEX.
     #[test]
     fn round_trip_with_meta_front_loaded() {
         let meta_bytes: Vec<u8> = (0..12u8).map(|i| 0xA0u8.wrapping_add(i)).collect();

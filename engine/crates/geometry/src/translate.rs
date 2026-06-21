@@ -1,7 +1,7 @@
-//! The model-format dispatch on file extension (the cgltf/tinyobj `translateModel`).
+//! The model-format dispatch on file extension.
 //!
 //! `.gltf`/`.glb` route to the glTF importer, `.obj` to the OBJ importer; any other
-//! extension is rejected. After this phase, every supported format is handled.
+//! extension is rejected.
 
 use std::path::Path;
 

@@ -2,13 +2,12 @@
 //! sections (vertices, indices, submeshes) with an optional v2 skin section appended.
 //!
 //! The image is the canonical triple contract: disk bytes == in-memory payload == the
-//! GPU vertex buffer. It is byte-for-byte identical to the C++ image so a `.smodel`
-//! MESH chunk slice and a standalone `.smesh` file read the same. The bytes are
-//! reinterpreted with **safe** `bytemuck` over `#[repr(C)]` Pod structs (`bytes_of` /
-//! `cast_slice` to write, `from_bytes` / `cast_slice` to read), so the crate's
-//! `#![deny(unsafe_code)]` holds while the bytes stay identical.
+//! GPU vertex buffer, so a `.smodel` MESH chunk slice and a standalone `.smesh` file
+//! read the same. The bytes are reinterpreted with **safe** `bytemuck` over
+//! `#[repr(C)]` Pod structs (`bytes_of` / `cast_slice` to write, `from_bytes` /
+//! `cast_slice` to read), so the crate's `#![deny(unsafe_code)]` holds.
 //!
-//! Two versions live in the format, exactly as the live source has them:
+//! Two versions live in the format:
 //! [`MESH_FORMAT_VERSION`] = 1 (unskinned) and [`MESH_FORMAT_VERSION_SKINNED`] = 2
 //! (the same header and first three sections plus a `VertexSkin` section). The encoder
 //! picks the version by whether the skin is non-empty; the loader accepts 1 and 2 and
@@ -33,9 +32,9 @@ const MAGIC: [u8; 4] = *b"SMSH";
 
 /// The 64-byte fixed header; the three contiguous raw arrays follow at the offsets.
 ///
-/// `#[repr(C)]` Pod with the exact field order/widths of the C++ `SMeshHeader`. The
-/// offsets are self-relative (from the start of the image), so an embedded `.smodel`
-/// chunk slice reads identically to a standalone file.
+/// `#[repr(C)]` Pod with a fixed field order and width. The offsets are self-relative
+/// (from the start of the image), so an embedded `.smodel` chunk slice reads
+/// identically to a standalone file.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 struct SMeshHeader {

@@ -1,22 +1,17 @@
 //! glTF (`.gltf`/`.glb`) import onto the `gltf` crate.
 //!
-//! The `gltf` crate exposes an index-only typed API; cgltf gave pointer-identity
-//! joins and `cgltf_node_transform_world`. Three deterministic glue pieces are
-//! reconstructed by hand and pinned by tests so the output stays byte-identical to
-//! the cgltf path the asset bake hashes depend on:
+//! The `gltf` crate exposes an index-only typed API. Three deterministic glue pieces
+//! are reconstructed by hand and pinned by tests so the output stays byte-stable for
+//! the asset bake hashes that depend on it:
 //!
 //! - **The parent map** ([`build_parents`]) — the crate's `Node` exposes `children`,
-//!   not a parent, so parent indices are built by one walk over every node's children
-//!   (the C++ `node.parent - data->nodes`).
+//!   not a parent, so parent indices are built by one walk over every node's children.
 //! - **The world-transform walk** ([`world_transform`]) — for the unskinned path the
 //!   mesh node's world transform is baked into its vertices; this composes each node's
-//!   local TRS up the parent chain, reproducing `cgltf_node_transform_world` exactly.
+//!   local TRS up the parent chain.
 //! - **Node ordering** — joint-index and channel→joint resolution depend on the node
 //!   array being in document order. The crate iterates `nodes()` in document order and
-//!   exposes `node.index()`; both index the same array the cgltf math used.
-//!
-//! The skin gate, the channel-skip rules, and the first-seen material slots are
-//! reproduced branch-for-branch from `importGltfModel`.
+//!   exposes `node.index()`; both index the same array.
 
 use std::path::Path;
 
@@ -181,7 +176,7 @@ pub fn import_gltf_model(path: impl AsRef<Path>) -> Result<ImportedModel> {
 /// Build the parent index of every node (`-1` for a root).
 ///
 /// The `gltf` crate's `Node` exposes its children, not its parent, so one pass over
-/// every node's children fills the inverse map — the C++ `node.parent - data->nodes`.
+/// every node's children fills the inverse map.
 fn build_parents(document: &gltf::Document) -> Vec<i32> {
     let mut parents = vec![-1i32; document.nodes().count()];
     for node in document.nodes() {
@@ -194,7 +189,7 @@ fn build_parents(document: &gltf::Document) -> Vec<i32> {
 }
 
 /// The world transform of a node: the product of its local TRS matrices up the parent
-/// chain (the `cgltf_node_transform_world` reproduction).
+/// chain.
 fn world_transform(document: &gltf::Document, parents: &[i32], index: usize) -> Mat4 {
     let mut transform = local_matrix(document, index);
     let mut parent = parents[index];
@@ -218,9 +213,9 @@ fn local_matrix(document: &gltf::Document, index: usize) -> Mat4 {
 /// Read one triangle primitive's attributes, optionally bake the node world
 /// transform into its vertices, and append the resulting vertex/index/submesh data.
 ///
-/// Non-triangle primitives and primitives without positions are skipped, matching
-/// the C++ `appendPrimitive`. Tracks whether a skinned (joints + weights) or an
-/// unskinned primitive was seen, and the first-seen material slot.
+/// Non-triangle primitives and primitives without positions are skipped. Tracks
+/// whether a skinned (joints + weights) or an unskinned primitive was seen, and the
+/// first-seen material slot.
 #[allow(clippy::too_many_arguments)]
 fn append_primitive(
     prim: &gltf::Primitive,
@@ -262,8 +257,8 @@ fn append_primitive(
     let vertex_offset = mesh.vertices.len() as i32;
     let first_index = mesh.indices.len() as u32;
     let normal_transform = node_transform.map(|m| {
-        // Inverse-transpose of the upper-3x3 transforms normals under a non-uniform
-        // scale, matching `transpose(inverse(mat3(nodeTransform)))`.
+        // Inverse-transpose of the upper-3x3 transforms normals correctly under a
+        // non-uniform scale.
         Mat3::from_mat4(*m).inverse().transpose()
     });
 
@@ -357,7 +352,7 @@ fn build_skin(
                 scale,
             } => (
                 Vec3::from_array(translation),
-                // glam's Quat is xyzw — the glTF storage order; no wxyz swizzle.
+                // glam's Quat is xyzw, matching the glTF storage order.
                 Quat::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3]),
                 Vec3::from_array(scale),
             ),
@@ -619,7 +614,7 @@ fn read_texture_bytes(
     }
 }
 
-/// Map an image MIME type onto a file extension (the cgltf `extensionFromMime`).
+/// Map an image MIME type onto a file extension.
 fn extension_from_mime(mime: &str) -> String {
     match mime {
         "image/jpeg" => "jpg".to_owned(),
@@ -635,7 +630,7 @@ fn extension_of(name: &str) -> String {
     }
 }
 
-/// Percent-decode a URI in place (`%20` -> space), matching `cgltf_decode_uri`.
+/// Percent-decode a URI in place (`%20` -> space).
 fn percent_decode(uri: &str) -> String {
     let bytes = uri.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

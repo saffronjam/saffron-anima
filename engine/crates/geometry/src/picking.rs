@@ -2,14 +2,11 @@
 //! accumulation, and smooth-normal recompute.
 //!
 //! These are leaf math helpers with no ownership or I/O. The numeric epsilons are
-//! load-bearing — they decide pick results — so they are carried verbatim from the
-//! C++ source rather than tidied.
+//! load-bearing — they decide pick results.
 //!
-//! The C++ used out-parameters (`f32& tEnter`, `f32& outT`); the Rust ports return
-//! the payload through `Option` instead, because that is the one idiomatic way to
-//! say "hit or miss, with data". [`world_aabb_from_corners`] keeps its *accumulate*
-//! semantics (it unions into caller-seeded bounds), because callers union a joint
-//! palette across many calls.
+//! Hit tests return the payload through `Option` ("hit or miss, with data").
+//! [`world_aabb_from_corners`] keeps *accumulate* semantics (it unions into
+//! caller-seeded bounds), because callers union a joint palette across many calls.
 
 use crate::types::{Mesh, Ray};
 use glam::{Mat4, Vec3};
@@ -151,7 +148,7 @@ mod tests {
     use glam::{Vec2, Vec3};
     use saffron_test_support::close;
 
-    /// The triangle and ray directions from `runPickMathSelfTest`.
+    /// The triangle corners and ray directions the pick-math tests share.
     const A: Vec3 = Vec3::new(0.0, 0.0, 0.0);
     const B: Vec3 = Vec3::new(1.0, 0.0, 0.0);
     const C: Vec3 = Vec3::new(0.0, 1.0, 0.0);
@@ -199,13 +196,12 @@ mod tests {
         assert!(close(t, 1.0, 1e-4), "t was {t}");
     }
 
-    /// Builds the 45°-about-Z rotation the self-test uses, matching the C++ column
-    /// writes `rot[0][0]=cs; rot[0][1]=sn; rot[1][0]=-sn; rot[1][1]=cs;`.
+    /// Builds the 45°-about-Z rotation the AABB test uses.
     fn rot_z_45() -> Mat4 {
         let angle = std::f32::consts::FRAC_PI_4;
         let cs = angle.cos();
         let sn = angle.sin();
-        // glam Mat4::from_cols takes columns; rot[col][row] in glm maps to col-major here.
+        // glam Mat4::from_cols takes columns in column-major order.
         Mat4::from_cols(
             glam::Vec4::new(cs, sn, 0.0, 0.0),
             glam::Vec4::new(-sn, cs, 0.0, 0.0),

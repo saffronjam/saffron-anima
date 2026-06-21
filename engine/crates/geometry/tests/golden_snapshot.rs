@@ -1,16 +1,12 @@
-//! Byte-exact golden snapshots for the `.smesh` / `.sanim` / `.smodel` formats
-//! (13-testing-and-verification phase 2; also the 02-math-and-geometry phase-3/4/7 golden
-//! gate).
+//! Byte-exact golden snapshots for the `.smesh` / `.sanim` / `.smodel` formats.
 //!
-//! Each test bakes a deterministic fixture input with the Rust writer and asserts the bytes
-//! are byte-identical to a fixture under `fixtures/golden/`, generated *once* from the C++
-//! engine's writers (`fixtures/golden/gen/gen_golden.cpp`, transcribed from
-//! `geometry.cppm`). The cube mesh and the clip below are reproduced field-for-field from
-//! that generator, so a drift in either writer or input surfaces as a byte mismatch with a
-//! windowed hexdump from [`assert_bytes_match_golden`].
+//! Each test bakes a deterministic fixture input with the writer and asserts the bytes
+//! are byte-identical to a committed fixture under `fixtures/golden/`, so a drift in
+//! either the writer or the input surfaces as a byte mismatch with a windowed hexdump
+//! from [`assert_bytes_match_golden`].
 //!
 //! Reseed with `UPDATE_GOLDEN=1` only to land an intentional, writer-and-fixture-together
-//! format change (NO LEGACY) — never to quiet a real drift.
+//! format change — never to quiet a real drift.
 
 use saffron_geometry::glam::{Vec2, Vec3};
 use saffron_geometry::{
@@ -20,9 +16,8 @@ use saffron_geometry::{
 use saffron_test_support::assert_bytes_match_golden;
 
 /// The canonical unit cube: 24 vertices (per-face normals + uvs), 36 indices, one submesh.
-/// Identical to the C++ generator's `cubeMesh()`.
 fn cube_mesh() -> Mesh {
-    // (normal, four corners) per face, in the generator's order: +Z, -Z, +X, -X, +Y, -Y.
+    // (normal, four corners) per face, in order: +Z, -Z, +X, -X, +Y, -Y.
     let faces: [(Vec3, [Vec3; 4]); 6] = [
         (
             Vec3::new(0.0, 0.0, 1.0),
@@ -107,8 +102,7 @@ fn cube_mesh() -> Mesh {
     mesh
 }
 
-/// The canonical clip: one rotation track and one translation track. Identical to the C++
-/// generator's `cubeClip()`.
+/// The canonical clip: one rotation track and one translation track.
 fn cube_clip() -> AnimClip {
     AnimClip {
         name: "CubeSpin".to_owned(),
@@ -162,7 +156,7 @@ fn cube_sanim_bytes_match_cpp_golden() {
 #[test]
 fn cube_smodel_bytes_match_cpp_golden() {
     // A self-contained container: a small fixed META JSON + the cube MESH chunk. The META
-    // string is byte-identical to the generator's `meta.dump(2)` (sorted nlohmann keys).
+    // string is two-space-indented with sorted keys.
     let meta = concat!(
         "{\n",
         "  \"materialCount\": 0,\n",

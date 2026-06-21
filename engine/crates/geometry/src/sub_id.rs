@@ -1,13 +1,12 @@
-//! The stable sub-asset id hash (`subIdFor`).
+//! The stable sub-asset id hash.
 //!
 //! The asset catalog resolves baked sub-assets (a material, a mesh) by an id
 //! derived from the model key, the sub-asset kind, the source name, and a
 //! duplicate-disambiguation index. The id must be **stable across reimports** so a
 //! re-bake of the same source resolves to the same id — a drifting hash silently
-//! orphans every baked sub-asset. The hash is therefore reproduced bit-for-bit from
-//! the C++ `subIdFor`: FNV-1a over the three string fields with an extra mix round
-//! between fields, then a four-byte little-endian mix of `dup_index`, then the
-//! `< 1024 -> + 1024` fold into the non-reserved id range.
+//! orphans every baked sub-asset. The hash is FNV-1a over the three string fields with
+//! an extra mix round between fields, then a four-byte little-endian mix of
+//! `dup_index`, then the `< 1024 -> + 1024` fold into the non-reserved id range.
 
 use saffron_core::Uuid;
 
@@ -49,9 +48,7 @@ pub fn sub_id_for(model_key: &str, kind: &str, source_name: &str, dup_index: u32
 mod tests {
     use super::*;
 
-    // Re-expresses `runTranslateDeterminismSelfTest`'s sub-id checks
-    // (geometry.cppm:2005-2011): stability, distinctness across each field, and the
-    // `>= 1024` fold.
+    // Stability, distinctness across each field, and the `>= 1024` fold.
     #[test]
     fn sub_id_is_stable_distinct_and_folded() {
         let stone = sub_id_for("town", "material", "stone", 0);

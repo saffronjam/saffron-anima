@@ -1,9 +1,7 @@
 //! glTF import tests over the real fixtures.
 //!
-//! These re-express the assertions of the C++ `runGeometrySelfTest` and
-//! `runTranslateDeterminismSelfTest` (the geometry self-tests are deleted, not run at
-//! startup). The fixtures live in `tests/fixtures/` — copies of the engine's sample
-//! models, each with an embedded base64 buffer so the test is self-contained.
+//! The fixtures live in `tests/fixtures/` — copies of the engine's sample models, each
+//! with an embedded base64 buffer so the test is self-contained.
 
 use std::path::PathBuf;
 
@@ -87,8 +85,7 @@ fn two_materials_yields_two_slots_in_first_seen_order() {
 
 #[test]
 fn cube_import_is_deterministic() {
-    // The `sameGraph` assertion of runTranslateDeterminismSelfTest: two imports of
-    // the same source yield structurally identical graphs.
+    // Two imports of the same source yield structurally identical graphs.
     let first = import("cube.gltf");
     let second = import("cube.gltf");
     assert_eq!(first.mesh.vertices.len(), second.mesh.vertices.len());
@@ -119,8 +116,8 @@ fn unsupported_extension_is_rejected() {
 
 #[test]
 fn skinned_strip_round_trips_through_smesh_and_sanim() {
-    // Chains phase 3/4: import a skinned model, bake the mesh + skin into a v2
-    // `.smesh` buffer, read it back, and round-trip a clip through `.sanim`.
+    // Import a skinned model, bake the mesh + skin into a v2 `.smesh` buffer, read it
+    // back, and round-trip a clip through `.sanim`.
     let model = import("animated-strip.gltf");
     let skin = model.skin.as_ref().expect("animated-strip is skinned");
 

@@ -3,8 +3,7 @@
 //!
 //! The format-bearing structs (`Vertex`, `Submesh`, `VertexSkin`) are `#[repr(C)]`
 //! Pod with byte strides pinned by [`super::tests`]. All format fields use glam's
-//! 12-byte `Vec3` (never the 16-byte SIMD `Vec3A`), so the strides match the C++
-//! `static_assert`s exactly.
+//! 12-byte `Vec3` (never the 16-byte SIMD `Vec3A`), so the strides stay fixed.
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
@@ -249,9 +248,8 @@ pub struct ImportedSkin {
 
 /// One imported material texture: the encoded (png/jpg) bytes plus their extension.
 ///
-/// Replaces the C++ `has*` bool + parallel byte/ext blob pair — an
-/// `Option<TextureSource>` makes "is the texture present?" and the payload one field,
-/// so the flag can never disagree with the bytes.
+/// Carried as an `Option<TextureSource>`, so "is the texture present?" and the payload
+/// are one field and a presence flag can never disagree with the bytes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TextureSource {
     /// The encoded image bytes (png/jpg), as read from an external file or embedded.
@@ -262,8 +260,8 @@ pub struct TextureSource {
 
 /// One material extracted from a model: the PBR factors and any optional textures.
 ///
-/// Each optional texture is an `Option<TextureSource>` rather than the C++ `has*`
-/// bool + parallel fields (NO LEGACY: the bool/blob pairs do not survive).
+/// Each optional texture is an `Option<TextureSource>`, so a presence flag can never
+/// disagree with the bytes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImportedMaterial {
     /// The source material name (the stable key for its baked sub-id).
@@ -310,9 +308,8 @@ impl Default for ImportedMaterial {
 
 /// The skin payload of a skinned model.
 ///
-/// Collapses the C++ `hasSkin` bool that gated three separate vectors into one
-/// `Option<SkinPayload>` on [`ImportedModel`]: present means skinned, and the four
-/// skin-only fields travel together (NO LEGACY: no bool that can disagree).
+/// Carried as one `Option<SkinPayload>` on [`ImportedModel`]: present means skinned,
+/// and the four skin-only fields travel together, so no presence flag can disagree.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SkinPayload {
     /// Per-vertex skin influences, parallel to [`Mesh::vertices`].

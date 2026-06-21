@@ -1,10 +1,6 @@
 //! The crate-root error type and `Result` alias.
 
 /// Errors raised by the geometry formats, importers, and decoders.
-///
-/// The variants seed everything the area's later phases need (formats in 3/4/7,
-/// importers/decoders in 5/6). They are added as those phases require them; the
-/// enum and the [`Result`] alias exist now so the public signatures compile.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A filesystem read or write failed. The payload is the OS message.

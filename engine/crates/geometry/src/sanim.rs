@@ -1,17 +1,15 @@
 //! The `.sanim` (`SANM`) byte format: a 32-byte header, the clip name, then a
 //! 20-byte record plus name/times/values per track.
 //!
-//! The second byte format after `.smesh`, mirroring its discipline: a `#[repr(C)]`
-//! Pod header and per-track record reinterpreted with **safe** `bytemuck` over
-//! `#[repr(C)]` Pod structs, byte-for-byte identical to the C++ image so a `.smodel`
-//! `SANM` chunk and a standalone `.sanim` file read the same. The crate's
+//! It mirrors the `.smesh` discipline: a `#[repr(C)]` Pod header and per-track record
+//! reinterpreted with **safe** `bytemuck` over `#[repr(C)]` Pod structs, so a
+//! `.smodel` `SANM` chunk and a standalone `.sanim` file read the same. The crate's
 //! `#![deny(unsafe_code)]` holds throughout.
 //!
 //! The [`AnimPath`]/[`AnimInterp`] discriminant bytes are pinned (their `from_u8`
 //! maps the byte through an explicit `match`, never `transmute`), and the decode
 //! runs a bounded [`Cursor`] whose `take` returns [`Error::Truncated`] on overrun so
-//! a lying count can never drive a giant allocation — the same anti-DoS guarantee as
-//! the C++ `overran` flag, shortened to one code path by `?`.
+//! a lying count can never drive a giant allocation.
 
 use std::fs;
 use std::path::Path;
@@ -29,7 +27,7 @@ const MAGIC: [u8; 4] = *b"SANM";
 
 /// The 32-byte fixed header; the clip name follows, then the per-track sections.
 ///
-/// `#[repr(C)]` Pod with the exact field order/widths of the C++ `SANimHeader`.
+/// `#[repr(C)]` Pod with a fixed field order and width.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 struct SANimHeader {
@@ -54,8 +52,8 @@ const _: () = assert!(
 
 /// The 20-byte per-track record; the joint name, then times, then values follow it.
 ///
-/// `#[repr(C)]` Pod keeping the explicit `pad: u16` of the C++ `SANimTrackRecord` so
-/// the field offsets and the 20-byte stride match exactly.
+/// `#[repr(C)]` Pod with an explicit `pad: u16` so the field offsets and the 20-byte
+/// stride are fixed.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 struct SANimTrackRecord {
