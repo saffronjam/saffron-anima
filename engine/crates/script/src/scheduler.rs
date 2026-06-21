@@ -1,8 +1,7 @@
 //! The Roblox-task-style coroutine scheduler: verbatim Luau installed onto the `sa`
 //! table after the bindings are bound.
 //!
-//! Ports the C++ `SchedulerPrelude` (`script_runtime.cpp:865`–904) unchanged. The
-//! scheduler is pure Luau over the enabled coroutine library: `sa.spawn_task` creates
+//! The scheduler is pure Luau over the enabled coroutine library: `sa.spawn_task` creates
 //! and resumes a coroutine, `sa.wait` yields it (a no-op outside a coroutine, never a
 //! tick error), `sa.delay` is wait + call, and the global `_sa_advance(dt)` resumes
 //! ready coroutines timed off accumulated `dt` — deterministic, never `os.clock` (the
@@ -10,13 +9,10 @@
 //! the message dispatch) through [`crate::ScriptHost`]; a faulting coroutine logs via
 //! `sa.log` and never crashes the VM.
 //!
-//! The prelude keeps the C++ `rawset(sa, …)` form (the C++ `sa` namespace had a read-only
-//! `__newindex`; in Rust `sa` is a plain table, so `rawset` is a plain assignment). It
-//! diverges from the C++ in one place — `sa.wait`'s "am I inside a scheduler task?" guard.
-//! The C++ relied on `coroutine.running()`'s `ismain` being `true` on the main thread, but
-//! mlua's Luau backend runs every `Function::call` (including a script's `on_update`) on an
-//! auxiliary Lua thread, so `ismain` reads `false` even in a bare `on_update`. The prelude
-//! instead tracks the scheduler coroutine it is currently resuming (`_sa_active`) and
+//! `sa.wait`'s "am I inside a scheduler task?" guard accounts for mlua's Luau backend
+//! running every `Function::call` (including a script's `on_update`) on an auxiliary Lua
+//! thread, so `coroutine.running()`'s `ismain` reads `false` even in a bare `on_update`.
+//! The prelude tracks the scheduler coroutine it is currently resuming (`_sa_active`) and
 //! yields only from *that* coroutine; a bare-`on_update` `sa.wait` falls through to the
 //! documented ignored no-op, never the "yield across a C-call boundary" error.
 
@@ -24,7 +20,7 @@ use mlua::Lua;
 
 use crate::error::{Error, Result};
 
-/// The scheduler prelude, byte-identical to the C++ `SchedulerPrelude`.
+/// The scheduler prelude source.
 const SCHEDULER_PRELUDE: &str = r#"
 local _tasks, _accum, _sa_active = {}, 0, nil
 rawset(sa, "spawn_task", function(fn, ...)
@@ -76,7 +72,7 @@ end
 /// Run once per session after [`crate::register_no_scene_globals`] and the scene
 /// bindings, so the prelude's `rawset(sa, …)` lands on the live `sa` table. A failure
 /// (a missing `sa` global, a Luau error) is surfaced as [`Error::Runtime`] for the
-/// caller to log — the C++ logged it and continued.
+/// caller to log.
 pub fn install(lua: &Lua) -> Result<()> {
     lua.load(SCHEDULER_PRELUDE)
         .set_name("sa:scheduler")

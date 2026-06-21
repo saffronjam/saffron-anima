@@ -1,15 +1,14 @@
 //! The JSON↔Lua bridge for the component read/write surface: total conversions
 //! between `serde_json::Value` and `mlua::Value`.
 //!
-//! Ports the C++ `jsonToLua` / `luaToJson` (`script_runtime.cpp:46`–157), the two
-//! halves of `get_component` / `set_component`. Both are total over the component DTO
-//! shapes: nothing aborts, an unrepresentable input degrades to `nil` / `null`.
+//! The two halves of `get_component` / `set_component`. Both are total over the
+//! component DTO shapes: nothing aborts, an unrepresentable input degrades to `nil` /
+//! `null`.
 //!
 //! - [`json_to_lua`] (the read half): objects→tables, arrays→1-based tables, strings
 //!   (a uuid stays its decimal string), booleans, floats; an unsigned integer past
-//!   `i64::MAX` falls back to `f64` (the C++ large-unsigned guard, so a u64 uuid that
-//!   slipped through as a number does not wrap negative), every other integer to a Lua
-//!   integer, and `null`→`nil`.
+//!   `i64::MAX` falls back to `f64` (so a u64 uuid that slipped through as a number does
+//!   not wrap negative), every other integer to a Lua integer, and `null`→`nil`.
 //! - [`lua_to_json`] (the write half): a `sa.Vec3` userdata → `{x,y,z}` object (the
 //!   shape the per-component serde reads), a string-keyed table → object, a 1-based
 //!   sequence → array, scalars 1:1, and anything else → `null`.
@@ -48,12 +47,11 @@ pub fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<LuaValue> {
     }
 }
 
-/// Converts a JSON number to a Lua value, reproducing the C++ integer/float split.
+/// Converts a JSON number to a Lua value with an integer/float split.
 ///
 /// A float stays a Lua number; an unsigned integer past `i64::MAX` falls back to a
-/// Lua number (the C++ `is_number_unsigned && value > i64::MAX` guard, so a u64 that
-/// arrived as a number does not wrap negative when narrowed to an `i64`); every other
-/// integer becomes a Lua integer.
+/// Lua number (so a u64 that arrived as a number does not wrap negative when narrowed
+/// to an `i64`); every other integer becomes a Lua integer.
 fn number_to_lua(n: &serde_json::Number) -> LuaValue {
     if let Some(i) = n.as_i64() {
         return LuaValue::Integer(i);
@@ -72,8 +70,7 @@ fn number_to_lua(n: &serde_json::Number) -> LuaValue {
 /// Total over the script-facing shapes — see the module docs. An `sa.Vec3` userdata
 /// becomes a `{x,y,z}` object; any other userdata (no numeric `x`/`y`/`z`) drops to
 /// `null` rather than being guessed at. A table with a positive array length is an
-/// array; otherwise its string keys become an object (non-string keys are dropped, as
-/// in the C++ `lua_type(L, -2) == LUA_TSTRING` filter).
+/// array; otherwise its string keys become an object (non-string keys are dropped).
 pub fn lua_to_json(value: &LuaValue) -> JsonValue {
     match value {
         LuaValue::Nil => JsonValue::Null,
@@ -107,8 +104,7 @@ fn userdata_to_json(ud: &mlua::AnyUserData) -> JsonValue {
     }
 }
 
-/// A Lua table → an array (positive sequence length) or an object (string keys),
-/// matching the C++ `rawlen > 0 ? array : object` split.
+/// A Lua table → an array (positive sequence length) or an object (string keys).
 fn table_to_json(table: &mlua::Table) -> JsonValue {
     let len = table.raw_len();
     if len > 0 {
@@ -131,8 +127,8 @@ fn table_to_json(table: &mlua::Table) -> JsonValue {
     JsonValue::Object(object)
 }
 
-/// A finite `f64` → a JSON number, NaN/inf → `null` (JSON has no representation, and
-/// the C++ `nlohmann::json` would emit `null` for a non-finite double).
+/// A finite `f64` → a JSON number, NaN/inf → `null` (JSON has no representation for a
+/// non-finite double).
 fn float_to_json(f: f64) -> JsonValue {
     serde_json::Number::from_f64(f)
         .map(JsonValue::Number)

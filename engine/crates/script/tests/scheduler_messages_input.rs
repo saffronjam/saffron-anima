@@ -1,14 +1,12 @@
-//! Phase-6 coverage: the coroutine scheduler (dt-driven `sa.wait`/`spawn_task` + a
-//! contained coroutine fault), inter-script messages (`entity:send` / `sa.broadcast`
-//! with payloads + sender, and the payload ref released across ticks), the input reads
-//! (held + derived edges + mouse, case-normalized) through a lent `ScriptInputState`,
-//! and the hierarchy/query bindings (`set_parent` / `parent` / `children` / `spawn` /
+//! Coverage of the coroutine scheduler (dt-driven `sa.wait`/`spawn_task` + a contained
+//! coroutine fault), inter-script messages (`entity:send` / `sa.broadcast` with payloads
+//! + sender, and the payload ref released across ticks), the input reads (held + derived
+//! edges + mouse, case-normalized) through a lent `ScriptInputState`, and the
+//! hierarchy/query bindings (`set_parent` / `parent` / `children` / `spawn` /
 //! `get_entity_by_name` / `find_by_uuid` / `primary_camera`).
 //!
 //! The scheduler/message cases drive real `.luau` fixtures through a real [`ScriptHost`]
 //! against a real [`Scene`]; the input/hierarchy cases drive a VM inside a session guard.
-//! The Rust port of the C++ `advanceScheduler` / `dispatchMessages` / the input + query
-//! bindings, expressed as `#[test]`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -237,8 +235,7 @@ fn input_bindings_read_the_lent_snapshot() {
     }
 }
 
-/// With no input lent, the bindings read their documented defaults (the C++
-/// `host.input == nullptr` path) — never an error.
+/// With no input lent, the bindings read their documented defaults — never an error.
 #[test]
 fn input_bindings_default_with_no_snapshot() {
     let mut scene = Scene::new();

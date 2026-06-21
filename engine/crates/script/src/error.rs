@@ -2,14 +2,11 @@
 
 /// The scripting crate error type.
 ///
-/// Replaces the C++ `Result<void>` + `Err(traceback)` stringly model: a load
-/// failure (a syntax error in the chunk) is [`Error::Load`], a runtime failure
-/// (a raised Lua error, a faulting handler) is [`Error::Runtime`], and a budget
-/// trip (the per-call instruction limit or the VM memory limit) is
-/// [`Error::Budget`]. The `Load`/`Runtime` payload carries the Luau message with
-/// its stack traceback already appended — `mlua` surfaces a traceback on every
-/// Lua error, so the C++ `tracebackHandler`/`luaL_traceback` raw-stack dance is
-/// gone.
+/// A load failure (a syntax error in the chunk) is [`Error::Load`], a runtime
+/// failure (a raised Lua error, a faulting handler) is [`Error::Runtime`], and a
+/// budget trip (the per-call instruction limit or the VM memory limit) is
+/// [`Error::Budget`]. The `Load`/`Runtime` payload carries the Luau message with its
+/// stack traceback already appended — `mlua` surfaces a traceback on every Lua error.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A chunk failed to load (a Luau syntax error). Carries the message.

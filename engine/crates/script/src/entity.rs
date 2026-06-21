@@ -2,14 +2,12 @@
 //! its scene-only surface resolved through the [session guard](crate::session) each
 //! call.
 //!
-//! Ports the C++ `ScriptEntity { entity; host* }` (`script_runtime.cpp:175`): the
-//! handle caches no scene borrow, only the id and an implicit reach to the live
-//! session. Every accessor runs the C++ three-check pattern — session active? entity
+//! The handle caches no scene borrow, only the id and an implicit reach to the live
+//! session. Every accessor runs the three-check pattern — session active? entity
 //! valid? (for transforms) `Transform` present? — and degrades to a logged no-op
-//! returning the documented default otherwise (`vec3{0}` position/rotation,
-//! `vec3{1}` scale, `"0"` uuid, `""` name; `script_runtime.cpp:180`–298). A handle
-//! stashed in a Lua global and used after its session ends therefore resolves to
-//! those defaults, never a dangling deref.
+//! returning the documented default otherwise (`vec3{0}` position/rotation, `vec3{1}`
+//! scale, `"0"` uuid, `""` name). A handle stashed in a Lua global and used after its
+//! session ends therefore resolves to those defaults, never a dangling deref.
 //!
 //! Transforms cross the boundary as [`SaVec3`]; rotation is engine ZYX-Euler
 //! radians, so `get_world_rotation` decomposes the world quaternion to euler and the
@@ -34,15 +32,15 @@ use crate::value::SaVec3;
 ///
 /// `Copy` because it holds only an id — script may pass and stash it freely. It owns
 /// no scene borrow, so a stale handle is safe: its accessors find no active session
-/// (or an invalid entity) and return the C++ default.
+/// (or an invalid entity) and return the documented default.
 #[derive(Clone, Copy, Debug)]
 pub struct EntityHandle {
     entity: Entity,
 }
 
-/// The invalid handle (the C++ `Entity{}` / `entt::null`): every accessor degrades to
-/// its documented default through the session guard. Returned by `parent()` at a root,
-/// by the `sa.*` query bindings on a miss, and as the sender of a sender-less message.
+/// The invalid handle: every accessor degrades to its documented default through the
+/// session guard. Returned by `parent()` at a root, by the `sa.*` query bindings on a
+/// miss, and as the sender of a sender-less message.
 impl Default for EntityHandle {
     fn default() -> Self {
         Self {
@@ -59,23 +57,22 @@ impl EntityHandle {
         Self { entity }
     }
 
-    /// The wrapped entity id (for the runtime's deferred-op bookkeeping in later
-    /// phases).
+    /// The wrapped entity id (for the runtime's deferred-op bookkeeping).
     #[must_use]
     pub fn entity(self) -> Entity {
         self.entity
     }
 
-    /// The C++ `isValid`: session active **and** the entity is a live handle in the
-    /// lent scene. A stale handle or a closed session is `false`.
+    /// Session active **and** the entity is a live handle in the lent scene. A stale
+    /// handle or a closed session is `false`.
     #[must_use]
     pub fn valid(self) -> bool {
         session::with_scene(|scene| scene.valid(self.entity)).unwrap_or(false)
     }
 
-    /// Reads a [`Transform`] field through the three-check guard, logging the C++
-    /// no-op message and returning `None` (→ the caller's default) when the session
-    /// is closed, the entity is dead, or it carries no [`Transform`].
+    /// Reads a [`Transform`] field through the three-check guard, logging the no-op
+    /// message and returning `None` (→ the caller's default) when the session is
+    /// closed, the entity is dead, or it carries no [`Transform`].
     fn read_transform<R>(self, op: &str, f: impl FnOnce(&Transform) -> R) -> Option<R> {
         let resolved = session::with_scene(|scene| {
             if !scene.valid(self.entity) || !scene.has_component::<Transform>(self.entity) {
@@ -127,7 +124,7 @@ impl EntityHandle {
             .unwrap_or_default()
     }
 
-    /// Local scale (`Transform::scale`); `vec3{1}` default (the C++ `vec3{1}`).
+    /// Local scale (`Transform::scale`); `vec3{1}` default.
     #[must_use]
     pub fn get_scale(self) -> SaVec3 {
         self.read_transform("get_scale", |t| SaVec3(t.scale))
@@ -136,7 +133,7 @@ impl EntityHandle {
 
     /// World-space position (`world_translation`, composed through the hierarchy);
     /// `vec3{0}` default. Guarded by the same `Transform`-present check as the local
-    /// getters (the C++ `transformScene("get_world_position")`).
+    /// getters.
     #[must_use]
     pub fn get_world_position(self) -> SaVec3 {
         self.read_world("get_world_position", |scene, e| {
@@ -193,8 +190,8 @@ impl EntityHandle {
     }
 
     /// The entity's name (`NameComponent`); `""` when the session is closed, the
-    /// entity is dead, or it carries no [`Name`] (the C++ `name()` returns `{}` with
-    /// no log — name/uuid are pure reads, not guarded ops).
+    /// entity is dead, or it carries no [`Name`]. Name/uuid are pure reads with no log,
+    /// not guarded ops.
     #[must_use]
     pub fn name(self) -> String {
         session::with_scene(|scene| {
@@ -210,7 +207,7 @@ impl EntityHandle {
 
     /// The entity's uuid as a decimal string (`IdComponent`, matching the wire);
     /// `"0"` when the session is closed, the entity is dead, or it carries no
-    /// [`IdComponent`] (the C++ `uuid()` default).
+    /// [`IdComponent`].
     #[must_use]
     pub fn uuid(self) -> String {
         session::with_scene(|scene| {
@@ -225,11 +222,10 @@ impl EntityHandle {
         .unwrap_or_else(|| "0".to_owned())
     }
 
-    /// The shared component-bridge guard: the C++ `registryScene` (scene + registry
-    /// non-null and the entity live) followed by the per-op body. `f` receives the
-    /// lent scene and the resolved registry. Returns `None` (→ the op's documented
-    /// default) when no session is open or the entity is dead, logging the C++
-    /// message in each case.
+    /// The shared component-bridge guard: scene + registry present and the entity live,
+    /// followed by the per-op body. `f` receives the lent scene and the resolved
+    /// registry. Returns `None` (→ the op's documented default) when no session is open
+    /// or the entity is dead, logging a message in each case.
     ///
     /// Both the scene and the registry are lent by the same [session
     /// guard](crate::session), so this nests `with_scene_mut` inside `with_registry`;
@@ -259,7 +255,7 @@ impl EntityHandle {
     /// A read-only snapshot of any registered component as JSON, via the registry's
     /// type-erased serialize — every component reachable with zero per-type code.
     /// `None` (→ `nil`) when the session is closed, the entity is dead, the name is
-    /// unknown, or the component is absent (the C++ `getComponentSnapshot`).
+    /// unknown, or the component is absent.
     #[must_use]
     pub fn get_component_json(self, component_name: &str) -> Option<JsonValue> {
         self.with_session("get_component", |scene, registry| {
@@ -275,7 +271,7 @@ impl EntityHandle {
     /// Writes a JSON patch onto any registered component, via the registry's
     /// type-erased deserialize (a merge — partial patches work). Refuses the
     /// structural components (the gate), logs an unknown name or a failed deserialize,
-    /// and returns `false` in each of those cases (the C++ `setComponent`).
+    /// and returns `false` in each of those cases.
     #[must_use]
     pub fn set_component_json(self, component_name: &str, value: &JsonValue) -> bool {
         if is_structural_component(component_name) {
@@ -300,7 +296,7 @@ impl EntityHandle {
 
     /// Default-constructs a registered component onto this entity. Refuses the
     /// structural components (the gate), and is a `false` no-op when the name is
-    /// unknown or the component is already present (the C++ `addComponent`).
+    /// unknown or the component is already present.
     #[must_use]
     pub fn add_component(self, component_name: &str) -> bool {
         if is_structural_component(component_name) {
@@ -322,7 +318,7 @@ impl EntityHandle {
 
     /// Removes a registered component from this entity, honoring the registry's
     /// `removable` flag. A `false` no-op when the name is unknown, the component is
-    /// non-removable, or it is absent (the C++ `removeComponent`).
+    /// non-removable, or it is absent.
     #[must_use]
     pub fn remove_component(self, component_name: &str) -> bool {
         self.with_session("remove_component", |scene, registry| {
@@ -338,8 +334,8 @@ impl EntityHandle {
         .unwrap_or(false)
     }
 
-    /// Whether this entity carries a registered component (the C++ `hasComponent`).
-    /// `false` when the session is closed, the entity is dead, or the name is unknown.
+    /// Whether this entity carries a registered component. `false` when the session is
+    /// closed, the entity is dead, or the name is unknown.
     #[must_use]
     pub fn has_component(self, component_name: &str) -> bool {
         self.with_session("has_component", |scene, registry| {
@@ -350,10 +346,10 @@ impl EntityHandle {
         .unwrap_or(false)
     }
 
-    /// Queues this entity for destruction at the end of the current instance loop
-    /// (the C++ `destroy`, `script_runtime.cpp:401`). The handle stays valid for the
-    /// rest of the handler; the runtime drains the queue and relinks the hierarchy
-    /// once after the loop. A logged no-op outside a session or on a dead entity.
+    /// Queues this entity for destruction at the end of the current instance loop. The
+    /// handle stays valid for the rest of the handler; the runtime drains the queue and
+    /// relinks the hierarchy once after the loop. A logged no-op outside a session or on
+    /// a dead entity.
     ///
     /// The deferral is by *uuid*, not the live handle, because the entity vector is
     /// iterated by reference: destroying mid-loop would invalidate it. Resolving the
@@ -375,10 +371,10 @@ impl EntityHandle {
         }
     }
 
-    /// Reparents this entity under `new_parent`, the only script reparent path (the C++
-    /// `setParent`, `script_runtime.cpp:415`–429). Runs the scene's guarded
-    /// `set_parent` (self/cycle/dangling guards + a relink), keeping world position; a
-    /// failed guard or a closed-session/dead-entity call is a logged `false`.
+    /// Reparents this entity under `new_parent`, the only script reparent path. Runs the
+    /// scene's guarded `set_parent` (self/cycle/dangling guards + a relink), keeping
+    /// world position; a failed guard or a closed-session/dead-entity call is a logged
+    /// `false`.
     ///
     /// Safe mid-tick: `set_parent` touches the relationship components and the children
     /// caches, not the instance vector being iterated.
@@ -407,10 +403,9 @@ impl EntityHandle {
         }
     }
 
-    /// The parent handle, or an invalid handle at the root (the C++ `parent`,
-    /// `script_runtime.cpp:432`–446). Reads the [`Relationship`] parent uuid and
-    /// resolves it; a root (`Uuid(0)`), a closed session, a dead entity, or no
-    /// [`Relationship`] all yield the invalid handle (check `:valid()`).
+    /// The parent handle, or an invalid handle at the root. Reads the [`Relationship`]
+    /// parent uuid and resolves it; a root (`Uuid(0)`), a closed session, a dead entity,
+    /// or no [`Relationship`] all yield the invalid handle (check `:valid()`).
     #[must_use]
     pub fn parent(self) -> EntityHandle {
         let resolved = session::with_scene(|scene| {
@@ -429,9 +424,8 @@ impl EntityHandle {
         EntityHandle::new(resolved.unwrap_or(Entity::NULL))
     }
 
-    /// The child entity handles, in order (the C++ `children`,
-    /// `script_runtime.cpp:448`–464). An empty list at a leaf, a closed session, a dead
-    /// entity, or no [`Relationship`].
+    /// The child entity handles, in order. An empty list at a leaf, a closed session, a
+    /// dead entity, or no [`Relationship`].
     #[must_use]
     pub fn children(self) -> Vec<EntityHandle> {
         session::with_scene(|scene| {
@@ -448,9 +442,8 @@ impl EntityHandle {
     }
 
     /// Queues a message to this entity's scripts: `self:<handler>(sender, payload)` runs
-    /// after the instance loop (the C++ `send`, `script_runtime.cpp:468`–488). `payload`
-    /// may be `nil`. The sender is the instance whose handler is running. A logged no-op
-    /// outside a session or on a dead entity.
+    /// after the instance loop. `payload` may be `nil`. The sender is the instance whose
+    /// handler is running. A logged no-op outside a session or on a dead entity.
     ///
     /// `payload` is stashed as a registry ref (released after dispatch) so it survives
     /// the deferral; `lua` is the VM the ref lives in.
@@ -480,8 +473,7 @@ impl EntityHandle {
 
     /// Drives a `CharacterController` capsule: `velocity`'s horizontal components become
     /// the controller's desired velocity (Y ignored, consumed by the next physics step);
-    /// `jump` applies the fixed vertical impulse (the C++ `moveCharacter`,
-    /// `script_runtime.cpp:505`–519). A **pure Scene write** — the
+    /// `jump` applies the fixed vertical impulse. A **pure Scene write** — the
     /// [`CharacterController`] lives in `saffron-scene`, so this needs no host bridge.
     ///
     /// A logged no-op outside a session, on a dead entity, or on an entity without a
@@ -508,63 +500,59 @@ impl EntityHandle {
         }
     }
 
-    /// Apply a center-of-mass impulse to this entity's Dynamic rigidbody (the C++
-    /// `applyImpulse`, `script_runtime.cpp:523`). Bridges over the host's physics world; a
-    /// non-Dynamic / unmapped body is a no-op there. The entity's uuid is the body key.
+    /// Apply a center-of-mass impulse to this entity's Dynamic rigidbody. Bridges over
+    /// the host's physics world; a non-Dynamic / unmapped body is a no-op there. The
+    /// entity's uuid is the body key.
     pub fn apply_impulse(self, impulse: SaVec3) {
         let uuid = self.body_uuid();
         session::with_bridge(|bridge| bridge.apply_impulse(uuid, impulse.0));
     }
 
     /// Add a continuous force (applied over the next step) to this entity's Dynamic
-    /// rigidbody (the C++ `addForce`, `script_runtime.cpp:530`).
+    /// rigidbody.
     pub fn add_force(self, force: SaVec3) {
         let uuid = self.body_uuid();
         session::with_bridge(|bridge| bridge.add_force(uuid, force.0));
     }
 
-    /// Set the absolute linear velocity of this entity's Dynamic rigidbody (the C++
-    /// `setVelocity`, `script_runtime.cpp:537`).
+    /// Set the absolute linear velocity of this entity's Dynamic rigidbody.
     pub fn set_velocity(self, velocity: SaVec3) {
         let uuid = self.body_uuid();
         session::with_bridge(|bridge| bridge.set_velocity(uuid, velocity.0));
     }
 
     /// The current linear velocity of this entity's Dynamic rigidbody, or `vec3{0}` when
-    /// there is none / no bridge is lent (the C++ `getVelocity`, `script_runtime.cpp:544`).
+    /// there is none / no bridge is lent.
     #[must_use]
     pub fn get_velocity(self) -> SaVec3 {
         let uuid = self.body_uuid();
         SaVec3(session::with_bridge(|bridge| bridge.get_velocity(uuid)).unwrap_or(glam::Vec3::ZERO))
     }
 
-    /// Make this rig go limp (a passive ragdoll); returns whether the toggle succeeded
-    /// (the C++ `enableRagdoll`, `script_runtime.cpp:551`). The rig uuid is this entity's
-    /// id; bridges over the host's physics world.
+    /// Make this rig go limp (a passive ragdoll); returns whether the toggle succeeded.
+    /// The rig uuid is this entity's id; bridges over the host's physics world.
     #[must_use]
     pub fn enable_ragdoll(self) -> bool {
         let uuid = self.body_uuid();
         session::with_bridge(|bridge| bridge.set_ragdoll_enabled(uuid, true)).unwrap_or(false)
     }
 
-    /// Restore this rig from a ragdoll (the C++ `disableRagdoll`,
-    /// `script_runtime.cpp:555`).
+    /// Restore this rig from a ragdoll.
     pub fn disable_ragdoll(self) {
         let uuid = self.body_uuid();
         session::with_bridge(|bridge| bridge.set_ragdoll_enabled(uuid, false));
     }
 
     /// Blend this rig between physics and animation: `active` arms/releases the motors,
-    /// `weight` sets the global body weight (`0` = animation, `1` = physics) (the C++
-    /// `setRagdollBlend`, `script_runtime.cpp:562`).
+    /// `weight` sets the global body weight (`0` = animation, `1` = physics).
     pub fn set_ragdoll_blend(self, active: bool, weight: f32) {
         let uuid = self.body_uuid();
         session::with_bridge(|bridge| bridge.set_ragdoll_blend(uuid, active, weight));
     }
 
     /// This rig's live ragdoll state as the POD the binding shapes into `{present,
-    /// active, body_weight, bones}` (the C++ `ragdollState`, `script_runtime.cpp:569`).
-    /// All-default (absent) when there is no ragdoll / no bridge is lent.
+    /// active, body_weight, bones}`. All-default (absent) when there is no ragdoll / no
+    /// bridge is lent.
     #[must_use]
     pub fn ragdoll_state(self) -> ScriptRagdollState {
         let uuid = self.body_uuid();
@@ -572,8 +560,8 @@ impl EntityHandle {
     }
 
     /// This entity's uuid as the physics body / rig key, or `Uuid(0)` when the session is
-    /// closed, the entity is dead, or it carries no [`IdComponent`] (the C++
-    /// `ScriptEntity::idValue`). The bridge maps `Uuid(0)` to a missing body (a no-op).
+    /// closed, the entity is dead, or it carries no [`IdComponent`]. The bridge maps
+    /// `Uuid(0)` to a missing body (a no-op).
     fn body_uuid(self) -> Uuid {
         session::with_scene(|scene| {
             if !scene.valid(self.entity) || !scene.has_component::<IdComponent>(self.entity) {
@@ -589,7 +577,7 @@ impl EntityHandle {
 }
 
 /// Stashes a non-nil payload as a registry ref so it survives the message queue, or
-/// `None` for a `nil` payload (the C++ `payload.isNil()` → `LUA_NOREF` check).
+/// `None` for a `nil` payload.
 fn stash_payload(lua: &Lua, payload: LuaValue) -> Option<mlua::RegistryKey> {
     match payload {
         LuaValue::Nil => None,

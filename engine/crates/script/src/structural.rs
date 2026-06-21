@@ -1,9 +1,8 @@
 //! The structural-component write gate: the fixed set of cache/asset-backed
 //! components a mid-play script may not `set`/`add`.
 //!
-//! Ports the C++ `kStructuralComponents` + `isStructuralComponent`
-//! (`script_runtime.cpp:163`–169). These components are cooked at play start — the
-//! Jolt world (`Collider`/`Rigidbody`/`KinematicBones`), the rig caches
+//! These components are cooked at play start — the Jolt world
+//! (`Collider`/`Rigidbody`/`KinematicBones`), the rig caches
 //! (`SkinnedMesh`/`Bone`/`FootIk`/`BonePhysics`), and the hierarchy link
 //! (`Relationship`). A script `set`/`add` of one mid-play would desync the live state
 //! (the registry's `deserialize` auto-adds, which is correct only for scene load), so
@@ -45,8 +44,7 @@ mod tests {
     }
 
     /// Every gated name must name a real registered component — a typo here would
-    /// silently leave a structural component writable (the C++ comment's "verify
-    /// against registerBuiltinComponents" turned into a test).
+    /// silently leave a structural component writable.
     #[test]
     fn every_gated_name_resolves_a_registry_row() {
         let registry = register_builtin_components();

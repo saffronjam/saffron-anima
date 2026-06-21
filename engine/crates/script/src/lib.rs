@@ -1,32 +1,29 @@
 //! The mlua/Luau VM, the typed `sa.*` bindings, and the generated Luau type defs.
 //!
-//! Depends on `saffron-core`, `saffron-scene` only — exactly the C++
-//! `Saffron.Script` module boundary. `mlua` confines every `lua_State`
-//! unsafety internally, so this crate is `#![deny(unsafe_code)]`: the C++
-//! raw-stack discipline is deleted, not ported.
+//! Depends on `saffron-core`, `saffron-scene` only. `mlua` confines every `lua_State`
+//! unsafety internally, so this crate is `#![deny(unsafe_code)]`.
 //!
-//! Phase 1 stands up the VM primitive: a sandboxed [`ScriptVm`] with an
-//! instruction/memory budget and a typed [`Error`] carrying the Luau traceback.
-//! Phase 2 adds the [`SaVec3`] value type and the declarative [`BINDINGS`] table —
-//! the single source that both registers the no-scene `sa.*` surface and feeds the
-//! Luau type emitter. Phase 3 adds the scoped [session guard](session) — the Rust
-//! re-encoding of the C++ `currentScene` raw-pointer invariant — and the
-//! [`EntityHandle`] scene-only surface (transforms, name/uuid, valid) built on it.
-//! Phase 5 lands the [`ScriptHost`] lifecycle (`start_scripts`/`tick_scripts`/
-//! `stop_scripts`, the class cache, the instance build with field injection +
-//! overrides, pause-on-error, and the deferred destroy + relink). Phase 6 adds the
-//! coroutine [scheduler](scheduler) prelude, the inter-script [`ScriptMessage`] queue
-//! (`entity:send`/`sa.broadcast`, drained after the loop), the input reads (held +
+//! The VM primitive is a sandboxed [`ScriptVm`] with an instruction/memory budget and a
+//! typed [`Error`] carrying the Luau traceback. The [`SaVec3`] value type and the
+//! declarative [`BINDINGS`] table are the single source that both registers the no-scene
+//! `sa.*` surface and feeds the Luau type emitter. The scoped [session guard](session)
+//! holds the live-scene invariant, and the [`EntityHandle`] scene-only surface
+//! (transforms, name/uuid, valid) is built on it. The [`ScriptHost`] lifecycle
+//! (`start_scripts`/`tick_scripts`/`stop_scripts`) drives the class cache, the instance
+//! build with field injection + overrides, pause-on-error, and the deferred destroy +
+//! relink. The coroutine [scheduler](scheduler), the inter-script [`ScriptMessage`]
+//! queue (`entity:send`/`sa.broadcast`, drained after the loop), the input reads (held +
 //! derived edges + mouse, lent through the session guard), and the hierarchy/query
 //! bindings (`parent`/`children`/`set_parent`/`spawn`/`get_entity_by_name`/
-//! `find_all_by_name`/`find_by_uuid`/`primary_camera`). Phase 7 adds the
-//! [`ScriptHostBridge`] (the POD seam the host implements for the physics reach — `sa.raycast`/
-//! `apply_impulse`/ragdoll control + the `sa.log` sink), the pure-Scene `move_character`, and
-//! [`ScriptHost::dispatch_contact`] (the contact-event ring → `on_trigger_enter`/`on_trigger_exit`/
-//! `on_contact` handlers). Phase 8 adds [`read_script_schema`] (the Inspector field contract): a
-//! throwaway sandboxed VM reads a script's declared `properties` and infers each
-//! [`ScriptField`]'s [`ScriptFieldType`] from its default — the shape the host's
-//! `get-script-schema` command maps to the `GetScriptSchemaResult` DTO.
+//! `find_all_by_name`/`find_by_uuid`/`primary_camera`) round out the runtime surface.
+//! The [`ScriptHostBridge`] is the POD seam the host implements for the physics reach
+//! (`sa.raycast`/`apply_impulse`/ragdoll control + the `sa.log` sink); `move_character`
+//! is a pure-Scene write; [`ScriptHost::dispatch_contact`] routes the contact-event ring
+//! to `on_trigger_enter`/`on_trigger_exit`/`on_contact` handlers. [`read_script_schema`]
+//! is the Inspector field contract: a throwaway sandboxed VM reads a script's declared
+//! `properties` and infers each [`ScriptField`]'s [`ScriptFieldType`] from its default —
+//! the shape the host's `get-script-schema` command maps to the `GetScriptSchemaResult`
+//! DTO.
 
 #![deny(unsafe_code)]
 

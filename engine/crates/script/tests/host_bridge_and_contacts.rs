@@ -1,11 +1,10 @@
-//! Coverage of phase 7: the [`ScriptHostBridge`] POD seam, the physics-reaching `sa.*`
-//! bindings + `sa.log` sink routed through it, the pure-Scene `move_character`, and
+//! Coverage of the [`ScriptHostBridge`] POD seam, the physics-reaching `sa.*` bindings +
+//! `sa.log` sink routed through it, the pure-Scene `move_character`, and
 //! [`ScriptHost::dispatch_contact`] (the contact-event ring → script handlers).
 //!
 //! Drives real `.luau` fixtures through a real VM against a real [`Scene`] + a stub
 //! [`ScriptHostBridge`] that records the calls, so the test can assert each binding routed
-//! to the bridge with the entity's uuid and shaped the POD result correctly — the Rust
-//! port of the C++ host-bridge / `dispatchContact` behaviour, expressed as `#[test]`.
+//! to the bridge with the entity's uuid and shaped the POD result correctly.
 
 use std::cell::RefCell;
 use std::path::PathBuf;

@@ -1,14 +1,12 @@
 //! Edit-time script schema: the declared `properties` of a script, read in a
 //! throwaway sandboxed VM with no gameplay run.
 //!
-//! Ports the C++ `readScriptSchema`/`inferField`/`scriptFieldTypeName`
-//! (`script_runtime.cpp` 1512–1617). A fresh sandboxed VM with the value types
-//! registered (so a `sa.vec3(...)` default resolves) loads + runs the chunk to get
-//! the class table, reads its `properties` table, infers each field's edit-time type
-//! from its declared default, and returns the fields sorted by name. The chunk only
-//! builds tables — no `on_create`/`on_update` runs, so the declaration must be
-//! side-effect-free. This feeds the editor Inspector via the host's
-//! `get-script-schema` command and the `GetScriptSchemaResult` DTO.
+//! A fresh sandboxed VM with the value types registered (so a `sa.vec3(...)` default
+//! resolves) loads + runs the chunk to get the class table, reads its `properties`
+//! table, infers each field's edit-time type from its declared default, and returns the
+//! fields sorted by name. The chunk only builds tables — no `on_create`/`on_update`
+//! runs, so the declaration must be side-effect-free. This feeds the editor Inspector
+//! via the host's `get-script-schema` command and the `GetScriptSchemaResult` DTO.
 
 use std::path::Path;
 
@@ -22,9 +20,8 @@ use crate::vm::ScriptVm;
 
 /// The inferred edit-time type of a script-declared property.
 ///
-/// Ports the C++ `ScriptFieldType` (`script.cppm:178`): a number, a boolean, a
-/// string, or a vec3 (a `sa.Vec3` default, captured as a 3-number JSON array — the
-/// shape the Inspector + override storage round-trip).
+/// A number, a boolean, a string, or a vec3 (a `sa.Vec3` default, captured as a
+/// 3-number JSON array — the shape the Inspector + override storage round-trip).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScriptFieldType {
     /// A Luau number default.
@@ -39,8 +36,6 @@ pub enum ScriptFieldType {
 
 impl ScriptFieldType {
     /// The wire/Inspector name of the type (`"number"|"bool"|"string"|"vec3"`).
-    ///
-    /// Ports `scriptFieldTypeName` (`script_runtime.cpp:1512`).
     #[must_use]
     pub fn wire_name(self) -> &'static str {
         match self {
@@ -55,9 +50,8 @@ impl ScriptFieldType {
 /// One script-declared editable field: the `properties` key, the type inferred from
 /// its default, and the default itself.
 ///
-/// Ports the C++ `ScriptField` (`script.cppm:190`). The `default_value` rides as an
-/// opaque [`serde_json::Value`] — a scalar (number/bool/string) or, for a vec3, a
-/// 3-number array — matching the C++ `nlohmann::json defaultValue` and the
+/// The `default_value` rides as an opaque [`serde_json::Value`] — a scalar
+/// (number/bool/string) or, for a vec3, a 3-number array — matching the
 /// `ScriptSlot.overrides` shape `inject_fields` consumes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScriptField {
@@ -71,10 +65,9 @@ pub struct ScriptField {
 
 /// Infers a [`ScriptField`] from a declared `properties` default.
 ///
-/// Ports `inferField` (`script_runtime.cpp:1533`): a number/bool/string maps 1:1; an
-/// `sa.Vec3` userdata is a vec3 captured as a 3-number JSON array; anything else (a
-/// table, a function, `nil`) is not a field. Returns `None` for an uninferable
-/// default — the caller logs and skips it.
+/// A number/bool/string maps 1:1; an `sa.Vec3` userdata is a vec3 captured as a
+/// 3-number JSON array; anything else (a table, a function, `nil`) is not a field.
+/// Returns `None` for an uninferable default — the caller logs and skips it.
 fn infer_field(name: String, default: &LuaValue) -> Option<ScriptField> {
     match default {
         LuaValue::Integer(i) => Some(ScriptField {
@@ -115,8 +108,6 @@ fn infer_field(name: String, default: &LuaValue) -> Option<ScriptField> {
 /// an entry whose default cannot be inferred is skipped with a logged note. Fields
 /// come back sorted by name. Returns [`Error::Load`]/[`Error::Runtime`] on a
 /// load/run failure, and [`Error::Load`] if the chunk does not return a table.
-///
-/// Ports `readScriptSchema` (`script_runtime.cpp:1565`).
 pub fn read_script_schema(path: &Path) -> Result<Vec<ScriptField>> {
     let vm = ScriptVm::new()?;
     vm.register_no_scene_globals()?;
@@ -155,7 +146,7 @@ pub fn read_script_schema(path: &Path) -> Result<Vec<ScriptField>> {
 
 /// Walks a `properties` table, inferring a [`ScriptField`] per string-keyed entry and
 /// logging + skipping any whose default cannot be inferred. Non-string keys are
-/// ignored (the C++ `lua_type(L, -2) == LUA_TSTRING` guard).
+/// ignored.
 fn read_property_fields(properties: &Table, source: &str) -> Result<Vec<ScriptField>> {
     let mut fields = Vec::new();
     for pair in properties.clone().pairs::<LuaValue, LuaValue>() {

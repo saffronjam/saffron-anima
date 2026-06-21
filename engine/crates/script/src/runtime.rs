@@ -1,19 +1,17 @@
 //! The play-session runtime: one VM, a class-table cache, and an ordered instance
 //! vector driven through start / tick / stop.
 //!
-//! Ports the C++ `ScriptHost` lifecycle (`script_runtime.cpp`): `startScripts`
-//! (1060–1394) creates the VM, registers the bindings, instantiates every
-//! `ScriptComponent` slot in `forEach` order, and runs `on_create`; `tickScripts`
-//! (1396–1422) runs every instance's `on_update(dt)` in order with pause-on-error;
-//! `stopScripts` (1485–1510) runs `on_destroy` with no scene bound, then drops
-//! everything and the VM. The class cache (`loadClass`, 700–735), the instance build
-//! with field injection (`makeInstance`/`injectFields`, 791–863), and the deferred
-//! destroy + relink (`flushStructuralOps`, 585–601) are all here.
+//! `start_scripts` creates the VM, registers the bindings, instantiates every
+//! `ScriptComponent` slot in `for_each` order, and runs `on_create`; `tick_scripts`
+//! runs every instance's `on_update(dt)` in order with pause-on-error; `stop_scripts`
+//! runs `on_destroy` with no scene bound, then drops everything and the VM. The class
+//! cache, the instance build with field injection, and the deferred destroy + relink are
+//! all here.
 //!
 //! The coroutine scheduler (`advance_scheduler` after each loop), inter-script messages
 //! (`dispatch_messages` draining the queue with payload-ref release), the input edges
-//! (lent through the session guard), and the hierarchy/query bindings are wired here.
-//! The physics bridges and `dispatch_contact` follow in later phases.
+//! (lent through the session guard), the hierarchy/query bindings, the physics bridges,
+//! and `dispatch_contact` are wired here.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -38,13 +36,9 @@ use crate::vm::ScriptVm;
 /// One live script instance: one slot of one entity's `Script` component, holding a
 /// registry ref to its `self` table. Within an entity, instances keep slot order; the
 /// vector order across entities is load-bearing (instances run top-to-bottom).
-///
-/// Ports the C++ `ScriptInstance` (`script.cppm:62`–69); the C++ `int selfRef`
-/// (`luaL_ref`) becomes an [`mlua::RegistryKey`] (the registry-ref idiom, README §8).
 struct ScriptInstance {
     /// The owning entity (handle into the play scene). Carried metadata — the runtime
-    /// matches instances by uuid, so later phases (contacts/messages) read this, not
-    /// this phase.
+    /// matches instances by uuid.
     #[allow(dead_code)]
     entity: Entity,
     /// The entity's uuid, cached so a contact/message dispatch can match by id.
@@ -52,7 +46,6 @@ struct ScriptInstance {
     /// The slot's script path relative to the project `src/` (for error reporting).
     script_path: String,
     /// The slot index within the entity's `Script` component (deterministic order).
-    /// Carried metadata, read by the editor-facing later phases.
     #[allow(dead_code)]
     slot_index: usize,
     /// The registry ref to the instance's `self` table.
@@ -62,12 +55,10 @@ struct ScriptInstance {
 /// One contact/overlap transition surfaced to scripts, the POD input to
 /// [`ScriptHost::dispatch_contact`].
 ///
-/// Ports the C++ `dispatchContact` parameter pack (`script.cppm:169`): the two entity
-/// uuids, the `begin`/`sensor` flags that pick the handler, and the world-space contact
-/// manifold (the six loose `px/py/pz/nx/ny/nz` floats folded into two `glam::Vec3`, the
-/// interface stays glam-POD). The host (08-host) fills it from a drained
-/// `saffron-physics` `ContactEvent` — `saffron-script` carries no physics edge, so this is
-/// the plain shape the binding sees.
+/// The two entity uuids, the `begin`/`sensor` flags that pick the handler, and the
+/// world-space contact manifold. The host fills it from a drained `saffron-physics`
+/// `ContactEvent` — `saffron-script` carries no physics edge, so this is the plain shape
+/// the binding sees.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContactInfo {
     /// One body's owner-entity uuid (`Uuid(0)` when the body had no owning entity).
@@ -86,8 +77,8 @@ pub struct ContactInfo {
 
 /// A contained per-instance failure from a start/tick call, traceback included.
 ///
-/// Ports the C++ `ScriptRunError` (`script.cppm:72`–77): the first failing instance
-/// halts the loop and is returned; the VM and every instance survive.
+/// The first failing instance halts the loop and is returned; the VM and every instance
+/// survive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptRunError {
     /// The uuid of the entity whose handler faulted.
@@ -101,23 +92,20 @@ pub struct ScriptRunError {
 /// The per-entity script runtime: one VM for the whole play session, class tables
 /// cached by path, instances in deterministic creation order.
 ///
-/// Ports the C++ `ScriptHost` (`script.cppm:118`). The scene and the registry are
-/// *not* stored — they are lent per call by the [session guard](crate::session), the
-/// Rust re-encoding of the C++ `currentScene`/`currentRegistry` raw-pointer invariant.
-/// The deferred-op queues live in the session guard too, scoped to a call. The eleven
-/// C++ `std::function` physics/log bridges collapse to one [`ScriptHostBridge`] (README
-/// §6), held here and lent to the session for the duration of each call.
+/// The scene and the registry are *not* stored — they are lent per call by the [session
+/// guard](crate::session). The deferred-op queues live in the session guard too, scoped
+/// to a call. The physics/log bridges are one [`ScriptHostBridge`], held here and lent to
+/// the session for the duration of each call.
 pub struct ScriptHost {
     /// The VM for the active session, or `None` between [`ScriptHost::stop_scripts`]
     /// and the next [`ScriptHost::start_scripts`].
     vm: Option<ScriptVm>,
-    /// The class table per resolved script path, cached for the VM's lifetime (the C++
-    /// `classRefByPath`). The key is the full resolved path, matching the C++ cache key.
+    /// The class table per resolved script path, cached for the VM's lifetime. The key
+    /// is the full resolved path.
     class_ref_by_path: HashMap<PathBuf, RegistryKey>,
     /// The ordered instance vector; top-to-bottom run order is load-bearing.
     instances: Vec<ScriptInstance>,
-    /// The host-installed callback bridge (the C++ eleven `std::function` fields). A
-    /// fresh host carries [`NoopBridge`] (the C++ "unset = a safe no-op"); the host
+    /// The host-installed callback bridge. A fresh host carries [`NoopBridge`]; the host
     /// installs its real impl with [`ScriptHost::install_bridge`]. Cloned into the
     /// session slot per call so the physics-reaching bindings reach it.
     bridge: Rc<dyn ScriptHostBridge>,
@@ -143,9 +131,8 @@ impl ScriptHost {
 
     /// Installs the host's [`ScriptHostBridge`] so the physics-reaching bindings
     /// (`sa.raycast`/`apply_impulse`/ragdoll control) and the `sa.log` sink reach the
-    /// live world / script-log ring (the C++ `state->script.raycast = …` wiring,
-    /// `host.cppm:1200`–1308). The bridge survives across sessions until replaced; it is
-    /// lent to each start/tick/contact call and cleared on scope exit.
+    /// live world / script-log ring. The bridge survives across sessions until replaced;
+    /// it is lent to each start/tick/contact call and cleared on scope exit.
     pub fn install_bridge(&mut self, bridge: Rc<dyn ScriptHostBridge>) {
         self.bridge = bridge;
     }
@@ -163,7 +150,7 @@ impl ScriptHost {
     }
 
     /// Creates the VM and instantiates every `Script` slot in `scene`, then runs
-    /// `on_create` per instance in order (the C++ `startScripts`).
+    /// `on_create` per instance in order.
     ///
     /// Each slot's script file (under `src_dir`, by the slot's relative path) must
     /// return a class table carrying `on_update`; a slot that fails to load is a logged
@@ -229,7 +216,7 @@ impl ScriptHost {
 
     /// Runs every instance's `on_update(dt)` in order, halting on the first error
     /// (pause-on-error), then flushes the deferred structural ops, dispatches the queued
-    /// messages, and advances the coroutine scheduler by `dt` (the C++ `tickScripts`).
+    /// messages, and advances the coroutine scheduler by `dt`.
     ///
     /// `input` is the host's per-tick gameplay-input snapshot, lent to the input
     /// bindings for the call's duration (its edges must already be derived by the host
@@ -271,8 +258,7 @@ impl ScriptHost {
         failure
     }
 
-    /// Dispatches a contact transition to both entities' scripts (the C++
-    /// `dispatchContact`, `script_runtime.cpp:1424`–1483).
+    /// Dispatches a contact transition to both entities' scripts.
     ///
     /// A sensor Begin invokes `on_trigger_enter(self, other)`, a sensor End
     /// `on_trigger_exit(self, other)`, a solid Begin `on_contact(self, other, point,
@@ -284,8 +270,8 @@ impl ScriptHost {
     /// transition.
     ///
     /// The contact ring's events are seq-stamped POD (`entity_a`/`entity_b` uuids, the
-    /// `Begin`/`End` flag, `sensor`, `point`/`normal`); the host (08-host) drains the ring
-    /// before `on_update` each tick and drives this per event. After the dispatch the
+    /// `Begin`/`End` flag, `sensor`, `point`/`normal`); the host drains the ring before
+    /// `on_update` each tick and drives this per event. After the dispatch the
     /// deferred structural ops flush and the queued messages dispatch (a contact handler
     /// may `destroy`/`send`), exactly as a tick does.
     pub fn dispatch_contact(
@@ -342,7 +328,7 @@ impl ScriptHost {
 
     /// Dispatches one direction of a contact transition: every instance whose
     /// `entity_uuid` matches `self_uuid` runs `self:<handler>(other[, point, normal])`,
-    /// halting on the first error (the C++ `dispatchOne` lambda). `self_uuid == Uuid(0)`
+    /// halting on the first error. `self_uuid == Uuid(0)`
     /// (a body with no owning entity) is a no-op. `other` is resolved on the lent scene
     /// to an [`EntityHandle`] (an invalid handle when the other body has no entity).
     fn dispatch_contact_one(
@@ -384,7 +370,7 @@ impl ScriptHost {
     }
 
     /// Invokes `self:<handler>(other[, point, normal])` for one instance, resetting the
-    /// per-call budget first (the C++ `callContactHandler`, `script_runtime.cpp:667`–696).
+    /// per-call budget first.
     ///
     /// An absent handler is a successful no-op (every contact handler is optional). The
     /// manifold args (`point`/`normal` as `sa.Vec3`) are passed only for the solid
@@ -426,7 +412,7 @@ impl ScriptHost {
     }
 
     /// Runs `on_destroy` per instance with no scene bound, then drops every instance,
-    /// the class cache, and the VM (the C++ `stopScripts`).
+    /// the class cache, and the VM.
     ///
     /// `on_destroy` runs outside a session (the play duplicate may already be gone), so
     /// any entity access in it degrades to a logged no-op. After this the host is back
@@ -444,7 +430,7 @@ impl ScriptHost {
             }
         }
         // Drop the registry keys before the VM so they release into a live state, then
-        // drop the VM (mlua frees the lua_State on Drop — no lua_close dance).
+        // drop the VM (mlua frees the VM on Drop).
         self.instances.clear();
         self.class_ref_by_path.clear();
         self.vm = None;
@@ -452,7 +438,7 @@ impl ScriptHost {
 
     /// Loads + runs a script file, caching the returned class table per path. The file
     /// must return a table carrying `on_update`; the ref is cached for the VM's
-    /// lifetime (the C++ `loadClass`). A cached path is a no-op.
+    /// lifetime. A cached path is a no-op.
     fn load_class(&mut self, full_path: &Path) -> Result<()> {
         if self.class_ref_by_path.contains_key(full_path) {
             return Ok(());
@@ -496,7 +482,7 @@ impl ScriptHost {
 
     /// Builds one [`ScriptInstance`]: load the class (cached), build the `self` table
     /// with `entity` + injected fields + the `__index = Class` metatable, store it in
-    /// the registry (the C++ `makeInstance`).
+    /// the registry.
     fn build_instance(&mut self, slot: &CollectedSlot) -> Result<ScriptInstance> {
         let class_key_path = slot.full_path.clone();
         self.load_class(&class_key_path)?;
@@ -539,7 +525,7 @@ impl ScriptHost {
     }
 
     /// Calls `self:<name>(dt?)` for the instance at `self_ref`, resetting the per-call
-    /// budget first (the C++ `callInstanceMethod`).
+    /// budget first.
     ///
     /// An absent method is a successful no-op — only `on_update` is required (enforced
     /// at load), so `on_create`/`on_destroy` may be missing. A raised error or a budget
@@ -575,8 +561,7 @@ impl ScriptHost {
     }
 
     /// Drains the messages queued during the instance loop and dispatches each to its
-    /// matching instances, then releases each payload registry ref (the C++
-    /// `dispatchMessages`, `script_runtime.cpp:962`–986).
+    /// matching instances, then releases each payload registry ref.
     ///
     /// A targeted message (`entity:send`) reaches only the instance whose
     /// `entity_uuid` matches; a broadcast (`target = Uuid(0)`) reaches every instance.
@@ -606,8 +591,7 @@ impl ScriptHost {
     }
 
     /// Invokes `self:<handler>(sender, payload)` for one instance, contained: a faulting
-    /// handler logs and the dispatch moves on (the C++ `callMessageHandler`,
-    /// `script_runtime.cpp:929`–957). An absent handler is a silent no-op.
+    /// handler logs and the dispatch moves on. An absent handler is a silent no-op.
     ///
     /// `sender` is resolved to an [`EntityHandle`] (an invalid handle when the sender is
     /// gone or it was a sender-less send); the payload is read back from its registry
@@ -646,8 +630,7 @@ impl ScriptHost {
     }
 
     /// Resumes ready coroutines by `dt` through the global `_sa_advance` the scheduler
-    /// prelude installs, contained under the budget/error guard (the C++
-    /// `advanceScheduler`, `script_runtime.cpp:908`–925).
+    /// prelude installs, contained under the budget/error guard.
     ///
     /// A faulting coroutine logs and the VM survives; an absent `_sa_advance` (the
     /// prelude failed to install) is a silent skip. The accumulation is dt-driven inside
@@ -668,8 +651,8 @@ impl ScriptHost {
         }
     }
 
-    /// Removes a payload registry ref from the VM after its message is dispatched (the
-    /// C++ `luaL_unref`), so a per-tick stream of messages does not leak refs.
+    /// Removes a payload registry ref from the VM after its message is dispatched, so a
+    /// per-tick stream of messages does not leak refs.
     fn release_registry_value(&self, key: RegistryKey) {
         if let Some(vm) = self.vm.as_ref() {
             let _ = vm.lua().remove_registry_value(key);
@@ -679,7 +662,7 @@ impl ScriptHost {
 
 /// Applies the deferred structural ops after an instance loop, on the scene lent by
 /// the open session: destroy each queued entity, then relink the hierarchy once if
-/// anything changed (the C++ `flushStructuralOps`, `script_runtime.cpp:585`–601).
+/// anything changed.
 ///
 /// Operates on the scene through [`session::with_scene_mut`] because the scene is moved
 /// into the session slot for the call's duration; the destroy is by *uuid* (resolved
@@ -719,8 +702,7 @@ struct CollectedSlot {
 }
 
 /// Walks every `Script` component in `scene` (deterministic `for_each` order) and
-/// collects each non-empty slot, resolving its path against `src_dir` (the C++
-/// `forEach<ScriptComponent>` slot loop in `startScripts`).
+/// collects each non-empty slot, resolving its path against `src_dir`.
 fn collect_slots(scene: &mut Scene, src_dir: &Path) -> Vec<CollectedSlot> {
     let mut slots = Vec::new();
     scene.for_each::<(&Script, Option<&IdComponent>), _>(|entity, (script, id)| {
@@ -743,7 +725,7 @@ fn collect_slots(scene: &mut Scene, src_dir: &Path) -> Vec<CollectedSlot> {
 }
 
 /// Sets every declared `properties` key on `self_table`: the slot's override when
-/// present (JSON→Lua), else the declared default (the C++ `injectFields`).
+/// present (JSON→Lua), else the declared default.
 ///
 /// A `sa.Vec3` field injects a fresh per-instance value — from the override's 3-number
 /// array when present, else a value-copy of the default (`SaVec3` is `Copy`, so it
@@ -803,8 +785,7 @@ fn inject_fields(
     Ok(())
 }
 
-/// The `glam::Vec3` of a value when it is an `sa.Vec3` userdata, else `None` (the C++
-/// `isVec3Userdata` + `readVec3Userdata`).
+/// The `glam::Vec3` of a value when it is an `sa.Vec3` userdata, else `None`.
 fn vec3_of(value: &LuaValue) -> Option<glam::Vec3> {
     match value {
         LuaValue::UserData(ud) => ud.borrow::<SaVec3>().ok().map(|v| v.0),
@@ -813,7 +794,7 @@ fn vec3_of(value: &LuaValue) -> Option<glam::Vec3> {
 }
 
 /// Reads a 3-number JSON array (the override encoding for a vec3 field) into a
-/// `glam::Vec3`, else `None` (the C++ `override.is_array() && override.size() == 3`).
+/// `glam::Vec3`, else `None`.
 fn vec3_array(value: &JsonValue) -> Option<glam::Vec3> {
     let array = value.as_array()?;
     if array.len() != 3 {
@@ -826,7 +807,7 @@ fn vec3_array(value: &JsonValue) -> Option<glam::Vec3> {
 }
 
 /// Shallow-copies a Lua table so a table default is never shared between instances —
-/// mutating one instance's field must not bleed across (the C++ `pushTableCopy`).
+/// mutating one instance's field must not bleed across.
 fn shallow_copy(lua: &mlua::Lua, source: &Table) -> Result<Table> {
     let copy = lua
         .create_table()

@@ -1,9 +1,7 @@
 //! The Luau VM: an owned `mlua::Lua` with the sandbox and the per-call
 //! instruction/memory budget installed.
 //!
-//! Replaces the C++ `ScriptVm` (a move-only wrapper over a raw `lua_State*` with
-//! `lua_close` in the destructor). `mlua::Lua` already owns the state and frees
-//! it on `Drop`, so the move-only RAII boilerplate is gone. The VM is `!Send` and
+//! `mlua::Lua` owns the state and frees it on `Drop`. The VM is `!Send` and
 //! single-thread-owned by value, per the host's ownership model.
 
 use std::cell::Cell;
@@ -13,11 +11,9 @@ use mlua::{Lua, LuaOptions, StdLib, VmState};
 
 use crate::error::{Error, Result};
 
-/// The sandboxed standard-library set: base, coroutine, string, math, table,
-/// utf8 — exactly the C++ `luaL_openselectedlibs(… GLIBK | COLIBK | STRLIBK |
-/// MATHLIBK | TABLIBK | UTF8LIBK …)` bitmask. `os`/`io`/`debug`/`package` are
-/// never loaded, so they read as `nil` in script, matching the C++ sandbox
-/// contract. `new_with` refuses any unsafe library, so this set stays safe with
+/// The sandboxed standard-library set: base, coroutine, string, math, table, utf8.
+/// `os`/`io`/`debug`/`package` are never loaded, so they read as `nil` in script.
+/// `new_with` refuses any unsafe library, so this set stays safe with
 /// `#![deny(unsafe_code)]`.
 fn sandbox_libs() -> StdLib {
     StdLib::COROUTINE | StdLib::STRING | StdLib::MATH | StdLib::TABLE | StdLib::UTF8
@@ -31,15 +27,14 @@ fn sandbox_libs() -> StdLib {
 pub const DEFAULT_INSTRUCTION_BUDGET: u64 = 1_000_000;
 
 /// The VM memory ceiling in bytes. A chunk that allocates past this is aborted
-/// with a memory error (mapped to [`Error::Budget`]). The C++ VM had no such
-/// limit; this is the guard Rust adds.
+/// with a memory error (mapped to [`Error::Budget`]).
 pub const DEFAULT_MEMORY_LIMIT: usize = 256 * 1024 * 1024;
 
 /// The shared budget state read and written by the interrupt callback.
 ///
 /// `Rc<Cell<…>>` because the interrupt closure is `'static` and runs on the same
 /// thread as the VM — no `Send` is needed, so this is the cheap single-thread
-/// shared-mutable idiom (conventions §3 bucket 4), not `Arc<Mutex>`.
+/// shared-mutable idiom, not `Arc<Mutex>`.
 #[derive(Clone, Default)]
 struct Budget {
     /// Interrupt callbacks taken since the last [`Budget::reset`].
@@ -117,7 +112,7 @@ impl ScriptVm {
         Ok(Self { lua, budget })
     }
 
-    /// Borrows the underlying VM (for binding registration in later phases).
+    /// Borrows the underlying VM (for binding registration).
     pub fn lua(&self) -> &Lua {
         &self.lua
     }
@@ -131,8 +126,7 @@ impl ScriptVm {
     /// `sa.lerp`, `sa.look_at`, `sa.log`) into this VM.
     ///
     /// The runtime VM and the throwaway schema VM both call this, so a `properties`
-    /// default of `sa.vec3(0, 1, 0)` resolves at edit time too (the C++
-    /// `registerScriptValueTypes` was bound in both VMs).
+    /// default of `sa.vec3(0, 1, 0)` resolves at edit time too.
     pub fn register_no_scene_globals(&self) -> Result<()> {
         crate::bindings::register_no_scene_globals(&self.lua)
     }
@@ -155,7 +149,7 @@ impl ScriptVm {
     /// that the runtime drives directly through `mlua` (an instance method call),
     /// rather than through [`ScriptVm::run_string`]. The runtime resets before every
     /// `on_create`/`on_update`/`on_destroy` so a tight loop in one handler cannot
-    /// starve the next (the phase-1 "budget reset per call" contract).
+    /// starve the next.
     pub(crate) fn reset_budget(&self) {
         self.budget.reset();
     }
@@ -173,8 +167,7 @@ impl ScriptVm {
     ///
     /// A syntax error maps to [`Error::Load`]; a raised/faulting runtime error to
     /// [`Error::Runtime`] (with the Luau traceback in the message); a budget or
-    /// memory-limit abort to [`Error::Budget`]. Replaces the C++ `runString` +
-    /// `tracebackHandler` + `finishRun` stack discipline.
+    /// memory-limit abort to [`Error::Budget`].
     pub fn run_string(&self, source: &str, chunk_name: &str) -> Result<()> {
         self.budget.reset();
         let chunk = self.lua.load(source).set_name(chunk_name);

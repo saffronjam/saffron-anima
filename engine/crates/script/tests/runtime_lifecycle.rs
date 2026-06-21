@@ -1,8 +1,7 @@
 //! End-to-end coverage of the [`ScriptHost`] lifecycle: start / tick / stop, the class
 //! cache, the instance build with field injection + overrides, pause-on-error, and the
 //! deferred destroy + relink. Drives real `.luau` fixtures through a real VM against a
-//! real [`Scene`] + component registry — the Rust port of the C++ `startScripts` /
-//! `tickScripts` / `stopScripts` behaviour, expressed as `#[test]`.
+//! real [`Scene`] + component registry.
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -2,19 +2,16 @@
 //! POD structs ([`ScriptRayHit`], [`ScriptRagdollState`]) the physics-reaching bindings
 //! exchange with the host.
 //!
-//! Ports the eleven C++ `std::function` bridges (`raycast`/`sphereCast`/`applyImpulse`/
-//! `addForce`/`setVelocity`/`getVelocity`/`setRagdollEnabled`/`setRagdollBlend`/
-//! `ragdollState` + `logSink`, `script.cppm:136`–148). C++ kept `Saffron.Script` off a
-//! physics/sceneedit module edge by routing every physics reach through POD closures the
-//! host installed; in Rust that is one [`ScriptHostBridge`] trait with one method per
-//! bridge over POD args (`glam::Vec3`, [`Uuid`], the two POD structs), so this crate stays
+//! Keeping `saffron-script` off a physics/sceneedit dependency edge means routing every
+//! physics reach through one [`ScriptHostBridge`] trait with one method per bridge over
+//! POD args (`glam::Vec3`, [`Uuid`], the two POD structs), so this crate stays
 //! `saffron-core` + `saffron-scene` only — the host (which *does* depend on physics +
 //! sceneedit) implements it.
 //!
-//! "Unset = a safe no-op" (`script_runtime.cpp:525`): [`ScriptHost`](crate::ScriptHost)
-//! defaults its bridge to [`NoopBridge`], so a session without a host-installed bridge
-//! (every unit test, an Edit-mode read) sees `raycast` miss, `get_velocity` return zero,
-//! and the ragdoll/log calls no-op — never a panic.
+//! Unset = a safe no-op: [`ScriptHost`](crate::ScriptHost) defaults its bridge to
+//! [`NoopBridge`], so a session without a host-installed bridge (every unit test, an
+//! Edit-mode read) sees `raycast` miss, `get_velocity` return zero, and the ragdoll/log
+//! calls no-op — never a panic.
 
 use glam::Vec3;
 
@@ -25,9 +22,7 @@ use saffron_core::Uuid;
 /// The host fills it from `World::raycast`/`sphere_cast` (a plain field copy off the
 /// physics crate's `RayHit`); this keeps `saffron-script` free of a physics edge — the
 /// `sa.raycast`/`sa.spherecast` binding only ever sees this POD, then shapes it into the
-/// `{hit, distance, point, normal, entity}` Lua table. Ports the C++ `ScriptRayHit`
-/// (`script.cppm:99`–112), with the six loose `px/py/pz/nx/ny/nz` floats folded into two
-/// `glam::Vec3` (the interface stays glam-POD).
+/// `{hit, distance, point, normal, entity}` Lua table.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScriptRayHit {
     /// Whether the ray/sweep hit anything.
@@ -45,8 +40,7 @@ pub struct ScriptRayHit {
 /// A rig's live ragdoll state surfaced to Lua, Jolt-free POD.
 ///
 /// The host fills it from `World::ragdoll_state`; `sa.Entity:ragdoll_state()` shapes it
-/// into the `{present, active, body_weight, bones}` Lua table. Ports the C++
-/// `ScriptRagdollState` (`script.cppm:91`–97).
+/// into the `{present, active, body_weight, bones}` Lua table.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScriptRagdollState {
     /// `true` when the rig has a live ragdoll instance this play session.
@@ -61,61 +55,58 @@ pub struct ScriptRagdollState {
 
 /// The host-callback seam the physics-reaching `sa.*` bindings dispatch through.
 ///
-/// One method per C++ `std::function` bridge, over POD args only — so `saffron-script`
-/// reaches the live physics world and the editor's script-log ring without importing
-/// `saffron-physics` or `saffron-sceneedit`. The host implements it (`saffron-host`),
-/// routing each method to a `World`/edit-context call; an unset bridge is
-/// [`NoopBridge`] (the C++ "unset = a safe no-op").
+/// One method per bridge, over POD args only — so `saffron-script` reaches the live
+/// physics world and the editor's script-log ring without importing `saffron-physics`
+/// or `saffron-sceneedit`. The host implements it (`saffron-host`), routing each method
+/// to a `World`/edit-context call; an unset bridge is [`NoopBridge`].
 ///
 /// `ScriptHost` holds the installed bridge as an `Rc<dyn ScriptHostBridge>` and lends it
 /// to the session for the duration of a start/tick/contact call — the bindings reach it
 /// through [`crate::session::with_bridge`]. It is read-only during a session, so it
-/// crosses as a shared `Rc` clone (conventions §3 bucket 1), not a moved value.
+/// crosses as a shared `Rc` clone, not a moved value.
 pub trait ScriptHostBridge {
-    /// Cast a ray `origin + dir * max_dist` against the live world (the C++
-    /// `host.raycast`). A miss returns [`ScriptRayHit::default`].
+    /// Cast a ray `origin + dir * max_dist` against the live world. A miss returns
+    /// [`ScriptRayHit::default`].
     fn raycast(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> ScriptRayHit;
 
     /// Sweep a sphere of `radius` along `origin + dir * max_dist` — a thicker probe than
-    /// [`Self::raycast`] (the C++ `host.sphereCast`).
+    /// [`Self::raycast`].
     fn sphere_cast(&self, origin: Vec3, dir: Vec3, radius: f32, max_dist: f32) -> ScriptRayHit;
 
-    /// Apply a center-of-mass impulse to the Dynamic body owned by `entity` (the C++
-    /// `host.applyImpulse`). A non-Dynamic / unmapped body is a no-op on the host side.
+    /// Apply a center-of-mass impulse to the Dynamic body owned by `entity`. A
+    /// non-Dynamic / unmapped body is a no-op on the host side.
     fn apply_impulse(&self, entity: Uuid, impulse: Vec3);
 
-    /// Add a continuous force (applied over the next step) to `entity`'s Dynamic body
-    /// (the C++ `host.addForce`).
+    /// Add a continuous force (applied over the next step) to `entity`'s Dynamic body.
     fn add_force(&self, entity: Uuid, force: Vec3);
 
-    /// Set the absolute linear velocity of `entity`'s Dynamic body (the C++
-    /// `host.setVelocity`).
+    /// Set the absolute linear velocity of `entity`'s Dynamic body.
     fn set_velocity(&self, entity: Uuid, velocity: Vec3);
 
     /// The current linear velocity of `entity`'s Dynamic body, or zero when there is
-    /// none (the C++ `host.getVelocity`).
+    /// none.
     fn get_velocity(&self, entity: Uuid) -> Vec3;
 
-    /// Go limp / restore the rig identified by `rig` (the C++ `host.setRagdollEnabled`);
-    /// returns whether the toggle succeeded.
+    /// Go limp / restore the rig identified by `rig`; returns whether the toggle
+    /// succeeded.
     fn set_ragdoll_enabled(&self, rig: Uuid, enable: bool) -> bool;
 
     /// Blend a rig between physics and animation: `active` arms/releases the motors,
-    /// `body_weight` sets the global target weight (the C++ `host.setRagdollBlend`).
+    /// `body_weight` sets the global target weight.
     fn set_ragdoll_blend(&self, rig: Uuid, active: bool, body_weight: f32);
 
-    /// The rig's live ragdoll state (the C++ `host.ragdollState`).
+    /// The rig's live ragdoll state.
     fn ragdoll_state(&self, rig: Uuid) -> ScriptRagdollState;
 
     /// Route a `sa.log(...)` line to the editor's script-log ring, tagged with the uuid
-    /// of the instance whose handler is running (the C++ `host.logSink`). Called *after*
-    /// the engine log, so a no-op sink still writes the console.
+    /// of the instance whose handler is running. Called *after* the engine log, so a
+    /// no-op sink still writes the console.
     fn log_sink(&self, sender: Uuid, message: &str);
 }
 
 /// The default bridge: every method is a safe no-op (a missed raycast, zero velocity, a
 /// dropped log line). Installed on a fresh [`ScriptHost`](crate::ScriptHost) so a session
-/// without a host-installed bridge degrades cleanly — the C++ "unset = a safe no-op".
+/// without a host-installed bridge degrades cleanly.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoopBridge;
 

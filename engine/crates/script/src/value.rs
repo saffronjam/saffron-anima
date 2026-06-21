@@ -1,17 +1,10 @@
 //! `sa.Vec3`: the one value type scripts construct, a `glam::Vec3`-backed
 //! `UserData` with the math + operator surface.
 //!
-//! Ports the C++ `registerScriptValueTypes` `sa.Vec3` class (`script_runtime.cpp`
-//! 992–1058): the read-write `x`/`y`/`z` fields, the `length`/`normalized`/`dot`/
-//! `cross`/`lerp` methods, and the `Add`/`Sub`/`Mul`/`Unm`/`Eq`/`ToString`
-//! metamethods. Two C++ hazards disappear here:
-//!
-//! - The dual-operand `__mul` thunk (a raw `lua_CFunction` because a class member
-//!   rejected a non-class first operand) collapses to one [`mlua`] `Mul`
-//!   meta-function that sees both operands as values and dispatches on which is the
-//!   number (no thunk, no raw stack).
-//! - `glam`'s xyzw quaternion has no GLM swizzle hazard, so the `&glm::vec3::x`
-//!   member-pointer reliance is gone — the fields are plain method accessors.
+//! The read-write `x`/`y`/`z` fields, the `length`/`normalized`/`dot`/`cross`/`lerp`
+//! methods, and the `Add`/`Sub`/`Mul`/`Unm`/`Eq`/`ToString` metamethods. The dual-operand
+//! `__mul` is one [`mlua`] `Mul` meta-function that sees both operands as values and
+//! dispatches on which is the number.
 
 use glam::Vec3;
 use mlua::{MetaMethod, UserData, UserDataMethods, UserDataRef, Value};
@@ -22,8 +15,7 @@ use saffron_scene::quat_to_euler_zyx;
 /// `x`/`y`/`z`, vector math methods, and the arithmetic metamethods.
 ///
 /// `Copy` because the inner [`Vec3`] is — script values are by-value, never shared
-/// handles, so there is no aliasing for a mutated component to bleed across (the
-/// C++ per-instance value-copy concern).
+/// handles, so there is no aliasing for a mutated component to bleed across.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SaVec3(pub Vec3);
 
@@ -83,8 +75,7 @@ impl UserData for SaVec3 {
 
         // One handler for both operand orders: `vec * scalar` and `scalar * vec`.
         // Luau calls `__mul(a, b)` in source order, so for `scalar * vec` the left
-        // operand is the number — dispatch on which operand is the vector. The C++
-        // raw-`lua_CFunction` thunk (`script_runtime.cpp:1010`) collapses to this.
+        // operand is the number — dispatch on which operand is the vector.
         methods.add_meta_function(MetaMethod::Mul, |_, (a, b): (Value, Value)| {
             let scaled = scale_mul(&a, &b)?;
             Ok(SaVec3(scaled))
@@ -92,9 +83,8 @@ impl UserData for SaVec3 {
     }
 }
 
-/// `glam::Vec3::normalize` returns NaN for a zero vector; GLM's `normalize` of zero
-/// is also undefined, and the C++ binding called it raw. Match that: a zero input
-/// stays zero rather than poisoning downstream math with NaN.
+/// `glam::Vec3::normalize` returns NaN for a zero vector. A zero input stays zero
+/// rather than poisoning downstream math with NaN.
 fn normalized(v: Vec3) -> Vec3 {
     let len = v.length();
     if len > 0.0 { v / len } else { Vec3::ZERO }
@@ -133,8 +123,7 @@ pub fn vec3(x: f32, y: f32, z: f32) -> SaVec3 {
     SaVec3(Vec3::new(x, y, z))
 }
 
-/// `sa.lerp(a, b, t)`: the linear interpolation `glam` computes (`Vec3::lerp`,
-/// GLM's `mix`).
+/// `sa.lerp(a, b, t)`: the linear interpolation `glam` computes (`Vec3::lerp`).
 #[must_use]
 pub fn lerp(a: SaVec3, b: SaVec3, t: f32) -> SaVec3 {
     SaVec3(a.0.lerp(b.0, t))
@@ -142,8 +131,7 @@ pub fn lerp(a: SaVec3, b: SaVec3, t: f32) -> SaVec3 {
 
 /// `sa.look_at(eye, target, up)`: a look rotation as engine ZYX-Euler radians so it
 /// feeds `set_rotation`. Faces `target` from `eye` with `up` the reference;
-/// degenerate (`eye == target`) returns zero. Ports `script_runtime.cpp:1046`:
-/// `quatToEulerZYX(quatLookAt(normalize(dir), up))`.
+/// degenerate (`eye == target`) returns zero.
 #[must_use]
 pub fn look_at(eye: SaVec3, target: SaVec3, up: SaVec3) -> SaVec3 {
     let dir = target.0 - eye.0;
@@ -153,10 +141,9 @@ pub fn look_at(eye: SaVec3, target: SaVec3, up: SaVec3) -> SaVec3 {
     SaVec3(quat_to_euler_zyx(quat_look_at(dir.normalize(), up.0)))
 }
 
-/// A quaternion looking in `direction` with the given `up`, in GLM's right-handed
-/// convention (a port of `glm::quatLookAt`): the forward maps to `-Z`. Kept private
-/// here because the crate boundary forbids reaching into `saffron-sceneedit`, which
-/// holds the only other copy.
+/// A quaternion looking in `direction` with the given `up`, right-handed: the forward
+/// maps to `-Z`. Kept private here because the crate boundary forbids reaching into
+/// `saffron-sceneedit`, which holds the only other copy.
 fn quat_look_at(direction: Vec3, up: Vec3) -> glam::Quat {
     let z = -direction;
     let x = up.cross(z).normalize();

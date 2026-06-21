@@ -1,21 +1,18 @@
 //! The declarative `sa.*` binding-descriptor table — the single source that both
-//! registers the API with the VM and feeds area 9's Luau type emitter.
+//! registers the API with the VM and feeds the Luau type emitter.
 //!
-//! The C++ plan rejected a declarative typed-descriptor registry because LuaBridge3
-//! registered functions by deduced C++ type and forced raw `lua_CFunction` thunks
-//! (README §3). `mlua`'s typed `IntoLua`/`FromLua` flips that calculus: a binding's
-//! argument and return types are first-class Rust data, so one ordered table can
-//! drive both registration and typegen with no second hand-written copy to drift —
-//! which is why the C++ `check-script-defs` tripwire is deleted.
+//! A binding's argument and return types are first-class Rust data, so one ordered
+//! table drives both registration and typegen with no second hand-written copy to
+//! drift.
 //!
 //! [`BINDINGS`] is the table. [`register_value_types`] + [`register_no_scene_globals`]
 //! bind the no-scene surface (the value type, `sa.vec3`/`sa.lerp`/`sa.look_at`, and the
 //! base `sa.log`); [`register_scene_globals`] binds the scene-dependent free functions
 //! (input reads, hierarchy queries, `sa.broadcast`) onto the same `sa` table, and the
-//! `sa.Entity` methods live on the [`EntityHandle`] userdata. Area 9's xtask emitter
-//! reads [`BINDINGS`] to emit the `.luau` defs through area 10's shared `map_type`
-//! mapper, so the type tokens here are spelled in that mapper's wire vocabulary
-//! (`"number"`, `"Vec3"`, `"string"`, …).
+//! `sa.Entity` methods live on the [`EntityHandle`] userdata. The xtask emitter reads
+//! [`BINDINGS`] to emit the `.luau` defs through the shared `map_type` mapper, so the
+//! type tokens here are spelled in that mapper's wire vocabulary (`"number"`, `"Vec3"`,
+//! `"string"`, …).
 
 use mlua::{Lua, Table, Value as LuaValue};
 
@@ -76,9 +73,8 @@ pub struct Binding {
 }
 
 /// Trims the per-entry boilerplate without hiding the set: each `binding!` is one
-/// row of [`BINDINGS`]. No proc-macro — the table is explicit and ordered so the
-/// emit order is deterministic and the whole set is visible at once (the PP-7 macro
-/// discipline).
+/// row of [`BINDINGS`]. The table is explicit and ordered so the emit order is
+/// deterministic and the whole set is visible at once.
 macro_rules! binding {
     (
         $name:literal,
@@ -101,13 +97,13 @@ macro_rules! binding {
 
 /// The ordered `sa.*` binding-descriptor table — the single source of truth.
 ///
-/// Phase 2 carries the value-type surface (`sa.Vec3` + its members) and the no-scene
-/// free functions (`sa.vec3`, `sa.lerp`, `sa.look_at`, `sa.log`); later phases append
-/// the `sa.Entity` methods and the scene-dependent globals to this same table. Phase 7
-/// adds the physics-reaching surface: the `sa.Entity` `move_character`/`apply_impulse`/
-/// `add_force`/`set_velocity`/`get_velocity`/ragdoll methods, and the `sa.raycast`/
-/// `sa.spherecast` free functions (whose `RayHit`/`RagdollState` return tokens phase 9's
-/// emitter maps to the `sa.RayHit`/`sa.RagdollState` classes).
+/// Carries the value-type surface (`sa.Vec3` + its members), the no-scene free
+/// functions (`sa.vec3`, `sa.lerp`, `sa.look_at`, `sa.log`), the `sa.Entity` methods
+/// and the scene-dependent globals. The physics-reaching surface lives here too: the
+/// `sa.Entity` `move_character`/`apply_impulse`/`add_force`/`set_velocity`/
+/// `get_velocity`/ragdoll methods, and the `sa.raycast`/`sa.spherecast` free functions
+/// (whose `RayHit`/`RagdollState` return tokens the emitter maps to the `sa.RayHit`/
+/// `sa.RagdollState` classes).
 pub const BINDINGS: &[Binding] = &[
     binding!(
         "x",
@@ -498,12 +494,11 @@ pub const BINDINGS: &[Binding] = &[
 /// Registers the value types into a VM (the `sa.Vec3` userdata metatable).
 ///
 /// Bound into both the runtime VM and the throwaway schema VM, so a `properties`
-/// default of `sa.vec3(0, 1, 0)` resolves at edit time too (the C++
-/// `registerScriptValueTypes` was called from both `newScriptVm` and `startScripts`).
-/// `mlua` registers the `SaVec3` `UserData` impl lazily on first use, so this is the
-/// no-op companion to [`register_no_scene_globals`] — the metatable is materialized
-/// when `sa.vec3` first constructs one. Kept as an explicit entry point so phase 8's
-/// schema VM has the same two-call shape as the runtime VM.
+/// default of `sa.vec3(0, 1, 0)` resolves at edit time too. `mlua` registers the
+/// `SaVec3` `UserData` impl lazily on first use, so this is the no-op companion to
+/// [`register_no_scene_globals`] — the metatable is materialized when `sa.vec3` first
+/// constructs one. An explicit entry point so the schema VM has the same two-call shape
+/// as the runtime VM.
 pub fn register_value_types(_lua: &Lua) -> Result<()> {
     Ok(())
 }
@@ -512,9 +507,10 @@ pub fn register_value_types(_lua: &Lua) -> Result<()> {
 /// constructors/helpers (`vec3`, `lerp`, `look_at`) and the base `log`.
 ///
 /// The scene-dependent globals (`spawn`, `broadcast`, `raycast`, …) and the
-/// `sa.Entity` methods are registered in later phases onto the same table. Under
-/// Luau's sandbox the main thread carries a writable globals table that shadows the
-/// frozen base, so installing a fresh `sa` table here is safe after `sandbox(true)`.
+/// `sa.Entity` methods are registered onto the same table by
+/// [`register_scene_globals`]. Under Luau's sandbox the main thread carries a writable
+/// globals table that shadows the frozen base, so installing a fresh `sa` table here is
+/// safe after `sandbox(true)`.
 pub fn register_no_scene_globals(lua: &Lua) -> Result<()> {
     register_value_types(lua)?;
 
@@ -537,7 +533,7 @@ pub fn register_no_scene_globals(lua: &Lua) -> Result<()> {
         .map_err(runtime)?;
     sa.set("look_at", look_at).map_err(runtime)?;
 
-    // The base `sa.log`; phase 7 overrides it with the host log-sink variant.
+    // The base `sa.log`; the play VM overrides it with the host log-sink variant.
     let log = lua
         .create_function(|_, message: String| {
             log_info!("{message}");
@@ -550,8 +546,7 @@ pub fn register_no_scene_globals(lua: &Lua) -> Result<()> {
     Ok(())
 }
 
-/// Lowercases an input key for a case-insensitive held/edge lookup (the C++
-/// `normalizeInputKey`, `script_runtime.cpp:630`–635).
+/// Lowercases an input key for a case-insensitive held/edge lookup.
 fn normalize_input_key(key: &str) -> String {
     key.to_ascii_lowercase()
 }
@@ -562,11 +557,10 @@ fn normalize_input_key(key: &str) -> String {
 /// and `sa.broadcast`.
 ///
 /// Every binding reads/writes through the [session guard](crate::session): with no
-/// session open (or no input lent) each returns its documented default — the Rust shape
-/// of the C++ `host.currentScene == nullptr` / `host.input == nullptr` checks. Called
-/// once per session after [`register_no_scene_globals`]; the entity-side hierarchy
-/// methods (`parent`/`children`/`set_parent`/`send`) live on the [`EntityHandle`]
-/// userdata, not here.
+/// session open (or no input lent) each returns its documented default. Called once per
+/// session after [`register_no_scene_globals`]; the entity-side hierarchy methods
+/// (`parent`/`children`/`set_parent`/`send`) live on the [`EntityHandle`] userdata, not
+/// here.
 pub fn register_scene_globals(lua: &Lua) -> Result<()> {
     let sa: Table = lua.globals().get("sa").map_err(runtime)?;
 
@@ -678,8 +672,8 @@ pub fn register_scene_globals(lua: &Lua) -> Result<()> {
         .map_err(runtime)?;
     sa.set("broadcast", broadcast).map_err(runtime)?;
 
-    // Physics queries: route through the host-installed bridge (the C++ `sa.raycast`/
-    // `sa.spherecast`), shaping the POD hit into the result table.
+    // Physics queries: route through the host-installed bridge, shaping the POD hit
+    // into the result table.
     let raycast = lua
         .create_function(
             |lua, (ox, oy, oz, dx, dy, dz, max_dist): (f32, f32, f32, f32, f32, f32, f32)| {
@@ -718,7 +712,7 @@ pub fn register_scene_globals(lua: &Lua) -> Result<()> {
 
     // Override the no-scene `sa.log` with the play VM's log-sink variant: the line still
     // hits the engine log, then routes to the host's script-log ring tagged with the
-    // running instance's uuid (the C++ play VM overriding `log`, `script_runtime.cpp:1273`).
+    // running instance's uuid.
     let log = lua
         .create_function(|_, message: String| {
             log_info!("{message}");
@@ -733,10 +727,9 @@ pub fn register_scene_globals(lua: &Lua) -> Result<()> {
 }
 
 /// Shapes a [`ScriptRayHit`] POD into the `{hit, distance, point, normal, entity}` Lua
-/// table (the C++ `sa.raycast` result, `script_runtime.cpp:1292`–1308). `point`/`normal`
-/// are `sa.Vec3`; `entity` is the resolved [`EntityHandle`] only on a hit with an owner
-/// entity (a miss / unmapped body has no `entity` key — `nil`). A `None` hit (no bridge
-/// lent) is the miss table `{hit = false}`.
+/// table. `point`/`normal` are `sa.Vec3`; `entity` is the resolved [`EntityHandle`] only
+/// on a hit with an owner entity (a miss / unmapped body has no `entity` key — `nil`). A
+/// `None` hit (no bridge lent) is the miss table `{hit = false}`.
 fn ray_hit_table(lua: &Lua, hit: Option<ScriptRayHit>) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     let Some(hit) = hit else {
@@ -756,9 +749,8 @@ fn ray_hit_table(lua: &Lua, hit: Option<ScriptRayHit>) -> mlua::Result<Table> {
     Ok(table)
 }
 
-/// The first entity matching `name` (names are not unique — the deliberate MVP choice),
-/// or the invalid handle when absent / outside a session (the C++ `get_entity_by_name`,
-/// `script_runtime.cpp:1163`).
+/// The first entity matching `name` (names are not unique), or the invalid handle when
+/// absent / outside a session.
 fn find_first_by_name(name: &str) -> EntityHandle {
     let found = session::with_scene_mut(|scene| {
         let mut hit = None;
@@ -773,8 +765,7 @@ fn find_first_by_name(name: &str) -> EntityHandle {
     EntityHandle::new(found.unwrap_or(saffron_scene::Entity::NULL))
 }
 
-/// Every entity matching `name`, in scan order (the C++ `find_all_by_name`,
-/// `script_runtime.cpp:1215`). An empty list outside a session.
+/// Every entity matching `name`, in scan order. An empty list outside a session.
 fn find_all_named(name: &str) -> Vec<EntityHandle> {
     session::with_scene_mut(|scene| {
         let mut hits = Vec::new();
@@ -789,8 +780,7 @@ fn find_all_named(name: &str) -> Vec<EntityHandle> {
 }
 
 /// Resolves a uuid (decimal string, matching `Entity:uuid()`) to its entity, or the
-/// invalid handle (the C++ `find_by_uuid`, `script_runtime.cpp:1236`). A `0` / unparsable
-/// id, or no session, yields the invalid handle.
+/// invalid handle. A `0` / unparsable id, or no session, yields the invalid handle.
 fn find_by_uuid(uuid: &str) -> EntityHandle {
     let id: u64 = uuid.trim().parse().unwrap_or(0);
     if id == 0 {
@@ -800,8 +790,8 @@ fn find_by_uuid(uuid: &str) -> EntityHandle {
     EntityHandle::new(found.unwrap_or(saffron_scene::Entity::NULL))
 }
 
-/// The scene's first primary camera entity, or the invalid handle (the C++
-/// `primary_camera`, `script_runtime.cpp:1184`). Moving its transform IS "move camera".
+/// The scene's first primary camera entity, or the invalid handle. Moving its transform
+/// IS "move camera".
 fn primary_camera() -> EntityHandle {
     let found = session::with_scene_mut(|scene| {
         let mut hit = None;
@@ -816,15 +806,15 @@ fn primary_camera() -> EntityHandle {
     EntityHandle::new(found.unwrap_or(saffron_scene::Entity::NULL))
 }
 
-/// Mints a new root entity (Name + Transform + Relationship) in the play duplicate (the
-/// C++ `spawn`, `script_runtime.cpp:1205`). The invalid handle outside a session.
+/// Mints a new root entity (Name + Transform + Relationship) in the play duplicate. The
+/// invalid handle outside a session.
 fn spawn_root(name: &str) -> EntityHandle {
     let entity = session::with_scene_mut(|scene| scene.create_entity(name));
     EntityHandle::new(entity.unwrap_or(saffron_scene::Entity::NULL))
 }
 
-/// Queues a broadcast message to every script instance (the C++ `broadcast`,
-/// `script_runtime.cpp:1254`): `handler(self, sender, payload)` runs after the loop.
+/// Queues a broadcast message to every script instance: `handler(self, sender, payload)`
+/// runs after the loop.
 fn broadcast(lua: &Lua, handler: &str, payload: LuaValue) {
     let payload_ref = match payload {
         LuaValue::Nil => None,
@@ -867,7 +857,7 @@ mod tests {
     #[test]
     fn table_carries_every_no_scene_entry() {
         let names: Vec<(Option<&str>, &str)> = BINDINGS.iter().map(|b| (b.class, b.name)).collect();
-        // The free functions phase 2 registers.
+        // The no-scene free functions.
         for free in ["vec3", "lerp", "look_at", "log"] {
             assert!(
                 names.contains(&(None, free)),
@@ -897,8 +887,8 @@ mod tests {
                 "missing Vec3 member {member}"
             );
         }
-        // The phase-3 sa.Entity scene-only surface, the phase-4 component bridge, and the
-        // phase-6 hierarchy/message methods.
+        // The sa.Entity scene surface, the component bridge, and the hierarchy/message
+        // methods.
         for member in [
             "valid",
             "name",
@@ -936,7 +926,7 @@ mod tests {
                 "missing Entity member {member}"
             );
         }
-        // The phase-6 scene-dependent free functions: input, hierarchy queries, and the
+        // The scene-dependent free functions: input, hierarchy queries, and the
         // scheduler/broadcast surface.
         for free in [
             "is_key_down",

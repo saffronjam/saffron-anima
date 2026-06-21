@@ -1,7 +1,6 @@
 //! VM-level coverage of the `sa.Vec3` value type and the no-scene binding table:
 //! every operator/method/free-function evaluated in a sandboxed VM matches the
-//! value `glam` computes directly. Replaces the C++ `registerScriptValueTypes`
-//! coverage (`script_runtime.cpp:992`).
+//! value `glam` computes directly.
 
 use glam::Vec3;
 use mlua::Value;
@@ -207,8 +206,8 @@ fn log_is_callable() {
 #[test]
 fn vec3_static_new_constructs() {
     let vm = vm();
-    // The static constructor is on the value class; phase 2 registers it implicitly
-    // through the userdata metatable, reachable from a constructed instance.
+    // The static constructor is on the value class, registered implicitly through the
+    // userdata metatable, reachable from a constructed instance.
     vm.run_string("assert(sa.vec3(1, 2, 3) == sa.vec3(1, 2, 3))", "new-test")
         .expect("vec3 construction should work");
 }
@@ -238,7 +237,7 @@ fn vec3_userdata_survives_as_value() {
         "userdata-test",
     )
     .expect("vec3 must be a userdata value");
-    // And it carries the numeric x/y/z the C++ `isVec3Userdata` probe checked.
+    // And it carries the numeric x/y/z a vec3 userdata probe checks.
     let v = vm.lua();
     let _ = v.globals().get::<Value>("sa");
 }
