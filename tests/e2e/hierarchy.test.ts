@@ -69,7 +69,7 @@ test("a parented child picks at its world position, not its local origin", async
   expect(atWorld.hit).toBe(true);
   expect(atWorld.id).toBe(child.id);
 
-  // The old local origin no longer holds the child.
+  // The child's local origin no longer holds it once parented.
   const probe = await engine.call<Ref>("create-entity", { args: ["h-probe"] });
   await engine.call("set-transform", { entity: probe.id, translation: { x: 0, y: 2, z: 0 } });
   const atLocal = await focusPick(probe.id);

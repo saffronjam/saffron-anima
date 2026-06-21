@@ -1,5 +1,5 @@
-// A static (unskinned) model in the asset editor: the generalization that made the editor open EVERY
-// model, not just rigged ones. get-asset-model reports hasRig=false with empty bones/clips but a real
+// A static (unskinned) model in the asset editor, which opens every model, not just rigged ones.
+// get-asset-model reports hasRig=false with empty bones/clips but a real
 // mesh + material count; enter-asset-preview spawns the model (a MeshComponent root, no skeleton) and
 // returns a non-zero rootEntity with an empty bone table; exit leaves project.json byte-identical.
 

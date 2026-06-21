@@ -72,7 +72,7 @@ test("a click in a rotated cube's empty AABB corner misses (triangle precision)"
 
   // Rotated 45° about the view axis (Z), the cube's silhouette is a diamond inscribed in a
   // world AABB that is √2 larger — the four corner triangles are inside the box but off the
-  // mesh. The old AABB-only pick hit them; triangle picking must not.
+  // mesh. Triangle picking must not hit them.
   const cube = await engine.call<Ref>("add-entity", { args: ["cube"] });
   await engine.call("rename-entity", { entity: cube.id, name: "rot-cube" });
   await engine.call("set-transform", {
@@ -122,7 +122,7 @@ test("a skinned model is selectable (SkinnedMeshComponent was ignored by picking
   await engine.settle();
 
   // Scan a grid around screen center; a skinned mesh must register at least one hit that
-  // resolves to the model root. Picking previously never tested SkinnedMeshComponent at all.
+  // resolves to the model root.
   let hitRoot = false;
   for (let v = 0.35; v <= 0.65 && !hitRoot; v += 0.05) {
     for (let u = 0.35; u <= 0.65; u += 0.05) {

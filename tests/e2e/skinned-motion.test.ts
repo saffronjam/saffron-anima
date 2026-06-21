@@ -1,8 +1,7 @@
 // Skinned motion vectors under TAA: with anti-aliasing set to TAA the motion-vector prepass
-// runs, and Phase 8 makes it emit velocity for skinned geometry (a second deformed buffer
-// skinned with last frame's palette + per-instance prevModel). This proves the host loop
-// drives the animated rig through the motion pass with TAA active and stays validation-clean
-// — the path that previously skipped skinned batches (and so ghosted under TAA).
+// runs and emits velocity for skinned geometry (a second deformed buffer skinned with last
+// frame's palette + per-instance prevModel). This proves the host loop drives the animated
+// rig through the motion pass with TAA active and stays validation-clean.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, readFileSync, rmSync } from "node:fs";

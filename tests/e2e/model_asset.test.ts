@@ -61,7 +61,7 @@ test("instantiate-model expands the asset into the scene, twice, as independent 
 
 test("a never-saved import survives a reload via the filesystem scan (orphan-proof)", async () => {
   // The model was imported but never save-project'd, so project.json does not list it. A reload reads
-  // that stale project.json and the scan rediscovers the .smodel on disk — the orphan class is gone.
+  // that stale project.json and the scan rediscovers the .smodel on disk.
   await engine.call("reload-project");
   await engine.settle();
   const assets = await engine.call<AssetList>("list-assets");

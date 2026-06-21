@@ -1,7 +1,7 @@
 // Multi-material import over the control plane: a glTF whose single mesh has two
 // primitives with distinct PBR materials imports as one entity carrying a
 // MaterialSetComponent of two slots — each slot preserving its metallic/roughness
-// factors (the old importer dropped factors and collapsed to one material). Editing a
+// factors. Editing a
 // single slot through set-material with `slot` leaves the others untouched, and the
 // slots round-trip through project save/reload.
 

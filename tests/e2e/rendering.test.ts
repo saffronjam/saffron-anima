@@ -30,10 +30,9 @@ test("imports a model and reports a draw", async () => {
   expect(stats.drawCalls).toBeGreaterThan(0);
 });
 
-// Regression: set-aa msaa2 used to create the MSAA color/depth images at a sample count
-// (2x) that the R16G16B16A16_SFLOAT / D32_SFLOAT target formats reject on some GPUs
-// (VUID-VkImageCreateInfo-samples-02258) — the count was clamped to the generic framebuffer
-// limit, not the per-format support. setAa now clamps to the formats' actual support.
+// setAa clamps the MSAA sample count to the R16G16B16A16_SFLOAT / D32_SFLOAT target formats'
+// actual support, not the generic framebuffer limit, so the color/depth images never request a
+// count those formats reject on some GPUs (VUID-VkImageCreateInfo-samples-02258).
 test("set-aa across every level stays Vulkan-validation-clean", async () => {
   for (const mode of ["msaa2", "msaa4", "msaa8", "msaa2", "off"]) {
     const result = await engine.call<{ aa: string }>("set-aa", { args: [mode] });

@@ -1,6 +1,6 @@
-// Proves the PBR map slots survive project save + reload (closing the phase-05/06 serde gap, where
-// imported normal/occlusion/emissive/height maps were dropped on reload). Imports a textured fixture,
-// assigns a normal map, saves + reloads the project, and asserts the normal slot persisted.
+// Proves the PBR map slots (normal/occlusion/emissive/height) survive project save + reload.
+// Imports a textured fixture, assigns a normal map, saves + reloads the project, and asserts the
+// normal slot persisted.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { join } from "node:path";

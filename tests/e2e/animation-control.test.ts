@@ -73,7 +73,7 @@ test("set-animation-playing resumes from the paused playhead, not the start", as
   expect(paused.playing).toBe(false);
   expect(paused.time).toBeGreaterThan(0); // advanced before the pause
 
-  // Resuming must continue from the paused time, not reset to 0 (the bug this guards).
+  // Resuming must continue from the paused time, not reset to 0.
   const resumed = await engine.call<AnimState>("set-animation-playing", { entity: meshId, playing: true });
   expect(resumed.playing).toBe(true);
   expect(resumed.time).toBeCloseTo(paused.time, 3);
