@@ -5,75 +5,98 @@ weight = 5
 
 # Build environment
 
-The build environment is a single container that holds the entire C++ toolchain. The host runs no
-compiler, so all building, testing, and running happens inside that container.
+The build environment is a single container that holds the entire Rust toolchain plus the Vulkan
+SDK and the Slang shader compiler. The host runs no compiler, so building, testing, and running all
+happen inside that container — and the `just` recipes auto-enter it, so the same command works from
+a host shell or from inside the container.
 
 A toolbox is a Fedora development container with the home directory shared host-side. It isolates
 the toolchain from an immutable host while leaving project files editable from either side.
 
 ## The toolbox
 
-The dev machine is Fedora **Silverblue 43**, ostree-booted, with home under `/var/home`. It ships
-no `g++`/`cmake`/clang/Vulkan SDK on the host. Everything builds inside the **`saffron-build`**
-container, created from `fedora-toolbox:43`. The home directory is shared host-to-toolbox, so files
-edited on the host are visible inside the container immediately.
+The dev machine is Fedora **Silverblue**, ostree-booted, with home under `/var/home`. It ships no
+Rust toolchain or Vulkan SDK on the host. Everything builds inside the **`saffron-build`**
+container. The home directory is shared host-to-toolbox, so files edited on the host are visible
+inside immediately.
 
-Every build, test, or run command goes through the toolbox:
+The container carries `cargo` + `rustc` (the workspace pins `rust-version = "1.85"`, `edition =
+"2024"`), the Vulkan headers / loader / validation layers / tools, and the prebuilt `slangc` under
+`~/.cache/saffron-slang/`. The GPU inside the toolbox is **llvmpipe**, Mesa's software Vulkan,
+sufficient for correctness and validation; hardware acceleration needs the NVIDIA ICD (the `just
+run` recipes wire it in) or `mesa-vulkan-drivers` installed in the container.
+
+## Driving the build with `just`
+
+The `justfile` at the repo root drives the flow through `cargo`, the `xtask` helper, and `bun`.
+Toolbox-bound recipes **auto-enter** `saffron-build` when run from the host, so a plain `just lint`
+behaves identically from a host shell or inside the container:
+
+```sh
+just engine    # cargo build --workspace, then cargo run -p xtask -- shaders
+just test      # cargo test --workspace
+just lint      # cargo fmt --check + cargo clippy --workspace -- -D warnings + editor oxlint
+just run       # build the host, compile shaders, start the Tauri editor
+just check     # the full reproducible gate
+```
+
+Under the hood, each toolbox recipe re-execs the same recipe inside the container when it is not
+already there (it checks `/run/.toolboxenv`). Because of that boundary, a host-side `ENV=… just …`
+would no-op — the variable never crosses into the container. Set the variable inside the recipe, or
+use a recipe argument.
+
+The engine build is a workspace `cargo build`; running it directly is just as valid:
 
 ```sh
 toolbox run -c saffron-build bash -lc '
-  cd /var/home/saffronjam/repos/SaffronAnima
-  cmake --preset debug            # first time / after CMake changes
-  cmake --build build/debug -j1   # -j1 on purpose, see below
-  ./build/debug/bin/SaffronAnima
+  cd engine
+  cargo build --workspace
+  cargo run -p xtask -- shaders        # compile shaders + copy runtime assets
+  ./target/debug/saffron-host          # the present-only viewport host
 '
 ```
 
-The container carries the full toolchain: Clang/Clang++ **21.1.8** with **libc++ 21**, which ships
-the `std` module that `import std` needs, CMake **3.31.11**, Ninja, lld, and Vulkan
-headers/loader/validation-layers/tools **1.4.341**, plus SDL3-devel **3.4.8**. The prebuilt Slang
-compiler lives under `~/.cache/saffron-slang/`. The `debug`/`release` presets pin `clang++`,
-`-stdlib=libc++`, and `-fuse-ld=lld` with Ninja.
+## Opting out of the toolbox
 
-The GPU inside the toolbox is **llvmpipe**, Mesa's software Vulkan, which is sufficient for
-correctness and validation. Hardware acceleration needs `mesa-vulkan-drivers` installed in the
-container.
-
-For headless or automated verification, bound the run so it exits on its own:
+Set `SAFFRON_NO_TOOLBOX=true` to skip the auto-enter and run a recipe directly on the host. This
+trusts the host to provide `cargo`, `bun`, and the Vulkan/Slang tooling itself:
 
 ```sh
-SAFFRON_EXIT_AFTER_FRAMES=5 ./build/debug/bin/SaffronAnima
+SAFFRON_NO_TOOLBOX=true just test
 ```
 
-## Why -j1
+It is the escape hatch for a host that already has the toolchain (CI on a provisioned runner, or a
+non-Silverblue dev box). On the standard Silverblue host it will fail at the first missing tool —
+which is the point: the toolbox is the default for a reason.
 
-Parallel builds in the toolbox intermittently `SIGBUS` on the Clang 21 + libc++ `import std`
-BMI-serialization ICE described in [module partitions](../module-partitions/). The fault lands on a
-random module TU and is non-deterministic. `-j1` serializes the module builds and is reliable.
+## Headless and bounded runs
 
-> [!WARNING]
-> Build with `-j1`. Parallel module builds in the toolbox intermittently `SIGBUS` on a Clang +
-> libc++ `import std` ICE. `-j1` is reliable.
+For headless or automated verification, bound the run so it exits on its own. The host honours
+`SAFFRON_EXIT_AFTER_FRAMES`:
 
-> [!WARNING]
-> Never `rm -rf build/debug`. The build tree holds runtime-imported assets (baked `.smesh` and
-> textures under `bin/assets/`) that are **not** in git. Wiping it loses them. Reconfigure in
-> place instead.
+```sh
+SAFFRON_EXIT_AFTER_FRAMES=5 ./target/debug/saffron-host
+```
 
-> [!WARNING]
-> Do not `set(CMAKE_CXX_EXTENSIONS OFF)`. The std module builds as `gnu++26`; a `c++26` consumer
-> rejects its BMI. See [C++26 modules](../cxx26-modules/).
+`just run-engine-headless 5` wraps this with the native-viewport driver set, so no window or
+compositor is needed.
+
+> [!NOTE]
+> The `cargo build` profile optimizes *dependencies* even in a debug engine build
+> (`[profile.dev.package."*"] opt-level = 3` in `engine/Cargo.toml`), so glam, ash inlining, and
+> the vendored Jolt run at speed while engine crates stay at `opt-level = 0` for fast incremental
+> rebuilds.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Toolbox + build recipe | `AGENTS.md` | `toolbox run -c saffron-build`, `-j1`, exit-after-frames |
-| Compiler + linker pins | `CMakePresets.json` | `clang-libcxx`, `-stdlib=libc++`, `-fuse-ld=lld`, Ninja |
-| Import-std gate | `CMakeLists.txt` | `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD`, extensions left on |
-| Shader toolchain | `cmake/Slang.cmake` | `slangc` from PATH/cache or fetched prebuilt |
+| Recipes + toolbox auto-enter | `justfile` | `engine`, `test`, `lint`, `run`, `check`, the re-enter prelude |
+| Toolbox opt-out | `justfile` | `SAFFRON_NO_TOOLBOX` |
+| Toolchain + profile knobs | `engine/Cargo.toml` | `[workspace.package]`, `[profile.dev]`, `[profile.dev.package."*"]` |
+| Shader + asset step | `engine/xtask/src/shaders.rs` | `Config::resolve`, `run` |
 
 ## Related
-- [Module partitions](../module-partitions/) — the ICE that `-j1` works around
-- [C++26 modules](../cxx26-modules/) — the libc++ std module the toolbox provides
-- [Shader compilation](../shader-compilation/) — where `slangc` fits in the build
+- [The Cargo workspace and crate model](../cxx26-modules/) — what `cargo build --workspace` builds
+- [Shader compilation](../shader-compilation/) — where `slangc` runs (the `xtask` step)
+- [Dependencies](../dependencies/) — the pins the toolbox `cargo` resolves

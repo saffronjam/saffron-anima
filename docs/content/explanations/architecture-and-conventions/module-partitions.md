@@ -1,86 +1,74 @@
 +++
-title = 'Module partitions'
+title = 'How a crate organizes its modules'
 weight = 3
 +++
 
-# Module partitions
+# How a crate organizes its modules
 
-A module partition is a named fragment of a single C++ module, declared with a colon
-(`Saffron.Rendering:Types`), that the primary module interface stitches into one logical unit. A
-module can also be spread across implementation units: plain `.cpp` files that open the module with
-a bare declaration and export nothing.
+A large crate is not one file. It is split into many module files under `src/`, each declared with
+`mod name;` in the crate root, and the root re-exports the curated public surface with `pub use`.
+The module files are private organization; the `pub use` block is the crate's API. This is how a
+crate like `saffron-rendering` carries thirty-odd feature files behind one tidy import.
 
-Together these split a large module across many files. `Saffron.Rendering` uses interface
-partitions for its exported surface and implementation units for its feature code. The choice
-between the two is forced by a Clang toolchain bug rather than by preference.
+The split is by feature, one module per concern, and it costs nothing at the boundary: modules in
+one crate share a single compilation unit, so a call from one module file to another is an ordinary
+function call with no extra ceremony. The only thing the crate root decides is what escapes.
 
-## Interface partitions and impl units
+## Module files and the re-export root
 
-`Saffron.Rendering` is one module spread across several files under
-`engine/source/saffron/rendering/`.
+`saffron-rendering` is one crate spread across many files under `crates/rendering/src/`. Each
+feature is its own module file — `pipelines.rs`, `lighting.rs`, `aa.rs`, `render_graph.rs`,
+`ssao.rs`, and so on — declared privately in `lib.rs`:
 
-Interface partitions carry the exported surface. `renderer_types.cppm` is the `:Types` partition:
-every data struct, the `Renderer` aggregate, and all public function declarations.
-`renderer_detail.cppm` is the `:Detail` partition of exported internal helpers.
+```rust
+// crates/rendering/src/lib.rs
+mod lighting;
+mod pipelines;
+mod render_graph;
+mod renderer;
+mod resources;
+// … ~30 module files
 
-The primary interface `renderer.cppm` does orchestration only (`newRenderer`, `beginFrame`,
-`endFrame`, the viewport getters) and stitches the partitions together:
-
-```cpp
-export module Saffron.Rendering;
-
-export import :RenderGraph;   // re-exported to consumers
-export import :Types;
+pub use render_graph::{RenderGraph, RgPass, RgUsage};
+pub use renderer::{Renderer, ViewId, ViewMode};
+pub use resources::{Buffer, Image, GpuMesh};
 ```
 
-`:Types` and `:RenderGraph` are `export import`ed so consumers see them; `:Detail` is plain
-`import`ed so the internal helpers stay off the consumer BMI.
+Every `mod` is private, so the module files are internal by default. A type is reachable to
+consumers only when `lib.rs` re-exports it with `pub use`. A consumer writes
+`use saffron_rendering::{Renderer, RenderGraph};` and sees exactly the curated surface — the feature
+files that produced those types stay invisible.
 
-Implementation units are regular `.cpp` files, one per feature, that open the module with a bare
-declaration and import nothing extra:
+Items a module file needs from a *sibling* file are reached with `use crate::pipelines::Pipelines;`
+(an internal path), distinct from the `pub use` that publishes to the outside world. Internal
+visibility lives between the two: a helper used across sibling modules but not exported is `pub(crate)`,
+visible crate-wide but absent from the public API.
 
-```cpp
-module;
-#include <vulkan/vulkan.hpp>
-// ...
-module Saffron.Rendering;   // implementation unit, NOT a partition
-```
+## Where the file lines fall
 
-`renderer_pipelines.cpp`, `renderer_lighting.cpp`, `renderer_aa.cpp` and the rest each define a
-slice of the declarations from `:Types`. Cross-unit calls resolve through those public decls; a
-purely internal helper is co-located in the `.cpp` with its sole caller.
+The division is by responsibility, not by size cap:
 
-In CMake the difference is the file set. Interface partitions go in `FILE_SET CXX_MODULES`
-(dependency-ordered, before the primary). Implementation units are ordinary `PRIVATE` sources.
+- The orchestration file (`renderer.rs`) owns the top-level type (`Renderer`) and the frame entry
+  points, and calls into the feature files.
+- Each feature file owns one subsystem's types and logic — `lighting.rs` the clustered lighting,
+  `ssao.rs` the ambient-occlusion pass, `render_graph.rs` the [`RgPass`/`RgUsage`
+  graph](../../frame-and-render-graph/render-graph-overview/).
+- A purely internal helper lives in the file with its sole caller and is never re-exported.
 
-## Why impl units instead of more partitions
-
-Making every feature its own interface partition (`export module Saffron.Rendering:Pipelines;` and
-so on) triggers a flaky Clang 21 + libc++ `import std` BMI-serialization crash: an internal compiler
-error in `ASTWriter` while serializing std declarations, surfacing as a `SIGBUS` in a random
-translation unit. An implementation unit produces no BMI, so there is nothing to serialize and no
-ICE. Feature code therefore lives in `.cpp` files.
-
-The same mechanism covers the editor (`:Context` partition plus five `.cpp` units) and the control
-plane (`:Command` partition plus four `.cpp` units). It is the codebase-wide pattern for splitting
-a large module.
-
-> [!WARNING]
-> Making each feature an interface partition (`export module Saffron.Rendering:Feature;`) hits a
-> Clang 21 + libc++ `import std` BMI-serialization ICE (`SIGBUS` in `ASTWriter`). Feature code must
-> be `.cpp` implementation units (`module Saffron.Rendering;`, no `export`) so no BMI is generated.
+A nested module group (a `mod foo { ... }` block, or a `foo/` directory with a `mod.rs`) is used
+when a feature has several closely-related files of its own — the same pattern one level down. The
+crate root re-exports only the public leaves either way.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Interface partition | `renderer_types.cppm` | `export module Saffron.Rendering:Types;` |
-| Internal-helper partition | `renderer_detail.cppm` | `export module Saffron.Rendering:Detail;` |
-| Primary + re-export | `renderer.cppm` | `export import :Types;`, `export import :RenderGraph;` |
-| Implementation unit | `renderer_pipelines.cpp` | `module Saffron.Rendering;` (no `export`) |
-| File-set wiring | `engine/CMakeLists.txt` | `FILE_SET CXX_MODULES` vs `PRIVATE` sources |
+| Private module files | `crates/rendering/src/lib.rs` | `mod lighting;`, `mod pipelines;`, … |
+| The re-export surface | `crates/rendering/src/lib.rs` | `pub use renderer::{Renderer, ...}` |
+| An orchestration module | `crates/rendering/src/renderer.rs` | `Renderer`, `submit`, the frame entry points |
+| A feature module | `crates/rendering/src/render_graph.rs` | `RenderGraph`, `RgPass`, `RgUsage` |
 
 ## Related
-- [C++26 modules](../cxx26-modules/) — why the std module is involved at all
-- [Module DAG](../module-dag/) — where the rendering partitions sit in the graph
-- [Build environment](../build-environment/) — why builds run `-j1` to dodge the same ICE
+- [The Cargo workspace and crate model](../cxx26-modules/) — crates vs modules
+- [The crate DAG](../module-dag/) — where the rendering crate sits in the graph
+- [Render graph overview](../../frame-and-render-graph/render-graph-overview/) — the `RgPass` API

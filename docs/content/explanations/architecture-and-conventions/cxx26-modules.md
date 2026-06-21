@@ -1,97 +1,92 @@
 +++
-title = 'C++26 modules'
+title = 'The Cargo workspace and crate model'
 weight = 2
 +++
 
-# C++26 modules
+# The Cargo workspace and crate model
 
-A C++ named module is a self-contained unit of code that exports an explicit interface, replacing
-the textual `#include` model with a compiled binary interface. C++26 also lets a program pull the
-entire standard library in as one module with `import std`, rather than including its headers.
+The engine is a Cargo workspace: a set of library crates under `engine/crates/`, plus the `xtask`
+tooling crate, sharing one `Cargo.lock`, one resolver, and one place where every third-party
+version is pinned. Each engine *area* is its own crate (`saffron-core`, `saffron-rendering`,
+`saffron-scene`, …); the crate boundary is the real boundary between areas, and a crate exports an
+explicit public surface that consumers reach through `use`.
 
-The engine is authored this way: every engine area is a named module, and modules that need the
-standard library import it. The module boundary is the real boundary between engine areas — module
-code includes no standard headers and relies on no precompiled-header soup.
+The workspace is the unit the whole build operates on. `cargo build --workspace` builds every
+member, `cargo test --workspace` tests every member, and the dependency edges between members are
+the engine's architecture made mechanical — a crate can only call into the crates it lists in its
+`Cargo.toml`.
 
-## Named modules
+## One workspace, one pin list
 
-Every engine area is one named module, `Saffron.<Area>`, declared and exported from a `.cppm` file.
-`Saffron.Core` is the smallest complete example:
+The root `engine/Cargo.toml` declares the members and pins every external dependency once under
+`[workspace.dependencies]`. Member crates pull each dependency with `dep.workspace = true`, so a
+version is written in exactly one place and never drifts across crates:
 
-```cpp
-export module Saffron.Core;
+```toml
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
 
-import std;
-
-export namespace sa
-{
-    template <typename T>
-    using Ref = std::shared_ptr<T>;
-    // ...
-}
+[workspace.dependencies]
+ash = "=0.38"          # Vulkan, pinned exactly
+glam = "0.30"          # math
+hecs = "0.11"          # the ECS, wrapped by saffron-scene
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2"
 ```
 
-`import std` pulls the whole standard library in as a module rather than as headers. It compiles
-faster than textual includes and keeps macros out of the picture. Modules that touch only the
-standard library (`core`, `signal`, `app`) use it directly. `window` mixes `import std` with the
-SDL3 **C** header, which is safe because C headers do not clash with the std module.
+`[workspace.package]` shares the `edition = "2024"`, `rust-version`, and `version` across every
+crate, and `[workspace.lints]` applies the same `clippy` / `unsafe_code` policy everywhere a crate
+opts in with `[lints] workspace = true`.
 
-## Heavy C++ headers
+## A crate's public surface
 
-Modules that wrap heavy **C++** third-party headers — `rendering`, `scene`, `geometry`,
-`json`, `assets`, `sceneedit`, `control` — do **not** `import std`. They use classic `#include` in the
-global module fragment, because mixing `import std` with a heavy C++ header (Vulkan-Hpp, entt)
-in one translation unit breaks the build. Consumers still get the std types: the compiled
-module interface (BMI) carries them across.
+Each crate is a library with a `lib.rs` root that names its internal modules and re-exports the
+types that form its public API. `saffron-core` is the smallest complete example:
 
-```cpp
-module;                          // global module fragment
-#define VULKAN_HPP_NO_EXCEPTIONS
-#include <vulkan/vulkan.hpp>     // heavy C++ header, classic include
-#include <glm/glm.hpp>
-#include <vector>                // std via include, NOT import std here
+```rust
+// crates/core/src/lib.rs
+mod error;
+mod log;
+mod time;
+mod uuid;
 
-export module Saffron.Rendering:Types;
+pub use error::{Error, Result};
+pub use log::{LogLevel, log};
+pub use uuid::Uuid;
+
+pub type Ref<T> = Arc<T>;
 ```
 
-## Enabling the std module
+Consumers write `use saffron_core::{Result, Ref};` — they see exactly what `lib.rs` re-exports and
+nothing else. A type that is `pub` inside a private `mod` is not reachable until `lib.rs`
+re-exports it, which is how a crate keeps its internal files private while presenting one curated
+surface.
 
-`import std` is still experimental in CMake 3.31, gated behind a version-specific UUID set once at
-the project root:
+## Crate vs module
 
-```cmake
-cmake_minimum_required(VERSION 3.31)
-set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "d0edc3af-4c50-42ea-a356-e2862fe7a444")
-set(CMAKE_CXX_STANDARD 26)
-```
+A **crate** is the architectural unit: it has a `Cargo.toml`, a dependency list, and a compilation
+boundary. A **module** (`mod foo;` → `foo.rs`) is an organizational unit *inside* one crate — see
+[how a crate organizes its modules](../module-partitions/). The dependency DAG that holds the
+engine together is a graph of crates, not modules (see [the crate DAG](../module-dag/)).
 
-Each target that wants the std module sets `CXX_MODULE_STD ON`, and named module interfaces go in a
-`FILE_SET CXX_MODULES`. The UUID changes per CMake version, so a toolchain bump means a new one.
-
-CMake builds the internal std module as `gnu++26`. A consumer compiled as plain `c++26` rejects the
-std BMI with "GNU extensions was enabled in precompiled file but is currently disabled". Leaving
-extensions on (the default) keeps the std module and its consumers on the same dialect.
-
-> [!WARNING]
-> Do **not** set `CMAKE_CXX_EXTENSIONS OFF`. The std module builds as `gnu++26`; a `c++26`
-> consumer rejects its BMI outright. Leave extensions on so they match.
-
-> [!WARNING]
-> Don't `import std` in a module that includes a heavy C++ third-party header (Vulkan-Hpp,
-> entt). The two clash in one TU. Use classic `#include` in the global module fragment instead;
-> consumers still get the std types through the BMI.
+| Concept | Spelled | Boundary |
+|---|---|---|
+| Crate | `engine/crates/<area>/` with a `Cargo.toml` | What a crate may depend on |
+| Module | `mod name;` inside a crate | File-level organization within a crate |
+| Re-export | `pub use` in `lib.rs` | The crate's public API |
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Import-std gate + dialect | `CMakeLists.txt` | `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD`, `CMAKE_CXX_STANDARD` |
-| Per-target std module | `engine/CMakeLists.txt` | `CXX_MODULE_STD ON`, `FILE_SET CXX_MODULES` |
-| Clang + libc++ presets | `CMakePresets.json` | `clang-libcxx`, `-stdlib=libc++` |
-| A pure-std module | `core.cppm` | `export module Saffron.Core; import std;` |
-| A heavy-header module | `renderer_types.cppm` | global module fragment + classic includes |
+| Workspace + pin list | `engine/Cargo.toml` | `[workspace]`, `members`, `[workspace.dependencies]` |
+| Shared package metadata + lints | `engine/Cargo.toml` | `[workspace.package]`, `[workspace.lints]` |
+| A crate manifest pulling pins | `crates/rendering/Cargo.toml` | `ash.workspace = true`, `saffron-core = { path = ... }` |
+| A crate's public surface | `crates/core/src/lib.rs` | `pub use`, `pub type Ref<T>` |
 
 ## Related
-- [Module partitions](../module-partitions/) — splitting a big module without the BMI ICE
-- [Module DAG](../module-dag/) — how the modules depend on each other
-- [Build environment](../build-environment/) — the toolbox that ships the libc++ std module
+- [How a crate organizes its modules](../module-partitions/) — files inside one crate
+- [The crate DAG](../module-dag/) — how the crates depend on each other
+- [Build environment](../build-environment/) — the toolbox that runs `cargo`
+- [Dependencies](../dependencies/) — the pins under `[workspace.dependencies]`

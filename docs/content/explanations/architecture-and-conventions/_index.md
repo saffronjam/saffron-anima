@@ -7,17 +7,17 @@ bookCollapseSection = true
 # Architecture & conventions
 
 The engine's architecture and conventions are the structure and rules that hold the codebase
-together. They cover the C++26 named-module DAG, the toolbox build, the shader pipeline, and
-the Go-flavored style the whole codebase follows.
+together. They cover the Cargo workspace and crate DAG, the toolbox build, the shader pipeline,
+and the Rust house style the whole codebase follows.
 
 ## Pages
 
 | Page | Covers | Code |
 |---|---|---|
-| `go-flavored-cpp` | data structs + free functions, struct-of-closures itables, errors as values | `CONVENTIONS.md` |
-| `cxx26-modules` | named modules, `import std`, the libc++ std-module gate and its gotchas | `CMakeLists.txt`; `AGENTS.md` |
-| `module-partitions` | interface partition + `.cpp` impl units, the BMI ICE workaround | `engine/CMakeLists.txt` |
-| `module-dag` | the dependency graph, the `:RenderGraph` partition, `Saffron.Host` | `AGENTS.md` |
-| `build-environment` | Fedora Silverblue + the `saffron-build` toolbox, `-j1`, never `rm -rf build` | `AGENTS.md` |
-| `shader-compilation` | Slang → SPIR-V compiled in CMake | `cmake/`; `engine/assets/shaders/` |
-| `dependencies` | vendored deps via FetchContent, system SDL3/Vulkan | `cmake/Dependencies.cmake` |
+| `go-flavored-cpp` | plain structs + methods, traits as itables, errors as values, `clippy -D warnings` | `crates/core/`, `crates/app/` |
+| `cxx26-modules` | the Cargo workspace, crates vs modules, the single pin list, `pub use` surfaces | `engine/Cargo.toml`; `crates/core/src/lib.rs` |
+| `module-partitions` | how one crate splits into module files behind a curated `pub use` root | `crates/rendering/src/lib.rs` |
+| `module-dag` | the crate dependency DAG, why `saffron-host` sits on top | `engine/Cargo.toml`; `crates/host/` |
+| `build-environment` | the `saffron-build` toolbox, `just` auto-enter, `SAFFRON_NO_TOOLBOX` | `justfile`; `engine/Cargo.toml` |
+| `shader-compilation` | Slang → SPIR-V via `cargo run -p xtask -- shaders` | `engine/xtask/src/shaders.rs`; `engine/assets/shaders/` |
+| `dependencies` | Cargo deps pinned once in `[workspace.dependencies]`, FFI/unsafe seams | `engine/Cargo.toml` |
