@@ -11,15 +11,15 @@ The convention is to give each set one class of resource and to order the sets b
 
 ## The mesh layout
 
-The mesh übershader reads from a fixed set layout. The `vk::binding` attributes in `mesh.slang` and the layout list in `newMeshPipeline` are two views of the same contract, and they must agree.
+The mesh übershader reads from a fixed set layout. The `vk::binding` attributes in `lighting.slang` (the shared lighting module `mesh.slang` imports) and the set-layout list `Pipelines::new` assembles are two views of the same contract, and they must agree.
 
 Sets 0–5 are always present in a mesh PSO. Sets 6–7 exist only when the device supports ray tracing, because their layouts need the acceleration-structure extension.
 
 | Set | Contents | Bindings | Why it's here |
 |---|---|---|---|
 | 0 | Bindless albedo array | `0` combined-image-sampler `[1024]` | one global texture array, indexed per-instance |
-| 1 | Lighting | `0` directional UBO · `1` punctual list · `2` cluster lists · `3` cluster params · `4`–`6` shadow maps | per-frame light state |
-| 2 | Instances | `0` per-instance storage buffer | model + normal matrix + base color + texture index |
+| 1 | Lighting | `0` directional UBO · `1` punctual list · `2` cluster list · `3` cluster params · `4`–`6` shadow maps | per-frame light state |
+| 2 | Instances | `0` per-instance storage buffer · `1` joint matrices · `2` material params | model + normal matrix + base color + texture index |
 | 3 | IBL | `0` irradiance cube · `1` prefiltered cube · `2` BRDF LUT | the ambient term |
 | 4 | Screen-space | `0` AO · `1` contact shadows · `2` SSGI | per-pixel maps sampled by screen UV |
 | 5 | DDGI | `0` irradiance atlas · `1` distance atlas | world-space multi-bounce indirect |
@@ -29,14 +29,15 @@ Sets 0–5 are always present in a mesh PSO. Sets 6–7 exist only when the devi
 In the shader these read as `vk::binding(binding, set)`:
 
 ```hlsl
-[[vk::binding(0, 0)]] Sampler2D albedoTextures[1024];   // set 0: bindless albedo
-[[vk::binding(0, 1)]] ConstantBuffer<LightGlobals> globals;  // set 1: directional + counts
-[[vk::binding(1, 1)]] StructuredBuffer<GpuLight> lights;     //        punctual list
-[[vk::binding(0, 2)]] StructuredBuffer<Instance> instances;  // set 2: per-instance data
-[[vk::binding(0, 3)]] SamplerCube irradianceMap;             // set 3: IBL
+[[vk::binding(0, 0)]] public Sampler2D albedoTextures[1024];     // set 0: bindless albedo
+[[vk::binding(0, 1)]] ConstantBuffer<LightGlobals> globals;      // set 1: directional + counts
+[[vk::binding(1, 1)]] StructuredBuffer<GpuLight> lights;         //        punctual list
+[[vk::binding(0, 2)]] StructuredBuffer<Instance> instances;      // set 2: per-instance data
+[[vk::binding(2, 2)]] StructuredBuffer<MaterialParams> materialParams;
+[[vk::binding(0, 3)]] SamplerCube irradianceMap;                 // set 3: IBL
 ```
 
-`newMeshPipeline` assembles the matching `vk::DescriptorSetLayout` list and appends 6 and 7 only when RT is live. The set-6 and set-7 bindings still compile into the shader unconditionally; they are only *accessed* under a runtime flag (`globals.pointShadowMeta.z` for RT shadows, `globals.screenFlags.w` for ReSTIR), so the unused bindings cost nothing on a device without RT.
+`Pipelines::new` assembles the matching `vk::DescriptorSetLayout` list from the device-global layouts and appends 6 and 7 only when both `rt_mesh_set_layout` and `restir_mesh_set_layout` are present. The set-6 and set-7 bindings still compile into the shader unconditionally; they are only *accessed* under a runtime flag (`globals.pointShadowMeta.z` for RT shadows, `globals.screenFlags.w` for ReSTIR), so the unused bindings cost nothing on a device without RT.
 
 ## Numbered by change frequency
 
@@ -68,11 +69,11 @@ A feature toggling on or off is a UBO write, not a pipeline switch. The sets are
 
 | What | File | Symbols |
 |---|---|---|
-| Binding declarations | `mesh.slang` | `vk::binding(b, s)` across sets 0–7 |
-| Runtime feature flags | `mesh.slang` | `LightGlobals::counts`, `screenFlags` |
-| PSO layout list | `renderer_pipelines.cpp` | `newMeshPipeline` — `setLayouts` |
-| Set 0/1/2 layout objects | `renderer_types.cppm` | `Descriptors::bindlessSetLayout`, `lightSetLayout`, `instanceSetLayout` |
-| Set 1 binding build | `renderer_detail.cppm` | `lightBindings` |
+| Binding declarations | `lighting.slang` | `vk::binding(b, s)` across sets 0–7 |
+| Runtime feature flags | `lighting.slang` | `LightGlobals::counts`, `screenFlags` |
+| PSO set-layout list | `pipelines.rs` | `Pipelines::new` — `set_layouts` |
+| Set 0/1/2 layout accessors | `descriptors.rs` | `Descriptors::bindless_set_layout`, `light_set_layout`, `instance_set_layout` |
+| RT set accessors (gate 6/7) | `descriptors.rs` | `rt_mesh_set_layout`, `restir_mesh_set_layout` |
 
 ## Related
 

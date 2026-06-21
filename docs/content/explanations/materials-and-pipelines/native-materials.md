@@ -24,43 +24,57 @@ A `.smat` is reference-only JSON: scalar factors plus texture references as deci
 }
 ```
 
-`MaterialAsset` (the in-memory form) adds a `parent` and an `overrides` set, so an **instance** material inherits a base and overrides only named fields — the UE material-instance model. `loadMaterialAsset` resolves the parent chain, applies overrides, then folds any graph; `resolveEntityMaterials` decides precedence between a mesh's built-in material and an assigned `MaterialAssetComponent`.
+`MaterialAsset` (the in-memory form) adds a `parent` `Uuid` and an `overrides` set, so an **instance**
+material inherits a base and overrides only named fields — the UE material-instance model.
+`load_material_asset` resolves the parent chain, applies overrides, then folds any graph;
+`resolve_entity_materials` decides precedence between a mesh's built-in material and an assigned
+`MaterialAssetComponent`. `material_asset_to_json` / `material_asset_from_json` are the frozen JSON
+contract.
 
 ## The params buffer and the surface seam
 
-At draw time a material resolves to a `MaterialParamsData` record (96 bytes) in a per-frame SSBO (set 2, binding 2). Identical materials dedup to one record; `InstanceData.texture.w` carries the material index. The übershader reads it through one seam:
+At draw time a material resolves to a `MaterialParamsData` record (96 bytes) in a per-frame SSBO (set
+2, binding 2). Identical materials dedup to one record (`intern_material` hashes the raw bytes);
+`InstanceData.texture.w` carries the material index. The übershader reads it through one seam:
 
 ```hlsl
-SurfaceData evalSurface(MaterialInput mi);   // material half
-// … lighting half consumes SurfaceData unchanged
+SurfaceData evalSurface(MaterialInput m);   // material half (mesh.slang)
+// … the lighting module (lighting.slang) consumes SurfaceData unchanged
 ```
 
-Everything material-specific lives behind `evalSurface`; the lighting code never changes. Feature bits in the params (`NORMAL`, `EMISSIVE_TEX`, `OCCLUSION`, `HEIGHT`, `ALPHACLIP`) gate the optional work, so a plain color material pays for none of it.
+Everything material-specific lives behind `evalSurface`; the lighting code never changes. Feature
+bits in the params (`FEATURE_NORMAL`, `FEATURE_EMISSIVE_TEX`, `FEATURE_OCCLUSION`, `FEATURE_HEIGHT`,
+`FEATURE_ALPHACLIP`) gate the optional work, so a plain color material pays for none of it.
 
 ## PBR slots
 
 Beyond albedo, a material carries normal, packed ORM (occlusion-R, roughness-G, metallic-B), emissive, and height maps, plus `normalStrength`, `uvTiling`/`uvOffset`, `heightScale`, and alpha-clip controls. The shader applies them feature-gated:
 
-- a derivative-based (Schüler) tangent frame perturbs the normal — no per-vertex tangents needed;
-- height drives **parallax occlusion mapping** (a 24-step UV march) for silhouette-deepening relief;
+- a derivative-based (Schüler) tangent frame perturbs the normal — no per-vertex tangents needed (`perturbNormal`);
+- height drives **parallax occlusion mapping** (`parallaxUv`, a multi-step UV march) for silhouette-deepening relief;
 - alpha-clip discards below a cutoff.
 
 This is what lets an imported Poly-Haven-style texture set — diffuse + normal + roughness + displacement — render with depth rather than as a flat decal.
 
 ## Authoring
 
-`importMaterialFolder` suffix-detects roles (`_diff`, `_nor`, `_rough`, `_disp`, …) and bakes a `.smat` plus catalog entries from a folder of textures. The **material panel** picks a material, shows it on a studio-lit preview sphere (`preview-render`), and edits factors live (coalesced `material-update` → re-render). Every operation has a control command, so the `sa` CLI and the editor drive the same surface.
+`import_material_folder` suffix-detects roles (`detect_material_role`: `_diff`, `_nor`, `_rough`,
+`_disp`, …) and bakes a `.smat` plus catalog entries from a folder of textures. The **material
+panel** picks a material, shows it on a studio-lit preview sphere (`preview-render` →
+`render_material_preview`), and edits factors live (coalesced `material-update` → re-render). Every
+operation has a control command, so the `sa` CLI and the editor drive the same surface.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Asset model + IO | `assets.cppm` | `MaterialAsset`, `materialAssetToJson`, `loadMaterialAsset`, `saveMaterialAsset` |
-| Import + role detection | `assets.cppm` | `importMaterialFolder`, `detectMaterialRole` |
-| Params record + dedup | `renderer_drawlist.cpp` | `MaterialParamsData`, `internMaterial`, `ensureMaterialCapacity` |
-| Surface seam + slots | `mesh.slang` | `evalSurface`, `perturbNormal`, `parallaxUv` |
-| Preview render | `renderer_thumbnail.cpp` | `renderMaterialPreview` |
-| Control commands | `control_commands_asset.cpp` | `material-create/-get/-update/-import/-assign/-set-override` |
+| Asset model + IO | `material.rs` | `MaterialAsset`, `material_asset_to_json`, `load_material_asset`, `save_material_asset` |
+| Import + role detection | `manage.rs`; `scan.rs` | `import_material_folder`; `detect_material_role` |
+| Entity precedence | `render_material.rs` | `resolve_entity_materials`, `MaterialAssetComponent` |
+| Params record + dedup | `gpu_types.rs`; `instancing.rs` | `MaterialParamsData`; `intern_material`, `ensure_material_capacity` |
+| Surface seam + slots | `mesh.slang`; `lighting.slang` | `evalSurface`, `perturbNormal`, `parallaxUv` |
+| Preview render | `thumbnail_render.rs` | `render_material_preview` |
+| Control commands | `commands_asset.rs` | `material-create/-get/-update/-import/-assign/-set-override` |
 
 ## Related
 

@@ -19,59 +19,65 @@ Every albedo texture in the scene lives in one fixed-size descriptor array bound
 texture is identified by its position in that array. The slot travels in the per-instance data, so
 the shader can look up the right texture for each instance from a single bound array.
 
-Because the slot is just an integer, a `DrawBatch` keys only on `(pipeline, mesh)`. Two textures on
-the same mesh become one instanced `drawIndexed`. `sa render-stats` reports batches, so two
+Because the slot is just an integer, a draw bucket keys only on `(pipeline, mesh)`. Two textures on
+the same mesh become one instanced `cmd_draw_indexed`. `sa render-stats` reports batches, so two
 differently textured instances are visible as a single batch.
 
 ## One array, set 0
 
-The übershader declares a fixed-size combined-image-sampler array as set 0, binding 0:
+The shared lighting module declares a fixed-size combined-image-sampler array as set 0, binding 0:
 
 ```hlsl
-[[vk::binding(0, 0)]] Sampler2D albedoTextures[1024];
+[[vk::binding(0, 0)]] public Sampler2D albedoTextures[1024];
 ```
 
-The C++ layout makes that array partially bound and update-after-bind:
+The Rust layout (`create_bindless_layout`) makes that array partially bound and update-after-bind:
 
-- **partiallyBound** means not every one of the 1024 slots needs a valid descriptor. The shader
-  only samples slots that were written, so the empty tail is fine.
-- **updateAfterBind** means a slot can be written while the set is bound and in use, between draws —
-  exactly what `uploadTexture` does.
+- **PARTIALLY_BOUND** means not every one of the `MAX_BINDLESS_TEXTURES` (1024) slots needs a valid
+  descriptor. The shader only samples slots that were written, so the empty tail is fine.
+- **UPDATE_AFTER_BIND** means a slot can be written while the set is bound and in use, between draws —
+  exactly what the upload path does. The set is allocated from an `UPDATE_AFTER_BIND_POOL`.
 
-Both features are requested at device selection time (`descriptorBindingPartiallyBound`,
-`descriptorBindingSampledImageUpdateAfterBind`), so a device that lacks them is not chosen. The set
-is bound once and stays bound for every mesh draw. Slot 0 is the default white texture, so a
+Both features are requested at device selection time (`descriptor_binding_partially_bound`,
+`descriptor_binding_sampled_image_update_after_bind` in the Vulkan 1.2 features), so a device that
+lacks them is not chosen. The set is bound once and stays bound for every mesh draw. Slot 0 is the
+default white texture (`DEFAULT_WHITE_SLOT`, claimed first at init and never reclaimed), so a
 renderable with no albedo samples white.
 
 ## Claiming a slot
 
-`uploadTexture` creates the device image, claims the next free slot, writes the descriptor, and
-stores the slot on the `GpuTexture`. `nextBindlessIndex` is a bump allocator: slots are handed out
-monotonically and not recycled. The descriptor write pokes one element of the live set, pairing the
-view with the shared `linearSampler`:
+`upload_texture` creates the device image, claims the next free slot, writes the descriptor, and
+stores the slot on the `GpuTexture`. The allocator (`Descriptors::claim_slot`) pops the reclaim
+free-list first and only grows its `next_index` high-water mark when the list is empty. The
+descriptor write pokes one element of the live set, pairing the view with the shared `linear_sampler`:
 
-```cpp
-void writeBindlessTexture(Renderer& renderer, vk::ImageView view, u32 index)
-{
-    vk::DescriptorImageInfo info{ renderer.descriptors.linearSampler, view, vk::ImageLayout::eShaderReadOnlyOptimal };
-    vk::WriteDescriptorSet write{};
-    write.dstSet = renderer.descriptors.bindlessSet;
-    write.dstBinding = 0;
-    write.dstArrayElement = index;          // the slot
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    write.setImageInfo(info);
-    renderer.context.device.updateDescriptorSets(write, {});
+```rust
+pub fn write_texture(&self, view: vk::ImageView, index: u32) {
+    let image_info = [vk::DescriptorImageInfo {
+        sampler: self.linear_sampler,
+        image_view: view,
+        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+    }];
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(self.bindless_set)
+        .dst_binding(0)
+        .dst_array_element(index)        // the slot
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(&image_info);
+    let _guard = self.slots.lock().expect("bindless slot allocator lock");
+    unsafe { self.resources.device().update_descriptor_sets(&[write], &[]) };
 }
 ```
 
-The renderer owns one linear, mipped, repeat sampler, shared across every texture in the array. A
-`GpuTexture` owns its image and view but not its sampler.
+The descriptors own one linear, mipped, repeat `linear_sampler`, shared across every texture in the
+array. A `GpuTexture` owns its image and view but not its sampler. The write takes the bindless
+mutex, because a background thumbnail worker can write the same set concurrently.
 
 ## The index travels per-instance
 
-The slot ends up in the per-instance storage buffer (set 2). The vertex stage forwards it flat to
-the fragment stage, which samples with `NonUniformResourceIndex` because the index varies across
-the warp:
+The slot ends up in the per-instance storage buffer (set 2, binding 0): `InstanceData.texture.x`.
+The vertex stage forwards it flat to the fragment stage, which samples with
+`NonUniformResourceIndex` because the index varies across the warp:
 
 ```hlsl
 struct Instance
@@ -83,35 +89,37 @@ struct Instance
     // ...
 };
 
-// fragment:
-float4 tex = albedoTextures[NonUniformResourceIndex(input.textureIndex)].Sample(input.uv0);
+// fragment (via the material params it dereferences):
+float4 tex = albedoTextures[NonUniformResourceIndex(mat.tex0.x)].Sample(uv);
 ```
 
 ## Slot lifetime and mipmaps
 
-The 1024-slot array is finite, so slots are **reclaimed**. A shared free-list lives on `Descriptors` and is
-held (as a `Ref`) by every `GpuTexture`; when a texture is destroyed its slot returns to the list, and the
-next upload reuses a freed slot before growing `nextBindlessIndex`. This keeps a hot-reloaded or churny
-scene bounded instead of marching the high-water mark to the limit. Reclaim is frame-safe because the draw
-path holds live texture `Ref`s for the frame — textures die at cache-clear/teardown, never mid-frame — and
-the free-list outlives both the descriptors and the textures. `sa render-stats` reports `bindlessTextures`
-(high-water) and `bindlessFree` (reclaimed).
+The 1024-slot array is finite, so slots are **reclaimed**. A shared free-list
+(`BindlessFreeList = Arc<Mutex<Vec<u32>>>`) is cloned by every `GpuTexture`; when a texture is
+dropped its `Drop` pushes its `bindless_index` back to the list (LIFO), and the next claim reuses a
+freed slot before growing `next_index`. This keeps a hot-reloaded or churny scene bounded instead of
+marching the high-water mark to the limit. Reclaim is frame-safe because the draw path holds live
+texture `Arc`s for the frame — textures die at cache-clear/teardown, never mid-frame — and the
+free-list outlives both the descriptors and the textures. `sa render-stats` reports
+`bindless_textures` (high-water) and `bindless_free` (reclaimed).
 
-Uploads generate a full **mip chain** (`vkCmdBlitImage` down the levels, linear filter) and the bindless
-sampler is trilinear, so minified 4K material textures don't alias. A texture whose `Uuid` is missing from
-the catalog warns once and resolves to the default white slot — never a null descriptor or black surface.
+Uploads generate a full **mip chain** (`cmd_blit_image` down the levels, linear filter — `mip_count`
+gives the level count) and the bindless sampler is trilinear, so minified 4K material textures don't
+alias. A texture whose `Uuid` is missing from the catalog resolves to the default white slot — never
+a null descriptor or black surface.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| Array binding (shader) | `mesh.slang` | `albedoTextures[1024]`, `NonUniformResourceIndex` |
-| Layout flags | `renderer_detail.cppm` | `albedoBinding`, `ePartiallyBound`, `eUpdateAfterBind` |
-| Device feature gate | `renderer.cppm` | `descriptorBindingPartiallyBound`, `…SampledImageUpdateAfterBind` |
-| Slot claim + reclaim | `renderer_textures.cpp` | `claimBindlessSlot`, `bindlessFreeList`; `renderer_types.cppm` · `GpuTexture::reset` |
-| Mip generation | `renderer_textures.cpp` | `mipCount`, `recordMipChain` |
-| Descriptor write | `renderer_detail.cppm` | `writeBindlessTexture` |
-| Index in instance data | `mesh.slang` | `Instance::texture.x` |
+| Array binding (shader) | `lighting.slang` | `albedoTextures[1024]`, `NonUniformResourceIndex` |
+| Layout flags + capacity | `descriptors.rs` | `create_bindless_layout`, `PARTIALLY_BOUND`, `UPDATE_AFTER_BIND`, `MAX_BINDLESS_TEXTURES` |
+| Device feature gate | `device.rs` | `descriptor_binding_partially_bound`, `descriptor_binding_sampled_image_update_after_bind` |
+| Slot claim + descriptor write | `descriptors.rs` | `claim_slot`, `write_texture`, `DEFAULT_WHITE_SLOT` |
+| Slot reclaim | `resources.rs` | `BindlessFreeList`, `GpuTexture` `Drop`, `bindless_index` |
+| Upload + mip generation | `upload.rs` | `upload_texture`, `mip_count` |
+| Index in instance data | `gpu_types.rs` | `InstanceData::texture` (`.x` albedo) |
 
 ## Related
 
