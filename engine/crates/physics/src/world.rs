@@ -1,16 +1,15 @@
 //! The per-play physics world: the body bookkeeping, the populate walk, the fixed-step loop, and
 //! the read-only + mutator surface.
 //!
-//! `PhysicsWorldImpl` (`physics.cpp:546`) is split across the crate boundary: the Jolt-owning half
-//! is the `-sys` `JoltWorld` (the `PhysicsSystem` + the four shim classes), and the Rust-side
-//! bookkeeping lives here — [`World`] holds the `UniquePtr<JoltWorld>` plus the body table, the
-//! body-id index, and the fixed-step accumulator. `World`'s [`Drop`] is just dropping the
-//! `UniquePtr`; the Jolt teardown *order* is the shim destructor's job, so the Rust side never
-//! sequences Jolt destruction.
+//! The world is split across the crate boundary: the Jolt-owning half is the `-sys` `JoltWorld`
+//! (the `PhysicsSystem` + the four shim classes), and the Rust-side bookkeeping lives here —
+//! [`World`] holds the `UniquePtr<JoltWorld>` plus the body table, the body-id index, and the
+//! fixed-step accumulator. `World`'s [`Drop`] is just dropping the `UniquePtr`; the Jolt teardown
+//! *order* is the shim destructor's job, so the Rust side never sequences Jolt destruction.
 //!
 //! `bodies` is a `Vec<BodyEntry>` in **creation order** (never a map iteration) because that order
-//! is load-bearing for the deterministic sim (`physics.cpp:517`); the `HashMap<u32, usize>` is only
-//! for the hit → entity lookup the contact drain needs.
+//! is load-bearing for the deterministic sim; the `HashMap<u32, usize>` is only for the hit →
+//! entity lookup the contact drain needs.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -34,14 +33,14 @@ use crate::types::{
 };
 
 /// The weight units/sec the eased per-bone physics weight approaches its target, so the
-/// animation↔physics blend ramps without a pop (`RagdollEntry::weightRate = 6.0`, `physics.cpp:539`).
+/// animation↔physics blend ramps without a pop.
 const RAGDOLL_WEIGHT_RATE: f32 = 6.0;
 
 /// At/above this eased weight the physics pose overwrites the bone's [`PoseOverride`] outright;
-/// below it the physics pose blends over the animation pose by the weight (`physics.cpp:1367`).
+/// below it the physics pose blends over the animation pose by the weight.
 const PURE_PHYSICS_WEIGHT: f32 = 0.999;
 
-/// The Jolt `EAllowedDOFs::All` bitmask: all six translation+rotation axes free (`AllowedDOFs.h`).
+/// The Jolt `EAllowedDOFs::All` bitmask: all six translation+rotation axes free.
 const ALLOWED_DOFS_ALL: u8 = 0b0011_1111;
 const DOF_TRANSLATION_X: u8 = 0b0000_0001;
 const DOF_TRANSLATION_Y: u8 = 0b0000_0010;
@@ -51,12 +50,11 @@ const DOF_ROTATION_Y: u8 = 0b0001_0000;
 const DOF_ROTATION_Z: u8 = 0b0010_0000;
 
 /// The accumulator backstop: at most this many fixed substeps run per [`World::step`], so a runaway
-/// `dt` cannot spiral into an unbounded catch-up (`maxSubsteps`, `physics.cpp:971`).
+/// `dt` cannot spiral into an unbounded catch-up.
 const MAX_SUBSTEPS: u32 = 8;
 
-/// One body created from an entity's components, tracked for transform write-back and (later
-/// phases) scene queries + contact events. Stored in creation order so the sim stays reproducible
-/// run-to-run (`BodyEntry`, `physics.cpp:518`).
+/// One body created from an entity's components, tracked for transform write-back, scene queries,
+/// and contact events. Stored in creation order so the sim stays reproducible run-to-run.
 #[derive(Clone, Copy, Debug)]
 struct BodyEntry {
     /// The owning entity handle, for the per-step transform write-back.
@@ -74,8 +72,7 @@ struct BodyEntry {
 
 /// One `CharacterVirtual` sweep object, paired with its owner entity. The shim owns the Jolt
 /// `Ref<CharacterVirtual>` (in `JoltWorld.characters`); this records the owner + the shim slot so
-/// the step loop can resolve the [`CharacterController`] each substep. Mirrors the
-/// `characters: Vec<(Entity, Ref<CharacterVirtual>)>` pairing (`physics.cpp:564`).
+/// the step loop can resolve the [`CharacterController`] each substep.
 #[derive(Clone, Copy, Debug)]
 struct CharacterEntry {
     /// The owning entity handle, for the per-step controller read + position write-back.
@@ -86,9 +83,9 @@ struct CharacterEntry {
 
 /// One live ragdoll's Rust-side bookkeeping. The Jolt `Ragdoll`/`RagdollSettings` live in the
 /// shim (`JoltWorld.ragdolls`); this holds the rig identity, the parent-index map for the
-/// world→local pose conversion, and the eased per-bone blend state. Mirrors the orchestration half
-/// of `RagdollEntry` (`physics.cpp:530`). Built passive (`motors_active = false`, weights `1` =
-/// pure physics); [`World::set_ragdoll_blend`] turns the motors on and retargets the weights.
+/// world→local pose conversion, and the eased per-bone blend state. Built passive
+/// (`motors_active = false`, weights `1` = pure physics); [`World::set_ragdoll_blend`] turns the
+/// motors on and retargets the weights.
 #[derive(Clone, Debug)]
 struct RagdollEntry {
     /// The rig mesh entity's stable id (the `CreateRagdoll` user-data + the lookup key).
@@ -113,9 +110,8 @@ struct RagdollEntry {
 /// A mesh cook callback the host supplies so the asset reader stays out of the physics crate.
 ///
 /// ConvexHull/Mesh colliders read their `source_mesh` `.smesh` through this; the host binds it to
-/// the asset reader (`host.cppm:1117`). A Jolt-free [`Mesh`](saffron_geometry::Mesh) crosses the
-/// seam, never a Jolt type. The closure's `String` error becomes [`Error::CookFailed`]. Mirrors
-/// `MeshCookSource = std::function<Result<Mesh>(Uuid)>` (`physics.cppm:84`).
+/// the asset reader. A Jolt-free [`Mesh`](saffron_geometry::Mesh) crosses the seam, never a Jolt
+/// type. The closure's `String` error becomes [`Error::CookFailed`].
 pub type MeshCook<'a> = dyn FnMut(Uuid) -> std::result::Result<Mesh, String> + 'a;
 
 /// The per-play physics world.
@@ -154,8 +150,7 @@ pub struct World {
 /// The `Factory`/registered types are a process global that outlives every [`World`], so this must
 /// run **only after the last world has dropped** — calling it while a live world still holds Jolt
 /// bodies is a use-after-free. The host sequences this in its teardown (drop the play world, then
-/// shut down the globals), mirroring `shutdownPhysics` after the last world in `host.cppm:1599`.
-/// Idempotent: safe with no prior world and safe to call twice.
+/// shut down the globals). Idempotent: safe with no prior world and safe to call twice.
 pub fn shutdown_physics() {
     sys::shutdown();
 }
@@ -190,8 +185,7 @@ impl World {
     /// and ConvexHull/Mesh cook their `source_mesh` `.smesh` through `cook` (vertices/indices fed
     /// in index order for a reproducible cooked shape). A per-collider failure — a `Mesh` on a
     /// Dynamic body, a missing cook source, a cook error, or a degenerate shape — is logged and
-    /// the body skipped, exactly as the C++ `logError` + skip; the world still builds. Mirrors
-    /// `populatePhysicsWorld` (`physics.cpp:766`) + `buildColliderShape` (`physics.cpp:367`).
+    /// the body skipped; the world still builds.
     pub fn populate(&mut self, scene: &mut Scene, cook: &mut MeshCook<'_>) {
         // Gather the collider rows first so the body-creation loop can borrow `scene` immutably for
         // the world-pose composition (the `for_each` closure holds a mutable borrow).
@@ -214,8 +208,8 @@ impl World {
                 .unwrap_or(MotionType::Static);
 
             // Cook the ConvexHull/Mesh geometry (and reject a Mesh on a Dynamic body) before
-            // touching Jolt. A typed error here is logged + the body skipped — the C++ logError +
-            // skip, re-expressed so the caller could match the cause.
+            // touching Jolt. A typed error here is logged + the body skipped, so the caller could
+            // match the cause.
             let geometry = match cook_shape_geometry(&collider, motion, cook) {
                 Ok(geometry) => geometry,
                 Err(err) => {
@@ -227,8 +221,8 @@ impl World {
                 }
             };
 
-            // worldTranslation/worldRotation compose on a cache miss (the play scene's caches may
-            // be cold here), scale-free, exactly as the C++ `worldPose` (`physics.cpp:800`).
+            // World translation/rotation compose on a cache miss (the play scene's caches may be
+            // cold here), scale-free.
             let position = scene.world_translation(entity);
             let rotation = scene.world_rotation(entity);
             let object_layer = resolve_object_layer(rigidbody.as_ref(), motion, collider.is_sensor);
@@ -277,7 +271,7 @@ impl World {
     /// [`BonePhysics::shape_half_extents`] (radius `.x`, half-height `.y`, with a `0.03` floor so a
     /// leaf/unfitted bone is never a degenerate capsule), seeded at the joint's fresh world pose,
     /// on the Moving layer. The bodies join `bodies` keyed by the joint entity in creation order
-    /// and tear down with the world. Mirrors `buildBoneBodies` (`physics.cpp:844`).
+    /// and tear down with the world.
     pub fn build_bone_bodies(&mut self, scene: &mut Scene) {
         // Gather the enabled rigs first so the body-creation loop can read `scene` immutably for
         // the per-joint world-pose composition (the `for_each` closure holds a mutable borrow).
@@ -345,7 +339,7 @@ impl World {
     }
 
     /// Advance the sim by `dt` in fixed substeps, then write every Dynamic body's world pose back
-    /// into its entity's [`Transform`]. Mirrors `stepPhysics` (`physics.cpp:960`).
+    /// into its entity's [`Transform`].
     ///
     /// `dt` is assumed already clamped by the caller's play loop. Each substep first drives every
     /// Kinematic body toward its entity's fresh world transform via `MoveKinematic` (so the swept
@@ -359,7 +353,7 @@ impl World {
             // Drive every Kinematic body (per-bone bodies + free kinematic bodies) toward its
             // entity's fresh world transform via MoveKinematic *before* the step, so the swept
             // motion over this same fixed dt imparts contact velocity to the dynamics it hits
-            // (never a teleport, which gives zero contact velocity). Mirrors `physics.cpp:979`.
+            // (never a teleport, which gives zero contact velocity).
             self.move_kinematic_bodies(scene);
             sys::world_step(&mut self.world, FIXED_STEP, 1);
             // Advance every CharacterVirtual against the just-settled world: gravity integration +
@@ -375,8 +369,7 @@ impl World {
 
         // Write each Dynamic body's world pose back into its entity's LOCAL Transform. v1 scopes
         // bodies to root entities (world == local); the parented-body local rebase is later. The
-        // rotation is stored as the quaternion the Transform's Euler convention round-trips
-        // through, per the area component design (no `glm::eulerAngles` re-derive).
+        // rotation is stored as the Euler the Transform's convention round-trips the quaternion to.
         for entry in &self.bodies {
             if entry.motion != MotionType::Dynamic
                 || !scene.has_component::<Transform>(entry.entity)
@@ -394,8 +387,7 @@ impl World {
         }
 
         // Write each character's resolved world position back into its entity-root Transform
-        // (binding mode a: position only — rotation/animation are independent). Mirrors
-        // `physics.cpp:1050`.
+        // (binding mode a: position only — rotation/animation are independent).
         for entry in &self.characters {
             if !scene.has_component::<Transform>(entry.entity) {
                 continue;
@@ -413,8 +405,7 @@ impl World {
     /// substeps) into the seq-stamped ring. Safe here: single-threaded on the sim thread, and the
     /// body → entity index is stable for the play session. Each pending pair is mapped via
     /// `index_by_body_id`, seq-stamped, given its `sensor` flag from the `BodyEntry` records, and
-    /// pushed with cap-[`CONTACT_RING_CAP`] `pop_front` eviction. Mirrors the drain loop in
-    /// `stepPhysics` (`physics.cpp:1059`).
+    /// pushed with cap-[`CONTACT_RING_CAP`] `pop_front` eviction.
     fn drain_into_ring(&mut self) {
         for pending in sys::drain_contacts(&mut self.world) {
             let a = self.index_by_body_id.get(&pending.a).copied();
@@ -445,8 +436,7 @@ impl World {
     /// Snapshot the contact events with `seq > since` (non-blocking), plus the cursor metadata that
     /// lets a stale cursor detect it missed evicted events. `high_water_seq` is the newest seq the
     /// ring has stamped, `oldest_seq` the lowest still retained (`0` when empty), and `overflowed`
-    /// is set when the cursor is older than that retained tail so the caller should resync. Mirrors
-    /// `drainContacts` (`physics.cpp:1085`).
+    /// is set when the cursor is older than that retained tail so the caller should resync.
     #[must_use]
     pub fn drain_contacts(&self, since: u64) -> ContactDrain {
         let events: Vec<ContactEvent> = self
@@ -468,9 +458,8 @@ impl World {
     /// Drive every Kinematic body toward its entity's fresh world transform via `MoveKinematic`
     /// over one [`FIXED_STEP`], so the swept motion imparts contact velocity to the dynamics it
     /// hits. The pose is composed fresh from the parent chain (not read from the possibly-stale
-    /// `WorldTransform` cache — the most likely source of a one-frame follow lag, `physics.cpp:976`).
-    /// A body whose entity is no longer valid is skipped. Mirrors the `MoveKinematic` branch
-    /// (`physics.cpp:979`).
+    /// `WorldTransform` cache — the most likely source of a one-frame follow lag). A body whose
+    /// entity is no longer valid is skipped.
     fn move_kinematic_bodies(&mut self, scene: &Scene) {
         // Resolve the (id, fresh pose) of each valid Kinematic body first so the move loop can
         // take `&mut self.world` without aliasing the `&self.bodies` read.
@@ -492,7 +481,6 @@ impl World {
     /// the controller's vertical velocity (resting on the floor when grounded and not moving up),
     /// clamp the desired horizontal velocity to `max_speed`, set the linear velocity, then
     /// `ExtendedUpdate` (stick-to-floor + WalkStairs) and write the resolved ground state back.
-    /// Mirrors the character block in `stepPhysics` (`physics.cpp:990`).
     fn step_characters(&mut self, scene: &mut Scene) {
         if self.characters.is_empty() {
             return;
@@ -541,8 +529,7 @@ impl World {
     }
 
     /// A summary of the live world. `active` is always `true` from a live world (the
-    /// `Option<World>` is the host's), kept for the wire DTO shape. Mirrors `physicsWorldStats`
-    /// (`physics.cpp:646`).
+    /// `Option<World>` is the host's), kept for the wire DTO shape.
     #[must_use]
     pub fn stats(&self) -> WorldStats {
         WorldStats {
@@ -552,8 +539,7 @@ impl World {
         }
     }
 
-    /// Every tracked body's read-only snapshot, in creation order. Mirrors `listPhysicsBodies`
-    /// (`physics.cpp:659`).
+    /// Every tracked body's read-only snapshot, in creation order.
     #[must_use]
     pub fn list_bodies(&self) -> Vec<BodyInfo> {
         self.bodies
@@ -568,8 +554,7 @@ impl World {
     }
 
     /// Apply a center-of-mass impulse to the Dynamic body owned by `entity`. A non-Dynamic /
-    /// unmapped target is a no-op with a warning (never a panic). Mirrors `applyBodyImpulse`
-    /// (`physics.cpp:697`).
+    /// unmapped target is a no-op with a warning (never a panic).
     pub fn apply_impulse(&mut self, entity: Uuid, impulse: Vec3) {
         match self.dynamic_body_id(entity) {
             Some(id) => sys::body_add_impulse(&mut self.world, id, impulse.to_array()),
@@ -581,8 +566,7 @@ impl World {
     }
 
     /// Add a force (applied over the next step) to the Dynamic body owned by `entity`. A
-    /// non-Dynamic / unmapped target is a no-op with a warning. Mirrors `addBodyForce`
-    /// (`physics.cpp:715`).
+    /// non-Dynamic / unmapped target is a no-op with a warning.
     pub fn add_force(&mut self, entity: Uuid, force: Vec3) {
         match self.dynamic_body_id(entity) {
             Some(id) => sys::body_add_force(&mut self.world, id, force.to_array()),
@@ -594,7 +578,7 @@ impl World {
     }
 
     /// Set the linear velocity of the Dynamic body owned by `entity`. A non-Dynamic / unmapped
-    /// target is a no-op with a warning. Mirrors `setBodyLinearVelocity` (`physics.cpp:733`).
+    /// target is a no-op with a warning.
     pub fn set_linear_velocity(&mut self, entity: Uuid, velocity: Vec3) {
         match self.dynamic_body_id(entity) {
             Some(id) => sys::body_set_linear_velocity(&mut self.world, id, velocity.to_array()),
@@ -606,7 +590,7 @@ impl World {
     }
 
     /// The current linear velocity of the Dynamic body owned by `entity`, or zero when there is no
-    /// such body. Mirrors `bodyLinearVelocity` (`physics.cpp:751`).
+    /// such body.
     #[must_use]
     pub fn body_linear_velocity(&self, entity: Uuid) -> Vec3 {
         match self.dynamic_body_id(entity) {
@@ -619,8 +603,7 @@ impl World {
     /// mapped back to its owner entity. Read-only: it takes `&self` so it cannot perturb the
     /// deterministic step — run it between steps (a command, or `on_update`), never mid-solve.
     /// `dir` is taken as supplied (not normalized): the hit `distance` is `fraction * max_dist` in
-    /// `dir` units, exactly as the C++. A ray into empty space returns [`RayHit::default`]
-    /// (`hit == false`). Mirrors `raycastWorld` (`physics.cpp:1117`).
+    /// `dir` units. A ray into empty space returns [`RayHit::default`] (`hit == false`).
     #[must_use]
     pub fn raycast(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> RayHit {
         let hit = sys::raycast(&self.world, origin.to_array(), dir.to_array(), max_dist);
@@ -630,8 +613,7 @@ impl World {
     /// Sweep a sphere of `radius` along `origin + dir * max_dist` against the live world — a
     /// thicker probe than [`World::raycast`], so it catches an edge a thin ray of the same
     /// origin/dir grazes — and return the closest hit mapped back to its owner entity. Read-only
-    /// (`&self`). A sweep that clears everything returns [`RayHit::default`]. Mirrors
-    /// `sphereCastWorld` (`physics.cpp:1144`).
+    /// (`&self`). A sweep that clears everything returns [`RayHit::default`].
     #[must_use]
     pub fn sphere_cast(&self, origin: Vec3, dir: Vec3, radius: f32, max_dist: f32) -> RayHit {
         let hit = sys::sphere_cast(
@@ -646,8 +628,7 @@ impl World {
 
     /// Convert a `-sys` [`sys::RayHit`] (POD with a raw `BodyID`) into the public [`RayHit`],
     /// mapping the struck body back to its owner entity uuid via `index_by_body_id`. An unmapped
-    /// body (or a miss) yields `Uuid(0)`. Mirrors the `bodyUuid` lookup the query did inline
-    /// (`physics.cpp:1110`).
+    /// body (or a miss) yields `Uuid(0)`.
     fn map_ray_hit(&self, hit: sys::RayHit) -> RayHit {
         if !hit.hit {
             return RayHit::default();
@@ -662,8 +643,7 @@ impl World {
     }
 
     /// Map a raw `BodyID` back to its owner entity uuid (`Uuid(0)` for an unmapped body). The query
-    /// hits return a raw Jolt `BodyID`; the safe layer owns the body → entity table
-    /// (`bodyUuid`, `physics.cpp:1110`).
+    /// hits return a raw Jolt `BodyID`; the safe layer owns the body → entity table.
     fn body_uuid(&self, id: u32) -> Uuid {
         self.index_by_body_id
             .get(&id)
@@ -673,7 +653,6 @@ impl World {
     /// Create a `CharacterVirtual` controller for `entity`: a capsule from its [`Collider`]
     /// (radius `half_extents.x`, half-height `half_extents.y`, with defaults when absent) and the
     /// `max_slope_angle` from its [`CharacterController`], seeded at the entity's fresh world pose.
-    /// Mirrors `addCharacter` (`physics.cpp:924`).
     ///
     /// # Errors
     ///
@@ -683,8 +662,8 @@ impl World {
             .component::<Collider>(entity)
             .map(|c| (c.half_extents.x.max(0.05), c.half_extents.y.max(0.05)))
             .unwrap_or((0.3, 0.6));
-        // The C++ default is the hand-typed literal `0.785398f` (~45°), kept verbatim so a
-        // controller-less entity matches the C++ `addCharacter` fallback byte-for-byte.
+        // A controller-less entity falls back to ~45° (`0.785398`), the hand-typed literal kept
+        // verbatim for a byte-exact seed.
         #[allow(clippy::approx_constant)]
         let max_slope_angle = scene
             .component::<CharacterController>(entity)
@@ -708,8 +687,8 @@ impl World {
     /// Build a **passive** SwingTwist ragdoll on the rig `entity`: parts mirror its
     /// [`SkinnedMesh::bones`] 1:1, sized from the [`BonePhysicsComponent`], seeded at each bone's
     /// current world pose, with the constraint kind each bone's [`Joint`](saffron_scene::Joint)
-    /// selects. Motors are attached but `Off` (phase 9 drives them). Idempotent: a re-enable on a
-    /// rig that already has a ragdoll rebuilds it. Mirrors `enableRagdoll` (`physics.cpp:1216`).
+    /// selects. Motors are attached but `Off` ([`World::set_ragdoll_blend`] drives them).
+    /// Idempotent: a re-enable on a rig that already has a ragdoll rebuilds it.
     ///
     /// # Errors
     ///
@@ -807,7 +786,7 @@ impl World {
 
     /// Remove the live ragdoll for `rig` (detach from the physics system, drop the handles),
     /// rebasing the shim-slot indices of the ragdolls that outlived it. A rig with no ragdoll is a
-    /// no-op. Mirrors `disableRagdoll` (`physics.cpp:1175`).
+    /// no-op.
     pub fn disable_ragdoll(&mut self, rig: Uuid) {
         let Some(pos) = self.ragdolls.iter().position(|r| r.rig == rig) else {
             return;
@@ -824,7 +803,7 @@ impl World {
         }
     }
 
-    /// Whether `rig` has a live ragdoll (`hasRagdoll`, `physics.cpp:1199`).
+    /// Whether `rig` has a live ragdoll.
     #[must_use]
     pub fn has_ragdoll(&self, rig: Uuid) -> bool {
         self.ragdolls.iter().any(|r| r.rig == rig)
@@ -834,9 +813,8 @@ impl World {
     /// swing + twist motor states to `Position` and the body-space target orientation to the
     /// per-joint rotation. A passive ragdoll, a rig with no target this frame, the root bone (no
     /// parent constraint), and a non-SwingTwist joint are all left to swing freely. Call once per
-    /// fixed step **before** [`World::step`] so the motors are read during the solve. Mirrors
-    /// `driveRagdollsToPose` (`physics.cpp:1384`); the glam quaternion (`xyzw`) feeds
-    /// `SetTargetOrientationBS` directly (glam == Jolt order, no swizzle).
+    /// fixed step **before** [`World::step`] so the motors are read during the solve. The glam
+    /// quaternion (`xyzw`) feeds `SetTargetOrientationBS` directly (glam == Jolt order, no swizzle).
     pub fn drive_ragdolls_to_pose(&mut self, targets: &[PoseTarget]) {
         // Resolve each active ragdoll's per-part target rotation first so the motor loop can take
         // `&mut self.world` without aliasing the `&self.ragdolls` read.
@@ -865,8 +843,7 @@ impl World {
 
     /// Ease every ragdoll's per-bone physics weight toward its target by `weight_rate * dt`
     /// (clamped so it never overshoots), so the animation↔physics blend ramps without a pop. Call
-    /// once per fixed step **before** [`World::write_ragdoll_poses`]. Mirrors `advanceRagdollBlend`
-    /// (`physics.cpp:1431`).
+    /// once per fixed step **before** [`World::write_ragdoll_poses`].
     pub fn advance_ragdoll_blend(&mut self, dt: f32) {
         for entry in &mut self.ragdolls {
             let step = entry.weight_rate * dt;
@@ -887,8 +864,7 @@ impl World {
     /// matrices' composition), and write it into the bone's [`PoseOverride`] blended by the eased
     /// per-bone weight. At weight ≥ [`PURE_PHYSICS_WEIGHT`] the physics pose overwrites outright;
     /// below it the physics pose blends over the animation pose the evaluator wrote earlier this
-    /// frame (`mix`/`slerp`). A bone with no `PoseOverride` gets one added (mirroring
-    /// `addComponent<PoseOverrideComponent>`). Mirrors `writeRagdollPoses` (`physics.cpp:1318`).
+    /// frame (`mix`/`slerp`). A bone with no `PoseOverride` gets one added.
     pub fn write_ragdoll_poses(&mut self, scene: &mut Scene) {
         // Resolve every (bone entity, local TRS, weight) write first against an immutable scene
         // borrow + the world read, then apply the component writes — the read of each part's world
@@ -977,7 +953,7 @@ impl World {
     /// SwingTwist motor to `Off`, so the bodies fall under gravity + limits alone); `body_weight`
     /// fills every bone's target weight uniformly (`0` = pure animation, `1` = pure physics); a
     /// `bone` ≥ 0 with `weight` retargets one bone (a hit reaction is `bone` + `weight` left to
-    /// ease back). Mirrors `setRagdollBlend` (`physics.cpp:1451`).
+    /// ease back).
     ///
     /// # Errors
     ///
@@ -1037,8 +1013,7 @@ impl World {
     }
 
     /// A rig's live ragdoll state: presence, the motor-active flag, the mean target weight across
-    /// bones, and the bone count. All-default (absent) when the rig has no ragdoll. Mirrors
-    /// `ragdollState` (`physics.cpp:1505`).
+    /// bones, and the bone count. All-default (absent) when the rig has no ragdoll.
     #[must_use]
     pub fn ragdoll_state(&self, rig: Uuid) -> RagdollState {
         let Some(entry) = self.ragdolls.iter().find(|r| r.rig == rig) else {
@@ -1058,9 +1033,8 @@ impl World {
         }
     }
 
-    /// The world transform (translation, rotation `xyzw`) of a ragdoll part, for the pose
-    /// write-back tests + the phase-9 conversion. `rig` selects the ragdoll, `part` the bone
-    /// index; returns `None` for an unknown rig or out-of-range part.
+    /// The world transform (translation, rotation `xyzw`) of a ragdoll part. `rig` selects the
+    /// ragdoll, `part` the bone index; returns `None` for an unknown rig or out-of-range part.
     #[must_use]
     pub fn ragdoll_part_transform(&self, rig: Uuid, part: u32) -> Option<(Vec3, Quat)> {
         let entry = self.ragdolls.iter().find(|r| r.rig == rig)?;
@@ -1074,8 +1048,7 @@ impl World {
         ))
     }
 
-    /// The number of parts (bodies) in `rig`'s ragdoll, or `0` when it has none. For tests +
-    /// the phase-9 write-back loop bound.
+    /// The number of parts (bodies) in `rig`'s ragdoll, or `0` when it has none.
     #[must_use]
     pub fn ragdoll_part_count(&self, rig: Uuid) -> u32 {
         self.ragdolls
@@ -1086,7 +1059,7 @@ impl World {
 
     /// The raw `BodyID` of the Dynamic body owned by `uuid`, or `None`. Impulses/velocity apply
     /// only to Dynamic bodies — a Static/Kinematic one would silently ignore them, so it is
-    /// excluded here (`dynamicBodyId`, `physics.cpp:684`).
+    /// excluded here.
     fn dynamic_body_id(&self, uuid: Uuid) -> Option<u32> {
         self.bodies
             .iter()
@@ -1102,8 +1075,8 @@ impl World {
 ///
 /// `cook` reads the entity's `Mesh`/`SkinnedMesh` `.smesh` (the same source cooking uses, so the
 /// fit needs no GPU upload and works identically in Edit and headless) — it is the seam that keeps
-/// the asset reader out of this crate. The control crate (area 09) calls this from add-component +
-/// the `fit-collider` command. Mirrors `fitColliderToMesh` (`control_commands_scene.cpp:255`).
+/// the asset reader out of this crate. The control crate calls this from add-component + the
+/// `fit-collider` command.
 pub fn fit_collider_to_mesh(scene: &mut Scene, entity: Entity, cook: &mut MeshCook<'_>) -> bool {
     if !scene.has_component::<Collider>(entity) {
         return false;
@@ -1172,8 +1145,7 @@ pub fn fit_collider_to_mesh(scene: &mut Scene, entity: Entity, cook: &mut MeshCo
 /// Size each rest-pose bone capsule of a rig's [`BonePhysicsComponent`] from the distance to its
 /// farthest child joint, writing the radius/half-height into `shape_half_extents`. Adds an empty
 /// `BonePhysicsComponent` (then sizes it) when the rig has none. Returns `false` (unchanged) when
-/// the entity has no `SkinnedMesh` or its bone list is empty. Mirrors `fitBoneCapsules`
-/// (`control_commands_scene.cpp:330`).
+/// the entity has no `SkinnedMesh` or its bone list is empty.
 pub fn fit_bone_capsules(scene: &mut Scene, rig: Entity) -> bool {
     let Ok(bone_handles) = scene.with_component::<SkinnedMesh, _>(rig, |s| s.bone_handles.clone())
     else {
@@ -1243,8 +1215,8 @@ fn mesh_aabb(mesh: &Mesh) -> Option<(Vec3, Vec3)> {
 }
 
 /// An entity's fresh world position + rotation (scale divided out), composed from the parent chain
-/// rather than read from the possibly-stale cached `WorldTransform`. Mirrors `worldPose`
-/// (`physics.cpp:174`) — the cache can lag a frame during a sim tick, so the seed pose composes.
+/// rather than read from the possibly-stale cached `WorldTransform` — the cache can lag a frame
+/// during a sim tick, so the seed pose composes.
 fn fresh_world_pose(scene: &Scene, entity: Entity) -> (Vec3, Quat) {
     let (_scale, rotation, translation) = scene
         .compose_world_matrix(entity)
@@ -1259,15 +1231,14 @@ fn fresh_world_translation(scene: &Scene, entity: Entity) -> Vec3 {
 }
 
 /// Whether a joint at `index` is driven by a [`KinematicBones`] rig: an empty `driven` list means
-/// every joint, otherwise the index must appear in the list. Mirrors the `driven` predicate
-/// (`physics.cpp:864`).
+/// every joint, otherwise the index must appear in the list.
 fn is_driven(driven: &[i32], index: usize) -> bool {
     driven.is_empty() || driven.iter().any(|&w| usize::try_from(w) == Ok(index))
 }
 
 /// The raw constraint-kind discriminant the bridge's `BonePart.joint` carries, mapping the scene
 /// [`Joint`](saffron_scene::Joint) enum to the shim's switch (`0` Fixed, `1` Hinge, `2` SwingTwist,
-/// `3` Free). The shim ports `buildJointConstraint` (`physics.cpp:224`) by this discriminant.
+/// `3` Free). The shim builds the joint constraint by this discriminant.
 fn joint_raw(joint: saffron_scene::Joint) -> u8 {
     match joint {
         saffron_scene::Joint::Fixed => 0,
@@ -1279,7 +1250,7 @@ fn joint_raw(joint: saffron_scene::Joint) -> u8 {
 
 /// Resolve a body's object layer. Precedence: sensor > the moving slot the rigidbody's
 /// `collision_layer` selects (0 = Moving, 1 = Character, 2 = Debris) > implicit Static (a lone
-/// collider or an explicit Static rigidbody). Mirrors `resolveObjectLayer` (`physics.cpp:283`).
+/// collider or an explicit Static rigidbody).
 fn resolve_object_layer(
     rigidbody: Option<&Rigidbody>,
     motion: MotionType,
@@ -1299,7 +1270,7 @@ fn resolve_object_layer(
 }
 
 /// The body's allowed degrees of freedom from its per-axis position/rotation locks, as the Jolt
-/// `EAllowedDOFs` bitmask. Mirrors `allowedDOFs` (`physics.cpp:310`).
+/// `EAllowedDOFs` bitmask.
 fn allowed_dofs(rb: &Rigidbody) -> u8 {
     let mut dofs = ALLOWED_DOFS_ALL;
     if rb.lock_position.x {
@@ -1358,11 +1329,9 @@ pub(crate) struct CookedGeometry {
 
 /// Resolve the cooked geometry a collider needs before its Jolt body is built. Analytic shapes
 /// need none (an empty [`CookedGeometry`]); ConvexHull/Mesh cook their `source_mesh` through
-/// `cook`, feeding vertices/indices in index order so the cooked shape is reproducible run-to-run
-/// (`physics.cpp:404`, `:437`). A ConvexHull/Mesh with no `source_mesh` is an [`Error::NoCookSource`]
-/// (the C++ null-cook guard, `physics.cpp:392`/`:425`); a `Mesh` shape on a Dynamic body is rejected
-/// outright (Jolt's `MeshShape` is Static/Kinematic only, `physics.cpp:417`). Mirrors the cook
-/// branches of `buildColliderShape` (`physics.cpp:389`, `:415`).
+/// `cook`, feeding vertices/indices in index order so the cooked shape is reproducible run-to-run.
+/// A ConvexHull/Mesh with no `source_mesh` is an [`Error::NoCookSource`]; a `Mesh` shape on a
+/// Dynamic body is rejected outright (Jolt's `MeshShape` is Static/Kinematic only).
 pub(crate) fn cook_shape_geometry(
     collider: &Collider,
     motion: MotionType,
@@ -1416,7 +1385,7 @@ pub(crate) fn cook_shape_geometry(
 
 /// Flatten a collider + rigidbody into the bridge's `BodyCreate` POD. The damping/mass/DOF fields
 /// only matter for a Dynamic body (the shim ignores them otherwise), but they are always filled so
-/// the struct is fully initialized. Mirrors the `BodyCreationSettings` block (`physics.cpp:804`).
+/// the struct is fully initialized.
 fn body_create(
     collider: &Collider,
     rigidbody: Option<&Rigidbody>,

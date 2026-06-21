@@ -1,9 +1,9 @@
-//! The Jolt-free POD vocabulary the world surfaces, ported from `physics_types.cppm`.
+//! The Jolt-free POD vocabulary the world surfaces.
 //!
 //! `MotionType` mirrors Jolt's `EMotionType` 1:1 and is the raw discriminant the bridge's
 //! `BodyCreate.motion` carries; `ObjectLayer` is the fixed v1 layer set whose raw discriminant
 //! keys the collision matrix. The result structs (`WorldStats`, `BodyInfo`, `RayHit`) are the
-//! read-only snapshots the control plane returns, with `glm::vec3` ported to glam `Vec3`.
+//! read-only snapshots the control plane returns.
 
 use glam::Vec3;
 
@@ -12,12 +12,11 @@ use saffron_core::Uuid;
 
 /// The deterministic fixed substep the world advances by, matching SceneEdit's `PlayFixedStep`
 /// (`1/60`). The accumulator advances the sim in fixed increments so it is frame-rate independent
-/// and stays bit-exact under the cross-platform-deterministic build (`PhysicsFixedStep`,
-/// `physics_types.cppm:43`).
+/// and stays bit-exact under the cross-platform-deterministic build.
 pub const FIXED_STEP: f32 = 1.0 / 60.0;
 
 /// How a body participates in the simulation. Mirrors Jolt `EMotionType` 1:1 and is the raw
-/// discriminant the bridge carries (`MotionType`, `physics_types.cppm:16`).
+/// discriminant the bridge carries.
 ///
 /// A [`Collider`](saffron_scene::Collider) without a [`Rigidbody`](saffron_scene::Rigidbody) is an
 /// implicit Static body; a present rigidbody's motion wins.
@@ -51,8 +50,8 @@ impl MotionType {
     }
 }
 
-/// The object-layer slots a body lives in. v1 is a fixed set (`ObjectLayer`,
-/// `physics_types.cppm:26`); its raw discriminant keys [`layers_collide`].
+/// The object-layer slots a body lives in. v1 is a fixed set; its raw discriminant keys
+/// [`layers_collide`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ObjectLayer {
@@ -77,9 +76,9 @@ impl ObjectLayer {
     }
 }
 
-/// Whether two object layers may collide. Symmetric — the whole v1 collision policy is this table
-/// (`layersCollide`, `physics.cpp:591`). The same matrix is implemented C++-side in the shim; this
-/// Rust copy is the orchestration-side reference (and lets a test pin the policy without the FFI).
+/// Whether two object layers may collide. Symmetric — the whole v1 collision policy is this table.
+/// The same matrix lives in the shim; this copy is the orchestration-side reference (and lets a
+/// test pin the policy without the FFI).
 #[must_use]
 pub fn layers_collide(a: ObjectLayer, b: ObjectLayer) -> bool {
     if a == ObjectLayer::Sensor || b == ObjectLayer::Sensor {
@@ -94,8 +93,7 @@ pub fn layers_collide(a: ObjectLayer, b: ObjectLayer) -> bool {
     true
 }
 
-/// A summary of the live world, surfaced over the control plane (`PhysicsWorldStats`,
-/// `physics_types.cppm:46`).
+/// A summary of the live world, surfaced over the control plane.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WorldStats {
     /// `true` while a world exists. Always `true` from a live [`World`](crate::World) (the
@@ -107,8 +105,7 @@ pub struct WorldStats {
     pub dynamic_count: i32,
 }
 
-/// One live body's read-only snapshot for the editor's physics panel (`PhysicsBodyInfo`,
-/// `physics_types.cppm:55`).
+/// One live body's read-only snapshot for the editor's physics panel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BodyInfo {
     /// Owner entity uuid (`0` when the entity carried no id).
@@ -121,7 +118,7 @@ pub struct BodyInfo {
     pub position: Vec3,
 }
 
-/// One ray/shape query hit against the live world (`PhysicsRayHit`, `physics_types.cppm:64`).
+/// One ray/shape query hit against the live world.
 ///
 /// Returned by [`World::raycast`](crate::World::raycast) and
 /// [`World::sphere_cast`](crate::World::sphere_cast) with the struck body already mapped to its
@@ -129,12 +126,10 @@ pub struct BodyInfo {
 ///
 /// This is the source POD for the `sa.raycast` / `sa.spherecast` script seam. To keep
 /// `saffron-script` free of a `saffron-physics` dependency (it must not import this crate), the
-/// host owns the bridge: `saffron-script` declares a `raycast`/`sphere_cast` callback trait
-/// (area 12), and the host (area 08) implements it over the live `Option<World>`, calling these two
-/// methods and flattening the result into the script-side POD. That conversion is a plain field
-/// copy — `hit`, `entity` (`u64`), `point.x/y/z`, `normal.x/y/z`, `distance` — with the `glm::vec3`
-/// already glam-`Vec3`; nothing here reorders or reinterprets. Mirrors the `host.cppm:1200`
-/// `ScriptRayHit` translation, which is exactly this field copy.
+/// host owns the bridge: `saffron-script` declares a `raycast`/`sphere_cast` callback trait, and the
+/// host implements it over the live `Option<World>`, calling these two methods and flattening the
+/// result into the script-side POD. That conversion is a plain field copy — `hit`, `entity`,
+/// `point.x/y/z`, `normal.x/y/z`, `distance`; nothing here reorders or reinterprets.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RayHit {
     /// Whether the ray hit anything.
@@ -161,13 +156,13 @@ impl Default for RayHit {
     }
 }
 
-/// The bounded contact ring's capacity: the oldest event is evicted past this many entries
-/// (`ContactRingCap`, `physics.cpp:459`). A stale drain cursor older than the retained tail learns
-/// it missed evictions via [`ContactDrain::overflowed`].
+/// The bounded contact ring's capacity: the oldest event is evicted past this many entries. A stale
+/// drain cursor older than the retained tail learns it missed evictions via
+/// [`ContactDrain::overflowed`].
 pub const CONTACT_RING_CAP: usize = 256;
 
 /// Whether a contact transition began or ended. Sensor overlaps and solid touches share the ring;
-/// [`ContactEvent::sensor`] distinguishes them (`ContactEvent::Kind`, `physics.cppm:116`).
+/// [`ContactEvent::sensor`] distinguishes them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContactKind {
     /// `OnContactAdded`: the bodies started touching/overlapping.
@@ -177,8 +172,7 @@ pub enum ContactKind {
 }
 
 /// One contact/overlap transition, seq-stamped and drained over a non-blocking cursor. Sensor
-/// overlaps and solid touches share one ring; [`sensor`](Self::sensor) distinguishes them. Mirrors
-/// `ContactEvent` (`physics.cppm:113`).
+/// overlaps and solid touches share one ring; [`sensor`](Self::sensor) distinguishes them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContactEvent {
     /// The monotonic sequence number stamped when the event entered the ring (`1`-based).
@@ -202,7 +196,7 @@ pub struct ContactEvent {
 /// A rig's per-frame animation target: the post-IK local TRS pose the evaluator produced, indexed
 /// 1:1 with the rig's [`SkinnedMesh`](saffron_scene::SkinnedMesh) bones (the same order the ragdoll
 /// skeleton was built from). Keyed by the rig mesh entity uuid; drives an active ragdoll's motors
-/// toward the animation. Mirrors `PoseTarget` (`physics.cppm:171`).
+/// toward the animation.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PoseTarget {
     /// The rig mesh entity's stable id (the lookup key against each ragdoll's rig).
@@ -212,8 +206,7 @@ pub struct PoseTarget {
 }
 
 /// A rig's live ragdoll state: presence, the motor-active flag, the mean target weight across
-/// bones, and the bone count. All-default (absent) when the rig has no ragdoll. Mirrors
-/// `RagdollState` (`physics.cppm:195`).
+/// bones, and the bone count. All-default (absent) when the rig has no ragdoll.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RagdollState {
     /// `true` when the rig has a live ragdoll instance this play session.
@@ -228,7 +221,7 @@ pub struct RagdollState {
 
 /// A snapshot of contact events with `seq > since` (non-blocking), plus cursor metadata that lets a
 /// stale cursor detect it missed evicted events — the same drain-cursor shape the alarms /
-/// script-errors rings use. Mirrors `ContactDrain` (`physics.cppm:131`).
+/// script-errors rings use.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ContactDrain {
     /// The events newer than the cursor, in seq order.

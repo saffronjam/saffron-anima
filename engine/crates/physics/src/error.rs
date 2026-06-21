@@ -2,14 +2,11 @@
 
 /// Errors the physics layer can raise.
 ///
-/// The fallible C++ surface (`createPhysicsWorld`, and the later `addCharacter`/`enableRagdoll`)
-/// returned `Result<T>`/`Err(std::string)`; here the bare-message cases become typed variants so
-/// callers can `match`. The no-op-on-null-world pattern (every mutator early-returned when
-/// `impl == nullptr`) is *not* an error here — those methods take `&mut World`, so "no world" is a
-/// type-level impossibility and never reaches this enum.
+/// "No world" is a type-level impossibility (mutators take `&mut World`), so it never reaches
+/// this enum.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// `JoltWorld` allocation failed (the C++ `make_unique` analogue handed back null).
+    /// `JoltWorld` allocation failed.
     #[error("failed to create the Jolt physics world")]
     WorldCreate,
 
@@ -17,18 +14,16 @@ pub enum Error {
     #[error("failed to initialize the Jolt globals: {0}")]
     GlobalInit(&'static str),
 
-    /// `addCharacter` could not build the capsule shape for the character controller
-    /// (`physics.cpp:948`).
+    /// `addCharacter` could not build the capsule shape for the character controller.
     #[error("failed to create the character capsule")]
     CharacterCapsule,
 
-    /// `enableRagdoll` was called on an entity lacking a `SkinnedMesh` + `BonePhysics` pair
-    /// (`physics.cpp:1225`).
+    /// `enableRagdoll` was called on an entity lacking a `SkinnedMesh` + `BonePhysics` pair.
     #[error("rig has no SkinnedMesh + BonePhysics")]
     RagdollMissingComponents,
 
     /// The `BonePhysics` array length did not match the rig's bone count, so the parts cannot map
-    /// 1:1 to the skeleton (`physics.cpp:1232`).
+    /// 1:1 to the skeleton.
     #[error("BonePhysics array length {got} does not match the skeleton's {expected} bones")]
     RagdollMismatch {
         /// The skeleton's bone count.
@@ -37,24 +32,21 @@ pub enum Error {
         got: usize,
     },
 
-    /// `CreateRagdoll` returned null (the Jolt ragdoll could not be built from the settings,
-    /// `physics.cpp:1300`).
+    /// `CreateRagdoll` returned null — the Jolt ragdoll could not be built from the settings.
     #[error("CreateRagdoll failed")]
     RagdollCreate,
 
-    /// A blend mutator (`set_ragdoll_blend`) named a rig that has no live ragdoll this play session
-    /// (`physics.cpp:1470`).
+    /// A blend mutator (`set_ragdoll_blend`) named a rig that has no live ragdoll this play session.
     #[error("rig has no live ragdoll")]
     NoRagdoll,
 
-    /// `set_ragdoll_blend` was given a bone index outside the rig's bone range
-    /// (`physics.cpp:1480`).
+    /// `set_ragdoll_blend` was given a bone index outside the rig's bone range.
     #[error("bone index {0} out of range")]
     BoneOutOfRange(i32),
 
     /// A `Mesh`-shaped collider was placed on a Dynamic body. Jolt's `MeshShape` is
     /// Static/Kinematic only, so the populate walk skips the body and logs this (use a ConvexHull
-    /// for a dynamic body, or make it Static/Kinematic — `physics.cpp:417`).
+    /// for a dynamic body, or make it Static/Kinematic).
     #[error(
         "Mesh collider on a Dynamic body is invalid — Jolt MeshShape is Static/Kinematic only; \
          use ConvexHull for a dynamic body, or make it Static/Kinematic"
@@ -62,12 +54,12 @@ pub enum Error {
     MeshShapeOnDynamic,
 
     /// A ConvexHull/Mesh collider needs the `.smesh` of its `source_mesh`, but the populate walk
-    /// was given no mesh-cook source. The C++ logged and skipped (`physics.cpp:392`, `:425`).
+    /// was given no mesh-cook source.
     #[error("collider shape has no mesh cook source")]
     NoCookSource,
 
-    /// The mesh-cook closure failed to read/cook the `source_mesh` for a ConvexHull/Mesh collider
-    /// (`physics.cpp:399`, `:432`). The payload is the cook's own message.
+    /// The mesh-cook closure failed to read/cook the `source_mesh` for a ConvexHull/Mesh collider.
+    /// The payload is the cook's own message.
     #[error("mesh cook failed: {0}")]
     CookFailed(String),
 }

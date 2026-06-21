@@ -2,11 +2,10 @@
 //! the scene's collider/rigidbody components, the deterministic fixed-step loop with dynamic
 //! transform write-back, and the read-only + impulse/force/velocity surface.
 //!
-//! This is the `physics.cppm` public surface re-expressed idiomatically. The `unsafe` Jolt
-//! boundary lives entirely in `saffron-physics-sys`; this crate holds `#![deny(unsafe_code)]` and
-//! speaks only safe Rust + the POD bridge. There is one [`World`] type and one code path per
-//! operation — the no-op-on-null-world mutators of the C++ become `&mut World` methods, so "no
-//! world" is a type-level impossibility (the `Option<World>` lives in the host).
+//! The `unsafe` Jolt boundary lives entirely in `saffron-physics-sys`; this crate holds
+//! `#![deny(unsafe_code)]` and speaks only safe Rust + the POD bridge. There is one [`World`] type
+//! and one code path per operation — mutators take `&mut World`, so "no world" is a type-level
+//! impossibility (the `Option<World>` lives in the host).
 //!
 //! The world builds all five collider shapes (Box/Sphere/Capsule analytic + ConvexHull/Mesh cooked
 //! through the [`MeshCook`] seam), drives the deterministic fixed-step loop with dynamic transform

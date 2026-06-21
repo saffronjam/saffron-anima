@@ -1,32 +1,29 @@
-//! The BLOCKING cross-arch bit-exact determinism gate (`05-physics-jolt-bridge` phase 5).
+//! The BLOCKING cross-arch bit-exact determinism gate.
 //!
 //! This harness proves that the vendored-Jolt-5.3.0 + `cxx` bridge, built with the determinism
 //! flags (`JPH_CROSS_PLATFORM_DETERMINISTIC` + single precision + `-ffp-model=precise`
 //! `-ffp-contract=off` + a confined `-mavx2`), produces a simulation whose per-step trace is
 //! **byte-for-byte identical** run-to-run and build-to-build. Bit-exactness is a property of the
-//! *build*, not of Jolt the library, so this gate is the only thing that proves the phase-1 flag
-//! set actually took. There is no tolerance knob: floats are compared as raw little-endian bytes,
+//! *build*, not of Jolt the library, so this gate is the only thing that proves the flag set
+//! actually took. There is no tolerance knob: floats are compared as raw little-endian bytes,
 //! folded into a SHA-256 whole-run hash.
 //!
 //! The scenario is a frozen fixture (hardcoded here, never loaded from disk so it cannot drift): a
 //! 10-box dynamic stack on a static floor, one 4-bone passive SwingTwist ragdoll, one
 //! `CharacterVirtual` driven by a fixed desired-velocity sequence, and one kinematic-bones rig
 //! swept by a fixed step function so its capsules shove a parked dynamic box (the
-//! `MoveKinematic`-vs-teleport contact-velocity subtlety, in the trace) — the two hard features the
-//! spike names (`ExtendedUpdate` + the passive SwingTwist ragdoll) plus the kinematic-bone follow
-//! are all present in the traced scenario. It is stepped 600 fixed substeps (10 s at `1/60`),
-//! mirroring the C++ engine's `Update(PhysicsFixedStep, 1, …)` loop (`physics.cpp:960`).
+//! `MoveKinematic`-vs-teleport contact-velocity subtlety, in the trace). It is stepped 600 fixed
+//! substeps (10 s at `1/60`).
 //!
-//! ## Cross-arch status (HONEST)
+//! ## Cross-arch status
 //!
 //! The toolbox is x86_64-only, so this harness verifies the **x86 half** thoroughly: the trace hash
 //! is identical across repeated in-process runs *and* across a freshly rebuilt world, with the
 //! determinism flags confirmed active end-to-end. The **aarch64 / ARM half** of the gate — the
-//! non-negotiable `Rust-x86 hash == Rust-aarch64 hash` assertion — **cannot be run on this
-//! hardware** and is DEFERRED-NEEDS-HARDWARE: it must be run on the self-hosted aarch64 runner (area
-//! 13's determinism gate slot) before the gate is unconditionally green. The committed
-//! [`GOLDEN_TRACE_HASH`] is the x86_64 build's hash; the aarch64 runner re-derives the same trace
-//! and asserts equality against it.
+//! non-negotiable `Rust-x86 hash == Rust-aarch64 hash` assertion — cannot be run on this hardware:
+//! it must be run on the self-hosted aarch64 runner before the gate is unconditionally green. The
+//! committed [`GOLDEN_TRACE_HASH`] is the x86_64 build's hash; the aarch64 runner re-derives the
+//! same trace and asserts equality against it.
 
 use glam::Vec3;
 use saffron_core::Uuid;
@@ -233,8 +230,7 @@ impl Scenario {
             finite &= cp.is_finite();
             hash_vec3(&mut hasher, cp);
 
-            // 3) Each ragdoll part's WORLD transform, pre-blend, read straight from the solver (the
-            //    phase grounding note: sample the part world transforms directly for the trace).
+            // 3) Each ragdoll part's WORLD transform, pre-blend, read straight from the solver.
             let parts = self.world.ragdoll_part_count(self.ragdoll_rig);
             for part in 0..parts {
                 let (pos, rot) = self
