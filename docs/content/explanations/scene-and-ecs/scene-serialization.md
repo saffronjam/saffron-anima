@@ -71,7 +71,7 @@ still opens. A parse failure inside a known component propagates as an
 
 ```rust
 let Some(&index) = self.by_name.get(name.as_str()) else {
-    log_warn!("unknown component '{name}', skipping");
+    tracing::warn!("unknown component '{name}', skipping");
     continue;
 };
 (self.rows[index].deserialize)(scene, entity, value)

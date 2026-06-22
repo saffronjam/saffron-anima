@@ -6,76 +6,83 @@ weight = 5
 # Logging
 
 Logging is the act of writing a tagged diagnostic line to a stream so a running program reports
-what it is doing. Saffron's logging is one free function plus three macros in `saffron-core` that
-print to stdout: no logger object, no sinks, and one filter (the Vulkan messenger's noise filter,
-below).
+what it is doing. Saffron logs through [`tracing`](https://docs.rs/tracing): call sites emit events
+with the `tracing::{info, warn, error, debug, trace}!` macros, and a single subscriber — installed
+once per process by `saffron-log` — renders them as one compact, colored line. Routing the events
+to a file or the editor UI later is one extra layer on that subscriber, not a change at any call
+site.
 
-This is enough for an engine that does most of its real diagnosis elsewhere — through Vulkan
-validation layers and the [`sa` control plane](../../tooling-and-control/control-plane-architecture/).
+This pairs with the engine's other diagnosis surfaces — Vulkan validation layers and the
+[`sa` control plane](../../tooling-and-control/control-plane-architecture/).
 
-## The frozen line format
+## The line format
 
 Every line has the shape
 
 ```
-[saffron:<subsystem>] <message>
-[saffron:<subsystem>] warn: <message>
-[saffron:<subsystem>] error: <message>
+12:30:01.234  INFO   rendering  vulkan ready — gpu 'RTX 3070 Ti' (discrete)
+12:30:01.235  WARN   assets     decode error: cannot decode '…smodel'
+12:30:01.236  INFO   script     [entity=42] ran on_update
 ```
 
-where `subsystem` is the crate that spoke (`rendering`, `scene`, `assets`, `control`, …). The
-prefix is the whole protocol: `grep '\[saffron'` finds all engine output, and the tag says which
-area to look at. There is no level to mute and no timestamp. The format is grep-relied-upon — the
-validation-clean-log gate parses it — so it is frozen.
+— a millisecond wall-clock timestamp, the level (colored on a real terminal), the **subsystem**
+column, any **span context** in brackets, then the message. The subsystem is derived from the
+event's target: the emitting crate with its `saffron_` prefix stripped (`saffron_rendering::renderer`
+→ `rendering`). The level defaults to `debug` and up; `RUST_LOG` overrides it per target
+(`RUST_LOG=saffron_script=trace`).
 
-## One function, three macros
+Color is gated on whether stdout is a terminal, so a human sees colored levels while piped or
+captured output (the e2e harness, the CI smoke) stays plain ASCII — which is what keeps the
+validation gate's `grep` stable.
 
-The base emit takes the subsystem tag explicitly; the three macros derive it from the caller:
+## Subsystem from the target, context from spans
+
+A call site never spells its tag — `tracing` sets the event target to the module path, and the
+formatter reduces it to the subsystem:
 
 ```rust
-pub fn log(level: LogLevel, subsystem: &str, message: &str);
-
-pub fn subsystem_of(module_path: &str) -> &str; // saffron_rendering::… → "rendering"
+tracing::info!("loaded {n} meshes");        // → … rendering  loaded 12 meshes
+tracing::error!("failed to create window: {err}");
 ```
 
-`subsystem_of` strips the leading `saffron_<area>` crate segment of the caller's `module_path!()`
-down to `<area>` (a path that doesn't start with `saffron_` falls back to `engine`). The
-`log_info!` / `log_warn!` / `log_error!` macros pass `module_path!()` through it, so call sites
-never spell a tag:
+Per-event context comes from **spans**. The script runtime enters
+`info_span!("script", entity = …)` around every handler call, so every line emitted under a script
+— including engine-side warnings the script triggered — carries `[entity=42]`. Adding richer
+context later (which script, which slot) is one more span field, with no formatter change.
 
-```rust
-log_info!("loaded {n} meshes");
-log_error!("failed to create window: {err}");
-```
-
-Only a component speaking on someone else's behalf passes a subsystem explicitly — which is exactly
-what the Vulkan debug messenger does.
+A component speaking on another's behalf sets the target explicitly. The Vulkan debug messenger does
+exactly this — `tracing::error!(target: "vulkan", …)` — so its lines read `… vulkan  [validation] …`
+even though the code lives in `saffron-rendering`.
 
 ## The Vulkan messenger funnels here too
 
 Validation-layer and loader messages arrive through `ash`'s debug-utils callback (`debug_callback`
-in `saffron-rendering`'s `device.rs`) and come out as one line in the same format, tagged `vulkan`.
-A separate process-wide counter, `validation_issue_count`, tallies validation/performance messages
-at warning-or-error severity; the validation-clean smoke reads it before and after a render and
-asserts it did not move — that is the e2e oracle, parsed off the frozen log line.
+in `saffron-rendering`'s `device.rs`) and come out as one event tagged `vulkan`. A separate
+process-wide counter, `validation_issue_count`, tallies validation/performance messages at
+warning-or-error severity; the validation-clean smoke reads it before and after a render and asserts
+it did not move — that is the e2e oracle. The harness also greps the log for an `ERROR`-level
+`vulkan` line containing `[validation]`.
 
 > [!NOTE]
-> The `[saffron:vulkan] error:` lines and the `validation_issue_count` tally are the two faces of
-> the same gate. A run is clean when no validation error line appears and the counter does not move.
+> The `ERROR  vulkan  [validation]` lines and the `validation_issue_count` tally are the two faces
+> of the same gate. A run is clean when no validation error line appears and the counter does not move.
 
-## Formatting at the call site
+## Installing the subscriber
 
-The macros forward to `format!`, so message formatting happens at the call site and the logging
-surface stays a single `log` seam. It pairs naturally with a `Result` check on the failure path —
-propagate the error, or log it and bail.
+`saffron_log::init_logging()` is called once at process start — the host's `run_host`, the player's
+`main`, and the editor bridge's `run`. It is idempotent (a second call is a no-op, never a panic),
+and it is the single seam where a future file sink (`tracing-appender`) or an editor-channel sink is
+added as one more `.with(layer)`. The editor's Tauri bridge — a separate process outside the engine
+workspace — depends only on the leaf `saffron-log` crate, so it shares this exact format without
+pulling the engine into its build.
 
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
-| The function + level | `engine/crates/core/src/log.rs` | `log`, `LogLevel` |
-| Subsystem derivation | `engine/crates/core/src/log.rs` | `subsystem_of` |
-| The macros | `engine/crates/core/src/log.rs` | `log_info!`, `log_warn!`, `log_error!` |
+| Subscriber install + line format | `engine/crates/log/src/lib.rs` | `init_logging`, `CompactFormatter`, `subsystem_of` |
+| Emit at the call site | anywhere | `tracing::{info, warn, error, debug, trace}!` |
+| Span context | `engine/crates/script/src/runtime.rs` | `info_span!("script", entity = …)` |
 | The Vulkan funnel | `engine/crates/rendering/src/device.rs` | `debug_callback`, `validation_issue_count` |
 
 ## Related

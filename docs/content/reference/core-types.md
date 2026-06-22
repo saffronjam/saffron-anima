@@ -44,14 +44,16 @@ Fallible functions return `Result<T>`; there are no panics on the engine path. E
 
 ## Logging
 
-Every line is `[saffron:<subsystem>] <message>`, with `warn:` / `error:` ahead of the message for the non-info levels. The format is frozen — the validation-clean-log gate parses it.
+Logging is **not** in `saffron-core` — it lives in the leaf `saffron-log` crate, built on
+[`tracing`](https://docs.rs/tracing). Call sites emit with `tracing::{info, warn, error, debug, trace}!`;
+`saffron_log::init_logging()` installs the subscriber once per process and renders the compact line
+`HH:MM:SS.mmm  LEVEL  subsystem  [span fields] message`.
 
 | What | File | Symbols |
 |---|---|---|
-| Log level + sink | `log.rs` | `LogLevel`, `LogLevel::{Info, Warn, Error}`, `log`, `subsystem_of` |
-| Tagged macros | `log.rs` | `log_info!`, `log_warn!`, `log_error!` |
+| Subscriber install + format | `engine/crates/log/src/lib.rs` | `init_logging`, `CompactFormatter`, `subsystem_of` |
 
-`log(level, subsystem, message)` prints the frozen line. The `log_info!` / `log_warn!` / `log_error!` macros take a `format!` argument list and derive the subsystem tag from the caller's `module_path!()` (`saffron_core::uuid` → `core`, `saffron_rendering` → `rendering`); a path without the `saffron_` prefix falls back to `engine`. `subsystem_of` is the exposed mapping function.
+See the [Logging](../../explanations/core-and-conventions/logging/) explanation for the full design.
 
 ## Identity constants
 

@@ -19,6 +19,6 @@ comes first.
 | [error-handling](error-handling/) | typed per-crate errors with `thiserror`, the `?` operator, no panics | `core/src/error.rs` · `Error`, `Result` |
 | [type-aliases-and-primitives](type-aliases-and-primitives/) | `Uuid`, `TimeSpan`, `Ref`, `base64_encode`, engine identity | `core/src/*` · primitives |
 | [ownership-and-raii](ownership-and-raii/) | Rust ownership, `Drop`, `Arc<T>` handles, teardown order | `core/src/lib.rs` · `Ref`; `app/src/lib.rs` · `wait_gpu_idle` |
-| [logging](logging/) | `log_info!` / `log_warn!` / `log_error!`, subsystem-tagged stdout | `core/src/log.rs` · `log`, macros |
+| [logging](logging/) | `tracing` events, compact colored line, subsystem + span context | `log/src/lib.rs` · `init_logging`, `CompactFormatter` |
 | [signals-and-slots](signals-and-slots/) | `SubscriberList<Args>`, `subscribe`, `SubscriptionId`, stop-propagation | `signal/src/lib.rs` |
 | [json-gateway](json-gateway/) | typed JSON over `serde_json`, the decimal-string-`u64` wire encoding | `json/src/lib.rs` |
