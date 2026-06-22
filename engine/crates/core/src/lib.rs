@@ -1,13 +1,12 @@
 //! Saffron Anima foundation primitives: the `Result`/`Error` model, `Uuid`, the
-//! `Ref = Arc` policy, logging, base64, and time/identity types.
+//! `Ref = Arc` policy, base64, and time/identity types.
 //!
-//! DAG root — depends on no other Saffron crate.
+//! DAG root — depends on no other Saffron crate. Logging lives in `saffron-log`.
 
 #![deny(unsafe_code)]
 
 mod base64;
 mod error;
-mod log;
 mod time;
 mod uuid;
 
@@ -15,7 +14,6 @@ use std::sync::Arc;
 
 pub use base64::base64_encode;
 pub use error::{Error, Result};
-pub use log::{LogLevel, log, subsystem_of};
 pub use time::TimeSpan;
 pub use uuid::Uuid;
 
@@ -51,13 +49,5 @@ mod tests {
         assert_eq!(*a, 7);
         assert_eq!(*b, 7);
         assert_eq!(Arc::strong_count(&a), 2);
-    }
-
-    #[test]
-    fn macros_compile_and_run() {
-        // Exercises the macro expansion paths (output goes to stdout).
-        log_info!("info {}", 1);
-        log_warn!("warn {}", 2);
-        log_error!("error {}", 3);
     }
 }
