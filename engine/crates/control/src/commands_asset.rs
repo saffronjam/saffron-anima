@@ -18,39 +18,43 @@ use saffron_assets::{
     AssetServer, ContainerMetadata, NewProject, ProjectHost, ProjectInfo, analyze_clean,
     asset_bytes, asset_type_name, build_dependency_graph, clear_extraction, create_project_script,
     default_display_name, default_material_asset, delete_unused, extract_sub_asset,
-    import_material_folder, load_material_asset, load_material_asset_raw, lower_graph_to_params,
+    import_material_folder, load_catalog_material_asset, load_catalog_material_asset_raw,
+    load_material_asset, load_material_asset_raw, lower_graph_to_params, pick_scene_surface,
     reimport_model, request_thumbnail, save_material_asset, update_material_asset,
-    valid_project_name,
+    valid_project_name, viewport_ray,
 };
 use saffron_core::Uuid;
+use saffron_geometry::glam::{Vec2, Vec3 as MathVec3};
+use saffron_geometry::world_aabb_from_corners as geom_world_aabb_from_corners;
 use saffron_protocol::{
     AnimationClipDto, AssetCapabilitiesDto, AssetEntryDto, AssetList, AssetMetadataDto,
-    AssetMetadataParams, AssetModelResult, AssetRef, AssetReferencesParams, AssetReferencesResult,
-    AssetSlotDto, AssetTypeDto, AssetUsageDto, AssetUsagesParams, AssetUsagesResult,
-    AssignAssetParams, AssignAssetResult, BoneDto, CleanAssetsParams, CleanCandidateDto,
-    CleanReport, ClearExtractionParams, CreateAssetFolderParams, CreateScriptParams,
-    CreateScriptResult, DeleteAssetFolderParams, DeleteAssetParams, DeleteAssetResult,
-    DeleteUnusedParams, DeleteUnusedResult, EmptyParams, EntityRef, ExtractSubAssetParams,
-    GetAssetModelParams, ImportModelResult, ImportTextureResult, InstantiateModelParams,
-    MaterialAssignParams, MaterialAssignResult, MaterialCompileParams, MaterialCompileResult,
-    MaterialCookResult, MaterialCreateInstanceParams, MaterialCreateParams, MaterialCreateResult,
-    MaterialGetParams, MaterialGetResult, MaterialImportParams, MaterialImportResultDto,
-    MaterialListResult, MaterialRefDto, MaterialSetGraphParams, MaterialSetGraphResult,
-    MaterialSetOverrideParams, MaterialSetOverrideResult, MaterialUpdateParams,
-    MaterialUpdateResult, ModelInfoParams, ModelInfoResult, ModelSubAssetDto, MoveAssetParams,
-    NewProjectParams, OptionalPathParams, PathParams, PathResult, PlayStateResult,
-    PreviewRenderParams, PreviewRenderResult, ProjectInfoDto, QuitResult, ReimportModelParams,
-    ReimportModelResult, RenameAssetFolderParams, RenameAssetParams, ScanAssetsResult,
-    ScreenshotParams, ScreenshotResult, ScreenshotTargetDto, SetActiveViewParams,
-    SetActiveViewResult, ThumbnailCacheParams, ThumbnailCacheResult, ThumbnailParams,
-    ThumbnailResult, Uuid as WireUuid, Vec3, Vec4,
+    AssetMetadataParams, AssetModelResult, AssetPlacementParams, AssetPlacementPhaseDto,
+    AssetPlacementResult, AssetRef, AssetReferencesParams, AssetReferencesResult, AssetSlotDto,
+    AssetTypeDto, AssetUsageDto, AssetUsagesParams, AssetUsagesResult, AssignAssetParams,
+    AssignAssetResult, BoneDto, CleanAssetsParams, CleanCandidateDto, CleanReport,
+    ClearExtractionParams, CreateAssetFolderParams, CreateScriptParams, CreateScriptResult,
+    DeleteAssetFolderParams, DeleteAssetParams, DeleteAssetResult, DeleteUnusedParams,
+    DeleteUnusedResult, EmptyParams, EntityRef, ExportAppParams, ExportAppResult,
+    ExtractSubAssetParams, GetAssetModelParams, ImportModelResult, ImportTextureResult,
+    InstantiateModelParams, MaterialAssignParams, MaterialAssignResult, MaterialCompileParams,
+    MaterialCompileResult, MaterialCookResult, MaterialCreateInstanceParams, MaterialCreateParams,
+    MaterialCreateResult, MaterialGetParams, MaterialGetResult, MaterialImportParams,
+    MaterialImportResultDto, MaterialListResult, MaterialRefDto, MaterialSetGraphParams,
+    MaterialSetGraphResult, MaterialSetOverrideParams, MaterialSetOverrideResult,
+    MaterialUpdateParams, MaterialUpdateResult, ModelInfoParams, ModelInfoResult, ModelSubAssetDto,
+    MoveAssetParams, NewProjectParams, OptionalPathParams, PathParams, PathResult,
+    PlacementTransformDto, PlayStateResult, PreviewRenderParams, PreviewRenderResult,
+    ProjectInfoDto, QuitResult, ReimportModelParams, ReimportModelResult, RenameAssetFolderParams,
+    RenameAssetParams, ScanAssetsResult, ScreenshotParams, ScreenshotResult, ScreenshotTargetDto,
+    SetActiveViewParams, SetActiveViewResult, ThumbnailCacheParams, ThumbnailCacheResult,
+    ThumbnailParams, ThumbnailResult, Uuid as WireUuid, Vec3, Vec4,
 };
 use saffron_rendering::{PngTransfer, ViewId};
 use saffron_scene::{
     AnimationPlayer, AssetEntry, AssetType, DirectionalLight, Entity, IdComponent, Material,
     MaterialAsset as MaterialAssetComponent, Mesh, Name, Scene, SkinnedMesh, SkyMode, Transform,
 };
-use saffron_sceneedit::{PlayState, SceneEditCamera};
+use saffron_sceneedit::{PlacementPreview, PlayState, SceneEditCamera};
 use serde_json::{Value, json};
 
 use crate::error::{Error, Result};
@@ -145,6 +149,241 @@ fn resolve_asset_index(ctx: &EngineContext<'_>, selector: &Value) -> Result<usiz
         }
     }
     Err(Error::command(format!("no asset '{name}'")))
+}
+
+fn preview_asset_placement(
+    ctx: &mut EngineContext<'_>,
+    params: AssetPlacementParams,
+) -> Result<AssetPlacementResult> {
+    require_project_loaded(ctx)?;
+    if ctx.scene_edit.play_state != PlayState::Edit {
+        return Err(Error::command(
+            "asset placement is only available in Edit mode",
+        ));
+    }
+    if ctx.scene_edit.preview_active_view {
+        return Err(Error::command(
+            "asset placement targets the scene view, not the asset preview",
+        ));
+    }
+    let selector = params
+        .asset
+        .as_ref()
+        .ok_or_else(|| Error::command("missing 'asset'"))?;
+    let asset = resolve_asset(ctx, selector)?;
+    let entry = ctx
+        .assets
+        .catalog
+        .find(asset)
+        .ok_or_else(|| Error::command(format!("no asset '{}'", asset.value())))?;
+    if entry.asset_type != AssetType::Model {
+        return Err(Error::command(format!(
+            "asset {} is not a model",
+            asset.value()
+        )));
+    }
+
+    let u = params.u.unwrap_or(0.5).clamp(0.0, 1.0);
+    let v = params.v.unwrap_or(0.5).clamp(0.0, 1.0);
+    let ndc = Vec2::new(u * 2.0 - 1.0, v * 2.0 - 1.0);
+    let viewport = (
+        ctx.renderer.viewport_width(),
+        ctx.renderer.viewport_height(),
+    );
+    let cam = ctx.scene_edit.render_camera_view();
+    let name = entry.name.clone();
+    let mut preview_scene = Scene::new();
+    let root = ctx
+        .assets
+        .instantiate_model(&mut preview_scene, asset, &name)
+        .map_err(|e| Error::command(e.to_string()))?;
+
+    let mut placement = None;
+    {
+        let scene = &mut ctx.scene_edit.scene;
+        let assets = &mut ctx.assets;
+        let renderer = &mut ctx.renderer;
+        renderer.with_gpu_uploader(&mut |gpu| {
+            placement = Some(compute_asset_placement(
+                gpu,
+                viewport,
+                scene,
+                assets,
+                &mut preview_scene,
+                &cam,
+                ndc,
+            ));
+        });
+    }
+    let transform = placement
+        .ok_or_else(|| Error::command("upload seam unavailable"))?
+        .map_err(Error::command)?;
+    apply_transform(&mut preview_scene, root, transform);
+    ctx.scene_edit.placement_preview = Some(PlacementPreview {
+        asset,
+        scene: preview_scene,
+        root,
+        transform,
+    });
+
+    Ok(AssetPlacementResult {
+        active: true,
+        valid: true,
+        transform: Some(placement_transform_dto(&transform)),
+        entity: None,
+        reason: None,
+    })
+}
+
+fn commit_asset_placement(ctx: &mut EngineContext<'_>) -> Result<AssetPlacementResult> {
+    require_project_loaded(ctx)?;
+    if ctx.scene_edit.play_state != PlayState::Edit {
+        ctx.scene_edit.placement_preview = None;
+        return Err(Error::command(
+            "asset placement is only available in Edit mode",
+        ));
+    }
+    if ctx.scene_edit.preview_active_view {
+        ctx.scene_edit.placement_preview = None;
+        return Err(Error::command(
+            "asset placement targets the scene view, not the asset preview",
+        ));
+    }
+    let Some(preview) = ctx.scene_edit.placement_preview.take() else {
+        return Ok(AssetPlacementResult {
+            active: false,
+            valid: false,
+            transform: None,
+            entity: None,
+            reason: Some("no active placement preview".to_owned()),
+        });
+    };
+    let entry_name = ctx
+        .assets
+        .catalog
+        .find(preview.asset)
+        .map(|e| e.name.clone())
+        .unwrap_or_default();
+    let root = ctx
+        .assets
+        .instantiate_model(&mut ctx.scene_edit.scene, preview.asset, &entry_name)
+        .map_err(|e| Error::command(e.to_string()))?;
+    apply_transform(&mut ctx.scene_edit.scene, root, preview.transform);
+    ctx.scene_edit.scene_version += 1;
+    ctx.scene_edit.set_selection(root);
+    let entity = {
+        let scene = &mut ctx.scene_edit.scene;
+        entity_ref_dto(scene, root)
+    };
+    Ok(AssetPlacementResult {
+        active: false,
+        valid: true,
+        transform: Some(placement_transform_dto(&preview.transform)),
+        entity: Some(entity),
+        reason: None,
+    })
+}
+
+fn compute_asset_placement(
+    gpu: &dyn saffron_assets::GpuUploader,
+    viewport: (u32, u32),
+    scene: &mut Scene,
+    assets: &mut AssetServer,
+    preview: &mut Scene,
+    cam: &saffron_scene::CameraView,
+    ndc: Vec2,
+) -> std::result::Result<Transform, String> {
+    if viewport.0 == 0 || viewport.1 == 0 {
+        return Err("viewport has zero size".to_owned());
+    }
+    scene.update_world_transforms();
+    preview.update_world_transforms();
+    let ray = viewport_ray(viewport, cam, ndc);
+    let target = pick_scene_surface(gpu, viewport, scene, assets, cam, ndc)
+        .map(|hit| hit.point)
+        .or_else(|| ground_plane_hit(ray))
+        .ok_or_else(|| "placement ray did not hit the scene or ground plane".to_owned())?;
+    let (min, max) = scene_render_bounds(gpu, preview, assets)
+        .ok_or_else(|| "model has no renderable bounds".to_owned())?;
+    let bottom_center = MathVec3::new((min.x + max.x) * 0.5, min.y, (min.z + max.z) * 0.5);
+    Ok(Transform {
+        translation: target - bottom_center,
+        rotation: MathVec3::ZERO,
+        scale: MathVec3::ONE,
+    })
+}
+
+fn ground_plane_hit(ray: saffron_geometry::Ray) -> Option<MathVec3> {
+    if ray.dir.y.abs() < 0.0001 {
+        return None;
+    }
+    let t = -ray.origin.y / ray.dir.y;
+    (t >= 0.0).then_some(ray.origin + ray.dir * t)
+}
+
+fn scene_render_bounds(
+    gpu: &dyn saffron_assets::GpuUploader,
+    scene: &mut Scene,
+    assets: &mut AssetServer,
+) -> Option<(MathVec3, MathVec3)> {
+    scene.update_world_transforms();
+    let mut min = MathVec3::splat(f32::MAX);
+    let mut max = MathVec3::splat(f32::MIN);
+    let mut found = false;
+
+    let mut statics: Vec<(Entity, Mesh)> = Vec::new();
+    scene.for_each::<(&Transform, &Mesh), _>(|entity, (_, mesh)| {
+        statics.push((entity, *mesh));
+    });
+    for (entity, mesh) in statics {
+        let Some(mesh_ref) = assets.load_mesh_asset(gpu, mesh.mesh) else {
+            continue;
+        };
+        let model = scene.world_matrix(entity);
+        geom_world_aabb_from_corners(
+            &model,
+            mesh_ref.bounds_min,
+            mesh_ref.bounds_max,
+            &mut min,
+            &mut max,
+        );
+        found = true;
+    }
+
+    let mut skins: Vec<(Entity, SkinnedMesh)> = Vec::new();
+    scene.for_each::<(&Transform, &SkinnedMesh), _>(|entity, (_, skin)| {
+        skins.push((entity, skin.clone()));
+    });
+    for (_, skin) in skins {
+        let Some(mesh_ref) = assets.load_mesh_asset(gpu, skin.mesh) else {
+            continue;
+        };
+        let palette = scene.joint_matrices(&skin);
+        for joint in &palette {
+            geom_world_aabb_from_corners(
+                joint,
+                mesh_ref.bounds_min,
+                mesh_ref.bounds_max,
+                &mut min,
+                &mut max,
+            );
+            found = true;
+        }
+    }
+
+    found.then_some((min, max))
+}
+
+fn apply_transform(scene: &mut Scene, entity: Entity, transform: Transform) {
+    let _ = scene.with_component_mut::<Transform, _>(entity, |t| *t = transform);
+}
+
+fn placement_transform_dto(transform: &Transform) -> PlacementTransformDto {
+    PlacementTransformDto {
+        translation: vec3(transform.translation),
+        rotation: vec3(transform.rotation),
+        scale: vec3(transform.scale),
+    }
 }
 
 /// Rebuilds the catalog's `by_id` index after an in-place `entries` mutation.
@@ -395,7 +634,7 @@ pub fn bootstrap_project_from_env(ctx: &mut EngineContext<'_>) {
         };
         match outcome {
             Ok(sidecar) => apply_loaded_project(ctx, &project, sidecar.as_ref()),
-            Err(err) => saffron_core::log_error!("project bring-up: {err}"),
+            Err(err) => tracing::error!("project bring-up: {err}"),
         }
         return;
     }
@@ -413,7 +652,7 @@ pub fn bootstrap_project_from_env(ctx: &mut EngineContext<'_>) {
             &defs,
         ) {
             Ok(()) => apply_loaded_project(ctx, &project, None),
-            Err(err) => saffron_core::log_error!("auto-empty project bring-up: {err}"),
+            Err(err) => tracing::error!("auto-empty project bring-up: {err}"),
         }
         return;
     }
@@ -433,7 +672,7 @@ pub fn bootstrap_project_from_env(ctx: &mut EngineContext<'_>) {
             &defs,
         ) {
             Ok(sidecar) => apply_loaded_project(ctx, &project, Some(&sidecar)),
-            Err(err) => saffron_core::log_error!("default project bring-up: {err}"),
+            Err(err) => tracing::error!("default project bring-up: {err}"),
         }
     }
 }
@@ -502,6 +741,149 @@ impl ProjectHost for RendererProjectHost<'_> {
     fn apply_render_settings(&mut self, settings: &Value) {
         self.renderer.apply_render_settings(settings);
     }
+}
+
+/// Cooks the loaded project into a standalone app folder at `params.output_dir`: pre-bakes every
+/// material's mesh SPIR-V (so the shipped player never needs `slangc`), then stages the player
+/// binary + the project data (`project.json`, `assets/`, `src/`) + the engine `shaders/` + an
+/// `app.json` manifest. Side-effecting (writes to disk); returns the staged path and any non-fatal
+/// warnings (a material that failed to bake, a missing player binary).
+fn export_app(ctx: &mut EngineContext<'_>, params: &ExportAppParams) -> Result<ExportAppResult> {
+    if params.output_dir.trim().is_empty() {
+        return Err(Error::command("missing 'outputDir'"));
+    }
+    let project_root = ctx.scene_edit.project_root.clone();
+    if project_root.is_empty() {
+        return Err(Error::command("no project loaded to export"));
+    }
+    let project_root = PathBuf::from(&project_root);
+    let mut warnings: Vec<String> = Vec::new();
+
+    // 1. Pre-bake every material's mesh shader into the project assets (the player loads only the
+    //    baked `.spv`; it never invokes `slangc`). Mirrors the `material-cook` command's loop.
+    let material_ids: Vec<Uuid> = ctx
+        .assets
+        .catalog
+        .entries
+        .iter()
+        .filter(|e| e.asset_type == AssetType::Material)
+        .map(|e| e.id)
+        .collect();
+    for id in material_ids {
+        let Ok(raw) = load_material_asset_raw(ctx.assets, id) else {
+            continue;
+        };
+        if !raw.graph.is_object() || raw.graph.as_object().is_none_or(|g| g.is_empty()) {
+            continue; // a factor-only material has no node graph to bake.
+        }
+        let mut probe = raw.clone();
+        if lower_graph_to_params(&raw.graph, &mut probe) {
+            continue; // the graph lowers to plain params — no codegen shader needed.
+        }
+        if let Err(err) = ctx.assets.compile_material_mesh_shader(&raw.graph, id) {
+            warnings.push(format!("material {id}: shader bake failed: {err}"));
+        }
+    }
+
+    // 2. Stage the folder. The player binary + engine shaders sit beside the running host binary.
+    let out = PathBuf::from(&params.output_dir);
+    std::fs::create_dir_all(&out)
+        .map_err(|e| Error::command(format!("create output dir '{}': {e}", out.display())))?;
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .ok_or_else(|| Error::command("cannot resolve the engine binary directory"))?;
+
+    copy_file(
+        &project_root.join("project.json"),
+        &out.join("project.json"),
+    )
+    .map_err(|e| Error::command(format!("copy project.json: {e}")))?;
+    copy_dir_recursive(&project_root.join("assets"), &out.join("assets"))
+        .map_err(|e| Error::command(format!("copy assets/: {e}")))?;
+    let src = project_root.join("src");
+    if src.is_dir() {
+        copy_dir_recursive(&src, &out.join("src"))
+            .map_err(|e| Error::command(format!("copy src/: {e}")))?;
+    }
+    let shaders = exe_dir.join("shaders");
+    if shaders.is_dir() {
+        copy_dir_recursive(&shaders, &out.join("shaders"))
+            .map_err(|e| Error::command(format!("copy shaders/: {e}")))?;
+    } else {
+        warnings.push(format!("engine shaders not found at {}", shaders.display()));
+    }
+    let player = exe_dir.join("saffron-player");
+    if player.is_file() {
+        copy_file(&player, &out.join("saffron-player"))
+            .map_err(|e| Error::command(format!("copy saffron-player: {e}")))?;
+    } else {
+        warnings.push(format!(
+            "saffron-player binary not found at {} (build it before export)",
+            player.display()
+        ));
+    }
+    // Bundle the C++ runtime libs the player links through the vendored Jolt physics (built
+    // against libc++ for deterministic physics). The player's `$ORIGIN` rpath finds them here, so
+    // the folder runs on a host without the toolbox's libc++.
+    for lib in ["libc++.so.1", "libc++abi.so.1"] {
+        match find_runtime_lib(lib) {
+            Some(src) => copy_file(&src, &out.join(lib))
+                .map_err(|e| Error::command(format!("copy {lib}: {e}")))?,
+            None => warnings.push(format!(
+                "{lib} not found on the host; the exported app needs it beside saffron-player"
+            )),
+        }
+    }
+    let app_json = serde_json::to_string_pretty(&params.app)
+        .map_err(|e| Error::command(format!("serialize app.json: {e}")))?;
+    std::fs::write(out.join("app.json"), app_json)
+        .map_err(|e| Error::command(format!("write app.json: {e}")))?;
+
+    Ok(ExportAppResult {
+        path: out.to_string_lossy().into_owned(),
+        warnings,
+    })
+}
+
+/// Resolves a shared library by SONAME from the usual Linux library directories (honoring a
+/// `LD_LIBRARY_PATH` override first), returning the first match — for bundling the C++ runtime
+/// into a standalone export.
+fn find_runtime_lib(name: &str) -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var("LD_LIBRARY_PATH")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    dirs.extend(["/usr/lib64", "/usr/lib", "/lib64", "/lib"].map(PathBuf::from));
+    dirs.into_iter().map(|dir| dir.join(name)).find(|p| p.exists())
+}
+
+/// Copies one file, creating the destination's parent directory first.
+fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(src, dst)?;
+    Ok(())
+}
+
+/// Recursively copies a directory tree (files + subdirectories) into `dst`.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// Resolves `{asset, size?}` to a base64-PNG thumbnail reply, driving
@@ -852,6 +1234,25 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
             ctx.scene_edit.set_selection(root);
             let scene = ctx.scene_edit.active_scene();
             Ok(entity_ref_dto(scene, root))
+        },
+    );
+
+    reg.register::<AssetPlacementParams, AssetPlacementResult>(
+        "asset-placement",
+        "asset-placement {phase, asset?, u?, v?}",
+        |ctx, params| match params.phase {
+            AssetPlacementPhaseDto::Preview => preview_asset_placement(ctx, params),
+            AssetPlacementPhaseDto::Commit => commit_asset_placement(ctx),
+            AssetPlacementPhaseDto::Clear => {
+                ctx.scene_edit.placement_preview = None;
+                Ok(AssetPlacementResult {
+                    active: false,
+                    valid: true,
+                    transform: None,
+                    entity: None,
+                    reason: None,
+                })
+            }
         },
     );
 
@@ -1600,9 +2001,9 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
         "material-get {id|name}",
         |ctx, params| {
             let id = resolve_asset(ctx, &params.material)?;
-            let m =
-                load_material_asset(ctx.assets, id).map_err(|e| Error::command(e.to_string()))?;
-            let graph = load_material_asset_raw(ctx.assets, id)
+            let m = load_catalog_material_asset(ctx.assets, id)
+                .map_err(|e| Error::command(e.to_string()))?;
+            let graph = load_catalog_material_asset_raw(ctx.assets, id)
                 .ok()
                 .filter(|raw| raw.graph.is_object())
                 .map_or_else(|| json!({}), |raw| raw.graph);
@@ -1678,8 +2079,8 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
         "preview-render {material} [size]",
         |ctx, params| {
             let id = resolve_asset(ctx, &params.material)?;
-            let loaded =
-                load_material_asset(ctx.assets, id).map_err(|e| Error::command(e.to_string()))?;
+            let loaded = load_catalog_material_asset(ctx.assets, id)
+                .map_err(|e| Error::command(e.to_string()))?;
             let size = params.size.unwrap_or(256);
             // A non-foldable graph (procedural nodes) renders through a codegen'd preview
             // shader; a foldable graph already folded into `loaded`, so the default studio
@@ -1828,6 +2229,12 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
             }
             Ok(MaterialCookResult { compiled, failed })
         },
+    );
+
+    reg.register::<ExportAppParams, ExportAppResult>(
+        "export-app",
+        "export-app {outputDir, app} — cook the project into a standalone app folder",
+        |ctx, params| export_app(ctx, &params),
     );
 
     reg.register::<PathParams, PathResult>("save-scene", "save-scene {path}", |ctx, params| {
@@ -2875,6 +3282,7 @@ mod tests {
             "open-project",
             "import-model",
             "instantiate-model",
+            "asset-placement",
             "import-texture",
             "list-assets",
             "scan-assets",
