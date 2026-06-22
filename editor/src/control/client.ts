@@ -56,6 +56,8 @@ import type {
   Transform,
   Vec3,
   ProjectInfo,
+  AppManifest,
+  ExportAppResult,
 } from "../protocol";
 
 /// The GPU profiler depth (off keeps the present-only host at baseline cost).
@@ -540,6 +542,20 @@ export const client = {
       ? call("instantiate-model", { asset })
       : call("instantiate-model", { asset, name });
   },
+  /// Preview, commit, or clear a model asset placement driven by viewport drag/drop.
+  previewAssetPlacement(
+    asset: string,
+    u: number,
+    v: number,
+  ): Promise<CommandResultMap["asset-placement"]> {
+    return call("asset-placement", { phase: "preview", asset, u, v });
+  },
+  commitAssetPlacement(): Promise<CommandResultMap["asset-placement"]> {
+    return call("asset-placement", { phase: "commit" });
+  },
+  clearAssetPlacement(): Promise<CommandResultMap["asset-placement"]> {
+    return call("asset-placement", { phase: "clear" });
+  },
   /// Rescan assets/ and reconcile the catalog from disk; returns added/removed counts.
   scanAssets(): Promise<CommandResultMap["scan-assets"]> {
     return call("scan-assets");
@@ -730,6 +746,11 @@ export const client = {
   /// Write catalog + scene to `path` (engine default `project.json` when omitted).
   saveProject(path?: string): Promise<ProjectInfo> {
     return call("save-project", path === undefined ? {} : { path });
+  },
+  /// Cook the loaded project into a standalone app folder at `outputDir`, writing `app` as the
+  /// runtime manifest (`app.json`). Returns the staged path + any non-fatal cook warnings.
+  exportApp(outputDir: string, app: AppManifest): Promise<ExportAppResult> {
+    return call("export-app", { outputDir, app });
   },
   /// Close the active project and load it again from its own path (catalog + scene +
   /// GPU assets). Clears the engine's selection; the caller resets the store.
