@@ -141,6 +141,9 @@ pub struct ViewTarget {
     /// The mandatory tonemap set: binding 0 = the offscreen color as a storage image
     /// (GENERAL). Rewritten when the offscreen recreates.
     pub tonemap_set: vk::DescriptorSet,
+    /// motion-vector visualization: motion sampler + offscreen storage (compute2-shape).
+    /// Bound by `write_aa_sets`; the visualize pass runs only when the motion target exists.
+    pub motion_vis_set: vk::DescriptorSet,
 
     /// This view's ReSTIR DI reservoirs + radiance + sets + temporal state, sized to the
     /// viewport. Rides alongside the view so two views never read each other's reservoirs
@@ -232,6 +235,7 @@ impl ViewTarget {
             ssgi_set: vk::DescriptorSet::null(),
             ssgi_blur_set: vk::DescriptorSet::null(),
             copy_color_set: vk::DescriptorSet::null(),
+            motion_vis_set: vk::DescriptorSet::null(),
             ssgi_accum_sets: [vk::DescriptorSet::null(); 2],
             fxaa_set: vk::DescriptorSet::null(),
             taa_sets: [vk::DescriptorSet::null(); 2],
@@ -326,6 +330,7 @@ impl ViewTarget {
         self.ssgi_set = descriptors.allocate_set(ssao.compute3_layout())?;
         self.ssgi_blur_set = descriptors.allocate_set(ssao.compute3_layout())?;
         self.copy_color_set = descriptors.allocate_set(ssao.compute2_layout())?;
+        self.motion_vis_set = descriptors.allocate_set(ssao.compute2_layout())?;
         self.ssgi_accum_sets = [
             descriptors.allocate_set(descriptors.taa_set_layout())?,
             descriptors.allocate_set(descriptors.taa_set_layout())?,
@@ -630,6 +635,11 @@ impl ViewTarget {
             // fxaa: scratch source sampler -> offscreen storage.
             Binding::sampled(self.fxaa_set, 0, linear, scene_input),
             Binding::storage(self.fxaa_set, 1, offscreen),
+            // motion-vector visualization: motion sampler -> offscreen storage. `motion` is
+            // the offscreen placeholder when not built; the visualize pass runs only when the
+            // real target exists, so the placeholder is never sampled.
+            Binding::sampled(self.motion_vis_set, 0, linear, motion),
+            Binding::storage(self.motion_vis_set, 1, offscreen),
             // mesh set 4 binding 2: the SSGI map the scene samples — the temporally
             // resolved map when TAA is on, the spatially denoised map otherwise.
             Binding::sampled(

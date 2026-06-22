@@ -48,17 +48,29 @@ type RenderFn = Box<dyn FnOnce(vk::CommandBuffer)>;
 
 /// The debug render-output mode.
 ///
-/// `Lit` is the shaded default; `Wireframe` selects the wireframe PSO permutation;
-/// the remaining modes output a single G-buffer channel (albedo / world normal /
-/// roughness / metallic / emissive) through the mesh fragment's debug path. The
-/// mode is transient — never persisted with the scene.
+/// `Lit` is the shaded default; `Wireframe` selects the wireframe PSO permutation
+/// and `LitWireframe` overlays edges on the shaded scene via an extra pass;
+/// `MotionVectors` is drawn by a dedicated fullscreen pass. The remaining modes
+/// fold a single debug channel into the mesh fragment's debug path (a recoloured
+/// material, a single G-buffer channel, or a light-complexity heatmap). The mode is
+/// transient — never persisted with the scene.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ViewMode {
     /// Full PBR shading (the default).
     #[default]
     Lit,
+    /// Albedo + emissive, no lighting.
+    Unlit,
     /// Wireframe (the `PolygonMode::LINE` permutation, gated on `fill_mode_non_solid`).
     Wireframe,
+    /// Shaded scene with wireframe edges overlaid (an extra wireframe-overlay pass).
+    LitWireframe,
+    /// Full lighting on a neutral-grey material (normals preserved).
+    DetailLighting,
+    /// Full lighting on a flat white diffuse material (normals/specular flattened).
+    LightingOnly,
+    /// IBL specular reflection only (mirror-like).
+    Reflections,
     /// Albedo / base color only.
     Albedo,
     /// World-space normal.
@@ -69,20 +81,42 @@ pub enum ViewMode {
     Metallic,
     /// Emissive.
     Emissive,
+    /// Linearized view-space depth as grayscale.
+    Depth,
+    /// Screen-space ambient occlusion factor (white when SSAO is off).
+    AmbientOcclusion,
+    /// Indirect/ambient lighting only (IBL diffuse + SSGI + DDGI).
+    Gi,
+    /// Per-cluster light count as a heatmap.
+    LightComplexity,
+    /// Motion vectors, colorized by a dedicated fullscreen pass.
+    MotionVectors,
 }
 
 impl ViewMode {
-    /// The debug-shading channel the mesh fragment outputs instead of full shading
-    /// (`0` lit/wireframe, `1` albedo, …, `5` emissive); folded into the light UBO's
-    /// `point_shadow_meta.w`.
+    /// The debug-shading channel the mesh fragment outputs instead of full shading;
+    /// folded into the light UBO's `point_shadow_meta.w`. `0` is full shading
+    /// (`Lit`, `Wireframe`, `LitWireframe`, and `MotionVectors`, the last two being
+    /// produced by dedicated passes).
     fn debug_channel(self) -> u32 {
         match self {
+            ViewMode::Lit
+            | ViewMode::Wireframe
+            | ViewMode::LitWireframe
+            | ViewMode::MotionVectors => 0,
             ViewMode::Albedo => 1,
             ViewMode::Normal => 2,
             ViewMode::Roughness => 3,
             ViewMode::Metallic => 4,
             ViewMode::Emissive => 5,
-            ViewMode::Lit | ViewMode::Wireframe => 0,
+            ViewMode::Unlit => 6,
+            ViewMode::DetailLighting => 7,
+            ViewMode::LightingOnly => 8,
+            ViewMode::Reflections => 9,
+            ViewMode::Depth => 10,
+            ViewMode::AmbientOcclusion => 11,
+            ViewMode::Gi => 12,
+            ViewMode::LightComplexity => 13,
         }
     }
 }
@@ -223,6 +257,11 @@ struct FramePipelines {
     /// is queued this frame.
     overlay: Option<Arc<crate::Pipeline>>,
     overlay_depth: Option<Arc<crate::Pipeline>>,
+    /// The Lit Wireframe overlay PSO, resolved only in the `LitWireframe` view mode (and
+    /// only on a `fill_mode_non_solid` device — `None` falls back to plain Lit).
+    wireframe_overlay: Option<Arc<crate::Pipeline>>,
+    /// The motion-vector visualization PSO, resolved only in the `MotionVectors` view mode.
+    motion_visualize: Option<Arc<crate::Pipeline>>,
     /// This frame's uploaded overlay vertex buffer + draw-range counts (the per-frame
     /// grow-only buffer is prepared before the graph build so the pass captures only the
     /// resolved handle). `None` when no overlay geometry is queued.
@@ -511,7 +550,7 @@ impl Renderer {
         // Log the swapchain image count alongside the GPU name; the offscreen host has no
         // present swapchain, so this fires only windowed.
         if let Some(swapchain) = swapchain.as_ref() {
-            saffron_core::log_info!("{} swapchain images", swapchain.image_count());
+            tracing::info!("{} swapchain images", swapchain.image_count());
         }
         let frames = match FrameRing::new(&device) {
             Ok(frames) => frames,
@@ -1813,9 +1852,9 @@ impl Renderer {
         let extent = swapchain.extent;
         let format = swapchain.format;
         if let Err(err) = self.copy_swapchain_to_png(image, extent, format, &path) {
-            saffron_core::log_warn!("window capture failed: {err}");
+            tracing::warn!("window capture failed: {err}");
         } else {
-            saffron_core::log_info!(
+            tracing::info!(
                 "captured window ({}x{}) to {}",
                 extent.width,
                 extent.height,
@@ -2538,7 +2577,7 @@ impl Renderer {
         // A failure is logged, not fatal.
         if self.ibl.rebake_pending {
             if let Err(err) = self.ibl.fire_rebake(&self.device) {
-                saffron_core::log_error!("ibl re-bake failed: {err}");
+                tracing::error!("ibl re-bake failed: {err}");
             }
         }
 
@@ -2766,7 +2805,7 @@ impl Renderer {
             let draw = match self.overlay.prepare(frame) {
                 Ok(draw) => draw,
                 Err(err) => {
-                    saffron_core::log_error!("overlay upload failed: {err}");
+                    tracing::error!("overlay upload failed: {err}");
                     None
                 }
             };
@@ -2777,6 +2816,21 @@ impl Renderer {
             )
         } else {
             (None, None, None)
+        };
+
+        // View-mode-specific post passes: the Lit Wireframe overlay (a second line-mode draw
+        // over the shaded scene) and the motion-vector visualization (a fullscreen compute on
+        // the motion target). Resolved only for their active mode so other frames pay nothing.
+        let wireframe_overlay = if self.view_mode == ViewMode::LitWireframe {
+            self.pipelines.request_wireframe_overlay()
+        } else {
+            None
+        };
+        let motion_visualize = if self.view_mode == ViewMode::MotionVectors {
+            self.pipelines
+                .request_motion_visualize(self.ssao.compute2_layout())
+        } else {
+            None
         };
 
         let frame_pipelines = FramePipelines {
@@ -2804,6 +2858,8 @@ impl Renderer {
             overlay,
             overlay_depth,
             overlay_draw,
+            wireframe_overlay,
+            motion_visualize,
         };
 
         let begin_info = vk::CommandBufferBeginInfo::default()
@@ -3540,6 +3596,19 @@ impl Renderer {
         // persisted 1× scene depth). By here `color` is always the 1× offscreen — present
         // / shm publish consume it identically in editor and present-only mode.
         self.add_tonemap_pass(&mut graph, &pipelines, color);
+        // View-mode overlays on the post-tonemap color: the motion-vector visualization
+        // overwrites it; the Lit Wireframe overlay draws edges over it. Both no-op unless
+        // their mode is active (the PSO is `None` otherwise).
+        self.add_motion_visualize_pass(&mut graph, &pipelines, color, motion_resource);
+        self.add_lit_wireframe_pass(
+            &mut graph,
+            &pipelines,
+            color,
+            depth,
+            instance_set,
+            deformed_res,
+            deformed_handle,
+        );
         self.add_grid_overlay_passes(&mut graph, &pipelines, color, depth);
 
         // Arm the per-frame GPU timestamp recorder (a cheap no-op when the profiler is `Off`):
@@ -4653,6 +4722,88 @@ impl Renderer {
         }
     }
 
+    /// Appends the motion-vector visualization (the `MotionVectors` view mode): a fullscreen
+    /// compute that samples the motion target and overwrites the post-tonemap `color`. A no-op
+    /// unless the mode's PSO is resolved and the motion target ran this frame (TAA or SSGI on);
+    /// otherwise the shaded scene shows through.
+    fn add_motion_visualize_pass(
+        &self,
+        graph: &mut RenderGraph,
+        pipelines: &FramePipelines,
+        color: RgResource,
+        motion: Option<RgResource>,
+    ) {
+        let (Some(pipeline), Some(motion)) = (&pipelines.motion_visualize, motion) else {
+            return;
+        };
+        let view = &self.views[self.active_view.index()];
+        let extent = view.extent();
+        let mut push = Vec::with_capacity(8);
+        push.extend_from_slice(&extent.width.to_ne_bytes());
+        push.extend_from_slice(&extent.height.to_ne_bytes());
+        let groups = |n: u32| n.div_ceil(8);
+        self.add_compute_pass(
+            graph,
+            "motion-visualize",
+            pipeline,
+            view.motion_vis_set,
+            &[
+                (motion, RgUsage::SampledReadCompute),
+                (color, RgUsage::StorageImageRwCompute),
+            ],
+            Some(push),
+            groups(extent.width),
+            groups(extent.height),
+        );
+    }
+
+    /// Appends the Lit Wireframe overlay (the `LitWireframe` view mode): re-draws the scene
+    /// geometry in line polygon mode over the post-tonemap `color`, depth-tested read-only
+    /// against the persisted 1× `depth` so hidden edges are occluded. A no-op unless the
+    /// mode's PSO is resolved (a `fill_mode_non_solid` device; else it falls back to plain
+    /// Lit). Reuses the depth-prepass recorder: bind the PSO + instance set, push the
+    /// viewProj, draw every batch.
+    #[allow(clippy::too_many_arguments)]
+    fn add_lit_wireframe_pass(
+        &self,
+        graph: &mut RenderGraph,
+        pipelines: &FramePipelines,
+        color: RgResource,
+        depth: RgResource,
+        instance_set: vk::DescriptorSet,
+        deformed_res: Option<RgResource>,
+        deformed_handle: Option<vk::Buffer>,
+    ) {
+        let Some(pipeline) = &pipelines.wireframe_overlay else {
+            return;
+        };
+        let extent = self.views[self.active_view.index()].extent();
+        let list = self.scene_draw_list.shallow_clone();
+        let raw_for_body = self.device.raw().clone();
+        let pipeline = Arc::clone(pipeline);
+        let handle = pipeline.handle();
+        let layout = pipeline.layout();
+        let mut pass = RgPass::graphics("lit-wireframe", extent)
+            .color(color_load_store(color))
+            .depth_attachment(depth_load_readonly(depth))
+            .body(move |cmd| {
+                record_depth_prepass(
+                    &raw_for_body,
+                    cmd,
+                    &list,
+                    handle,
+                    layout,
+                    instance_set,
+                    deformed_handle,
+                );
+                drop(pipeline);
+            });
+        if let Some(deformed) = deformed_res {
+            pass = pass.access(deformed, RgUsage::VertexInputRead);
+        }
+        graph.add_pass(pass);
+    }
+
     /// Appends one screen-space compute pass: declare the `(resource, usage)` accesses
     /// (the graph derives the GENERAL ↔ ShaderReadOnly transitions), bind the per-view
     /// set, optionally push `push`, and dispatch `(groups_x, groups_y, 1)`.
@@ -4748,6 +4899,44 @@ impl Renderer {
             pass = pass.access(deformed, RgUsage::VertexInputRead);
         }
         graph.add_pass(pass);
+    }
+
+    /// Rebuilds the present swapchain at `(width, height)` after a window resize.
+    ///
+    /// The swapchain is created once in [`Renderer::new`] and is otherwise immutable; a
+    /// resize makes it out of date, so [`Renderer::begin_present_frame`] returns `false`
+    /// and skips the frame until this rebuilds it at the new surface size. The windowed
+    /// loop calls it on `WindowEvent::Resized`. Waits the device idle first (an in-flight
+    /// present may still reference the old images), drops any acquired-image index a
+    /// skipped frame left behind, then destroys and rebuilds the swapchain as a unit
+    /// (its per-image views + semaphores rebuild with it; the frame-ring-indexed
+    /// [`crate::present::PresentSync`] is extent-independent and is kept). A no-op for the
+    /// offscreen host (no swapchain) and for a zero extent (minimized).
+    ///
+    /// # Errors
+    ///
+    /// Propagates a device-idle wait failure or any swapchain-creation [`Error`].
+    pub fn recreate_swapchain(&mut self, width: u32, height: u32) -> Result<()> {
+        if self.swapchain.is_none() || width == 0 || height == 0 {
+            return Ok(());
+        }
+        self.device.wait_idle()?;
+        // The old image indices are about to be invalid; drop any index a skipped
+        // out-of-date frame left acquired so the next present starts clean.
+        if let Some(present_sync) = self.present_sync.as_mut() {
+            let _ = present_sync.take_acquired_image();
+        }
+        if let Some(mut swapchain) = self.swapchain.take() {
+            swapchain.destroy(&self.device);
+        }
+        let swapchain = Swapchain::new(&self.device, width, height)?;
+        tracing::info!(
+            "swapchain rebuilt {}x{}",
+            swapchain.extent.width,
+            swapchain.extent.height
+        );
+        self.swapchain = Some(swapchain);
+        Ok(())
     }
 
     /// Begins a windowed present-only frame: waits + resets the current slot's fence

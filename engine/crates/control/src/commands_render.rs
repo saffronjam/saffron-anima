@@ -74,24 +74,44 @@ fn aa_mode_from_name(name: &str) -> AaModeDto {
 fn view_mode_to_dto(mode: ViewMode) -> ViewModeDto {
     match mode {
         ViewMode::Lit => ViewModeDto::Lit,
+        ViewMode::Unlit => ViewModeDto::Unlit,
         ViewMode::Wireframe => ViewModeDto::Wireframe,
+        ViewMode::LitWireframe => ViewModeDto::LitWireframe,
+        ViewMode::DetailLighting => ViewModeDto::DetailLighting,
+        ViewMode::LightingOnly => ViewModeDto::LightingOnly,
+        ViewMode::Reflections => ViewModeDto::Reflections,
         ViewMode::Albedo => ViewModeDto::Albedo,
         ViewMode::Normal => ViewModeDto::Normal,
         ViewMode::Roughness => ViewModeDto::Roughness,
         ViewMode::Metallic => ViewModeDto::Metallic,
         ViewMode::Emissive => ViewModeDto::Emissive,
+        ViewMode::Depth => ViewModeDto::Depth,
+        ViewMode::AmbientOcclusion => ViewModeDto::AmbientOcclusion,
+        ViewMode::Gi => ViewModeDto::Gi,
+        ViewMode::LightComplexity => ViewModeDto::LightComplexity,
+        ViewMode::MotionVectors => ViewModeDto::MotionVectors,
     }
 }
 
 fn view_mode_from_dto(mode: ViewModeDto) -> ViewMode {
     match mode {
         ViewModeDto::Lit => ViewMode::Lit,
+        ViewModeDto::Unlit => ViewMode::Unlit,
         ViewModeDto::Wireframe => ViewMode::Wireframe,
+        ViewModeDto::LitWireframe => ViewMode::LitWireframe,
+        ViewModeDto::DetailLighting => ViewMode::DetailLighting,
+        ViewModeDto::LightingOnly => ViewMode::LightingOnly,
+        ViewModeDto::Reflections => ViewMode::Reflections,
         ViewModeDto::Albedo => ViewMode::Albedo,
         ViewModeDto::Normal => ViewMode::Normal,
         ViewModeDto::Roughness => ViewMode::Roughness,
         ViewModeDto::Metallic => ViewMode::Metallic,
         ViewModeDto::Emissive => ViewMode::Emissive,
+        ViewModeDto::Depth => ViewMode::Depth,
+        ViewModeDto::AmbientOcclusion => ViewMode::AmbientOcclusion,
+        ViewModeDto::Gi => ViewMode::Gi,
+        ViewModeDto::LightComplexity => ViewMode::LightComplexity,
+        ViewModeDto::MotionVectors => ViewMode::MotionVectors,
     }
 }
 
@@ -591,7 +611,7 @@ pub fn register_render_commands(reg: &mut CommandRegistry) {
 
     reg.register::<SetViewModeParams, SetViewModeResult>(
         "set-view-mode",
-        "set-view-mode {lit|wireframe|albedo|normal|roughness|metallic|emissive} — debug render-output (transient)",
+        "set-view-mode {lit|unlit|wireframe|lit-wireframe|detail-lighting|lighting-only|reflections|albedo|normal|roughness|metallic|emissive|depth|ambient-occlusion|gi|light-complexity|motion-vectors} — debug render-output (transient)",
         |ctx, params| {
             ctx.renderer
                 .set_view_mode(view_mode_from_dto(params.mode.unwrap_or(ViewModeDto::Lit)));
