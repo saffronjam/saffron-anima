@@ -7,7 +7,7 @@ weight = 7
 
 An asset picker is a form control that edits a reference to a catalog asset. A component field stores the asset's Uuid rather than its name, and the picker presents that Uuid as a thumbnail and a label the user can change.
 
-The picker serves two channels into the same field: a dropdown combo that lists candidate assets, and a drop target that accepts a tile dragged from elsewhere in the editor. Both are type-gated, so a field that holds a mesh can only ever be assigned a mesh. `AssetPicker` is one reusable React widget; the [inspector](../inspector/) and the [environment panel](../theme-and-fonts/) mount it on any uuid field.
+The picker serves two channels into the same field: a dropdown combo that lists candidate assets, and a drop target that accepts a tile dragged from elsewhere in the editor. Both are type-gated, so a field that holds a mesh can only ever be assigned a mesh. Model tiles also have a viewport drop path: while a model is dragged over the scene, the engine renders a transient placement preview at the transform that will be committed if the drop lands.
 
 ## The picker combo
 
@@ -23,9 +23,9 @@ A Mesh field passes `assetType: "mesh"`, an albedo or sky field `"texture"`, so 
 
 The picker is **field-agnostic**: it only emits the chosen id. The inspector owns the write. `Mesh.mesh` and `Material.albedoTexture` go through the dedicated `assign-asset`; every other uuid field goes through `set-component-field`. The id is a **string** end-to-end (engine Uuids are u64), never `Number()`d.
 
-## Type-gated drag-drop
+## Type-gated field drops
 
-A tile is an HTML5 drag source carrying `application/x-se-asset` — a JSON `{id, type}` payload. The picker is the matching drop target and accepts only when the dragged asset's type matches its own field type:
+A tile is an HTML5 drag source carrying `application/x-sa-asset` — a JSON `{id, type}` or `{ids}` payload. The picker is the matching drop target and accepts only when the dragged asset's type matches its own field type:
 
 ```ts
 const onDrop = (event) => {
@@ -37,12 +37,23 @@ const onDrop = (event) => {
 
 Dragging a texture onto a Mesh field does nothing: the same type comparison guards both the combo filter and the drop, so a mismatched drop cannot land. This is a distinct channel from the OS file drop the [Assets panel](../assets-panel-and-thumbnails/) listens for, which imports a new asset rather than assigning an existing one.
 
+## Viewport placement preview
+
+The scene viewport accepts model assets from the browser. During `dragover`, `ViewportPanel` reads the first model id in the asset payload, converts the cursor to viewport UV, and sends `asset-placement { phase:"preview", asset, u, v }`. The host computes the placement from the scene camera: it ray-tests rendered scene geometry first, falls back to the world `Y=0` ground plane, and offsets the model so its bounds bottom-center sits on that point.
+
+The preview is a transient `Scene` stored on `SceneEditContext`, not an authored project entity. The host renders it by merging the transient scene into the same draw-list build as the authored scene. `drop` sends a final preview at the release UV and then `asset-placement { phase:"commit" }`; commit instantiates the model into the authored scene with the stored transform, selects it, bumps the scene version, and clears the preview. `dragleave`, cancellation, or unmount sends `phase:"clear"`.
+
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
 | The picker widget | `editor/src/components/AssetPicker.tsx` | `AssetPicker`, `AssetSwatch`, `PickerRow` |
 | Drag payload + reader | `editor/src/components/AssetTile.tsx` | `ASSET_DND_MIME`, `AssetDragPayload`, `readAssetPayload` |
+| Viewport placement target | `editor/src/panels/ViewportPanel.tsx` | `ViewportPanel`, `clientPointToUv` |
+| Placement client calls | `editor/src/control/client.ts` | `previewAssetPlacement`, `commitAssetPlacement`, `clearAssetPlacement` |
+| Placement command | `engine/crates/control/src/commands_asset.rs` | `asset-placement`, `preview_asset_placement`, `commit_asset_placement` |
+| Transient render state | `engine/crates/sceneedit/src/context.rs` | `PlacementPreview`, `SceneEditContext::placement_preview` |
+| Draw-list merge | `engine/crates/assets/src/render_scene.rs` | `render_scene_with_transient`, `pick_scene_surface`, `viewport_ray` |
 | Where it's mounted | `editor/src/components/fieldRenderer.tsx` | the `uuid` case in `renderField`, `FieldHint.asset` |
 | The write (client) | `editor/src/panels/InspectorPanel.tsx` | `sendWrite` (`assignAsset` / `setComponentField`) |
 | Assign (engine) | `engine/crates/control/src/commands_asset.rs` | `assign-asset` |

@@ -26,7 +26,7 @@ Every editor operation rides the JSON-over-unix-socket [control protocol](../too
 | `hierarchy-panel` | the React tree outliner (`parentId` → forest), drag-reparent, the Environment sentinel, Create presets | `HierarchyPanel.tsx` · `HierarchyTree.tsx` |
 | `inspector` | the DTO-typed component inspector (fieldRenderer + FIELD_HINTS), RMW writes, add/remove guarded | `InspectorPanel.tsx` · `fieldRenderer.tsx` |
 | `physics-inspector` | the split Rigidbody/Collider sections: the enum/lockAxes/struct field kinds (motion/shape Selects, X/Y/Z lock grid, nested material sliders), Fit-to-mesh, collider-alone-static note, skinned-only rig sidecars | `fieldRenderer.tsx` · `EnumField.tsx` · `LockAxesField.tsx` · `InspectorPanel.tsx` |
-| `asset-pickers-and-drag-drop` | the AssetPicker uuid combo, type-gated HTML5 drag-drop | `AssetPicker.tsx` · `AssetTile.tsx` |
+| `asset-pickers-and-drag-drop` | the AssetPicker uuid combo, type-gated HTML5 drag-drop, live viewport placement previews for model assets | `AssetPicker.tsx` · `AssetTile.tsx` · `ViewportPanel.tsx` · `commands_asset.rs` |
 | `assets-panel-and-thumbnails` | the React asset browser, virtual folders, asset tabs, `get-thumbnail` base64 PNG + blob-URL cache, import dialog | `AssetsPanel.tsx` · `AssetTile.tsx` · `AssetViewer.tsx` |
 | `selection` | select/get-selection/deselect, the version-stamped reconcile round-trip, optimistic select | `state/store.ts` · `ViewportPanel.tsx` |
 | `undo-redo` | editor-only inverse-command + per-tab snapshot history, gesture grouping, mouse Back/Forward + Alt-arrow nav suppression, invalidation, the extension recipe | `lib/undo.ts` · `useTabSnapshotHistory.ts` · `state/store.ts` |
