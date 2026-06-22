@@ -150,7 +150,7 @@ pub fn import_gltf_model(path: impl AsRef<Path>) -> Result<ImportedModel> {
             path,
         ));
     } else if saw_skinned && saw_unskinned {
-        saffron_core::log_warn!(
+        tracing::warn!(
             "gltf: '{}' mixes skinned and unskinned primitives; importing unskinned",
             path.display()
         );
@@ -433,7 +433,7 @@ fn decode_clips(
             let target = channel.target();
             let property = target.property();
             if property == Property::MorphTargetWeights {
-                saffron_core::log_warn!(
+                tracing::warn!(
                     "gltf: '{}' clip '{}' has a morph-weights channel; skipped",
                     path.display(),
                     clip.name
@@ -443,7 +443,7 @@ fn decode_clips(
             let node_index = target.node().index() as i32;
             let joint = desc.joints.iter().position(|j| *j == node_index);
             let Some(joint) = joint else {
-                saffron_core::log_warn!(
+                tracing::warn!(
                     "gltf: '{}' clip '{}' targets a non-skin node; channel skipped",
                     path.display(),
                     clip.name
@@ -453,7 +453,7 @@ fn decode_clips(
 
             let sampler = channel.sampler();
             if sampler.input().sparse().is_some() || sampler.output().sparse().is_some() {
-                saffron_core::log_warn!(
+                tracing::warn!(
                     "gltf: '{}' clip '{}' has a sparse or empty sampler; channel skipped",
                     path.display(),
                     clip.name
@@ -465,7 +465,7 @@ fn decode_clips(
                 channel.reader(|buffer| buffers.get(buffer.index()).map(|d| d.0.as_slice()));
             let (Some(inputs), Some(outputs)) = (reader.read_inputs(), reader.read_outputs())
             else {
-                saffron_core::log_warn!(
+                tracing::warn!(
                     "gltf: '{}' clip '{}' has a sparse or empty sampler; channel skipped",
                     path.display(),
                     clip.name
@@ -596,7 +596,7 @@ fn read_texture_bytes(
         }
         gltf::image::Source::Uri { uri, .. } => {
             if uri.starts_with("data:") {
-                saffron_core::log_warn!(
+                tracing::warn!(
                     "gltf: '{}' embeds its {label} as a data: URI (not yet supported)",
                     path.display()
                 );

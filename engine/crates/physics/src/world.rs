@@ -15,7 +15,7 @@ use std::collections::{HashMap, VecDeque};
 
 use glam::{Mat4, Quat, Vec3};
 
-use saffron_core::{Uuid, log_warn};
+use saffron_core::Uuid;
 use saffron_geometry::Mesh;
 use saffron_physics_sys::{
     self as sys, BodyCreate, BonePart, CharacterCreate, INVALID_BODY_ID, JoltWorld,
@@ -213,7 +213,7 @@ impl World {
             let geometry = match cook_shape_geometry(&collider, motion, cook) {
                 Ok(geometry) => geometry,
                 Err(err) => {
-                    log_warn!(
+                    tracing::warn!(
                         "physics: skipping body for {}: {err}",
                         id_of(scene, entity).0
                     );
@@ -558,7 +558,7 @@ impl World {
     pub fn apply_impulse(&mut self, entity: Uuid, impulse: Vec3) {
         match self.dynamic_body_id(entity) {
             Some(id) => sys::body_add_impulse(&mut self.world, id, impulse.to_array()),
-            None => log_warn!(
+            None => tracing::warn!(
                 "physics: apply-impulse on a non-Dynamic / unmapped body ({})",
                 entity.0
             ),
@@ -570,7 +570,7 @@ impl World {
     pub fn add_force(&mut self, entity: Uuid, force: Vec3) {
         match self.dynamic_body_id(entity) {
             Some(id) => sys::body_add_force(&mut self.world, id, force.to_array()),
-            None => log_warn!(
+            None => tracing::warn!(
                 "physics: add-force on a non-Dynamic / unmapped body ({})",
                 entity.0
             ),
@@ -582,7 +582,7 @@ impl World {
     pub fn set_linear_velocity(&mut self, entity: Uuid, velocity: Vec3) {
         match self.dynamic_body_id(entity) {
             Some(id) => sys::body_set_linear_velocity(&mut self.world, id, velocity.to_array()),
-            None => log_warn!(
+            None => tracing::warn!(
                 "physics: set-velocity on a non-Dynamic / unmapped body ({})",
                 entity.0
             ),

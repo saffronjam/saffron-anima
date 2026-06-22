@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use glam::{Quat, Vec3};
-use saffron_core::{Uuid, log_warn};
+use saffron_core::Uuid;
 use saffron_geometry::{AnimClip, AnimPath};
 use saffron_scene::{
     AnimationPlayer, Entity, FootIk, IdComponent, Name, PoseOverride, Relationship, Scene,
@@ -121,7 +121,7 @@ impl AnimationRuntime {
     /// Resolves (and caches) a clip uuid to its loaded [`AnimClip`] through `load`.
     ///
     /// `Uuid(0)` short-circuits to "no clip" before any lookup. A broken asset is
-    /// negative-cached as an empty clip (with a one-time `log_warn`) so it is not re-read
+    /// negative-cached as an empty clip (with a one-time `tracing::warn!`) so it is not re-read
     /// every frame. Returns `None` only for the unset (`Uuid(0)`) clip.
     fn load_clip(&mut self, clip: Uuid, load: ClipLoader<'_>) -> Option<&AnimClip> {
         if clip.0 == 0 {
@@ -129,7 +129,7 @@ impl AnimationRuntime {
         }
         let entry = self.clip_cache.entry(clip.0).or_insert_with(|| {
             load(clip).unwrap_or_else(|err| {
-                log_warn!("clip {} failed to load: {err}", clip.0);
+                tracing::warn!("clip {} failed to load: {err}", clip.0);
                 AnimClip::default()
             })
         });

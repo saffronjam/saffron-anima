@@ -41,11 +41,11 @@ impl ControlContext {
 
         let server = match start_control_server(control_socket_path()) {
             Ok(server) => {
-                saffron_core::log_info!("control socket listening on {}", server.path());
+                tracing::info!("control socket listening on {}", server.path());
                 Some(server)
             }
             Err(error) => {
-                saffron_core::log_warn!("control socket disabled: {error}");
+                tracing::warn!("control socket disabled: {error}");
                 None
             }
         };

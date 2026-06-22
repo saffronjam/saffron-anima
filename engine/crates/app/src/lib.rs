@@ -34,7 +34,7 @@
 
 use std::time::{Duration, Instant};
 
-use saffron_core::{TimeSpan, log_error, log_info};
+use saffron_core::TimeSpan;
 use saffron_rendering::{RenderGraph, Renderer, SurfaceSource};
 use saffron_window::{
     ActiveEventLoop, ApplicationHandler, ControlFlow, EventLoop, Window, WindowConfig, WindowEvent,
@@ -104,6 +104,12 @@ pub trait FrameHost {
     ///
     /// Propagates a device-lost or wait failure.
     fn wait_gpu_idle(&self) -> Result<()>;
+
+    /// Handles a window resize to `(width, height)` pixels: rebuilds the swapchain
+    /// and the active offscreen view so the present path matches the new surface.
+    /// The default is a no-op — the headless editor host has no swapchain and never
+    /// receives a resize (it has no window).
+    fn resized(&mut self, _width: u32, _height: u32) {}
 
     /// Exposes the concrete [`Renderer`] when this host is the real GPU renderer,
     /// `None` for the GPU-free test host.
@@ -179,6 +185,23 @@ impl FrameHost for Renderer {
 
     fn wait_gpu_idle(&self) -> Result<()> {
         Ok(self.device().wait_idle()?)
+    }
+
+    fn resized(&mut self, width: u32, height: u32) {
+        // Only the windowed standalone host has a swapchain to rebuild; a zero extent
+        // is a minimize, which the next frame's `viewport_size` guard skips anyway.
+        if self.swapchain().is_none() || width == 0 || height == 0 {
+            return;
+        }
+        if let Err(err) = self.recreate_swapchain(width, height) {
+            tracing::error!("swapchain recreate failed: {err}");
+        }
+        // The present blit's source is the active offscreen view; track the window so
+        // the presented image is rendered at native resolution, not scaled.
+        let view = self.active_view_id();
+        if let Err(err) = self.set_viewport_desired_size(view, width, height) {
+            tracing::error!("viewport resize failed: {err}");
+        }
     }
 
     fn renderer_mut(&mut self) -> Option<&mut Renderer> {
@@ -333,7 +356,7 @@ pub fn run(config: AppConfig) -> i32 {
     match run_inner(config, HostMode::from_env()) {
         Ok(()) => 0,
         Err(err) => {
-            log_error!("{err}");
+            tracing::error!("{err}");
             1
         }
     }
@@ -425,7 +448,7 @@ fn start(app: &mut App, config: &mut AppConfig) {
 /// command buffer references a resource a handler is about to drop.
 fn finish(app: &mut App, config: &mut AppConfig) {
     if let Err(err) = app.frame_host.wait_gpu_idle() {
-        log_error!("wait_gpu_idle failed: {err}");
+        tracing::error!("wait_gpu_idle failed: {err}");
     }
     run_hook(app, |layer, app| layer.on_detach(app));
     let on_exit = std::mem::replace(&mut config.on_exit, Box::new(|_| {}));
@@ -464,7 +487,7 @@ fn step_frame(app: &mut App, limits: LoopLimits, clock: &mut FrameClock) {
             }
             Ok(false) => {}
             Err(err) => {
-                log_error!("begin_frame failed: {err}");
+                tracing::error!("begin_frame failed: {err}");
                 app.running = false;
             }
         }
@@ -481,7 +504,7 @@ fn step_frame(app: &mut App, limits: LoopLimits, clock: &mut FrameClock) {
 
     clock.frame_count += 1;
     if limits.frame_limit != 0 && clock.frame_count >= limits.frame_limit {
-        log_info!("frame limit reached ({}), exiting", limits.frame_limit);
+        tracing::info!("frame limit reached ({}), exiting", limits.frame_limit);
         app.running = false;
     }
 
@@ -595,9 +618,17 @@ impl ApplicationHandler for WindowedApp {
         if let Some(window) = app.window.as_mut() {
             window.dispatch_window_event(&event);
         }
-        if event == WindowEvent::CloseRequested {
-            app.running = false;
-            event_loop.exit();
+        match event {
+            WindowEvent::CloseRequested => {
+                app.running = false;
+                event_loop.exit();
+            }
+            // A resize makes the swapchain out of date; rebuild it (and the offscreen
+            // the present blits from) at the new surface size before the next frame.
+            WindowEvent::Resized(size) => {
+                app.frame_host.resized(size.width, size.height);
+            }
+            _ => {}
         }
     }
 
@@ -647,7 +678,7 @@ fn run_frame(app: &mut App) {
     app.frame_host.begin_frame_graph(&mut graph);
     run_hook(app, |layer, app| layer.on_render_graph(app, &mut graph));
     if let Err(err) = app.frame_host.end_frame(graph) {
-        log_error!("end_frame failed: {err}");
+        tracing::error!("end_frame failed: {err}");
         app.running = false;
     }
 }
@@ -724,7 +755,7 @@ fn parse_u64_env(name: &str, reject_zero: bool) -> u64 {
     match parse_strict_u64(&text, reject_zero) {
         Some(value) => value,
         None => {
-            log_error!("invalid {name}='{text}', ignoring");
+            tracing::error!("invalid {name}='{text}', ignoring");
             0
         }
     }
