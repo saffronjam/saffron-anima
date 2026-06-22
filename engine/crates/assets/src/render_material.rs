@@ -172,7 +172,7 @@ impl AssetServer {
             if material_id.value() != 0 {
                 let loaded = load_material_asset(self, material_id);
                 let material = loaded.unwrap_or_else(|| {
-                    saffron_core::log_warn!(
+                    tracing::warn!(
                         "entity material asset {} missing; using default",
                         material_id.value()
                     );
@@ -297,11 +297,11 @@ impl AssetServer {
 /// Loads a `.smat` resolved for rendering, returning `None` (with the caller warning)
 /// when the id is absent or unreadable — the resolve path treats a missing material as
 /// "use the default", never an error.
-fn load_material_asset(assets: &AssetServer, id: saffron_core::Uuid) -> Option<MaterialAsset> {
+fn load_material_asset(assets: &mut AssetServer, id: saffron_core::Uuid) -> Option<MaterialAsset> {
     if id == DEFAULT_MATERIAL_ID {
         return Some(default_material_asset());
     }
-    crate::material::load_material_asset(assets, id).ok()
+    crate::material::load_catalog_material_asset(assets, id).ok()
 }
 
 /// Whether `value` is a JSON object with at least one member (a present, non-empty

@@ -62,9 +62,9 @@ pub use manage::{
     import_material_folder, reimport_model,
 };
 pub use material::{
-    MaterialAsset, apply_overrides, default_material_asset, load_material_asset,
-    load_material_asset_raw, material_asset_from_json, material_asset_to_json, save_material_asset,
-    update_material_asset,
+    MaterialAsset, apply_overrides, default_material_asset, load_catalog_material_asset,
+    load_catalog_material_asset_raw, load_material_asset, load_material_asset_raw,
+    material_asset_from_json, material_asset_to_json, save_material_asset, update_material_asset,
 };
 pub use model::{
     ByteSource, ContainerMetadata, Import, METADATA_SCHEMA_VERSION, ModelAsset, SubAsset,
@@ -78,7 +78,10 @@ pub use project::{
     project_userdata_root, valid_project_name,
 };
 pub use render_material::{ResolvedMaterials, build_submesh_material};
-pub use render_scene::{RendererScene, SceneRenderer, pick_entity, render_scene};
+pub use render_scene::{
+    RendererScene, SceneRenderer, SceneSurfaceHit, pick_entity, pick_scene_surface, render_scene,
+    render_scene_with_transient, viewport_ray,
+};
 pub use scan::detect_material_role;
 pub use spawn::{ModelSpawnInput, imported_nodes_from_json, imported_skin_from_json, spawn_model};
 pub use thumbnail::{

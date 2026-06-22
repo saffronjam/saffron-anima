@@ -47,7 +47,7 @@ use crate::{AssetServer, Error, Result};
 
 /// The thumbnail cache version, folded into every stamp so a behaviour change retires
 /// the whole on-disk cache. At `v2`, model thumbnails render textured.
-pub const THUMBNAIL_CACHE_VERSION: u32 = 2;
+pub const THUMBNAIL_CACHE_VERSION: u32 = 3;
 
 /// The FNV-1a 64-bit offset basis.
 const FNV_OFFSET: u64 = 1469598103934665603;
@@ -303,13 +303,13 @@ fn worker_loop(shared: &Arc<(Mutex<WorkerState>, Condvar)>, gpu: &dyn ThumbnailG
         match png {
             Ok(png) => {
                 if let Err(err) = write_thumbnail_cache(Path::new(&job.cache_path), &png.bytes) {
-                    saffron_core::log_warn!("{err}");
+                    tracing::warn!("{err}");
                 }
                 state.texture_handback.append(&mut texture_out);
                 state.mesh_handback.append(&mut mesh_out);
             }
             Err(err) => {
-                saffron_core::log_warn!("thumbnail {}: {err}", job.id.value());
+                tracing::warn!("thumbnail {}: {err}", job.id.value());
                 // A missing thumbnail settles to the type icon — never retried.
                 state.failed.insert(job.cache_path.clone());
             }
@@ -334,14 +334,14 @@ fn upload_thumbnail_texture(
         let decoded = match decoded {
             Ok(decoded) => decoded,
             Err(err) => {
-                saffron_core::log_warn!("{err}");
+                tracing::warn!("{err}");
                 return None;
             }
         };
         let tex = match gpu.upload_texture_float(&decoded.rgba, decoded.width, decoded.height) {
             Ok(tex) => tex,
             Err(err) => {
-                saffron_core::log_warn!("{err}");
+                tracing::warn!("{err}");
                 return None;
             }
         };
@@ -356,14 +356,14 @@ fn upload_thumbnail_texture(
     let decoded = match decoded {
         Ok(decoded) => decoded,
         Err(err) => {
-            saffron_core::log_warn!("{err}");
+            tracing::warn!("{err}");
             return None;
         }
     };
     let tex = match gpu.upload_texture(&decoded.rgba, decoded.width, decoded.height, src.srgb) {
         Ok(tex) => tex,
         Err(err) => {
-            saffron_core::log_warn!("{err}");
+            tracing::warn!("{err}");
             return None;
         }
     };
@@ -774,9 +774,21 @@ fn build_thumbnail_job(assets: &mut AssetServer, id: Uuid, size: u32) -> Result<
 
     let (content, stamp): (ThumbnailContent, String) = match entry.asset_type {
         AssetType::Material => {
-            let material = crate::material::load_material_asset(assets, id)?;
+            let material = crate::material::load_catalog_material_asset(assets, id)?;
             let stamp = thumbnail_material_stamp(&material);
-            let textures = resolve_material_textures(assets, &material);
+            let textures = if entry.container.value() == 0 {
+                resolve_material_textures(assets, &material)
+            } else {
+                let container = assets.load_model_asset(entry.container).ok_or_else(|| {
+                    Error::Thumbnail(format!("model {} is not loadable", entry.container.value()))
+                })?;
+                let mut textures = Vec::new();
+                let mut added = HashSet::new();
+                for tid in material_texture_ids(&material) {
+                    add_model_texture(assets, &container, tid, &mut added, &mut textures);
+                }
+                textures
+            };
             (
                 ThumbnailContent::Material {
                     material: Box::new(material),
@@ -902,10 +914,10 @@ fn build_embedded_job(
         if sub.asset_type != AssetType::Material {
             continue;
         }
-        let material = match crate::material::load_material_asset(assets, sub.sub_id) {
+        let material = match crate::material::load_catalog_material_asset(assets, sub.sub_id) {
             Ok(material) => material,
             Err(err) => {
-                saffron_core::log_warn!(
+                tracing::warn!(
                     "model {}: material {} unresolved: {err}",
                     id.value(),
                     sub.sub_id.value()
@@ -1060,7 +1072,7 @@ pub fn request_thumbnail(
         insert_thumbnail_handback(assets, texture_out, mesh_out);
         if !job.cache_path.is_empty() {
             if let Err(err) = write_thumbnail_cache(Path::new(&job.cache_path), &png.bytes) {
-                saffron_core::log_warn!("{err}");
+                tracing::warn!("{err}");
             }
         }
         return Ok(ThumbnailReply {
@@ -1098,7 +1110,9 @@ mod tests {
     use std::sync::mpsc;
 
     use saffron_geometry::glam::{Vec2, Vec3};
-    use saffron_geometry::{Mesh, Submesh, Vertex, save_mesh_to_buffer};
+    use saffron_geometry::{
+        ContainerChunk, Mesh, Submesh, Vertex, save_mesh_to_buffer, write_container,
+    };
     use saffron_rendering::{
         BindlessFreeList, Descriptors, Device, GpuQueue, SurfaceSource, Uploader,
     };
@@ -1360,6 +1374,110 @@ mod tests {
             path: "models/m.smesh".to_owned(),
             ..Default::default()
         });
+    }
+
+    fn put_embedded_material_model(
+        assets: &mut AssetServer,
+        model_id: Uuid,
+        material_id: Uuid,
+        material: &MaterialAsset,
+    ) {
+        let mesh_id = Uuid(model_id.value() + 1);
+        let rel = format!("models/{}.smodel", model_id.value());
+        std::fs::create_dir_all(assets.root.join("models")).expect("models dir");
+
+        let mut meta = crate::model::ContainerMetadata {
+            model_id,
+            name: "embedded".to_owned(),
+            ..crate::model::ContainerMetadata::default()
+        };
+        meta.sub_assets.push(crate::model::SubAsset {
+            sub_id: mesh_id,
+            asset_type: AssetType::Mesh,
+            name: "mesh".to_owned(),
+            chunk: 1,
+            ..crate::model::SubAsset::default()
+        });
+        meta.sub_assets.push(crate::model::SubAsset {
+            sub_id: material_id,
+            asset_type: AssetType::Material,
+            name: "mat".to_owned(),
+            chunk: 2,
+            ..crate::model::SubAsset::default()
+        });
+
+        let meta_bytes = crate::model::encode_container_metadata(&meta);
+        let mesh_bytes = smesh_bytes();
+        let material_doc = crate::material::material_asset_to_json(material);
+        let material_bytes = saffron_json::dump_json(&material_doc, -1).into_bytes();
+        let chunks = [
+            ContainerChunk {
+                kind: ChunkKind::Meta,
+                sub_id: 0,
+                flags: 0,
+                bytes: &meta_bytes,
+            },
+            ContainerChunk {
+                kind: ChunkKind::Mesh,
+                sub_id: mesh_id.value(),
+                flags: 0,
+                bytes: &mesh_bytes,
+            },
+            ContainerChunk {
+                kind: ChunkKind::Material,
+                sub_id: material_id.value(),
+                flags: 0,
+                bytes: &material_bytes,
+            },
+        ];
+        write_container(assets.root.join(&rel), &chunks).expect("smodel");
+        for row in crate::import::catalog_rows_for_model(&meta, &rel) {
+            assets.catalog.put(row);
+        }
+    }
+
+    #[test]
+    fn model_thumbnail_job_reads_embedded_material_chunks() {
+        let root = temp_root("embedded-model-material");
+        let mut assets = AssetServer::new(&root);
+        let material = MaterialAsset {
+            base_color: saffron_geometry::glam::Vec4::new(0.25, 0.5, 0.75, 1.0),
+            metallic: 0.4,
+            roughness: 0.2,
+            ..MaterialAsset::default()
+        };
+        put_embedded_material_model(&mut assets, Uuid(12_000), Uuid(12_002), &material);
+
+        let job = build_thumbnail_job(&mut assets, Uuid(12_000), 64).expect("job");
+        let ThumbnailContent::Model { materials, .. } = job.content else {
+            panic!("model thumbnail content");
+        };
+        assert_eq!(materials.len(), 1);
+        assert_eq!(materials[0].base_color, material.base_color);
+        assert_eq!(materials[0].metallic, material.metallic);
+        assert_eq!(materials[0].roughness, material.roughness);
+    }
+
+    #[test]
+    fn material_thumbnail_job_reads_embedded_material_chunks() {
+        let root = temp_root("embedded-material");
+        let mut assets = AssetServer::new(&root);
+        let material = MaterialAsset {
+            base_color: saffron_geometry::glam::Vec4::new(0.8, 0.2, 0.1, 1.0),
+            unlit: true,
+            ..MaterialAsset::default()
+        };
+        put_embedded_material_model(&mut assets, Uuid(13_000), Uuid(13_002), &material);
+
+        let job = build_thumbnail_job(&mut assets, Uuid(13_002), 64).expect("job");
+        let ThumbnailContent::Material {
+            material: loaded, ..
+        } = job.content
+        else {
+            panic!("material thumbnail content");
+        };
+        assert_eq!(loaded.base_color, material.base_color);
+        assert_eq!(loaded.unlit, material.unlit);
     }
 
     #[test]

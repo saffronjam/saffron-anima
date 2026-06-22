@@ -27,7 +27,10 @@
 //! [`default_material_asset`].
 
 use saffron_core::Uuid;
-use saffron_geometry::glam::{Vec2, Vec3, Vec4};
+use saffron_geometry::{
+    ChunkKind,
+    glam::{Vec2, Vec3, Vec4},
+};
 use saffron_json::{Value, json_bool_or, json_f32_or, json_string_or, parse_json};
 use saffron_scene::{AssetEntry, AssetType};
 
@@ -414,6 +417,60 @@ pub fn load_material_asset_raw(assets: &AssetServer, id: Uuid) -> Result<Materia
     Ok(material_asset_from_json(&doc))
 }
 
+/// Reads a material catalog row, whether it is a standalone `.smat` or an embedded
+/// `.smodel` `SMAT` chunk.
+///
+/// Standalone rows follow [`load_material_asset_raw`]. Embedded rows resolve the owning
+/// container, slice the material chunk, and parse the chunk's `.smat` JSON.
+///
+/// # Errors
+///
+/// [`Error::NotInCatalog`] / [`Error::WrongAssetType`] when the id is absent or not a
+/// material; [`Error::ContainerMissingSubAsset`] when an embedded row has no material
+/// chunk; [`Error::Io`] / [`Error::Json`] when the bytes cannot be read or parsed.
+pub fn load_catalog_material_asset_raw(
+    assets: &mut AssetServer,
+    id: Uuid,
+) -> Result<MaterialAsset> {
+    if id.value() == DEFAULT_MATERIAL_ID.value() {
+        return Ok(default_material_asset());
+    }
+    let entry = assets
+        .catalog
+        .find(id)
+        .cloned()
+        .ok_or(Error::NotInCatalog(id.value()))?;
+    if entry.asset_type != AssetType::Material {
+        return Err(Error::WrongAssetType {
+            id: id.value(),
+            wanted: "material",
+        });
+    }
+    if entry.container.value() == 0 {
+        return load_material_asset_raw(assets, id);
+    }
+
+    let model = assets.load_model_asset(entry.container).ok_or_else(|| {
+        Error::Io(format!(
+            "material {}: container {} is not loadable",
+            id.value(),
+            entry.container.value()
+        ))
+    })?;
+    let source = assets.chunk_source_for(&model, ChunkKind::Material, id);
+    if source.is_empty() {
+        return Err(Error::ContainerMissingSubAsset {
+            container: entry.container.value(),
+            sub: id.value(),
+        });
+    }
+    let bytes = source.read()?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|e| Error::Io(format!("material {} chunk is not UTF-8: {e}", id.value())))?;
+    let doc = parse_json(text)?;
+    Ok(material_asset_from_json(&doc))
+}
+
 /// Reads a `.smat` resolved for rendering.
 ///
 /// An instance (`parent != 0`) resolves to its parent's resolved params with this
@@ -429,6 +486,15 @@ pub fn load_material_asset(assets: &AssetServer, id: Uuid) -> Result<MaterialAss
     load_material_asset_at(assets, id, 0)
 }
 
+/// Reads a material catalog row resolved for rendering, supporting standalone and
+/// embedded material rows.
+///
+/// Parent resolution mirrors [`load_material_asset`], but parent ids may also point at
+/// embedded material rows.
+pub fn load_catalog_material_asset(assets: &mut AssetServer, id: Uuid) -> Result<MaterialAsset> {
+    load_catalog_material_asset_at(assets, id, 0)
+}
+
 /// The depth-tracked recursion behind [`load_material_asset`].
 fn load_material_asset_at(assets: &AssetServer, id: Uuid, depth: u32) -> Result<MaterialAsset> {
     let material = load_material_asset_raw(assets, id)?;
@@ -441,6 +507,26 @@ fn load_material_asset_at(assets: &AssetServer, id: Uuid, depth: u32) -> Result<
             return Ok(base);
         }
         // A missing or cyclic parent falls back to this material's own stored params.
+    }
+    Ok(material)
+}
+
+fn load_catalog_material_asset_at(
+    assets: &mut AssetServer,
+    id: Uuid,
+    depth: u32,
+) -> Result<MaterialAsset> {
+    let material = load_catalog_material_asset_raw(assets, id)?;
+    if material.parent.value() != 0 && depth < MAX_INSTANCE_DEPTH {
+        if let Ok(parent_resolved) =
+            load_catalog_material_asset_at(assets, material.parent, depth + 1)
+        {
+            let mut base = parent_resolved;
+            apply_overrides(&mut base, &material.overrides);
+            base.parent = material.parent;
+            base.overrides = material.overrides;
+            return Ok(base);
+        }
     }
     Ok(material)
 }
