@@ -79,6 +79,19 @@ base64 = "0.22"
 anyhow = "1"
 thiserror = "2"
 
+# Logging (saffron-log) — tracing is the event/span API every crate emits through; the
+# subscriber stack, the time formatter, and the ANSI palette are the saffron-log internals
+# that render the compact line and host future sinks (file, editor channel).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "registry",
+    "fmt",
+    "env-filter",
+    "std",
+] }
+time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
+nu-ansi-term = "0.50"
+
 # Benchmark harness (dev-only; the ECS go/no-go gate in 03-ecs-and-scene phase 2).
 criterion = "0.7"
 
