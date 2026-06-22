@@ -19,6 +19,12 @@ serde_json = "1"
 tauri = { version = "2.11", features = [] }
 tauri-plugin-dialog = "2"
 
+# Logging: the bridge shares the engine's compact `tracing` format via the leaf
+# `saffron-log` crate (no other engine code is pulled in), and emits its own lines
+# (`viewport` / `saffron` subsystems) through the `tracing` macros.
+tracing = "0.1"
+saffron-log = { path = "../../engine/crates/log" }
+
 # The wayland subsurface presenter: GTK/GDK access for the transparent toplevel prep
 # (versions track what tauri/wry already resolve so the types unify), and the wayland
 # crates drive the subsurface over GTK's own connection (system libwayland backend),
