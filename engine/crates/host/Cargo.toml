@@ -18,11 +18,14 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+tracing.workspace = true
 saffron-core = { path = "../core" }
+saffron-log = { path = "../log" }
 saffron-app = { path = "../app" }
 saffron-window = { path = "../window" }
 saffron-rendering = { path = "../rendering" }
 saffron-sceneedit = { path = "../sceneedit" }
+saffron-runtime = { path = "../runtime" }
 saffron-control = { path = "../control" }
 saffron-scene = { path = "../scene" }
 saffron-geometry = { path = "../geometry" }

@@ -10,6 +10,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+tracing.workspace = true
 saffron-core = { path = "../core" }
 glam = { workspace = true, features = ["bytemuck"] }
 bytemuck = { workspace = true }

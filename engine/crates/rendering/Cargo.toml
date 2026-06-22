@@ -10,6 +10,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+tracing.workspace = true
 saffron-core = { path = "../core" }
 saffron-window = { path = "../window" }
 saffron-geometry = { path = "../geometry" }
