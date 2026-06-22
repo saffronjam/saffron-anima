@@ -32,12 +32,11 @@ use raw_window_handle::{
 };
 use saffron_signal::SubscriberList;
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::ElementState;
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window as WinitWindow, WindowAttributes};
 
 pub use winit::application::ApplicationHandler;
-pub use winit::event::WindowEvent;
+pub use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 pub use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 pub use winit::keyboard;
 pub use winit::window::WindowId;

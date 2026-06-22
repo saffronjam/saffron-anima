@@ -1,0 +1,27 @@
+[package]
+name = "saffron-player"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "saffron-player"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing.workspace = true
+saffron-core = { path = "../core" }
+saffron-log = { path = "../log" }
+saffron-app = { path = "../app" }
+saffron-runtime = { path = "../runtime" }
+saffron-rendering = { path = "../rendering" }
+saffron-window = { path = "../window" }
+saffron-scene = { path = "../scene" }
+saffron-assets = { path = "../assets" }
+saffron-protocol = { path = "../protocol" }
+serde_json.workspace = true
