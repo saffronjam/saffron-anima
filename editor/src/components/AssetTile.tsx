@@ -24,6 +24,12 @@ export interface AssetDragPayload {
   type?: AssetEntry["type"];
 }
 
+export function catalogDragEffectAllowed(
+  assetIds: readonly string[],
+): DataTransfer["effectAllowed"] {
+  return assetIds.length > 0 ? "copyMove" : "move";
+}
+
 /// Try to read an asset drag payload off a DataTransfer; null if it is not one.
 export function readAssetPayload(dt: DataTransfer): AssetDragPayload | null {
   const raw = dt.getData(ASSET_DND_MIME);
@@ -53,6 +59,56 @@ export function assetIdsFromPayload(payload: AssetDragPayload | null): string[] 
     return payload.ids;
   }
   return payload.id ? [payload.id] : [];
+}
+
+export function firstModelAssetId(
+  ids: readonly string[],
+  assets: readonly AssetEntry[],
+): string | null {
+  return ids.find((id) => assets.find((asset) => asset.id === id)?.type === "model") ?? null;
+}
+
+let transparentDragImage: HTMLImageElement | null = null;
+
+export function hideNativeDragImage(dt: DataTransfer): void {
+  if (!transparentDragImage) {
+    transparentDragImage = document.createElement("img");
+    transparentDragImage.src =
+      "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    transparentDragImage.style.position = "fixed";
+    transparentDragImage.style.left = "-1000px";
+    transparentDragImage.style.top = "-1000px";
+    transparentDragImage.style.width = "1px";
+    transparentDragImage.style.height = "1px";
+  }
+  if (!transparentDragImage.isConnected) {
+    document.body.appendChild(transparentDragImage);
+  }
+  dt.setDragImage(transparentDragImage, 0, 0);
+}
+
+export function AssetDragPreviewTile({ entry }: { entry: AssetEntry }) {
+  const url = getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE);
+
+  return (
+    <div className="flex w-[72px] flex-col gap-1 rounded-md border border-ring bg-card/95 p-1 shadow-lg ring-1 ring-ring">
+      <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
+        {url ? (
+          <img src={url} alt={entry.name} className="size-full object-contain" draggable={false} />
+        ) : (
+          <TypeIcon type={entry.type} />
+        )}
+        {entry.type === "animation" && entry.duration ? (
+          <span className="absolute bottom-1 right-1 rounded bg-background/80 px-1 py-0.5 text-[9px] font-medium tabular-nums text-muted-foreground">
+            {formatDurationBadge(entry.duration)}
+          </span>
+        ) : null}
+      </div>
+      <div className="truncate rounded-sm px-0.5 text-center text-[11px] leading-tight text-foreground">
+        {entry.name}
+      </div>
+    </div>
+  );
 }
 
 /// The DnD payload for dragging catalog FOLDERS (their full paths) — distinct from
@@ -134,6 +190,7 @@ export interface AssetTileProps {
   /// Write the drag payload (the panel owns selection, so it assembles the asset +
   /// folder ids the drag carries).
   onBeginDrag(entry: AssetEntry, event: React.DragEvent): void;
+  onEndDrag(): void;
   /// The rename input settled (commit or cancel); the panel clears its rename state.
   onRenameEnd(): void;
 }
@@ -150,12 +207,14 @@ export const AssetTile = memo(function AssetTile({
   onDelete,
   onSelect,
   onBeginDrag,
+  onEndDrag,
   onRenameEnd,
 }: AssetTileProps) {
   logRender("AssetTile");
   // Membership-only subscription: the tile re-renders when ITS selected bit flips,
   // never on unrelated selection changes.
   const selected = useEditorStore((s) => s.selectedAssetIds.has(entry.id));
+  const dragging = useEditorStore((s) => s.catalogDrag?.assetIds.includes(entry.id) ?? false);
   const [url, setUrl] = useState<string | null>(() =>
     getCachedThumbnailUrl(entry.id, THUMBNAIL_FETCH_SIZE),
   );
@@ -222,6 +281,7 @@ export const AssetTile = memo(function AssetTile({
         // Renaming disables the drag so a tile-drag never starts while typing.
         draggable={!renaming}
         onDragStart={(event) => onBeginDrag(entry, event)}
+        onDragEnd={onEndDrag}
         onClick={(event) => onSelect(entry, event)}
         onDoubleClick={() => onView(entry)}
         onKeyDown={(event) => {
@@ -235,8 +295,9 @@ export const AssetTile = memo(function AssetTile({
         }}
         className={cn(
           "group flex w-[72px] cursor-grab flex-col gap-1 rounded-md border border-transparent p-1",
-          "transition-colors hover:border-ring hover:bg-accent/40 active:cursor-grabbing",
+          "transition-[opacity,color,border-color,background-color] duration-150 hover:border-ring hover:bg-accent/40 active:cursor-grabbing",
           selected && "border-ring bg-accent/60 ring-1 ring-ring",
+          dragging && "opacity-45",
         )}
       >
         <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-muted">

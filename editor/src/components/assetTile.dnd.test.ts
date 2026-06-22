@@ -2,12 +2,15 @@ import { describe, expect, test } from "bun:test";
 import {
   ASSET_DND_MIME,
   assetIdsFromPayload,
+  catalogDragEffectAllowed,
   type AssetDragPayload,
   FOLDER_DND_MIME,
+  firstModelAssetId,
   isCatalogDrag,
   readAssetPayload,
   readFolderPayload,
 } from "./AssetTile";
+import type { AssetEntry } from "../protocol";
 
 /// A minimal DataTransfer stand-in: `getData(mime)` returns the stored string (or
 /// "" for an absent mime, matching the DOM), and `types` lists the present mimes.
@@ -120,6 +123,32 @@ describe("assetIdsFromPayload", () => {
   test("round-trips a multi-id payload read off a DataTransfer", () => {
     const payload = readAssetPayload(withAsset(JSON.stringify({ ids: ["m1", "m2"] })));
     expect(assetIdsFromPayload(payload)).toEqual(["m1", "m2"]);
+  });
+});
+
+describe("catalogDragEffectAllowed", () => {
+  test("asset drags allow copy placement and move organization", () => {
+    expect(catalogDragEffectAllowed(["model-1"])).toBe("copyMove");
+  });
+
+  test("folder-only drags remain move-only", () => {
+    expect(catalogDragEffectAllowed([])).toBe("move");
+  });
+});
+
+describe("firstModelAssetId", () => {
+  const assets = [
+    { id: "texture-1", name: "Texture", path: "assets/texture.png", type: "texture" },
+    { id: "model-1", name: "Model", path: "assets/model.smodel", type: "model" },
+    { id: "model-2", name: "Second Model", path: "assets/second.smodel", type: "model" },
+  ] satisfies AssetEntry[];
+
+  test("returns the first dragged id whose catalog entry is a model", () => {
+    expect(firstModelAssetId(["texture-1", "model-2", "model-1"], assets)).toBe("model-2");
+  });
+
+  test("returns null when the drag contains no model assets", () => {
+    expect(firstModelAssetId(["texture-1", "missing"], assets)).toBeNull();
   });
 });
 
