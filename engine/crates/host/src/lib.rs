@@ -25,20 +25,15 @@
 mod control_renderer;
 mod layer;
 mod overlay;
-mod script_bridge;
 pub mod viewport_shm;
 
 pub use control_renderer::HostControlRenderer;
 pub use layer::{HostLayer, ParentWatch, TeardownStep};
 pub use overlay::build_scene_edit_overlay;
-pub use script_bridge::{
-    HostScriptBridge, ScriptLogLine, SharedPhysics, SharedScene, SharedScriptSink,
-};
 pub use viewport_shm::{ShmView, ShmViewConfig, ViewportShmPublisher};
 
 use saffron_app::{App, AppConfig, attach_layer, run};
 use saffron_assets::engine_asset_path;
-use saffron_core::{log_error, log_info, log_warn};
 use saffron_window::WindowConfig;
 
 /// Builds the editor host (window or headless device + renderer + the editor session), runs
@@ -50,6 +45,8 @@ use saffron_window::WindowConfig;
 /// runs before [`HostLayer::on_detach`] tears the session down, before the renderer drops.
 #[must_use]
 pub fn run_host(title: impl Into<String>, width: u32, height: u32) -> i32 {
+    saffron_log::init_logging();
+
     let editor_spawned = std::env::var_os("SAFFRON_EDITOR_NATIVE_VIEWPORT").is_some();
 
     // The viewport shm segments are created at startup (both views, if named) so the
@@ -57,13 +54,13 @@ pub fn run_host(title: impl Into<String>, width: u32, height: u32) -> i32 {
     let shm = match ViewportShmPublisher::from_env() {
         Ok(shm) => shm,
         Err(err) => {
-            log_error!("viewport shm publish: {err}");
+            tracing::error!("viewport shm publish: {err}");
             ViewportShmPublisher::new()
         }
     };
     let shm_publish = shm.any_enabled();
     if shm_publish {
-        log_info!("viewport shm publish enabled");
+        tracing::info!("viewport shm publish enabled");
     }
 
     let asset_root = engine_asset_path("assets");
@@ -82,7 +79,7 @@ pub fn run_host(title: impl Into<String>, width: u32, height: u32) -> i32 {
             if let Some(renderer) = app.frame_host.renderer_mut() {
                 renderer.set_present_viewport_only(true);
                 if let Err(err) = renderer.set_aa(4, false, false) {
-                    log_warn!("default AA setup failed: {err}");
+                    tracing::warn!("default AA setup failed: {err}");
                 }
             }
 

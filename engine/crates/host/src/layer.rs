@@ -15,35 +15,26 @@
 //!   concrete [`Renderer`] through [`saffron_app::FrameHost::renderer_mut`]; with no
 //!   renderer attached (the test host) those steps are skipped.
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::sync::Arc;
-
 use glam::Vec2;
 
-use saffron_animation::{AnimMode, AnimationRuntime, tick_animation};
+use saffron_animation::{AnimMode, AnimationRuntime};
 use saffron_app::{App, Layer};
 use saffron_assets::{
-    AssetServer, RenderSceneOptions, RendererScene, RendererUploader, render_scene,
+    AssetServer, RenderSceneOptions, RendererScene, RendererUploader, render_scene_with_transient,
 };
 use saffron_control::ControlContext;
+use saffron_runtime::RuntimeSession;
 
 use crate::control_renderer::HostControlRenderer;
-use saffron_core::{TimeSpan, Uuid, log_error, log_warn};
-use saffron_physics::{PoseTarget, World};
+use saffron_core::TimeSpan;
 use saffron_protocol::{GetScriptSchemaParams, GetScriptSchemaResult, ScriptFieldDto};
 use saffron_rendering::{GpuQueue, Renderer, Uploader};
-use saffron_scene::{
-    CameraView, ComponentRegistry, Entity, Mesh, Scene, ScriptInputState,
-    derive_script_input_edges, register_builtin_components,
-};
+use saffron_scene::{CameraView, Entity, Mesh, Scene};
 use saffron_sceneedit::{PlayState, SceneEditContext, update_scene_edit_camera};
-use saffron_script::{ContactInfo, ScriptHost, ScriptHostBridge, ScriptRunError};
 use saffron_signal::SubscriptionId;
 use saffron_window::Window;
 
 use crate::overlay::build_scene_edit_overlay;
-use crate::script_bridge::{HostScriptBridge, ScriptLogLine, SharedPhysics, SharedScene};
 use crate::viewport_shm::{ShmView, ViewportShmPublisher};
 
 /// The host's apex layer: the editor session plus the wired subsystems.
@@ -56,44 +47,13 @@ pub struct HostLayer {
     editor: SceneEditContext,
     /// The live asset catalog + GPU caches + thumbnail worker.
     assets: AssetServer,
-    /// The per-session animation player (clip cache + transitions + IK).
-    animation: AnimationRuntime,
     /// The control plane: the command registry + the once-per-frame socket drain.
     control: ControlContext,
-    /// The play session's script VM + instances. Empty between plays; `start_scripts`/
-    /// `tick_scripts` run on the play edge / each tick. Behind an `Rc<RefCell>` because the
-    /// `sim_tick` seam closure (stored in the editor, invoked while the editor is borrowed by
-    /// `tick_play`) must reach it without capturing `&mut self` — the single-thread
-    /// shared-mutable idiom.
-    script: Rc<RefCell<ScriptHost>>,
-    /// The component reflection table the script start/tick/contact calls bind, built once
-    /// (`register_builtin_components`); the editor's own registry is not `Clone`, and this is
-    /// the same closed component set, so a host-owned `Arc` is the one source the play
-    /// session's scripts read through.
-    script_registry: Arc<ComponentRegistry>,
-    /// The live play physics world, present exactly while play is active (`None` in Edit).
-    /// Behind the shared cell so the bridge's `sa.raycast`/impulse bindings and the `sim_tick`
-    /// closure reach it, and `poll_control` lends `borrow_mut().as_mut()` into the
-    /// `EngineContext::physics` borrow.
-    physics: SharedPhysics,
-    /// The gameplay-input snapshot the `sim_tick` closure derives edges on and ticks scripts
-    /// with. Shared so the closure reaches it; the host syncs the editor's authored input into
-    /// it before each tick and copies the derived state back after (the closure cannot reach
-    /// the editor, borrowed by `tick_play`).
-    script_input: Rc<RefCell<ScriptInputState>>,
-    /// This frame's ragdoll pose targets, snapshotted from the animation runtime's `last_pose`
-    /// after `tick_animation` and before `tick_play`, so the `sim_tick` closure motors active
-    /// ragdolls toward the animated pose.
-    pose_targets: Rc<RefCell<Vec<PoseTarget>>>,
-    /// The `sa.log` lines the bridge buffers during a script call; drained into the editor's
-    /// script-log ring after `tick_play` releases the editor borrow.
-    script_log_sink: Rc<RefCell<Vec<ScriptLogLine>>>,
-    /// The script errors the `sim_tick` closure records during a tick/contact dispatch;
-    /// drained into the editor's error ring after `tick_play`, then the deferred pause fires.
-    script_error_sink: Rc<RefCell<Vec<ScriptRunError>>>,
-    /// The host-owned bridge, kept alive across plays so the same `Rc` is re-installed each
-    /// play edge.
-    bridge: Rc<dyn ScriptHostBridge>,
+    /// The shared play-mode simulation spine: the Jolt world + script VM + animation runtime.
+    /// Idle in Edit; `start`/`stop` on the Edit↔Play edge, `tick_animation` (both modes) and
+    /// the gated `step` (play only) each frame. The same `RuntimeSession` the standalone
+    /// `saffron-player` runs, so "advance the world a frame" is one code path.
+    runtime: RuntimeSession,
     /// The play state the host last reconciled, for the edge detection that builds/tears the
     /// world + VM (run host-side after `poll_control` releases the editor borrow rather than
     /// inside the published transition).
@@ -106,18 +66,6 @@ pub struct HostLayer {
     /// block-open both panes.
     shm: ViewportShmPublisher,
 
-    /// Seq high-water for per-tick contact → script dispatch. Shared so the `sim_tick`
-    /// closure advances it across ticks.
-    contact_cursor: Rc<Cell<u64>>,
-    /// A script VM exists (Playing/Paused); stop destroys it.
-    script_vm_active: bool,
-    /// The Jolt process globals (`Factory` + registered types) are installed — set true the first
-    /// time a play world is built. They outlive every world, so teardown shuts them down once,
-    /// *after* the last world drops.
-    physics_init: bool,
-    /// Set inside the `sim_tick` closure on a contained script failure; drives the deferred
-    /// pause once per `update`. Shared so the closure flips it.
-    script_error_pending: Rc<Cell<bool>>,
     /// Frames publish to shared memory; the editor owns the render size.
     shm_publish: bool,
     /// Tracks asset-preview transitions so the anim runtime is pruned once per edge.
@@ -160,8 +108,6 @@ pub enum TeardownStep {
     PhysicsWorldDropped,
     /// Shut down the Jolt process globals — only after the last world is gone.
     JoltGlobalsShutdown,
-    /// Null the `sim_tick` seam (no dangling physics/script closure).
-    SimTickCleared,
     /// Unsubscribe the two play-state lifecycle hooks.
     PlayHooksUnsubscribed,
     /// Drop the host's one-off uploader + clear the GPU `Ref` caches, before the renderer drops.
@@ -170,9 +116,9 @@ pub enum TeardownStep {
 
 impl HostLayer {
     /// Builds the host layer: a seeded editor context, an asset server rooted at `asset_root`,
-    /// the animation runtime with its clip loader installed, the control context (which binds
-    /// the socket), the host-owned `get-script-schema` command, and the two play-state
-    /// lifecycle subscriptions held as live tokens.
+    /// the idle [`RuntimeSession`] (its world/VM build lazily on the play edge), the control
+    /// context (which binds the socket), the host-owned `get-script-schema` command, and the two
+    /// play-state lifecycle subscriptions held as live tokens.
     ///
     /// `editor_spawned` records whether the editor launched this host (the parent-death watch
     /// is armed only then, capturing `getppid()` now); `shm_publish` records that frames
@@ -186,50 +132,17 @@ impl HostLayer {
         let editor = SceneEditContext::new();
         let assets = AssetServer::new(asset_root);
 
-        let animation = AnimationRuntime::new();
-
         let mut control = ControlContext::new();
         Self::register_script_schema_command(&mut control);
-
-        // The play-session shared cells: the `sim_tick` seam closure is stored in the editor
-        // and invoked while the editor is borrowed by `tick_play`, so it cannot capture
-        // `&mut self`; it reaches the world / VM / cursors through these single-thread cells
-        // instead. The host holds an `Rc::clone` of each so it can build/tear the session and
-        // drain the sinks.
-        let physics: SharedPhysics = Rc::new(RefCell::new(None));
-        let script_log_sink: Rc<RefCell<Vec<ScriptLogLine>>> = Rc::new(RefCell::new(Vec::new()));
-        // The bridge's scene cell backs only the script-driven `sa.set_ragdoll_enabled(rig)` rig
-        // lookup, an off-gate path: during a tick the play scene is lent to the script session's
-        // thread-local, so the host cannot also share it here without a clone. The cell stays
-        // empty (a script enabling a ragdoll mid-tick resolves no rig); control-driven ragdoll
-        // enabling goes straight through `EngineContext::physics`, unaffected.
-        let bridge_scene: SharedScene = Rc::new(RefCell::new(Scene::new()));
-        let bridge: Rc<dyn ScriptHostBridge> = Rc::new(HostScriptBridge::new(
-            Rc::clone(&physics),
-            bridge_scene,
-            Rc::clone(&script_log_sink),
-        ));
 
         let mut layer = Self {
             editor,
             assets,
-            animation,
             control,
-            script: Rc::new(RefCell::new(ScriptHost::new())),
-            script_registry: Arc::new(register_builtin_components()),
-            physics,
-            script_input: Rc::new(RefCell::new(ScriptInputState::default())),
-            pose_targets: Rc::new(RefCell::new(Vec::new())),
-            script_log_sink,
-            script_error_sink: Rc::new(RefCell::new(Vec::new())),
-            bridge,
+            runtime: RuntimeSession::new(),
             last_play_state: PlayState::Edit,
             uploader: None,
             shm: ViewportShmPublisher::new(),
-            contact_cursor: Rc::new(Cell::new(0)),
-            script_vm_active: false,
-            physics_init: false,
-            script_error_pending: Rc::new(Cell::new(false)),
             shm_publish,
             preview_active: false,
             editor_spawned,
@@ -315,10 +228,10 @@ impl HostLayer {
         &mut self.editor
     }
 
-    /// The animation runtime (for tests asserting the preview-prune behavior).
+    /// The runtime's animation player (for tests asserting the preview-prune behavior).
     #[must_use]
     pub fn animation(&self) -> &AnimationRuntime {
-        &self.animation
+        self.runtime.animation()
     }
 
     /// Attaches the viewport shm publisher `run_host` builds from the editor-set
@@ -331,21 +244,19 @@ impl HostLayer {
     /// The per-tick contact → script dispatch high-water cursor.
     #[must_use]
     pub fn contact_cursor(&self) -> u64 {
-        self.contact_cursor.get()
+        self.runtime.contact_cursor()
     }
 
-    /// Whether a live play physics world is present (`false` in Edit). The world lives behind
-    /// the shared cell, so a borrowing accessor would alias the cell `poll_control` /
-    /// `sim_tick` hold; this reports presence without lending the world out.
+    /// Whether a live play physics world is present (`false` in Edit).
     #[must_use]
     pub fn has_physics(&self) -> bool {
-        self.physics.borrow().is_some()
+        self.runtime.has_physics()
     }
 
     /// Whether a script VM is live (Playing/Paused).
     #[must_use]
     pub fn script_vm_active(&self) -> bool {
-        self.script_vm_active
+        self.runtime.script_vm_active()
     }
 
     /// Whether any viewport view publishes to shared memory.
@@ -400,9 +311,10 @@ impl HostLayer {
     }
 
     /// The renderer-independent per-frame spine: the parent-death verdict, the asset-preview
-    /// prune on its transition edge, `tick_animation` then `tick_play` (control runs before
-    /// this, so a play/step command lands the same frame), the deferred script-error pause, the
-    /// fly-camera look-delta drain, and the edit smoothing. Returns the parent-death verdict.
+    /// prune on its transition edge, the runtime's `tick_animation` then the gated `step`
+    /// (control runs before this, so a play/step command lands the same frame), the deferred
+    /// script-error pause, the fly-camera look-delta drain, and the edit smoothing. Returns the
+    /// parent-death verdict.
     pub fn update_session(
         &mut self,
         dt: TimeSpan,
@@ -423,63 +335,38 @@ impl HostLayer {
         // re-entered preview starts clean and dead entries never accumulate across opens.
         let previewing = self.editor.previewing();
         if previewing != self.preview_active {
-            self.animation.prune_session();
+            self.runtime.prune_animation();
             self.preview_active = previewing;
         }
 
-        // Animation runs every frame in both Edit (preview) and Play, before scripts so a
-        // script can still override a bone the same frame.
+        // Animation runs every frame in both Edit (preview) and Play, before the simulation step
+        // so a script can still override a bone the same frame physics settles it. `editor`,
+        // `runtime`, and `assets` are distinct fields, so the borrows are disjoint.
         let anim_mode = if self.editor.play_state == PlayState::Edit {
             AnimMode::Edit
         } else {
             AnimMode::Play
         };
-        // The animation evaluator sits below `saffron-assets`, so the host hands it a loader
-        // resolving a clip id through the **live** catalog. `editor`, `animation`, and `assets`
-        // are distinct fields, so the three borrows are disjoint; the loader closure is the
-        // per-tick injected dependency.
-        let assets = &mut self.assets;
-        let mut load = |id: Uuid| {
-            assets
-                .load_anim_clip(id)
-                .map_err(|err| saffron_animation::Error::ClipLoad(err.to_string()))
-        };
-        let scene = self.editor.active_scene();
-        tick_animation(&mut self.animation, scene, dt.seconds, anim_mode, &mut load);
+        {
+            let scene = self.editor.active_scene();
+            self.runtime
+                .tick_animation(scene, &mut self.assets, dt.seconds, anim_mode);
+        }
 
-        // Snapshot this frame's animated poses into the shared cell (after `tick_animation`,
-        // before `tick_play`), so the `sim_tick` closure motors each active ragdoll toward the
-        // pose without reaching the animation runtime it cannot capture. Cheap when no rig is
-        // driven.
-        if self.editor.play_state != PlayState::Edit && self.script_vm_active {
-            let mut targets = self.pose_targets.borrow_mut();
-            targets.clear();
-            for (rig, pose) in self.animation.last_poses() {
-                targets.push(PoseTarget {
-                    rig: Uuid(rig),
-                    local: pose.to_vec(),
-                });
+        // The gated simulation step. Control already drained this frame (in `on_update`), so a
+        // play/pause/step command lands now: `play_step_dt` consumes a grant and yields the dt to
+        // simulate, or `None` in Edit / inert Paused. The runtime steps physics + scripts over
+        // the play scene (taking the editor's gameplay input by `&mut`, deriving edges in place).
+        // A contained script failure surfaces through the drained errors and defers a pause —
+        // never inside the step, which would re-enter the play machine.
+        if let Some(step_dt) = self.editor.play_step_dt(dt.seconds) {
+            {
+                let (scene, input) = self.editor.play_scene_and_input();
+                self.runtime.step(scene, step_dt, input);
             }
-            // Lend the editor's authored gameplay input into the shared cell the closure ticks
-            // with; the derived state copies back after the tick (the closure cannot reach the
-            // editor, borrowed by `tick_play`).
-            *self.script_input.borrow_mut() = self.editor.script_input.clone();
-        }
-
-        // Control already drained this frame (in `on_update`), so a play/pause/step command
-        // takes effect this tick. `tick_play` invokes the installed `sim_tick` closure with the
-        // play scene; the closure steps physics + scripts through the shared cells.
-        self.editor.tick_play(dt.seconds);
-
-        // Drain what the tick buffered while the editor was borrowed: copy the derived input
-        // memory back, route logged lines + recorded errors into the editor's rings, and flip
-        // the deferred pause (never inside the tick — that would re-enter the play machine).
-        if self.editor.play_state != PlayState::Edit {
-            self.editor.script_input = self.script_input.borrow().clone();
-            self.drain_script_sinks();
-        }
-        if self.script_error_pending.replace(false) {
-            let _ = self.editor.pause_play();
+            if self.drain_runtime_sinks() {
+                let _ = self.editor.pause_play();
+            }
         }
 
         // Fly-cam: the editor streams pointer-lock look deltas over the control plane; drain
@@ -506,9 +393,11 @@ impl HostLayer {
         };
         let mut control_renderer = HostControlRenderer::new(renderer, uploader);
         // Lend the live play world into the `EngineContext::physics` borrow: a `RefMut` on the
-        // shared cell, held for the drain's duration. No `sim_tick` runs during the drain, so
-        // the cell is free to borrow here.
-        let mut physics = self.physics.borrow_mut();
+        // runtime's shared world cell, held for the drain's duration. The cell is an owned `Rc`
+        // clone, so borrowing it does not alias `self.editor`/`self.assets`; no simulation step
+        // runs during the drain, so the world is free to borrow here.
+        let physics_cell = self.runtime.physics_cell();
+        let mut physics = physics_cell.borrow_mut();
         self.control.poll(
             window,
             &mut control_renderer,
@@ -523,9 +412,9 @@ impl HostLayer {
     ///
     /// Runs each `on_update` right after `poll_control` releases the editor borrow — the only
     /// borrow-sound place, since the published transition holds `&mut editor`. On Edit→Playing it
-    /// builds the Jolt world from the play scene, starts the script VM, installs the bridge, and
-    /// sets the `sim_tick` seam; on →Edit it drops the world, stops the VM, and clears the seam in
-    /// teardown order. Pause/Resume keep the session — only the Edit boundary builds or tears it.
+    /// starts the runtime (builds the Jolt world from the play scene + the script VM); on →Edit it
+    /// stops it (drops the world, stops the VM). Pause/Resume keep the session — only the Edit
+    /// boundary builds or tears it.
     fn reconcile_play_edge(&mut self) {
         let now = self.editor.play_state;
         if now == self.last_play_state {
@@ -542,219 +431,43 @@ impl HostLayer {
         }
     }
 
-    /// Builds the play world + starts the script VM on the Edit→Playing edge.
-    ///
-    /// Turns the play scene's collider/rigidbody components into Jolt bodies (`World::populate`
-    /// cooking `.smesh` through the asset reader), adds per-bone kinematic bodies and a
-    /// `CharacterVirtual` per controller, starts the VM (loading the project's `src/` classes +
-    /// injecting fields), installs the host bridge, resets the contact cursor, and points the
-    /// editor's `sim_tick` seam at the play-loop closure.
+    /// Starts the runtime on the Edit→Playing edge: builds the world + script VM from the play
+    /// scene (`RuntimeSession::start`), mirrors the instance count onto the editor, and routes any
+    /// `on_create` log lines into the editor's ring (the editor is freely borrowable here).
     fn enter_play_session(&mut self) {
-        // Build the Jolt world from the play scene.
-        let world = match World::new() {
-            Ok(world) => world,
-            Err(err) => {
-                log_error!("physics world create failed: {err}");
-                return;
-            }
-        };
-        self.physics_init = true; // globals installed by `World::new`; teardown shuts them down once.
-        *self.physics.borrow_mut() = Some(world);
-        self.contact_cursor.set(0);
-        self.populate_play_world();
-
-        // Start the script VM against the play scene and install the bridge.
-        self.start_play_scripts();
-
-        self.install_sim_tick();
-    }
-
-    /// Populates the live world from the play scene's components: collider/rigidbody bodies
-    /// (cooking convex-hull/mesh shapes through the asset reader), per-bone kinematic bodies for
-    /// bone-following rigs, and a `CharacterVirtual` per controller entity.
-    fn populate_play_world(&mut self) {
-        let assets = &mut self.assets;
-        let mut world_ref = self.physics.borrow_mut();
-        let Some(world) = world_ref.as_mut() else {
-            return;
-        };
-        let scene = self.editor.active_scene();
-
-        let mut cook = |id: Uuid| {
-            assets
-                .load_mesh_cpu_asset(id)
-                .map_err(|err| err.to_string())
-        };
-        world.populate(scene, &mut cook);
-        world.build_bone_bodies(scene);
-
-        let mut characters: Vec<Entity> = Vec::new();
-        scene.for_each::<&saffron_scene::CharacterController, _>(|entity, _| {
-            characters.push(entity);
-        });
-        for entity in characters {
-            if let Err(err) = world.add_character(entity, scene) {
-                log_warn!("character controller setup failed: {err}");
-            }
+        let project_root = std::path::PathBuf::from(&self.editor.project_root);
+        {
+            let scene = self.editor.active_scene();
+            self.runtime.start(scene, &mut self.assets, &project_root);
         }
+        self.editor.script_instance_count =
+            i32::try_from(self.runtime.instance_count()).unwrap_or(i32::MAX);
+        self.drain_runtime_sinks();
     }
 
-    /// Starts the play session's script VM and installs the host bridge.
-    ///
-    /// Loads each `Script` slot's class from `<project>/src`, injects its declared fields, and
-    /// runs `on_create` per instance. A start failure is logged and leaves the VM inactive (no
-    /// scripts run); physics still steps. The buffered `sa.log` lines drain into the editor's
-    /// ring after the call releases the editor borrow.
-    fn start_play_scripts(&mut self) {
-        self.script
-            .borrow_mut()
-            .install_bridge(Rc::clone(&self.bridge));
-        let src_dir = std::path::Path::new(&self.editor.project_root).join("src");
-        let registry = Arc::clone(&self.script_registry);
-        let scene = self.editor.active_scene();
-        let result = self
-            .script
-            .borrow_mut()
-            .start_scripts(scene, registry, &src_dir);
-        match result {
-            Ok(()) => {
-                self.script_vm_active = true;
-                self.editor.script_instance_count =
-                    i32::try_from(self.script.borrow().instance_count()).unwrap_or(i32::MAX);
-            }
-            Err(err) => {
-                log_error!("script start failed: {err}");
-                self.script_vm_active = false;
-            }
-        }
-        // `on_create` may have logged; route the lines into the editor now (it is free here).
-        self.drain_script_sinks();
-    }
-
-    /// Tears the play session down on the Playing/Paused→Edit edge, in teardown order: stop the
-    /// VM (it never touches the scene), then drop the world (RAII frees its Jolt bodies), then
-    /// clear the `sim_tick` seam. The Jolt globals outlive every world, so they shut down only in
-    /// the host teardown, after the last world is gone.
+    /// Stops the runtime on the Playing/Paused→Edit edge (drops the world + stops the VM) and
+    /// clears the editor's instance count. The Jolt globals outlive every world, so they shut
+    /// down only in the host teardown, after the last world is gone.
     fn exit_play_session(&mut self) {
-        self.script.borrow_mut().stop_scripts();
-        self.script_vm_active = false;
+        self.runtime.stop();
         self.editor.script_instance_count = 0;
-        *self.physics.borrow_mut() = None;
-        self.editor.sim_tick = None;
-        self.pose_targets.borrow_mut().clear();
-        self.script_log_sink.borrow_mut().clear();
-        self.script_error_sink.borrow_mut().clear();
-        self.contact_cursor.set(0);
     }
 
-    /// Installs the `sim_tick` seam closure on the editor.
-    ///
-    /// The closure captures the play-session shared cells (it cannot capture `&mut self`: it runs
-    /// while the editor is borrowed by `tick_play`). Per fixed step it drives ragdolls to the
-    /// snapshotted animated pose, advances the per-bone blend, steps physics (which writes
-    /// Dynamic body poses back into the play scene), writes ragdoll poses, drains the tick's new
-    /// contacts and dispatches them to scripts, derives input edges, and runs `on_update` —
-    /// physics-then-scripts, so a script reads this frame's settled transforms. A contained
-    /// script failure is buffered for the host's deferred pause.
-    fn install_sim_tick(&mut self) {
-        let physics = Rc::clone(&self.physics);
-        let script = Rc::clone(&self.script);
-        let registry = Arc::clone(&self.script_registry);
-        let input = Rc::clone(&self.script_input);
-        let pose_targets = Rc::clone(&self.pose_targets);
-        let contact_cursor = Rc::clone(&self.contact_cursor);
-        let error_pending = Rc::clone(&self.script_error_pending);
-        let error_sink = Rc::clone(&self.script_error_sink);
-        let vm_active = self.script_vm_active;
-
-        self.editor.sim_tick = Some(Box::new(move |scene: &mut Scene, dt: f32| {
-            // Step physics + collect this tick's new contacts under a scoped world borrow that
-            // is released before any script runs (a contact / `on_update` handler may
-            // `sa.raycast` back into the world through the bridge, re-borrowing the cell).
-            let events = {
-                let mut world_ref = physics.borrow_mut();
-                let Some(world) = world_ref.as_mut() else {
-                    return;
-                };
-                // Drive active ragdolls toward this frame's animated pose, ease the per-bone
-                // physics weight, then step — drive before the step so the motors are read in
-                // the solve.
-                world.drive_ragdolls_to_pose(&pose_targets.borrow());
-                world.advance_ragdoll_blend(dt);
-                world.step(scene, dt);
-                // Physics wins the frame: write each ragdoll part's pose into the bone override.
-                world.write_ragdoll_poses(scene);
-
-                if vm_active {
-                    let drain = world.drain_contacts(contact_cursor.get());
-                    contact_cursor.set(drain.high_water_seq);
-                    drain.events
-                } else {
-                    Vec::new()
-                }
-            };
-
-            if !vm_active {
-                return;
-            }
-
-            // Dispatch the drained contacts before `on_update`, so a trigger/contact handler
-            // runs the same frame the contact fired.
-            for event in events {
-                let contact = ContactInfo {
-                    entity_a: event.entity_a,
-                    entity_b: event.entity_b,
-                    begin: event.kind == saffron_physics::ContactKind::Begin,
-                    sensor: event.sensor,
-                    point: event.point,
-                    normal: event.normal,
-                };
-                let failure =
-                    script
-                        .borrow_mut()
-                        .dispatch_contact(scene, Arc::clone(&registry), contact);
-                if let Some(err) = failure {
-                    log_error!(
-                        "script contact handler in '{}': {}",
-                        err.script,
-                        err.message
-                    );
-                    error_sink.borrow_mut().push(err);
-                    error_pending.set(true);
-                    return;
-                }
-            }
-
-            // Derive this tick's input edges, then run every instance's `on_update`.
-            let failure = {
-                let mut input_ref = input.borrow_mut();
-                derive_script_input_edges(&mut input_ref);
-                script.borrow_mut().tick_scripts(
-                    scene,
-                    Arc::clone(&registry),
-                    Some(&mut input_ref),
-                    dt,
-                )
-            };
-            if let Some(err) = failure {
-                log_error!("script error in '{}': {}", err.script, err.message);
-                error_sink.borrow_mut().push(err);
-                error_pending.set(true);
-            }
-        }));
-    }
-
-    /// Routes what a script call batch buffered while the editor was borrowed into the editor's
-    /// rings: the `sa.log` lines and the contained errors. Called after each `tick_play` and
-    /// after the play-edge `start_scripts`, when the editor is freely borrowable.
-    fn drain_script_sinks(&mut self) {
-        for line in self.script_log_sink.borrow_mut().drain(..) {
+    /// Routes what the runtime buffered this step into the editor's rings — the `sa.log` lines and
+    /// the contained script errors — and reports whether any error fired (the caller defers a
+    /// pause). Called after each gated `step` and after the play-edge `start`, when the editor is
+    /// freely borrowable.
+    fn drain_runtime_sinks(&mut self) -> bool {
+        for line in self.runtime.take_logs() {
             self.editor.push_script_log(line.sender, line.message);
         }
-        for err in self.script_error_sink.borrow_mut().drain(..) {
+        let errors = self.runtime.take_errors();
+        let had_error = !errors.is_empty();
+        for err in errors {
             self.editor
                 .push_script_error(err.entity_uuid.0, err.script, err.message);
         }
+        had_error
     }
 
     /// Brings the project up from the editor-set environment once at attach time, before the
@@ -806,9 +519,33 @@ impl HostLayer {
         let skinning = renderer.skinning_enabled();
         self.ensure_uploader(renderer);
         if let Some(uploader) = self.uploader.as_ref() {
-            let scene: &mut Scene = self.editor.active_scene();
             let mut driver = RendererScene::new(renderer, uploader, skinning);
-            render_scene(&mut driver, scene, &mut self.assets, &cam, options);
+            if self.editor.play_state == PlayState::Edit && !self.editor.preview_active_view {
+                let scene = &mut self.editor.scene;
+                let placement_preview = self
+                    .editor
+                    .placement_preview
+                    .as_mut()
+                    .map(|preview| &mut preview.scene);
+                render_scene_with_transient(
+                    &mut driver,
+                    scene,
+                    &mut self.assets,
+                    &cam,
+                    options,
+                    placement_preview,
+                );
+            } else {
+                let scene: &mut Scene = self.editor.active_scene();
+                render_scene_with_transient(
+                    &mut driver,
+                    scene,
+                    &mut self.assets,
+                    &cam,
+                    options,
+                    None,
+                );
+            }
         }
 
         self.submit_scene_edit_overlay(renderer, &cam, view_width, view_height);
@@ -825,7 +562,7 @@ impl HostLayer {
         // its frame transport. The copy is recorded into the frame command buffer above; this
         // submits it. A failure is logged, not fatal.
         if let Err(err) = renderer.render_scene_offscreen() {
-            log_error!("render_scene_offscreen: {err}");
+            tracing::error!("render_scene_offscreen: {err}");
             return;
         }
         if self.shm_publish {
@@ -909,7 +646,7 @@ impl HostLayer {
     /// fallback still serves thumbnails), never fatal.
     fn start_thumbnail_worker(&mut self, renderer: &mut Renderer) {
         if let Err(err) = renderer.prewarm_thumbnail_resources() {
-            log_error!("thumbnail worker not started: prewarm failed: {err}");
+            tracing::error!("thumbnail worker not started: prewarm failed: {err}");
             return;
         }
         let queue = GpuQueue::new(renderer.device().graphics_queue);
@@ -921,7 +658,7 @@ impl HostLayer {
         ) {
             Ok(gpu) => gpu,
             Err(err) => {
-                log_error!("thumbnail worker not started: {err}");
+                tracing::error!("thumbnail worker not started: {err}");
                 return;
             }
         };
@@ -938,7 +675,7 @@ impl HostLayer {
         let queue = GpuQueue::new(renderer.device().graphics_queue);
         match Uploader::new(renderer.device(), &queue) {
             Ok(uploader) => self.uploader = Some(uploader),
-            Err(err) => log_error!("uploader create failed: {err}"),
+            Err(err) => tracing::error!("uploader create failed: {err}"),
         }
     }
 
@@ -963,8 +700,9 @@ impl HostLayer {
     /// 3. Quit can land mid-play: stop the script VM (it never touches the scene), drop the
     ///    physics world (RAII frees its Jolt bodies + detaches ragdolls before they destruct),
     ///    then shut down the Jolt globals **after** that last world is gone (the
-    ///    `Factory`/registered types outlive every body), then null the `sim_tick` seam and
-    ///    unsubscribe the two play-state hooks.
+    ///    `Factory`/registered types outlive every body), then unsubscribe the two play-state
+    ///    hooks. The first three steps delegate to the runtime, which owns the VM + world +
+    ///    globals.
     /// 4. Drop the host's one-off uploader + clear every cached GPU `Ref` **before** the renderer
     ///    frees the device/allocator — otherwise the last `Arc<GpuMesh>`/`Arc<GpuTexture>` drop
     ///    would free a GPU resource after its allocator is gone (UAF). The loop already idled the
@@ -976,23 +714,16 @@ impl HostLayer {
         self.control.shutdown();
         steps.push(TeardownStep::ControlClosed);
 
-        self.script.borrow_mut().stop_scripts();
-        self.script_vm_active = false;
+        self.runtime.stop_scripts();
         steps.push(TeardownStep::ScriptsStopped);
 
         // Drop the world before the Jolt globals: a live world holds Jolt bodies, so shutting
         // down the `Factory`/registered types first would be a use-after-free.
-        *self.physics.borrow_mut() = None;
+        self.runtime.drop_physics_world();
         steps.push(TeardownStep::PhysicsWorldDropped);
 
-        if self.physics_init {
-            saffron_physics::shutdown_physics();
-            self.physics_init = false;
-        }
+        self.runtime.shutdown_physics_globals();
         steps.push(TeardownStep::JoltGlobalsShutdown);
-
-        self.editor.sim_tick = None;
-        steps.push(TeardownStep::SimTickCleared);
 
         self.editor
             .on_play_state_changed
@@ -1077,23 +808,25 @@ impl Layer for HostLayer {
 
 #[cfg(test)]
 impl HostLayer {
-    /// Marks the host as mid-play with the Jolt globals installed and a live world, set directly
-    /// so a teardown test can drive a real play→quit.
-    fn set_play_session_for_test(&mut self, physics: World) {
-        *self.physics.borrow_mut() = Some(physics);
-        self.physics_init = true;
-        self.script_vm_active = true;
+    /// Drives the host into a live mid-play session through the real play edge (`enter_play` →
+    /// `reconcile_play_edge` → `RuntimeSession::start`), so a teardown test exercises a real
+    /// play→quit. Requires the Jolt globals to install (`World::new`); the caller probes first
+    /// and skips cleanly when the toolchain is absent.
+    fn set_play_session_for_test(&mut self) {
+        self.editor.enter_play().expect("enter play");
+        self.reconcile_play_edge();
     }
 
     /// Whether the Jolt globals are still flagged installed (a test reads the post-teardown state).
     fn physics_init_for_test(&self) -> bool {
-        self.physics_init
+        self.runtime.physics_init()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use saffron_physics::World;
     use saffron_sceneedit::PlayState;
     use std::sync::Mutex;
 
@@ -1231,9 +964,9 @@ mod tests {
     }
 
     #[test]
-    fn update_order_is_animation_then_tick_play() {
+    fn update_order_is_animation_then_step() {
         // A play/step command this frame must take effect this frame: stepping while Paused
-        // grants one fixed tick that `tick_play` (run after animation, inside update_session)
+        // grants one fixed tick that `play_step_dt` (run after animation, inside update_session)
         // consumes, advancing `play_tick`. We arm a step, then a single update consumes it.
         let mut host = standalone("order");
 
@@ -1253,7 +986,7 @@ mod tests {
         assert_eq!(
             host.editor().play_tick,
             before + 1,
-            "the stepped tick ran this frame (tick_play consumed the step after animation)"
+            "the stepped tick ran this frame (the gated step consumed it after animation)"
         );
         assert_eq!(
             host.editor().fly_input.look_delta,
@@ -1368,14 +1101,19 @@ mod tests {
     #[test]
     fn teardown_unsubscribes_and_drops_in_order() {
         let _guard = jolt_guard();
+        // Skip cleanly when the Jolt globals cannot install (no toolchain) — not a false pass.
+        match World::new() {
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("skipping: World::new failed: {err}");
+                return;
+            }
+        }
         let mut host = standalone("teardown-order");
 
-        // A play session active: a real Jolt world (so `physics_init` is meaningful) and the
-        // script-VM flag set, with both play-state subscriptions live and a `sim_tick` seam
-        // installed (the host fills it on the play edge). Quit can land here, mid-play.
-        let world = World::new().expect("world creation");
-        host.set_play_session_for_test(world);
-        host.editor_mut().sim_tick = Some(Box::new(|_scene, _dt| {}));
+        // A play session active via the real play edge: a live Jolt world + script VM, with both
+        // play-state subscriptions live. Quit can land here, mid-play.
+        host.set_play_session_for_test();
         assert!(host.play_hooks_live(), "the play-state hooks start live");
         assert!(host.has_physics(), "the play world is present");
         assert!(
@@ -1394,7 +1132,6 @@ mod tests {
                 TeardownStep::ScriptsStopped,
                 TeardownStep::PhysicsWorldDropped,
                 TeardownStep::JoltGlobalsShutdown,
-                TeardownStep::SimTickCleared,
                 TeardownStep::PlayHooksUnsubscribed,
                 TeardownStep::GpuCachesCleared,
             ],
@@ -1416,17 +1153,13 @@ mod tests {
             "the physics world dropped before the Jolt globals shut down"
         );
 
-        // Post-teardown state: subscriptions gone, world gone, sim_tick cleared, globals flagged
-        // down, script flag cleared — back to the fresh, drop-safe state.
+        // Post-teardown state: subscriptions gone, world gone, globals flagged down, script flag
+        // cleared — back to the fresh, drop-safe state.
         assert!(
             !host.play_hooks_live(),
             "teardown unsubscribed both play-state hooks (no dangling subscription)"
         );
         assert!(!host.has_physics(), "the play world was dropped");
-        assert!(
-            host.editor().sim_tick.is_none(),
-            "the sim_tick seam was nulled"
-        );
         assert!(
             !host.physics_init_for_test(),
             "the Jolt globals were shut down (physics_init cleared)"
