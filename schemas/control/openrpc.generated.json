@@ -1950,6 +1950,24 @@
       }
     },
     {
+      "name": "asset-placement",
+      "summary": "asset-placement {phase, asset?, u?, v?} — preview, commit, or clear a viewport model drop",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AssetPlacementParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssetPlacementResult"
+        }
+      }
+    },
+    {
       "name": "import-texture",
       "summary": "import-texture {path}",
       "params": [
@@ -2742,6 +2760,24 @@
       }
     },
     {
+      "name": "export-app",
+      "summary": "export-app {outputDir, app} — cook the project into a standalone app folder",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ExportAppParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ExportAppResult"
+        }
+      }
+    },
+    {
       "name": "quit",
       "summary": "close the running app",
       "params": [
@@ -2998,6 +3034,33 @@
           "animationVersion"
         ]
       },
+      "AppManifest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "default": "Saffron App"
+          },
+          "width": {
+            "type": "integer",
+            "default": 1280
+          },
+          "height": {
+            "type": "integer",
+            "default": 720
+          },
+          "fullscreen": {
+            "type": "boolean",
+            "default": false
+          },
+          "vsync": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": []
+      },
       "ApplyImpulseParams": {
         "type": "object",
         "additionalProperties": false,
@@ -3231,6 +3294,55 @@
           "capabilities",
           "bones",
           "clips"
+        ]
+      },
+      "AssetPlacementParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "phase": {
+            "type": "string",
+            "enum": [
+              "preview",
+              "commit",
+              "clear"
+            ]
+          },
+          "asset": {},
+          "u": {
+            "type": "number"
+          },
+          "v": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "AssetPlacementResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "transform": {
+            "$ref": "#/components/schemas/PlacementTransformDto"
+          },
+          "entity": {
+            "$ref": "#/components/schemas/EntityRef"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "valid"
         ]
       },
       "AssetPreviewOptionsResult": {
@@ -4334,6 +4446,41 @@
       },
       "EnvironmentDto": {
         "$ref": "#/components/schemas/Environment"
+      },
+      "ExportAppParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "outputDir": {
+            "type": "string"
+          },
+          "app": {
+            "$ref": "#/components/schemas/AppManifest"
+          }
+        },
+        "required": [
+          "outputDir",
+          "app"
+        ]
+      },
+      "ExportAppResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "path",
+          "warnings"
+        ]
       },
       "ExtractSubAssetParams": {
         "type": "object",
@@ -5738,6 +5885,26 @@
           "pixels"
         ]
       },
+      "PlacementTransformDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "translation": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "rotation": {
+            "$ref": "#/components/schemas/Vec3"
+          },
+          "scale": {
+            "$ref": "#/components/schemas/Vec3"
+          }
+        },
+        "required": [
+          "translation",
+          "rotation",
+          "scale"
+        ]
+      },
       "PlayAnimationParams": {
         "type": "object",
         "additionalProperties": false,
@@ -6450,12 +6617,22 @@
             "type": "string",
             "enum": [
               "lit",
+              "unlit",
               "wireframe",
+              "lit-wireframe",
+              "detail-lighting",
+              "lighting-only",
+              "reflections",
               "albedo",
               "normal",
               "roughness",
               "metallic",
-              "emissive"
+              "emissive",
+              "depth",
+              "ambient-occlusion",
+              "gi",
+              "light-complexity",
+              "motion-vectors"
             ]
           }
         },
@@ -7659,12 +7836,22 @@
             "type": "string",
             "enum": [
               "lit",
+              "unlit",
               "wireframe",
+              "lit-wireframe",
+              "detail-lighting",
+              "lighting-only",
+              "reflections",
               "albedo",
               "normal",
               "roughness",
               "metallic",
-              "emissive"
+              "emissive",
+              "depth",
+              "ambient-occlusion",
+              "gi",
+              "light-complexity",
+              "motion-vectors"
             ]
           }
         },
@@ -7678,12 +7865,22 @@
             "type": "string",
             "enum": [
               "lit",
+              "unlit",
               "wireframe",
+              "lit-wireframe",
+              "detail-lighting",
+              "lighting-only",
+              "reflections",
               "albedo",
               "normal",
               "roughness",
               "metallic",
-              "emissive"
+              "emissive",
+              "depth",
+              "ambient-occlusion",
+              "gi",
+              "light-complexity",
+              "motion-vectors"
             ]
           }
         },

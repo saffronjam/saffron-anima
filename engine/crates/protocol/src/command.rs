@@ -3,7 +3,7 @@
 //! `register_*_commands` joins this table to handler fns by name to dispatch, and the
 //! OpenRPC/manifest emitters read the same slice to emit `methods`.
 //!
-//! [`COMMANDS`] holds exactly the **153 typed commands** in the frozen wire order (the committed
+//! [`COMMANDS`] holds exactly the **155 typed commands** in the frozen wire order (the committed
 //! `schemas/control/command-manifest.generated.json` order, `ping` first, `quit` last) — the order
 //! is load-bearing: it is the manifest's `commands` order and the OpenRPC `methods` order, so the
 //! emitters reproduce the committed artifacts byte-for-byte. The lone untyped reflective builtin
@@ -32,7 +32,7 @@ pub struct CommandSpec {
     pub result: &'static str,
 }
 
-/// The 153 typed commands in frozen wire order (`help` excluded — see module docs).
+/// The 155 typed commands in frozen wire order (`help` excluded — see module docs).
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "ping",
@@ -683,6 +683,12 @@ pub static COMMANDS: &[CommandSpec] = &[
         result: "EntityRef",
     },
     CommandSpec {
+        name: "asset-placement",
+        summary: "asset-placement {phase, asset?, u?, v?} — preview, commit, or clear a viewport model drop",
+        params: "AssetPlacementParams",
+        result: "AssetPlacementResult",
+    },
+    CommandSpec {
         name: "import-texture",
         summary: "import-texture {path}",
         params: "PathParams",
@@ -947,6 +953,12 @@ pub static COMMANDS: &[CommandSpec] = &[
         result: "ThumbnailCacheResult",
     },
     CommandSpec {
+        name: "export-app",
+        summary: "export-app {outputDir, app} — cook the project into a standalone app folder",
+        params: "ExportAppParams",
+        result: "ExportAppResult",
+    },
+    CommandSpec {
         name: "quit",
         summary: "close the running app",
         params: "EmptyParams",
@@ -1071,6 +1083,10 @@ pub static COMMAND_SKIPS: &[(&str, &str)] = &[
     ("import-model", "requires an external model fixture path"),
     (
         "instantiate-model",
+        "requires a model asset id from a prior import",
+    ),
+    (
+        "asset-placement",
         "requires a model asset id from a prior import",
     ),
     (
@@ -1227,6 +1243,10 @@ pub static COMMAND_SKIPS: &[(&str, &str)] = &[
         "stop-preview",
         "needs a rigged entity with an animation player (covered by the e2e)",
     ),
+    (
+        "export-app",
+        "writes a staged app folder to disk from a loaded project (covered by the e2e)",
+    ),
 ];
 
 /// Every DTO type name a [`CommandSpec`] may reference — the struct/enum names the protocol crate
@@ -1246,6 +1266,7 @@ pub static DTO_TYPE_NAMES: &[&str] = &[
     "GiModeDto",
     "ViewModeDto",
     "AssetSlotDto",
+    "AssetPlacementPhaseDto",
     "ScreenshotTargetDto",
     "AssetTypeDto",
     "ProfilerModeDto",
@@ -1343,6 +1364,9 @@ pub static DTO_TYPE_NAMES: &[&str] = &[
     "OptionalPathParams",
     "ImportModelResult",
     "InstantiateModelParams",
+    "AssetPlacementParams",
+    "PlacementTransformDto",
+    "AssetPlacementResult",
     "ExtractSubAssetParams",
     "ClearExtractionParams",
     "ImportTextureResult",
@@ -1397,6 +1421,9 @@ pub static DTO_TYPE_NAMES: &[&str] = &[
     "MaterialCompileParams",
     "MaterialCompileResult",
     "MaterialCookResult",
+    "AppManifest",
+    "ExportAppParams",
+    "ExportAppResult",
     "AssignAssetResult",
     "PathResult",
     "ScreenshotParams",
@@ -1507,10 +1534,10 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn table_holds_153_typed_commands_in_frozen_order() {
+    fn table_holds_154_typed_commands_in_frozen_order() {
         assert_eq!(
             COMMANDS.len(),
-            153,
+            155,
             "command table count drifted from the catalog"
         );
         assert_eq!(
@@ -1554,10 +1581,10 @@ mod tests {
         let animation = animation_domain();
         let physics = physics_domain();
 
-        // The five domains partition the 153 typed commands: render 28 (the render file's 29
+        // The five domains partition the 155 typed commands: render 28 (the render file's 29
         // includes the untyped `help`, dropped here), scene 48 (the 47 in `register_scene_commands`
         // plus `get-script-schema`, which the host registers separately but the catalog groups with
-        // the script commands), asset 52, animation 13, physics 12 = 153.
+        // the script commands), asset 54, animation 13, physics 12 = 155.
         let domains = [render, scene, asset, animation, physics];
         for c in COMMANDS {
             let hits = domains.iter().filter(|d| d.contains(&c.name)).count();
@@ -1569,8 +1596,8 @@ mod tests {
         }
         let total: usize = domains.iter().map(|d| d.len()).sum();
         assert_eq!(
-            total, 153,
-            "the five domains must partition the 153 typed commands"
+            total, 155,
+            "the five domains must partition the 155 typed commands"
         );
 
         // Catalog endpoints per registration domain.
@@ -1609,7 +1636,7 @@ mod tests {
         for (n, _) in COMMAND_SKIPS {
             assert!(names.contains(n), "skip names unknown command `{n}`");
         }
-        assert_eq!(COMMAND_FIXTURES.len() + COMMAND_SKIPS.len(), 153);
+        assert_eq!(COMMAND_FIXTURES.len() + COMMAND_SKIPS.len(), 155);
     }
 
     /// Every command's `params`/`result` type name resolves to a DTO the crate defines — the join
@@ -1727,6 +1754,7 @@ mod tests {
             "open-project",
             "import-model",
             "instantiate-model",
+            "asset-placement",
             "scan-assets",
             "extract-subasset",
             "clear-extraction",
@@ -1772,6 +1800,7 @@ mod tests {
             "get-thumbnail",
             "view-asset",
             "thumbnail-cache",
+            "export-app",
             "quit",
         ]
     }

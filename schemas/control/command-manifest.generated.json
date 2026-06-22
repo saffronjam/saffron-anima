@@ -758,6 +758,13 @@
       "skip": "requires a model asset id from a prior import"
     },
     {
+      "name": "asset-placement",
+      "params": "AssetPlacementParams",
+      "result": "AssetPlacementResult",
+      "status": "typed",
+      "skip": "requires a model asset id from a prior import"
+    },
+    {
       "name": "import-texture",
       "params": "PathParams",
       "result": "ImportTextureResult",
@@ -1064,6 +1071,13 @@
       "result": "ThumbnailCacheResult",
       "status": "typed",
       "fixture": "thumbnail-cache-stats"
+    },
+    {
+      "name": "export-app",
+      "params": "ExportAppParams",
+      "result": "ExportAppResult",
+      "status": "typed",
+      "skip": "writes a staged app folder to disk from a loaded project (covered by the e2e)"
     },
     {
       "name": "quit",

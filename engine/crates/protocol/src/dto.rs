@@ -96,6 +96,61 @@ pub struct EntityRef {
     pub name: String,
 }
 
+/// The standalone app manifest: the window identity + present options the exported
+/// `saffron-player` boots with. It is the project's persisted `app` config block (set in the
+/// editor's Export dialog), written verbatim to `app.json` beside the player binary at export.
+/// `#[serde(default)]` lets a partial or absent `app.json` fall back field-by-field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct AppManifest {
+    /// The window title (and the default export folder name).
+    pub title: String,
+    /// The initial window width in pixels.
+    pub width: u32,
+    /// The initial window height in pixels.
+    pub height: u32,
+    /// Whether the window starts fullscreen.
+    pub fullscreen: bool,
+    /// Whether to present with vsync.
+    pub vsync: bool,
+}
+
+impl Default for AppManifest {
+    fn default() -> Self {
+        Self {
+            title: "Saffron App".to_string(),
+            width: 1280,
+            height: 720,
+            fullscreen: false,
+            vsync: true,
+        }
+    }
+}
+
+/// `export-app` params: cook the open project into a standalone app folder at `outputDir`, using
+/// `app` as the runtime manifest (written to `app.json` beside the player binary).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportAppParams {
+    /// The destination directory for the staged app (created if absent).
+    pub output_dir: String,
+    /// The runtime manifest to write into the staged `app.json`.
+    pub app: AppManifest,
+}
+
+/// `export-app` result: the staged app directory and any non-fatal warnings raised during cook.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportAppResult {
+    /// The staged app directory (the folder containing the player binary + data).
+    pub path: String,
+    /// Non-fatal warnings (e.g. a material that failed to pre-bake), for the editor to surface.
+    pub warnings: Vec<String>,
+}
+
 /// The `add-entity` preset selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "kebab-case")]
@@ -178,12 +233,22 @@ pub enum GiModeDto {
 #[ts(export)]
 pub enum ViewModeDto {
     Lit,
+    Unlit,
     Wireframe,
+    LitWireframe,
+    DetailLighting,
+    LightingOnly,
+    Reflections,
     Albedo,
     Normal,
     Roughness,
     Metallic,
     Emissive,
+    Depth,
+    AmbientOcclusion,
+    Gi,
+    LightComplexity,
+    MotionVectors,
 }
 
 /// The asset slot an `assign-asset` targets.
@@ -1175,6 +1240,52 @@ pub struct InstantiateModelParams {
     pub asset: AssetSelector,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AssetPlacementPhaseDto {
+    Preview,
+    Commit,
+    #[default]
+    Clear,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetPlacementParams {
+    pub phase: AssetPlacementPhaseDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<AssetSelector>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub u: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlacementTransformDto {
+    pub translation: Vec3,
+    pub rotation: Vec3,
+    pub scale: Vec3,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AssetPlacementResult {
+    pub active: bool,
+    pub valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transform: Option<PlacementTransformDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<EntityRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

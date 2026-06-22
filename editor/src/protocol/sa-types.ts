@@ -296,7 +296,7 @@ export interface RenderStatsDto {
   hdr: boolean;
   exposureEv: number;
   aa: "off" | "fxaa" | "taa" | "msaa2" | "msaa4" | "msaa8";
-  viewMode: "lit" | "wireframe" | "albedo" | "normal" | "roughness" | "metallic" | "emissive";
+  viewMode: "lit" | "unlit" | "wireframe" | "lit-wireframe" | "detail-lighting" | "lighting-only" | "reflections" | "albedo" | "normal" | "roughness" | "metallic" | "emissive" | "depth" | "ambient-occlusion" | "gi" | "light-complexity" | "motion-vectors";
 }
 
 export interface ProfilerSetModeParams {
@@ -485,11 +485,11 @@ export interface SetAaResult {
 }
 
 export interface SetViewModeParams {
-  mode?: "lit" | "wireframe" | "albedo" | "normal" | "roughness" | "metallic" | "emissive";
+  mode?: "lit" | "unlit" | "wireframe" | "lit-wireframe" | "detail-lighting" | "lighting-only" | "reflections" | "albedo" | "normal" | "roughness" | "metallic" | "emissive" | "depth" | "ambient-occlusion" | "gi" | "light-complexity" | "motion-vectors";
 }
 
 export interface SetViewModeResult {
-  viewMode: "lit" | "wireframe" | "albedo" | "normal" | "roughness" | "metallic" | "emissive";
+  viewMode: "lit" | "unlit" | "wireframe" | "lit-wireframe" | "detail-lighting" | "lighting-only" | "reflections" | "albedo" | "normal" | "roughness" | "metallic" | "emissive" | "depth" | "ambient-occlusion" | "gi" | "light-complexity" | "motion-vectors";
 }
 
 export interface ToggleParams {
@@ -1253,6 +1253,27 @@ export interface InstantiateModelParams {
   name?: string;
 }
 
+export interface AssetPlacementParams {
+  phase: "preview" | "commit" | "clear";
+  asset?: unknown;
+  u?: number;
+  v?: number;
+}
+
+export interface AssetPlacementResult {
+  active: boolean;
+  valid: boolean;
+  transform?: PlacementTransformDto;
+  entity?: EntityRef;
+  reason?: string;
+}
+
+export interface PlacementTransformDto {
+  translation: Vec3;
+  rotation: Vec3;
+  scale: Vec3;
+}
+
 export interface ImportTextureResult {
   texture: WireUuid;
 }
@@ -1663,6 +1684,24 @@ export interface ThumbnailCacheResult {
   bytes: number;
 }
 
+export interface ExportAppParams {
+  outputDir: string;
+  app: AppManifest;
+}
+
+export interface AppManifest {
+  title: string;
+  width: number;
+  height: number;
+  fullscreen: boolean;
+  vsync: boolean;
+}
+
+export interface ExportAppResult {
+  path: string;
+  warnings: string[];
+}
+
 export interface QuitResult {
   quitting: boolean;
 }
@@ -1776,6 +1815,7 @@ export interface CommandParamsMap {
   "open-project": PathParams;
   "import-model": PathParams;
   "instantiate-model": InstantiateModelParams;
+  "asset-placement": AssetPlacementParams;
   "import-texture": PathParams;
   "list-assets": EmptyParams;
   "scan-assets": EmptyParams;
@@ -1820,6 +1860,7 @@ export interface CommandParamsMap {
   "get-thumbnail": ThumbnailParams;
   "view-asset": ThumbnailParams;
   "thumbnail-cache": ThumbnailCacheParams;
+  "export-app": ExportAppParams;
   "quit": EmptyParams;
 }
 
@@ -1932,6 +1973,7 @@ export interface CommandResultMap {
   "open-project": ProjectInfoDto;
   "import-model": ImportModelResult;
   "instantiate-model": EntityRef;
+  "asset-placement": AssetPlacementResult;
   "import-texture": ImportTextureResult;
   "list-assets": AssetList;
   "scan-assets": ScanAssetsResult;
@@ -1976,5 +2018,6 @@ export interface CommandResultMap {
   "get-thumbnail": ThumbnailResult;
   "view-asset": ThumbnailResult;
   "thumbnail-cache": ThumbnailCacheResult;
+  "export-app": ExportAppResult;
   "quit": QuitResult;
 }

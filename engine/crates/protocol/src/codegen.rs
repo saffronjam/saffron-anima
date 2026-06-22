@@ -140,6 +140,10 @@ pub fn ts_decls() -> Vec<(&'static str, String)> {
         decl_entry!(OptionalPathParams),
         decl_entry!(ImportModelResult),
         decl_entry!(InstantiateModelParams),
+        decl_entry!(AssetPlacementPhaseDto),
+        decl_entry!(AssetPlacementParams),
+        decl_entry!(PlacementTransformDto),
+        decl_entry!(AssetPlacementResult),
         decl_entry!(ExtractSubAssetParams),
         decl_entry!(ClearExtractionParams),
         decl_entry!(ImportTextureResult),
@@ -194,6 +198,9 @@ pub fn ts_decls() -> Vec<(&'static str, String)> {
         decl_entry!(MaterialCompileParams),
         decl_entry!(MaterialCompileResult),
         decl_entry!(MaterialCookResult),
+        decl_entry!(AppManifest),
+        decl_entry!(ExportAppParams),
+        decl_entry!(ExportAppResult),
         decl_entry!(AssignAssetResult),
         decl_entry!(PathResult),
         decl_entry!(ScreenshotParams),
@@ -389,6 +396,9 @@ pub fn struct_fragments() -> Vec<(&'static str, Value)> {
         frag_entry!(OptionalPathParams),
         frag_entry!(ImportModelResult),
         frag_entry!(InstantiateModelParams),
+        frag_entry!(AssetPlacementParams),
+        frag_entry!(PlacementTransformDto),
+        frag_entry!(AssetPlacementResult),
         frag_entry!(ExtractSubAssetParams),
         frag_entry!(ClearExtractionParams),
         frag_entry!(ImportTextureResult),
@@ -443,6 +453,9 @@ pub fn struct_fragments() -> Vec<(&'static str, Value)> {
         frag_entry!(MaterialCompileParams),
         frag_entry!(MaterialCompileResult),
         frag_entry!(MaterialCookResult),
+        frag_entry!(AppManifest),
+        frag_entry!(ExportAppParams),
+        frag_entry!(ExportAppResult),
         frag_entry!(AssignAssetResult),
         frag_entry!(PathResult),
         frag_entry!(ScreenshotParams),
@@ -538,15 +551,15 @@ mod tests {
 
     #[test]
     fn ts_decls_cover_the_full_dto_universe() {
-        // 232 structs + 17 enums + `Uuid` = 250, the inventory count.
-        assert_eq!(ts_decls().len(), 250);
+        // 238 structs + 18 enums + `Uuid` = 257, the inventory count.
+        assert_eq!(ts_decls().len(), 257);
     }
 
     #[test]
     fn struct_fragments_cover_every_openrpc_struct() {
-        // The 232 struct fragments the OpenRPC `components.schemas` block needs (the three
+        // The 238 struct fragments the OpenRPC `components.schemas` block needs (the three
         // wire-helper object fragments are hand-emitted by the xtask, not here).
-        assert_eq!(struct_fragments().len(), 232);
+        assert_eq!(struct_fragments().len(), 238);
     }
 
     #[test]
