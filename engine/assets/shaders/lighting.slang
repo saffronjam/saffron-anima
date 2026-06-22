@@ -554,11 +554,21 @@ public MaterialInput makeMaterialInput(VertexOutput input)
     return mi;
 }
 
-// The debug render-output channel (pointShadowMeta.w): 0 = normal shading, else a surface value
-// the mesh fragment outputs directly (1 albedo, 2 normal, 3 roughness, 4 metallic, 5 emissive).
+// The debug render-output channel (pointShadowMeta.w); 0 = full shading. See `evalViewMode` for
+// the channel → view-mode mapping (matches ViewMode::debug_channel in renderer.rs).
 public uint debugViewChannel()
 {
     return globals.pointShadowMeta.w;
+}
+
+// Jet-style heatmap ramp (blue → cyan → green → yellow → red) for a [0,1] scalar.
+float3 heatmap(float t)
+{
+    t = saturate(t);
+    float r = saturate(min(4.0 * t - 1.5, -4.0 * t + 4.5));
+    float g = saturate(min(4.0 * t - 0.5, -4.0 * t + 3.5));
+    float b = saturate(min(4.0 * t + 0.5, -4.0 * t + 2.5));
+    return float3(r, g, b);
 }
 
 // The shared lighting half: turns a SurfaceData into lit radiance (direct + punctual + IBL/GI).
@@ -624,6 +634,7 @@ public float4 evalLighting(VertexOutput input, SurfaceData surf)
 
     // Indirect (ambient): split-sum IBL when enabled, else the flat scalar fallback.
     float3 ambient;
+    float3 reflectionSpec = float3(0.0);  // IBL specular term, surfaced by the Reflections view mode
     if (globals.counts.z != 0)
     {
         float3 F0 = lerp(float3(0.04), albedo, metallic);
@@ -666,6 +677,7 @@ public float4 evalLighting(VertexOutput input, SurfaceData surf)
         float3 diffuseIBL = kd * irradiance * albedo;
         float2 ab = brdfLut.SampleLevel(float2(ndotv, roughness), 0.0).rg;
         float3 specularIBL = prefiltered * (F0 * ab.x + ab.y);
+        reflectionSpec = specularIBL;
         ambient = diffuseIBL + specularIBL;
     }
     else
@@ -692,6 +704,108 @@ public float4 evalLighting(VertexOutput input, SurfaceData surf)
         float3 probeIrradiance = ddgiSampleIrradiance(input.worldPos, n);
         ambient += probeIrradiance * albedo * (1.0 - metallic);
     }
+    // Two view modes peel a single term off the composed result.
+    uint channel = debugViewChannel();
+    if (channel == 9u)  // Reflections: IBL specular only
+    {
+        return float4(reflectionSpec, surf.opacity);
+    }
+    if (channel == 12u)  // GI: indirect/ambient only
+    {
+        return float4(ambient, surf.opacity);
+    }
     float3 color = lo + ambient + surf.emissive;
     return float4(color, surf.opacity);
+}
+
+// Resolves the active view mode (debugViewChannel) to a final color. Channel 0 is full shading;
+// `kUnlit` (the per-material unlit PSO permutation) also forces the unlit output. Pure surface and
+// screen-space channels return here; material-override modes recolour the surface and fall through
+// to evalLighting (which itself peels off the Reflections/GI terms by channel). `Wireframe`,
+// `LitWireframe`, and `MotionVectors` are channel 0 here — produced by dedicated passes.
+public float4 evalViewMode(VertexOutput input, SurfaceData surf, bool kUnlit)
+{
+    uint channel = debugViewChannel();
+
+    // Pure surface-channel outputs (no lighting).
+    if (channel == 1u) { return float4(surf.albedo, surf.opacity); }
+    if (channel == 2u) { return float4(surf.normal * 0.5 + 0.5, surf.opacity); }
+    if (channel == 3u) { return float4(surf.roughness.xxx, surf.opacity); }
+    if (channel == 4u) { return float4(surf.metallic.xxx, surf.opacity); }
+    if (channel == 5u) { return float4(surf.emissive, surf.opacity); }
+    if (channel == 6u || kUnlit) { return float4(surf.albedo + surf.emissive, surf.opacity); }
+
+    // Linearized view-space depth, normalized over the cluster z-range.
+    if (channel == 10u)
+    {
+        float viewZ = mul(clusterParams.view, float4(input.worldPos, 1.0)).z;
+        float near = clusterParams.zPlanes.x;
+        float far = clusterParams.zPlanes.y;
+        float d = saturate((max(-viewZ, near) - near) / max(far - near, 1e-3));
+        return float4(d.xxx, 1.0);
+    }
+
+    // Screen-space ambient occlusion factor (white when SSAO is off).
+    if (channel == 11u)
+    {
+        float2 screenUv = input.position.xy / float2(clusterParams.screenSize.xy);
+        float ao = globals.counts.w != 0 ? aoMap.SampleLevel(screenUv, 0.0).r : 1.0;
+        return float4(ao.xxx, 1.0);
+    }
+
+    // Punctual-light complexity as a heatmap: the number of point/spot lights reaching this
+    // pixel (directional lights are not clustered, so they never count). 0 reads as near-black;
+    // the ramp saturates to red around 8 overlapping lights.
+    if (channel == 13u)
+    {
+        uint count;
+        if (clusterParams.screenSize.z != 0)
+        {
+            // Clustered: the froxel's assigned light count (lights whose sphere hits the froxel).
+            float viewZ = mul(clusterParams.view, float4(input.worldPos, 1.0)).z;
+            count = clusters[clusterIndexFor(input.position.xy, viewZ)].count;
+        }
+        else
+        {
+            // Brute force: count punctual lights whose range reaches this pixel, matching the
+            // reference lighting loop (so the mode is meaningful with clustering off).
+            count = 0u;
+            for (uint i = 0u; i < globals.counts.x; i = i + 1u)
+            {
+                GpuLight lt = lights[i];
+                if (length(lt.positionRange.xyz - input.worldPos) <= lt.positionRange.w)
+                {
+                    count += 1u;
+                }
+            }
+        }
+        if (count == 0u)
+        {
+            return float4(float3(0.02), 1.0);
+        }
+        return float4(heatmap(saturate(float(count) / 8.0)), 1.0);
+    }
+
+    // Material-override modes reuse the full lighting path on a recoloured surface.
+    if (channel == 7u)  // Detail Lighting: neutral grey, normals preserved
+    {
+        surf.albedo = float3(0.18);
+        surf.metallic = 0.0;
+        surf.emissive = float3(0.0);
+    }
+    else if (channel == 8u)  // Lighting Only: flat white diffuse, geometric normal
+    {
+        surf.albedo = float3(1.0);
+        surf.normal = normalize(input.worldNormal);
+        surf.metallic = 0.0;
+        surf.roughness = 1.0;
+        surf.emissive = float3(0.0);
+    }
+    else if (channel == 9u)  // Reflections: mirror-like (evalLighting returns the specular term)
+    {
+        surf.metallic = 1.0;
+        surf.roughness = 0.02;
+    }
+
+    return evalLighting(input, surf);
 }

@@ -14,7 +14,7 @@ SurfaceData evalSurface(MaterialInput m)
 
     // Parallax occlusion mapping offsets the UV (in the pre-parallax tangent frame) before every
     // other sample, so the whole surface reads from the displaced texel.
-    if (features & FEATURE_HEIGHT)
+    if ((features & FEATURE_HEIGHT) != 0u)
     {
         float3 vt = mul(tbn, m.viewDir);
         uv = parallaxUv(uv, vt, mat.tex1.x, mat.emissive.w);  // heightScale = emissive.w
@@ -36,13 +36,13 @@ SurfaceData evalSurface(MaterialInput m)
 
     // Ambient occlusion (AO in R), only when a map is present.
     s.occlusion = 1.0;
-    if (features & FEATURE_OCCLUSION)
+    if ((features & FEATURE_OCCLUSION) != 0u)
     {
         s.occlusion = albedoTextures[NonUniformResourceIndex(mat.tex1.y)].Sample(uv).r;
     }
 
     // Tangent-space normal map: perturb the geometric normal with the pre-parallax frame.
-    if (features & FEATURE_NORMAL)
+    if ((features & FEATURE_NORMAL) != 0u)
     {
         float3 mapN = albedoTextures[NonUniformResourceIndex(mat.tex0.z)].Sample(uv).xyz * 2.0 - 1.0;
         mapN.xy *= mat.pbr.z;  // normalStrength
@@ -52,7 +52,7 @@ SurfaceData evalSurface(MaterialInput m)
 
     // Emissive: factor radiance, modulated by the emissive map when present.
     s.emissive = mat.emissive.rgb;
-    if (features & FEATURE_EMISSIVE_TEX)
+    if ((features & FEATURE_EMISSIVE_TEX) != 0u)
     {
         s.emissive *= albedoTextures[NonUniformResourceIndex(mat.tex0.w)].Sample(uv).rgb;
     }
@@ -81,32 +81,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     {
         discard;
     }
-    // Debug view-mode channels: output a surface value directly instead of lighting. Tonemap still
-    // applies (these write into the HDR scene color), so values are display-referred, not raw.
-    uint debugChannel = debugViewChannel();
-    if (debugChannel == 1u)
-    {
-        return float4(surf.albedo, surf.opacity);
-    }
-    if (debugChannel == 2u)
-    {
-        return float4(surf.normal * 0.5 + 0.5, surf.opacity);
-    }
-    if (debugChannel == 3u)
-    {
-        return float4(surf.roughness.xxx, surf.opacity);
-    }
-    if (debugChannel == 4u)
-    {
-        return float4(surf.metallic.xxx, surf.opacity);
-    }
-    if (debugChannel == 5u)
-    {
-        return float4(surf.emissive, surf.opacity);
-    }
-    if (kUnlit)
-    {
-        return float4(surf.albedo + surf.emissive, surf.opacity);
-    }
-    return evalLighting(input, surf);
+    // Resolve the active view mode (full shading, a debug channel, or the unlit permutation). Debug
+    // channels write into the HDR scene color, so tonemap still applies — values are display-referred.
+    return evalViewMode(input, surf, kUnlit);
 }
