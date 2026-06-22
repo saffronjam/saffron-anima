@@ -10,7 +10,12 @@ import { useEditorStore } from "../state/store";
 import { LoadingOverlay } from "../app/LoadingOverlay";
 import { useSubsurfaceBounds } from "../lib/useSubsurfaceBounds";
 import { bindingFor } from "../lib/keybindings";
-import { ASSET_DND_MIME, assetIdsFromPayload, readAssetPayload } from "../components/AssetTile";
+import {
+  ASSET_DND_MIME,
+  assetIdsFromPayload,
+  firstModelAssetId,
+  readAssetPayload,
+} from "../components/AssetTile";
 import { errorText, notify, notifyError } from "../lib/flash";
 
 /// Pointer travel (CSS px) below which a press-release is treated as a click
@@ -30,18 +35,22 @@ interface Uv {
   v: number;
 }
 
-/// Map a pointer event to {u,v} in [0,1] using the panel's own client rect.
-function eventToUv(el: HTMLElement, event: PointerEvent): Uv {
+function clientPointToUv(el: HTMLElement, clientX: number, clientY: number): Uv {
   const rect = el.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) {
     return { u: 0, v: 0 };
   }
-  const u = (event.clientX - rect.left) / rect.width;
-  const v = (event.clientY - rect.top) / rect.height;
+  const u = (clientX - rect.left) / rect.width;
+  const v = (clientY - rect.top) / rect.height;
   return {
     u: Math.min(1, Math.max(0, u)),
     v: Math.min(1, Math.max(0, v)),
   };
+}
+
+/// Map a pointer event to {u,v} in [0,1] using the panel's own client rect.
+function eventToUv(el: HTMLElement, event: PointerEvent): Uv {
+  return clientPointToUv(el, event.clientX, event.clientY);
 }
 
 function scriptKeyFromEvent(event: KeyboardEvent): string | null {
@@ -73,6 +82,10 @@ function targetOwnsTextInput(target: EventTarget | null): boolean {
 export function ViewportPanel() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const attachedRef = useRef(false);
+  const placementDragRef = useRef<{ asset: string | null; lastSent: number }>({
+    asset: null,
+    lastSent: 0,
+  });
   const setPhase = useEditorStore((s) => s.setPhase);
   const setSelectedId = useEditorStore((s) => s.setSelectedId);
   const setDragActive = useEditorStore((s) => s.setDragActive);
@@ -116,6 +129,31 @@ export function ViewportPanel() {
     },
     [setSelectedId],
   );
+
+  const firstDraggedModel = useCallback(
+    (dt: DataTransfer, preferCatalogDrag: boolean): string | null => {
+      const state = useEditorStore.getState();
+      if (preferCatalogDrag && state.catalogDrag) {
+        const model = firstModelAssetId(state.catalogDrag.assetIds, state.assets);
+        if (model) {
+          return model;
+        }
+      }
+      const ids = assetIdsFromPayload(readAssetPayload(dt));
+      if (ids.length === 0) {
+        return null;
+      }
+      return firstModelAssetId(ids, state.assets);
+    },
+    [],
+  );
+
+  const clearPlacementPreview = useCallback((): void => {
+    placementDragRef.current = { asset: null, lastSent: 0 };
+    void client.clearAssetPlacement().catch(() => {});
+  }, []);
+
+  useEffect(() => clearPlacementPreview, [clearPlacementPreview]);
 
   // Readiness: probe the control plane until the engine has booted + bound its
   // socket, then flip the phase. The `engine-phase` events are emitted from the Rust
@@ -540,34 +578,57 @@ export function ViewportPanel() {
   // a modal over the region does not show the desktop through the window.
   return (
     <div
+      data-viewport-drop-target="true"
       className={`relative h-full w-full overflow-hidden ${
         viewportHidden ? "bg-background" : "bg-transparent"
       }`}
-      // Dropping a model asset from the catalog onto the viewport instantiates it into the scene.
-      // The webview composites over the subsurface, so this transparent region is a valid HTML5
-      // drop target even though the rendered pixels live below it. Asset drags carry
-      // `application/x-sa-asset`; other drags fall through.
+      // Asset drags carry `application/x-sa-asset`; model assets stream a transient placement
+      // preview into the engine while hovering and commit only on drop.
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes(ASSET_DND_MIME)) {
-          e.preventDefault();
-        }
-      }}
-      onDrop={(e) => {
-        const ids = assetIdsFromPayload(readAssetPayload(e.dataTransfer));
-        if (ids.length === 0) {
+        if (!e.dataTransfer.types.includes(ASSET_DND_MIME)) {
           return;
         }
         e.preventDefault();
-        const state = useEditorStore.getState();
-        const models = ids.filter(
-          (id) => state.assets.find((asset) => asset.id === id)?.type === "model",
-        );
-        for (const id of models) {
-          void state
-            .instantiateModel(id)
-            .then(() => notify("Added to scene"))
-            .catch((err: unknown) => notifyError(errorText(err)));
+        e.dataTransfer.dropEffect = "copy";
+        const model = firstDraggedModel(e.dataTransfer, true);
+        if (!model) {
+          return;
         }
+        const now = performance.now();
+        const drag = placementDragRef.current;
+        if (drag.asset === model && now - drag.lastSent < GIZMO_STREAM_MS) {
+          return;
+        }
+        placementDragRef.current = { asset: model, lastSent: now };
+        const uv = clientPointToUv(e.currentTarget, e.clientX, e.clientY);
+        void client.previewAssetPlacement(model, uv.u, uv.v).catch(() => {
+          clearPlacementPreview();
+        });
+      }}
+      onDragLeave={(e) => {
+        const next = e.relatedTarget;
+        if (next instanceof Node && e.currentTarget.contains(next)) {
+          return;
+        }
+        clearPlacementPreview();
+      }}
+      onDrop={(e) => {
+        const model = firstDraggedModel(e.dataTransfer, false);
+        if (!model) {
+          clearPlacementPreview();
+          return;
+        }
+        e.preventDefault();
+        const uv = clientPointToUv(e.currentTarget, e.clientX, e.clientY);
+        placementDragRef.current = { asset: model, lastSent: performance.now() };
+        void client
+          .previewAssetPlacement(model, uv.u, uv.v)
+          .then(() => client.commitAssetPlacement())
+          .then(() => notify("Added to scene"))
+          .catch((err: unknown) => {
+            clearPlacementPreview();
+            notifyError(errorText(err));
+          });
       }}
     >
       <div ref={hostRef} className="viewport-host" />
