@@ -117,6 +117,17 @@ pub trait SceneRenderer: GpuUploader {
     fn submit_sky(&mut self, settings: &SkyRenderSettings);
 }
 
+/// The nearest rendered-surface hit for a viewport ray.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneSurfaceHit {
+    /// The entity whose mesh was hit.
+    pub entity: Entity,
+    /// The world-space hit point.
+    pub point: Vec3,
+    /// The ray distance to the hit point.
+    pub distance: f32,
+}
+
 /// The live-renderer [`SceneRenderer`]: a `&mut Renderer` (the setter target) plus a
 /// borrowed [`Uploader`](saffron_rendering::Uploader) for the asset-resolve uploads.
 ///
@@ -387,6 +398,18 @@ pub fn render_scene<R: SceneRenderer>(
     camera: &CameraView,
     options: RenderSceneOptions,
 ) {
+    render_scene_with_transient(renderer, scene, assets, camera, options, None);
+}
+
+/// Renders the authored scene plus an optional transient scene into one frame draw list.
+pub fn render_scene_with_transient<R: SceneRenderer>(
+    renderer: &mut R,
+    scene: &mut Scene,
+    assets: &mut AssetServer,
+    camera: &CameraView,
+    options: RenderSceneOptions,
+    transient: Option<&mut Scene>,
+) {
     let width = renderer.viewport_width();
     let height = renderer.viewport_height();
     if width == 0 || height == 0 {
@@ -402,6 +425,10 @@ pub fn render_scene<R: SceneRenderer>(
     // (lights, meshes, probes) and the between-frame pick/gizmo paths read the world-
     // transform cache this writes.
     scene.update_world_transforms();
+    let mut transient = transient;
+    if let Some(preview) = &mut transient {
+        preview.update_world_transforms();
+    }
 
     let (light_dir, light_color, light_intensity, light_ambient) = gather_directional_light(scene);
     let (lights, point_shadow, spot_shadow) = gather_punctual_lights(scene);
@@ -430,6 +457,18 @@ pub fn render_scene<R: SceneRenderer>(
     } else {
         Vec::new()
     };
+    let preview_joints = if let Some(preview) = transient {
+        gather_static_draw_list(renderer, preview, assets, &mut build);
+        if renderer.skinning_enabled() {
+            gather_skinned_draw_list(renderer, preview, assets, &mut build)
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    let mut frame_joints = frame_joints;
+    frame_joints.extend(preview_joints);
     let DrawListBuild {
         mut items,
         scene_min,
@@ -514,7 +553,7 @@ pub fn render_scene<R: SceneRenderer>(
         eye_position,
         lights,
     }) {
-        saffron_core::log_error!("set_scene_lighting: {err}");
+        tracing::error!("set_scene_lighting: {err}");
     }
 
     // Drive the environment bake. Equirect (a loaded panorama) wins, then the atmosphere,
@@ -545,7 +584,7 @@ pub fn render_scene<R: SceneRenderer>(
         append_editor_camera_models(scene, assets, renderer, &mut items);
     }
     if let Err(err) = renderer.submit_draw_list(view_projection, &items, &frame_joints) {
-        saffron_core::log_error!("submit_draw_list: {err}");
+        tracing::error!("submit_draw_list: {err}");
     }
 
     // Resolve the scene environment into the visible-sky settings.
@@ -895,21 +934,24 @@ pub fn pick_entity(
     camera: &CameraView,
     ndc: Vec2,
 ) -> Entity {
+    pick_scene_surface(gpu, viewport, scene, assets, camera, ndc)
+        .map_or(Entity::NULL, |hit| hit.entity)
+}
+
+/// Picks the nearest rendered surface hit for a viewport NDC point.
+pub fn pick_scene_surface(
+    gpu: &dyn GpuUploader,
+    viewport: (u32, u32),
+    scene: &mut Scene,
+    assets: &mut AssetServer,
+    camera: &CameraView,
+    ndc: Vec2,
+) -> Option<SceneSurfaceHit> {
     let (width, height) = viewport;
     if width == 0 || height == 0 {
-        return Entity::NULL;
+        return None;
     }
-    let aspect = width as f32 / height as f32;
-    let mut proj = camera_projection(camera, aspect);
-    proj.y_axis.y *= -1.0; // match the renderer's clip space
-    let inv_view_proj = (proj * camera.view).inverse();
-    let near_h = inv_view_proj * Vec4::new(ndc.x, ndc.y, 0.0, 1.0); // GLM 0..1 depth: near = 0
-    let far_h = inv_view_proj * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
-    let origin = near_h.truncate() / near_h.w;
-    let ray = Ray {
-        origin,
-        dir: (far_h.truncate() / far_h.w - origin).normalize(),
-    };
+    let ray = viewport_ray(viewport, camera, ndc);
 
     // The world transforms come from the last frame's flatten (lockstep with the draw loop);
     // the joint palette is rebuilt fresh below.
@@ -922,7 +964,7 @@ pub fn pick_entity(
         skins.push((entity, skin.clone()));
     });
 
-    let mut hit = Entity::NULL;
+    let mut hit = None;
     let mut nearest = f32::MAX;
 
     for (entity, mesh) in statics {
@@ -954,7 +996,11 @@ pub fn pick_entity(
             && t < nearest
         {
             nearest = t;
-            hit = entity;
+            hit = Some(SceneSurfaceHit {
+                entity,
+                point: ray.origin + ray.dir * t,
+                distance: t,
+            });
         }
     }
 
@@ -1008,10 +1054,30 @@ pub fn pick_entity(
             && t < nearest
         {
             nearest = t;
-            hit = entity;
+            hit = Some(SceneSurfaceHit {
+                entity,
+                point: ray.origin + ray.dir * t,
+                distance: t,
+            });
         }
     }
     hit
+}
+
+/// Builds the world-space viewport ray used by picking and placement.
+pub fn viewport_ray(viewport: (u32, u32), camera: &CameraView, ndc: Vec2) -> Ray {
+    let (width, height) = viewport;
+    let aspect = width as f32 / height as f32;
+    let mut proj = camera_projection(camera, aspect);
+    proj.y_axis.y *= -1.0;
+    let inv_view_proj = (proj * camera.view).inverse();
+    let near_h = inv_view_proj * Vec4::new(ndc.x, ndc.y, 0.0, 1.0);
+    let far_h = inv_view_proj * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
+    let origin = near_h.truncate() / near_h.w;
+    Ray {
+        origin,
+        dir: (far_h.truncate() / far_h.w - origin).normalize(),
+    }
 }
 
 /// Walks a triangle soup (flat indices into `positions`, already in world space) and reports
