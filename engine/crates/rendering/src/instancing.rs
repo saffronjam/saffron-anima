@@ -353,7 +353,7 @@ impl Instancing {
                 &mut list,
             )?;
         } else if !skin_buckets.is_empty() {
-            saffron_core::log_warn!(
+            tracing::warn!(
                 "skinning: skinned instances present but no joint palette uploaded; skipping"
             );
         }

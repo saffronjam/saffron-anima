@@ -419,7 +419,7 @@ impl Uploader {
         ) {
             Ok(blas) => blas,
             Err(err) => {
-                saffron_core::log_warn!("BLAS build failed: {err}");
+                tracing::warn!("BLAS build failed: {err}");
                 None
             }
         };

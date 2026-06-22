@@ -25,7 +25,6 @@
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
-use saffron_core::log_info;
 
 use crate::resources::{BindlessFreeList, DeviceResources};
 use crate::{Device, Result, checked};
@@ -172,7 +171,7 @@ impl Descriptors {
         let white_slot = allocator.claim();
         debug_assert_eq!(white_slot, DEFAULT_WHITE_SLOT);
 
-        log_info!(
+        tracing::info!(
             "bindless descriptor table ready ({} slots, update-after-bind)",
             MAX_BINDLESS_TEXTURES
         );

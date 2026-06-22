@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use ash::vk;
 use bytemuck::Zeroable;
-use saffron_core::{log_info, log_warn};
 use saffron_geometry::glam::{UVec4, Vec3, Vec4};
 use vk_mem::Alloc;
 
@@ -681,7 +680,7 @@ impl Ibl {
         let use_atmosphere = self.source == EnvSource::Atmosphere && sky.atmosphere.enabled;
         let use_equirect = self.source == EnvSource::Equirect && self.env_panorama.is_some();
         if self.source == EnvSource::Equirect && self.env_panorama.is_none() {
-            log_warn!("ibl bake: Equirect source has no panorama; falling back to procedural");
+            tracing::warn!("ibl bake: Equirect source has no panorama; falling back to procedural");
         }
 
         // A re-bake overwrites the existing images in place (the UNDEFINED→GENERAL barriers
@@ -950,7 +949,7 @@ impl Ibl {
             self.write_mesh_set(&raw);
             self.ready = true;
         }
-        log_info!(
+        tracing::info!(
             "ibl baked — env {IBL_ENV_SIZE}^2, irradiance {IBL_IRRADIANCE_SIZE}^2, prefiltered \
              {IBL_PREFILTER_SIZE}^2 x{mips} mips, lut {IBL_LUT_SIZE}^2{}",
             if use_atmosphere { " (atmosphere)" } else { "" }
@@ -2164,7 +2163,7 @@ impl ReflectionProbes {
         let mut count = uploads.len();
         if count > cap {
             if !self.warned_overflow {
-                log_warn!("more than {cap} reflection probes — excess ignored");
+                tracing::warn!("more than {cap} reflection probes — excess ignored");
                 self.warned_overflow = true;
             }
             count = cap;

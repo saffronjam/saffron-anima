@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ash::vk;
-use saffron_core::{log_error, log_info, log_warn};
 use saffron_geometry::Vertex;
 use saffron_geometry::glam::Mat4;
 
@@ -233,7 +232,7 @@ impl Skinning {
                 vk::DescriptorPoolResetFlags::empty(),
             )
         } {
-            log_error!("skinning: resetDescriptorPool failed: {result:?}");
+            tracing::error!("skinning: resetDescriptorPool failed: {result:?}");
             return Ok(false);
         }
 
@@ -307,7 +306,7 @@ impl Skinning {
         self.frames[frame].deformed_capacity = capacity;
         if capacity > self.peak_vertices {
             self.peak_vertices = capacity;
-            log_info!(
+            tracing::info!(
                 "skinning: deformed-vertex buffer grew to {} vertices ({} KiB)",
                 capacity,
                 u64::from(capacity) * size_of::<Vertex>() as u64 / 1024
@@ -436,7 +435,7 @@ fn wire_set(
     let set = match unsafe { raw.allocate_descriptor_sets(&info) } {
         Ok(sets) => sets[0],
         Err(result) => {
-            log_error!("skinning: allocate skin set failed: {result:?}");
+            tracing::error!("skinning: allocate skin set failed: {result:?}");
             return None;
         }
     };
@@ -553,7 +552,7 @@ fn create_skin_pool(raw: &ash::Device) -> Result<vk::DescriptorPool> {
 /// retained count.
 pub fn clamp_to_set_budget(count: usize) -> usize {
     if count > SKIN_MAX_SETS_PER_FRAME as usize {
-        log_warn!(
+        tracing::warn!(
             "skinning: {count} skinned instances exceed the {SKIN_MAX_SETS_PER_FRAME}-set frame budget; clamping"
         );
         SKIN_MAX_SETS_PER_FRAME as usize

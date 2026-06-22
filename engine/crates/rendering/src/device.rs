@@ -13,7 +13,6 @@ use ash::khr::acceleration_structure as accel;
 use ash::khr::{surface, swapchain};
 use ash::vk;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use saffron_core::{LogLevel, log, log_info, log_warn};
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -260,9 +259,11 @@ impl Device {
             })
             .flatten();
         if calibrated_ts.is_some() {
-            log_info!("calibrated timestamps available — GPU spans correlate to the CPU clock");
+            tracing::info!(
+                "calibrated timestamps available — GPU spans correlate to the CPU clock"
+            );
         } else {
-            log_info!("calibrated timestamps unavailable — GPU spans stay on their own axis");
+            tracing::info!("calibrated timestamps unavailable — GPU spans stay on their own axis");
         }
         let resources = DeviceResources::new(device, allocator);
 
@@ -615,7 +616,7 @@ fn validation_enabled(entry: &ash::Entry) -> bool {
     if validation_layer_available(entry) {
         true
     } else {
-        log_warn!("validation layer unavailable — running without it");
+        tracing::warn!("validation layer unavailable — running without it");
         false
     }
 }
@@ -722,11 +723,11 @@ unsafe extern "system" fn debug_callback(
     }
 
     let level = if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
-        LogLevel::Error
+        tracing::Level::ERROR
     } else if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
-        LogLevel::Warn
+        tracing::Level::WARN
     } else {
-        LogLevel::Info
+        tracing::Level::INFO
     };
     let kind = if types.contains(vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION) {
         "validation"
@@ -738,13 +739,20 @@ unsafe extern "system" fn debug_callback(
 
     // A real validation or performance issue (not filtered loader chatter) at
     // warning-or-error severity fails the validation-clean gate.
-    if kind != "general" && level != LogLevel::Info {
+    if kind != "general" && level != tracing::Level::INFO {
         VALIDATION_ISSUE_COUNT.fetch_add(1, Ordering::Relaxed);
     }
-    if id.is_empty() {
-        log(level, "vulkan", &format!("[{kind}] {message}"));
+    // The messenger logs on another subsystem's behalf, so it sets the target
+    // explicitly rather than inheriting this crate's module path.
+    let body = if id.is_empty() {
+        format!("[{kind}] {message}")
     } else {
-        log(level, "vulkan", &format!("[{kind}] {id}: {message}"));
+        format!("[{kind}] {id}: {message}")
+    };
+    match level {
+        tracing::Level::ERROR => tracing::error!(target: "vulkan", "{body}"),
+        tracing::Level::WARN => tracing::warn!(target: "vulkan", "{body}"),
+        _ => tracing::info!(target: "vulkan", "{body}"),
     }
     vk::FALSE
 }
@@ -877,7 +885,7 @@ fn select_physical_device(
             // so the loader's order is preserved within one device type.
             Ok(selection) => {
                 if verbose {
-                    log_info!("device qualifies ({:?})", selection.preference);
+                    tracing::info!("device qualifies ({:?})", selection.preference);
                 }
                 if best
                     .as_ref()
@@ -888,7 +896,7 @@ fn select_physical_device(
             }
             Err(reason) => {
                 if verbose {
-                    log_info!("device rejected: {reason}");
+                    tracing::info!("device rejected: {reason}");
                 }
                 last_reason = reason;
             }
@@ -1262,18 +1270,18 @@ fn log_selected_device(instance: &ash::Instance, physical_device: vk::PhysicalDe
         vk::PhysicalDeviceType::CPU => "cpu",
         _ => "other",
     };
-    log_info!("vulkan ready — gpu '{name}' ({kind})");
+    tracing::info!("vulkan ready — gpu '{name}' ({kind})");
 }
 
 /// Logs the resolved software-GPU and RT capability once.
 fn log_software_gpu(capabilities: &Capabilities) {
     if capabilities.software_gpu {
-        log_info!("software rasterizer detected — GPU timings reflect CPU rasterization time");
+        tracing::info!("software rasterizer detected — GPU timings reflect CPU rasterization time");
     }
     if capabilities.rt_supported {
-        log_info!("ray tracing available (KHR acceleration_structure + ray_query)");
+        tracing::info!("ray tracing available (KHR acceleration_structure + ray_query)");
     } else {
-        log_info!("ray tracing unavailable — RT passes disabled");
+        tracing::info!("ray tracing unavailable — RT passes disabled");
     }
 }
 

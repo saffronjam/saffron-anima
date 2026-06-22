@@ -321,7 +321,7 @@ impl Rt {
             return None;
         }
         if let Err(err) = self.ensure_tlas_capacity(frame, count) {
-            saffron_core::log_error!("rt: TLAS instance buffer grow failed: {err}");
+            tracing::error!("rt: TLAS instance buffer grow failed: {err}");
             return None;
         }
         // Copy the packed instances into the host-visible instance buffer. The ash
@@ -444,7 +444,7 @@ impl Rt {
                             (accel, false)
                         }
                         Err(err) => {
-                            saffron_core::log_error!("rt: skinned BLAS create failed: {err}");
+                            tracing::error!("rt: skinned BLAS create failed: {err}");
                             continue;
                         }
                     }
@@ -474,7 +474,7 @@ impl Rt {
             return Vec::new();
         }
         if let Err(err) = self.ensure_blas_scratch(frame, scratch_needed) {
-            saffron_core::log_error!("rt: skinned BLAS scratch grow failed: {err}");
+            tracing::error!("rt: skinned BLAS scratch grow failed: {err}");
             // Roll back the "built" flags so a later frame retries the build cleanly.
             return Vec::new();
         }
@@ -541,14 +541,14 @@ impl Rt {
                     self.write_mesh_set(device, frame, handle);
                 }
                 Err(err) => {
-                    saffron_core::log_error!("rt: TLAS create failed: {err}");
+                    tracing::error!("rt: TLAS create failed: {err}");
                     return None;
                 }
             }
         }
         let scratch_needed = sizes.build_scratch_size.max(cap_sizes.build_scratch_size);
         if let Err(err) = self.ensure_tlas_scratch(frame, scratch_needed) {
-            saffron_core::log_error!("rt: TLAS scratch grow failed: {err}");
+            tracing::error!("rt: TLAS scratch grow failed: {err}");
             return None;
         }
         let scratch_addr = device.buffer_device_address(
