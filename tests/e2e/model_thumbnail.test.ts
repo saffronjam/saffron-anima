@@ -42,7 +42,18 @@ test("get-thumbnail on an embedded mesh sub-asset also renders", async () => {
   expect(Math.max(t.width, t.height)).toBe(128);
 });
 
+test("get-thumbnail on an embedded material sub-asset also renders", async () => {
+  const assets = await engine.call<AssetList>("list-assets");
+  const materialSub = assets.assets.find((a) => a.type === "material" && a.container === modelId);
+  expect(materialSub).toBeDefined();
+  const t = await engine.getThumbnail<Thumb>("get-thumbnail", { asset: materialSub!.id, size: 128 });
+  expect(t.format).toBe("png");
+  expect(Math.max(t.width, t.height)).toBe(128);
+});
+
 test("the engine logged no validation errors", async () => {
   await engine.settle();
   expect(engine.validationErrors()).toEqual([]);
+  expect(engine.log).not.toContain("stream did not contain valid UTF-8");
+  expect(engine.log).not.toContain("unresolved");
 });
