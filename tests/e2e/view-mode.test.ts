@@ -1,7 +1,8 @@
-// View mode: the debug render-output selector (set-view-mode {lit|wireframe}). Drives the control
-// command (echo), proves the value reads back through render-stats (no get-view-mode), proves
-// wireframe actually changes the render (llvmpipe supports fillModeNonSolid), and asserts the run
-// stays validation-clean.
+// View mode: the debug render-output selector (set-view-mode {lit|unlit|wireframe|lit-wireframe|
+// detail-lighting|lighting-only|reflections|albedo|normal|roughness|metallic|emissive|depth|
+// ambient-occlusion|gi|light-complexity|motion-vectors}). Drives the control command (echo), proves
+// the value reads back through render-stats (no get-view-mode), proves a few modes actually change
+// the render (llvmpipe supports fillModeNonSolid), and asserts the run stays validation-clean.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, readFileSync, rmSync } from "node:fs";
@@ -84,6 +85,54 @@ test("a buffer channel (albedo) round-trips and changes the render", async () =>
   await engine.settle(300);
   const albedo = await screenshot("albedo");
   expect(albedo.equals(lit)).toBe(false);
+});
+
+// Every mode beyond the originals: the in-fragment debug channels (unlit / detail-lighting /
+// lighting-only / reflections / depth / ambient-occlusion / gi / light-complexity) plus the two
+// dedicated passes (lit-wireframe, motion-vectors). All must echo + read back through
+// render-stats; the dedicated passes no-op gracefully when their inputs are absent, but the
+// command round-trip is unconditional.
+const NEW_MODES = [
+  "unlit",
+  "lit-wireframe",
+  "detail-lighting",
+  "lighting-only",
+  "reflections",
+  "depth",
+  "ambient-occlusion",
+  "gi",
+  "light-complexity",
+  "motion-vectors",
+];
+
+test("every new view mode echoes and reads back through render-stats", async () => {
+  for (const mode of NEW_MODES) {
+    const set = await engine.call<ViewModeResult>("set-view-mode", { mode });
+    expect(set.viewMode).toBe(mode);
+    const stats = await engine.call<RenderStats>("render-stats", {});
+    expect(stats.viewMode).toBe(mode);
+  }
+  await engine.call("set-view-mode", { mode: "lit" });
+});
+
+test("detail-lighting changes the render", async () => {
+  await engine.call("set-view-mode", { mode: "lit" });
+  await engine.settle(300);
+  const lit = await screenshot("lit3");
+  await engine.call("set-view-mode", { mode: "detail-lighting" });
+  await engine.settle(300);
+  const detail = await screenshot("detail");
+  expect(detail.equals(lit)).toBe(false);
+});
+
+test("lit-wireframe overlays edges on the shaded scene", async () => {
+  await engine.call("set-view-mode", { mode: "lit" });
+  await engine.settle(300);
+  const lit = await screenshot("lit4");
+  await engine.call("set-view-mode", { mode: "lit-wireframe" });
+  await engine.settle(300);
+  const litWire = await screenshot("lit-wire");
+  expect(litWire.equals(lit)).toBe(false);
 });
 
 test("the engine logged no validation errors", () => {
