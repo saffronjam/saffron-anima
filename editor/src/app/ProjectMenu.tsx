@@ -27,6 +27,7 @@ export function ProjectMenu() {
   const devMode = useEditorStore((s) => s.devMode);
   const playState = useEditorStore((s) => s.playState);
   const setProjectModalOpen = useEditorStore((s) => s.setProjectModalOpen);
+  const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
 
   const ready = phase === "ready";
   // Saving/loading/reloading are locked during play: open/reload swap the scene out
@@ -147,6 +148,13 @@ export function ProjectMenu() {
           <DropdownMenuItem onSelect={() => void openInVsCode()} disabled={!project}>
             <span>Open in VS Code</span>
             <VsCodeIcon className="size-4" />
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => setExportModalOpen(true)}
+            disabled={!editing || !project}
+          >
+            Export App...
           </DropdownMenuItem>
           {devMode ? (
             <>
