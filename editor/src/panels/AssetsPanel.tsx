@@ -31,6 +31,9 @@ import {
   ASSET_DND_MIME,
   FOLDER_DND_MIME,
   assetIdsFromPayload,
+  catalogDragEffectAllowed,
+  firstModelAssetId,
+  hideNativeDragImage,
   isCatalogDrag,
   readAssetPayload,
   readFolderPayload,
@@ -553,10 +556,18 @@ export function AssetsPanel() {
       if (folderPaths.length > 0) {
         event.dataTransfer.setData(FOLDER_DND_MIME, JSON.stringify({ paths: folderPaths }));
       }
-      event.dataTransfer.effectAllowed = "move";
+      state.setCatalogDrag({ assetIds, folderPaths });
+      event.dataTransfer.effectAllowed = catalogDragEffectAllowed(assetIds);
+      if (firstModelAssetId(assetIds, state.assets)) {
+        hideNativeDragImage(event.dataTransfer);
+      }
     },
     [currentFolder],
   );
+
+  const endDrag = useCallback((): void => {
+    useEditorStore.getState().setCatalogDrag(null);
+  }, []);
 
   const requestDeleteAsset = useCallback(async (asset: AssetEntry): Promise<void> => {
     setPendingFolderDelete(null);
@@ -867,6 +878,7 @@ export function AssetsPanel() {
                   onSelectAsset={selectAsset}
                   onSelectFolder={selectFolder}
                   onBeginDrag={beginDrag}
+                  onEndDrag={endDrag}
                   onDeleteAsset={deleteAsset}
                   onDeleteFolder={requestDeleteFolder}
                   onMoveAssets={moveAssets}
@@ -1242,6 +1254,7 @@ const AssetPanelBody = memo(function AssetPanelBody({
   onSelectAsset,
   onSelectFolder,
   onBeginDrag,
+  onEndDrag,
   onDeleteAsset,
   onDeleteFolder,
   onMoveAssets,
@@ -1270,6 +1283,7 @@ const AssetPanelBody = memo(function AssetPanelBody({
   onSelectAsset(asset: AssetEntry, event: ReactMouseEvent): void;
   onSelectFolder(folder: string, event: ReactMouseEvent): void;
   onBeginDrag(kind: "asset" | "folder", key: string, event: ReactDragEvent): void;
+  onEndDrag(): void;
   onDeleteAsset(asset: AssetEntry): void;
   onDeleteFolder(folder: string): void;
   onMoveAssets(assetIds: string[], folder: string | null): void;
@@ -1538,6 +1552,7 @@ const AssetPanelBody = memo(function AssetPanelBody({
                     onOpen={onOpenFolder}
                     onSelect={onSelectFolder}
                     onBeginDrag={beginFolderDrag}
+                    onEndDrag={onEndDrag}
                     onAssetDropTarget={onAssetDropTarget}
                     onMoveAssets={onMoveAssets}
                     onMoveFolders={onMoveFolders}
@@ -1557,6 +1572,7 @@ const AssetPanelBody = memo(function AssetPanelBody({
                   onDelete={onDeleteAsset}
                   onSelect={onSelectAsset}
                   onBeginDrag={beginAssetDrag}
+                  onEndDrag={onEndDrag}
                   onRenameEnd={onRenameEnd}
                 />
               ))}
@@ -1729,6 +1745,7 @@ const FolderTile = memo(function FolderTile({
   onOpen,
   onSelect,
   onBeginDrag,
+  onEndDrag,
   onAssetDropTarget,
   onMoveAssets,
   onMoveFolders,
@@ -1745,6 +1762,7 @@ const FolderTile = memo(function FolderTile({
   onOpen(path: string): void;
   onSelect?(path: string, event: ReactMouseEvent): void;
   onBeginDrag(path: string, event: ReactDragEvent): void;
+  onEndDrag(): void;
   /// Hover highlight for a catalog drag: enter/over report this tile's path,
   /// drop/drag-end clear with null.
   onAssetDropTarget(path: string | null): void;
@@ -1832,7 +1850,10 @@ const FolderTile = memo(function FolderTile({
           onMoveAssets(ids, path);
         }
       }}
-      onDragEnd={() => onAssetDropTarget(null)}
+      onDragEnd={() => {
+        onEndDrag();
+        onAssetDropTarget(null);
+      }}
     >
       {content}
     </button>
