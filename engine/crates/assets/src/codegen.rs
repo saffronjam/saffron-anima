@@ -72,8 +72,9 @@ fn resolve_slangc(
 }
 
 /// The fixed `slangc` flag set the three runtime compiles share, matching the static
-/// xtask shader flags for the overlapping flags: `-profile glsl_450 -target spirv
-/// -emit-spirv-directly -fvk-use-entrypoint-name -matrix-layout-column-major`.
+/// xtask shader flags: `-profile glsl_450 -target spirv -emit-spirv-directly
+/// -fvk-use-entrypoint-name -matrix-layout-column-major -capability <atoms>`. The capabilities are
+/// declared so Slang does not implicitly upgrade the profile (see `xtask`'s `SLANGC_CAPABILITIES`).
 const SLANGC_FLAGS: &[&str] = &[
     "-profile",
     "glsl_450",
@@ -82,6 +83,8 @@ const SLANGC_FLAGS: &[&str] = &[
     "-emit-spirv-directly",
     "-fvk-use-entrypoint-name",
     "-matrix-layout-column-major",
+    "-capability",
+    "SPV_KHR_non_semantic_info+SPV_GOOGLE_user_type+spvSparseResidency+spvMinLod+spvFragmentFullyCoveredEXT+spvShaderNonUniformEXT+spvRayQueryKHR",
 ];
 
 /// Builds the full `slangc` argv (program first) for compiling `slang_path` to
@@ -344,6 +347,8 @@ mod tests {
         "-emit-spirv-directly",
         "-fvk-use-entrypoint-name",
         "-matrix-layout-column-major",
+        "-capability",
+        "SPV_KHR_non_semantic_info+SPV_GOOGLE_user_type+spvSparseResidency+spvMinLod+spvFragmentFullyCoveredEXT+spvShaderNonUniformEXT+spvRayQueryKHR",
     ];
 
     /// No argv element may contain a shell quote or a redirection token.

@@ -31,7 +31,15 @@ pub const SLANGC_SPV_FLAGS: &[&str] = &[
     "-emit-spirv-directly",
     "-fvk-use-entrypoint-name",
     "-matrix-layout-column-major",
+    "-capability",
+    SLANGC_CAPABILITIES,
 ];
+
+/// Capabilities the shaders actually use that `glsl_450` does not imply (bindless non-uniform
+/// indexing, sparse residency + min-LOD texture sampling, fragment-fully-covered, inline ray query,
+/// and the SPIR-V debug-info extensions). Declared up front so Slang does not implicitly upgrade the
+/// profile and emit an informational warning per entry point.
+const SLANGC_CAPABILITIES: &str = "SPV_KHR_non_semantic_info+SPV_GOOGLE_user_type+spvSparseResidency+spvMinLod+spvFragmentFullyCoveredEXT+spvShaderNonUniformEXT+spvRayQueryKHR";
 
 /// Inputs to one shader-pipeline run, resolved from the workspace layout + the build profile.
 pub struct Config {
@@ -297,7 +305,7 @@ mod tests {
 
     /// Guards against flag drift: the per-shader argument vector must be exactly `<src> -profile
     /// glsl_450 -target spirv -emit-spirv-directly -fvk-use-entrypoint-name
-    /// -matrix-layout-column-major -I <dir> -o <out>`.
+    /// -matrix-layout-column-major -capability <atoms> -I <dir> -o <out>`.
     #[test]
     fn spv_flag_set_is_frozen() {
         let args = spv_arg_vector(
@@ -316,6 +324,8 @@ mod tests {
                 "-emit-spirv-directly",
                 "-fvk-use-entrypoint-name",
                 "-matrix-layout-column-major",
+                "-capability",
+                SLANGC_CAPABILITIES,
                 "-I",
                 "/shaders",
                 "-o",
