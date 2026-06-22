@@ -74,6 +74,27 @@ enum Subcmd {
         /// The shell to generate completions for.
         shell: Shell,
     },
+    /// Export the loaded project into a standalone, runnable app folder (the `export-app` command
+    /// with a typed app manifest).
+    Export {
+        /// The destination directory for the staged app.
+        output_dir: String,
+        /// The app + window title (default: "Saffron App").
+        #[arg(long)]
+        title: Option<String>,
+        /// The window width in pixels (default: 1280).
+        #[arg(long)]
+        width: Option<u32>,
+        /// The window height in pixels (default: 720).
+        #[arg(long)]
+        height: Option<u32>,
+        /// Start the app fullscreen.
+        #[arg(long)]
+        fullscreen: bool,
+        /// Present without vsync (vsync is on by default).
+        #[arg(long)]
+        no_vsync: bool,
+    },
     /// Any control command name and its free-form arguments, forwarded to the engine verbatim.
     #[command(external_subcommand)]
     External(Vec<String>),
@@ -912,6 +933,46 @@ fn vec_component(parent: Option<&Value>, key: &str) -> f64 {
 
 /// Forwards one control command to the engine over the socket: build the envelope, round-trip,
 /// and print the reply. The single non-`start`/`completions` path.
+/// Builds the `export-app` params from the typed `export` flags and forwards the command. The
+/// `app` manifest is partial — omitted fields fall back to the engine's [`AppManifest`] defaults
+/// (`#[serde(default)]`), so `sa export <dir>` exports with the default window + title.
+#[allow(clippy::fn_params_excessive_bools)] // the two bools are independent CLI flags, not a mode.
+fn export(
+    output_dir: String,
+    title: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    fullscreen: bool,
+    no_vsync: bool,
+    mode: OutputMode,
+) -> Outcome {
+    let mut app = Map::new();
+    if let Some(title) = title {
+        app.insert("title".to_owned(), Value::String(title));
+    }
+    if let Some(width) = width {
+        app.insert("width".to_owned(), Value::from(width));
+    }
+    if let Some(height) = height {
+        app.insert("height".to_owned(), Value::from(height));
+    }
+    if fullscreen {
+        app.insert("fullscreen".to_owned(), Value::Bool(true));
+    }
+    if no_vsync {
+        app.insert("vsync".to_owned(), Value::Bool(false));
+    }
+    let mut params = Map::new();
+    params.insert("outputDir".to_owned(), Value::String(output_dir));
+    params.insert("app".to_owned(), Value::Object(app));
+    let mut client = Client::from_env();
+    present_outcome(
+        "export-app",
+        client.call_raw("export-app", Value::Object(params)),
+        mode,
+    )
+}
+
 fn forward(tokens: &[String], mode: OutputMode) -> Outcome {
     let Some((cmd, args)) = tokens.split_first() else {
         // The `external_subcommand` arm only matches with at least one token, so this is
@@ -1075,6 +1136,17 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some(Subcmd::Start { attach, build }) => start(attach, build).code(),
+        Some(Subcmd::Export {
+            output_dir,
+            title,
+            width,
+            height,
+            fullscreen,
+            no_vsync,
+        }) => export(
+            output_dir, title, width, height, fullscreen, no_vsync, cli.output,
+        )
+        .code(),
         Some(Subcmd::External(tokens)) => forward(&tokens, cli.output).code(),
     }
 }
