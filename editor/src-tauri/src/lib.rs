@@ -671,6 +671,8 @@ fn install_stderr_noise_filter() {
 }
 
 pub fn run() {
+    saffron_log::init_logging();
+
     // The webview render path on NVIDIA Wayland. The hardware DMABUF path crashes by default:
     // WebKit enables explicit sync (wp_linux_drm_syncobj) on its EGL render surface, but a
     // non-dmabuf wl_shm buffer reaches that surface and Mutter fatally rejects it — "Protocol
@@ -705,8 +707,9 @@ pub fn run() {
             // Without this the NVIDIA hardware path crashes on the explicit-sync protocol error.
             unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
         }
-        eprintln!(
-            "[saffron] webview render path: {}",
+        tracing::info!(
+            target: "saffron",
+            "webview render path: {}",
             if hardware { "hardware" } else { "software (Mesa llvmpipe)" }
         );
     }

@@ -214,7 +214,7 @@ impl Dispatch<WpPresentation, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         if let wp_presentation::Event::ClockId { clk_id } = event {
-            eprintln!("[viewport] presentation clock id {clk_id}");
+            tracing::info!(target: "viewport", "presentation clock id {clk_id}");
         }
     }
 }
@@ -284,7 +284,7 @@ pub fn install(
     gtk_window.set_app_paintable(true);
     match webview.clone().downcast::<webkit2gtk::WebView>() {
         Ok(view) => view.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0)),
-        Err(_) => eprintln!("[viewport] webview is not a webkit2gtk::WebView; transparency may not apply"),
+        Err(_) => tracing::warn!(target: "viewport", "webview is not a webkit2gtk::WebView; transparency may not apply"),
     }
 
     // The opaque backdrop lives BELOW the toplevel as its own subsurface (see run()) —
@@ -364,7 +364,7 @@ pub fn install(
         thread::spawn(move || {
             let views = [(View::Scene, scene_shm, scene_shared), (View::AssetPreview, asset_shm, asset_shared)];
             if let Err(err) = run(display_addr, surface_addr, views) {
-                eprintln!("[viewport] wayland presenter failed: {err}");
+                tracing::warn!(target: "viewport", "wayland presenter failed: {err}");
             }
         });
 
@@ -442,7 +442,7 @@ fn run(
     let presentation: Option<WpPresentation> =
         find("wp_presentation").map(|(id, ver)| registry.bind(id, ver.min(1), &qh, ()));
     if presentation.is_none() {
-        eprintln!("[viewport] wp_presentation not advertised; presentation stats unavailable");
+        tracing::warn!(target: "viewport", "wp_presentation not advertised; presentation stats unavailable");
     }
 
     let parent: WlSurface = unsafe {
@@ -477,12 +477,12 @@ fn run(
             attempts += 1;
             if attempts % 50 == 0 {
                 let errno = std::io::Error::last_os_error();
-                eprintln!("[viewport] still waiting for shm '{shm_name}': {errno}");
+                tracing::info!(target: "viewport", "still waiting for shm '{shm_name}': {errno}");
             }
             thread::sleep(Duration::from_millis(100));
         };
         let pool: WlShmPool = wl_shm.create_pool(pool_fd.as_fd(), total as i32, &qh, ());
-        eprintln!("[viewport] '{}' subsurface up ({total} byte pool)", view.wire());
+        tracing::info!(target: "viewport", "'{}' subsurface up ({total} byte pool)", view.wire());
 
         below = Some(surface.clone());
         let now = std::time::Instant::now();
@@ -544,7 +544,7 @@ fn run(
             _backdrop_buffer = Some(buffer);
         }
         None => {
-            eprintln!("[viewport] backdrop memfd failed; seams may show the desktop");
+            tracing::warn!(target: "viewport", "backdrop memfd failed; seams may show the desktop");
             _backdrop_fd = None;
             _backdrop_buffer = None;
         }
@@ -595,8 +595,9 @@ fn run(
                     0.0
                 };
                 let commits: u32 = surfaces.iter().map(|vs| vs.commits).sum();
-                eprintln!(
-                    "[viewport] commit {commits}/s · presented {}/s discarded {}/s · \
+                tracing::info!(
+                    target: "viewport",
+                    "commit {commits}/s · presented {}/s discarded {}/s · \
                      vblank Δ mean {mean_delta:.2} · refresh {refresh_hz:.0} Hz · flags {}",
                     stats.presented,
                     stats.discarded,
@@ -647,7 +648,7 @@ fn step_view(
                     vs.buffer_dims = (0, 0);
                     vs.last_seq = 0;
                     vs.buffer_attached = false;
-                    eprintln!("[viewport] '{}' shm segment remapped ({} byte pool)", vs.view.wire(), vs.total);
+                    tracing::info!(target: "viewport", "'{}' shm segment remapped ({} byte pool)", vs.view.wire(), vs.total);
                 }
             }
         }
@@ -782,7 +783,7 @@ fn step_view(
     vs.last_seq = seq;
     vs.buffer_attached = true;
     if vs.first_commit {
-        eprintln!("[viewport] '{}' first subsurface commit ({width}x{height} buffer)", vs.view.wire());
+        tracing::info!(target: "viewport", "'{}' first subsurface commit ({width}x{height} buffer)", vs.view.wire());
         vs.first_commit = false;
     }
     vs.commits += 1;
