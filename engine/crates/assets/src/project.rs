@@ -28,7 +28,6 @@
 
 use std::path::{Path, PathBuf};
 
-use saffron_core::{log_info, log_warn};
 use saffron_json::{Value, dump_json, json_string_or, json_u64_or, parse_json};
 use saffron_scene::{ComponentRegistry, Scene};
 
@@ -273,13 +272,13 @@ pub const LUARC_JSON: &str = r#"{
 pub fn ensure_script_src(root: &Path) {
     let src = root.join("src");
     if let Err(err) = std::fs::create_dir_all(&src) {
-        log_warn!("project src/ not created: {err}");
+        tracing::warn!("project src/ not created: {err}");
         return;
     }
     let example = src.join("example.lua");
     if !example.exists() {
         if let Err(err) = std::fs::write(&example, STARTER_SCRIPT) {
-            log_warn!("project example.lua not written: {err}");
+            tracing::warn!("project example.lua not written: {err}");
         }
     }
 }
@@ -294,16 +293,16 @@ pub fn ensure_script_src(root: &Path) {
 pub fn ensure_script_library(root: &Path, sa_lua_defs: &str) {
     let library = root.join("library");
     if let Err(err) = std::fs::create_dir_all(&library) {
-        log_warn!("project library/ not created: {err}");
+        tracing::warn!("project library/ not created: {err}");
         return;
     }
     if let Err(err) = std::fs::write(library.join("sa.lua"), sa_lua_defs) {
-        log_warn!("project sa.lua not written: {err}");
+        tracing::warn!("project sa.lua not written: {err}");
     }
     let luarc = root.join(".luarc.json");
     if !luarc.exists() {
         if let Err(err) = std::fs::write(&luarc, LUARC_JSON) {
-            log_warn!("project .luarc.json not written: {err}");
+            tracing::warn!("project .luarc.json not written: {err}");
         }
     }
 }
@@ -494,14 +493,14 @@ impl AssetServer {
         match self.load_catalog() {
             Ok(scan) => {
                 if !scan.added.is_empty() || !scan.removed.is_empty() {
-                    log_info!(
+                    tracing::info!(
                         "scan: reconciled catalog with disk (+{} -{})",
                         scan.added.len(),
                         scan.removed.len()
                     );
                 }
             }
-            Err(err) => log_warn!("scan: {err}"),
+            Err(err) => tracing::warn!("scan: {err}"),
         }
         self.sweep_thumbnail_cache_orphans();
 

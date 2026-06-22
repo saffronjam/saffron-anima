@@ -188,7 +188,7 @@ impl AssetServer {
                         }
                     }
                     Err(err) => {
-                        saffron_core::log_warn!("scan: skipping '{rel}': {err}");
+                        tracing::warn!("scan: skipping '{rel}': {err}");
                     }
                 }
                 continue;
@@ -239,7 +239,7 @@ impl AssetServer {
                 match read_smeta(&smeta_path) {
                     Ok(loaded) => sidecar = Some(loaded),
                     Err(err) => {
-                        saffron_core::log_warn!("scan: ignoring bad .smeta '{rel}.smeta': {err}");
+                        tracing::warn!("scan: ignoring bad .smeta '{rel}.smeta': {err}");
                     }
                 }
             }
@@ -259,9 +259,9 @@ impl AssetServer {
                         name: stem.to_owned(),
                     };
                     if let Err(err) = write_smeta(&smeta_path, &minted) {
-                        saffron_core::log_warn!("scan: could not write '{rel}.smeta': {err}");
+                        tracing::warn!("scan: could not write '{rel}.smeta': {err}");
                     }
-                    saffron_core::log_warn!(
+                    tracing::warn!(
                         "scan: minted .smeta for foreign file '{rel}' (colorspace {} — verify it for data maps like normals)",
                         colorspace_name(colorspace)
                     );

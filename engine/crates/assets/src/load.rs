@@ -107,14 +107,14 @@ impl AssetServer {
         let bytes = match source.read() {
             Ok(bytes) => bytes,
             Err(err) => {
-                saffron_core::log_warn!("mesh {}: {err}", sub_id.value());
+                tracing::warn!("mesh {}: {err}", sub_id.value());
                 return None;
             }
         };
         let mesh = match load_mesh_from_bytes(&bytes) {
             Ok(mesh) => mesh,
             Err(err) => {
-                saffron_core::log_warn!("mesh {}: {err}", sub_id.value());
+                tracing::warn!("mesh {}: {err}", sub_id.value());
                 return None;
             }
         };
@@ -124,7 +124,7 @@ impl AssetServer {
         match gpu.upload_mesh(&mesh, &skin) {
             Ok(mesh_ref) => Some(mesh_ref),
             Err(err) => {
-                saffron_core::log_warn!("mesh {}: {err}", sub_id.value());
+                tracing::warn!("mesh {}: {err}", sub_id.value());
                 None
             }
         }
@@ -166,7 +166,7 @@ impl AssetServer {
         };
         let source = self.chunk_source_for(&model, ChunkKind::Mesh, sub_id);
         if source.is_empty() {
-            saffron_core::log_warn!(
+            tracing::warn!(
                 "model {}: no mesh sub-asset {}",
                 model_id.value(),
                 sub_id.value()
@@ -198,7 +198,7 @@ impl AssetServer {
             .map_or(Colorspace::Srgb, |entry| colorspace_from_flags(entry.flags));
         let source = self.chunk_source_for(&model, ChunkKind::Texture, sub_id);
         if source.is_empty() {
-            saffron_core::log_warn!(
+            tracing::warn!(
                 "model {}: no texture sub-asset {}",
                 model_id.value(),
                 sub_id.value()
@@ -255,7 +255,7 @@ impl AssetServer {
                 // A dangling reference: a material/scene names a texture not in the
                 // catalog. Warn once and negative-cache; the draw path falls back to the
                 // default-white slot (it does not retry).
-                saffron_core::log_warn!("texture {} not in catalog; using default", id.value());
+                tracing::warn!("texture {} not in catalog; using default", id.value());
                 self.texture_by_uuid.insert(id.value(), None);
                 return None;
             }
@@ -393,7 +393,7 @@ impl AssetServer {
         let model = match translate_model(engine_asset_path("models/cube.gltf")) {
             Ok(model) => model,
             Err(err) => {
-                saffron_core::log_warn!("preview floor mesh: {err}");
+                tracing::warn!("preview floor mesh: {err}");
                 self.mesh_by_uuid
                     .insert(PREVIEW_FLOOR_MESH_ID.value(), None);
                 return false;
@@ -406,7 +406,7 @@ impl AssetServer {
                 true
             }
             Err(err) => {
-                saffron_core::log_warn!("preview floor mesh: {err}");
+                tracing::warn!("preview floor mesh: {err}");
                 self.mesh_by_uuid
                     .insert(PREVIEW_FLOOR_MESH_ID.value(), None);
                 false
@@ -430,7 +430,7 @@ impl AssetServer {
         let model = match translate_model(engine_asset_path("models/editor-camera.glb")) {
             Ok(model) => model,
             Err(err) => {
-                saffron_core::log_warn!("editor camera model: {err}");
+                tracing::warn!("editor camera model: {err}");
                 return false;
             }
         };
@@ -441,7 +441,7 @@ impl AssetServer {
         let mesh_ref = match gpu.upload_mesh(&model.mesh, skin) {
             Ok(mesh_ref) => mesh_ref,
             Err(err) => {
-                saffron_core::log_warn!("editor camera model: {err}");
+                tracing::warn!("editor camera model: {err}");
                 return false;
             }
         };
@@ -487,7 +487,7 @@ fn upload_texture_from_source(
     let bytes = match source.read() {
         Ok(bytes) => bytes,
         Err(err) => {
-            saffron_core::log_warn!("texture {}: {err}", sub_id.value());
+            tracing::warn!("texture {}: {err}", sub_id.value());
             return None;
         }
     };
@@ -497,13 +497,13 @@ fn upload_texture_from_source(
                 match gpu.upload_texture_float(&decoded.rgba, decoded.width, decoded.height) {
                     Ok(texture) => Some(texture),
                     Err(err) => {
-                        saffron_core::log_warn!("texture {}: {err}", sub_id.value());
+                        tracing::warn!("texture {}: {err}", sub_id.value());
                         None
                     }
                 }
             }
             Err(err) => {
-                saffron_core::log_warn!("texture {}: {err}", sub_id.value());
+                tracing::warn!("texture {}: {err}", sub_id.value());
                 None
             }
         };
@@ -514,13 +514,13 @@ fn upload_texture_from_source(
             match gpu.upload_texture(&decoded.rgba, decoded.width, decoded.height, srgb) {
                 Ok(texture) => Some(texture),
                 Err(err) => {
-                    saffron_core::log_warn!("texture {}: {err}", sub_id.value());
+                    tracing::warn!("texture {}: {err}", sub_id.value());
                     None
                 }
             }
         }
         Err(err) => {
-            saffron_core::log_warn!("texture {}: {err}", sub_id.value());
+            tracing::warn!("texture {}: {err}", sub_id.value());
             None
         }
     }

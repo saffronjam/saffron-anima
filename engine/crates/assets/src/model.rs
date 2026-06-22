@@ -422,14 +422,14 @@ impl AssetServer {
         let meta = match read_container_metadata(&full_path) {
             Ok(meta) => meta,
             Err(err) => {
-                saffron_core::log_warn!("model {}: {err}", model_id.value());
+                tracing::warn!("model {}: {err}", model_id.value());
                 return None;
             }
         };
         let reader = match read_container(&full_path) {
             Ok(reader) => reader,
             Err(err) => {
-                saffron_core::log_warn!("model {}: {err}", model_id.value());
+                tracing::warn!("model {}: {err}", model_id.value());
                 return None;
             }
         };
@@ -458,7 +458,7 @@ impl AssetServer {
                         ..ByteSource::default()
                     };
                 }
-                saffron_core::log_warn!(
+                tracing::warn!(
                     "model {}: remap target '{external}' for sub-asset {} is missing; using the embedded chunk",
                     model.meta.model_id.value(),
                     sub_id.value()

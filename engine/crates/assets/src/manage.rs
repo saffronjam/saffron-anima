@@ -378,7 +378,7 @@ pub fn reimport_model(assets: &mut AssetServer, model_id: Uuid) -> Result<Reimpo
         if let Ok(reader) = saffron_geometry::read_container(&container_full)
             && let Err(err) = rewrite_container_meta(&container_full, &reader, &new_meta)
         {
-            saffron_core::log_warn!(
+            tracing::warn!(
                 "reimport: could not preserve remap for model {}: {err}",
                 model_id.value()
             );
@@ -842,7 +842,7 @@ pub fn delete_unused(
     let mut result = DeleteUnusedData::default();
     for id in ids {
         if !deletable.contains(&id.value()) {
-            saffron_core::log_warn!(
+            tracing::warn!(
                 "delete-unused: refusing {} (not classified Unused)",
                 id.value()
             );
@@ -857,7 +857,7 @@ pub fn delete_unused(
         let _ = std::fs::remove_file(format!("{full}.smeta")); // foreign-file sidecar, if any
         result.deleted += 1;
         result.reclaimed_bytes += bytes;
-        saffron_core::log_info!("delete-unused: removed '{path}' ({bytes} bytes)");
+        tracing::info!("delete-unused: removed '{path}' ({bytes} bytes)");
     }
     let _ = assets.scan_assets(); // rebuild the catalog + surface any cascade
     assets.write_catalog_cache();
