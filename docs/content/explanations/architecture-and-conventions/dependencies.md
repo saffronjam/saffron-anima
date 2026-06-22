@@ -83,6 +83,6 @@ declare the exception locally: `saffron-rendering` calls `ash`'s Vulkan entry po
 | The Jolt FFI sys crate | `crates/physics-sys/Cargo.toml` | `cxx`, `cxx-build`, `cc`, `build = "build.rs"` |
 
 ## Related
-- [The Cargo workspace and crate model](../cxx26-modules/) — the workspace the pins live in
+- [The Cargo workspace and crate model](../cargo-workspace/) — the workspace the pins live in
 - [Build environment](../build-environment/) — the toolbox `cargo` that resolves them
 - [Shader compilation](../shader-compilation/) — the `slangc` half of the toolchain

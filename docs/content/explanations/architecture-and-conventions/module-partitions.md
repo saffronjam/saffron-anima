@@ -69,6 +69,6 @@ crate root re-exports only the public leaves either way.
 | A feature module | `crates/rendering/src/render_graph.rs` | `RenderGraph`, `RgPass`, `RgUsage` |
 
 ## Related
-- [The Cargo workspace and crate model](../cxx26-modules/) — crates vs modules
+- [The Cargo workspace and crate model](../cargo-workspace/) — crates vs modules
 - [The crate DAG](../module-dag/) — where the rendering crate sits in the graph
 - [Render graph overview](../../frame-and-render-graph/render-graph-overview/) — the `RgPass` API

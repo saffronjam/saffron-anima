@@ -14,8 +14,8 @@ and the Rust house style the whole codebase follows.
 
 | Page | Covers | Code |
 |---|---|---|
-| `go-flavored-cpp` | plain structs + methods, traits as itables, errors as values, `clippy -D warnings` | `crates/core/`, `crates/app/` |
-| `cxx26-modules` | the Cargo workspace, crates vs modules, the single pin list, `pub use` surfaces | `engine/Cargo.toml`; `crates/core/src/lib.rs` |
+| `rust-house-style` | plain structs + methods, traits as itables, errors as values, `clippy -D warnings` | `crates/core/`, `crates/app/` |
+| `cargo-workspace` | the Cargo workspace, crates vs modules, the single pin list, `pub use` surfaces | `engine/Cargo.toml`; `crates/core/src/lib.rs` |
 | `module-partitions` | how one crate splits into module files behind a curated `pub use` root | `crates/rendering/src/lib.rs` |
 | `module-dag` | the crate dependency DAG, why `saffron-host` sits on top | `engine/Cargo.toml`; `crates/host/` |
 | `build-environment` | the `saffron-build` toolbox, `just` auto-enter, `SAFFRON_NO_TOOLBOX` | `justfile`; `engine/Cargo.toml` |

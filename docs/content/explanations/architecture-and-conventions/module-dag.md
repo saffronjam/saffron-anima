@@ -127,5 +127,5 @@ that implements `Layer`) and a binary (`saffron-host`, whose `main.rs` is a thin
 
 ## Related
 - [How a crate organizes its modules](../module-partitions/) — files inside one crate
-- [The Cargo workspace and crate model](../cxx26-modules/) — the workspace mechanism itself
+- [The Cargo workspace and crate model](../cargo-workspace/) — the workspace mechanism itself
 - [Main loop](../../app-lifecycle-and-window/main-loop-and-run/) — what `saffron-app` exposes

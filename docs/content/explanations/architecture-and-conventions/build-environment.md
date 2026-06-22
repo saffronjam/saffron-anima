@@ -97,6 +97,6 @@ compositor is needed.
 | Shader + asset step | `engine/xtask/src/shaders.rs` | `Config::resolve`, `run` |
 
 ## Related
-- [The Cargo workspace and crate model](../cxx26-modules/) — what `cargo build --workspace` builds
+- [The Cargo workspace and crate model](../cargo-workspace/) — what `cargo build --workspace` builds
 - [Shader compilation](../shader-compilation/) — where `slangc` runs (the `xtask` step)
 - [Dependencies](../dependencies/) — the pins the toolbox `cargo` resolves
