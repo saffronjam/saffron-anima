@@ -28,7 +28,6 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type AaMode = RenderStats["aa"];
-type ViewMode = RenderStats["viewMode"];
 
 const AA_MODES: { value: AaMode; label: string }[] = [
   { value: "off", label: "Off" },
@@ -37,18 +36,6 @@ const AA_MODES: { value: AaMode; label: string }[] = [
   { value: "msaa2", label: "MSAA 2x" },
   { value: "msaa4", label: "MSAA 4x" },
   { value: "msaa8", label: "MSAA 8x" },
-];
-
-/// The debug render-output mode. Transient (not persisted, not undoable); only implemented
-/// modes are listed, so the dropdown never offers a value the engine ignores.
-const VIEW_MODES: { value: ViewMode; label: string }[] = [
-  { value: "lit", label: "Lit" },
-  { value: "wireframe", label: "Wireframe" },
-  { value: "albedo", label: "Albedo" },
-  { value: "normal", label: "Normal" },
-  { value: "roughness", label: "Roughness" },
-  { value: "metallic", label: "Metallic" },
-  { value: "emissive", label: "Emissive" },
 ];
 
 /// The boolean feature toggles (label + the stat field + its setter). RT-gated rows
@@ -128,7 +115,6 @@ export function RenderPanel() {
       const r = s.renderStats;
       return {
         aa: (r?.aa ?? "off") as AaMode,
-        viewMode: (r?.viewMode ?? "lit") as ViewMode,
         exposureEv: r?.exposureEv ?? 0,
         rtSupported: r?.rtSupported ?? false,
         clustered: r?.clustered ?? false,
@@ -204,15 +190,6 @@ export function RenderPanel() {
     void client
       .setAa(mode)
       .then((res) => optimistic({ aa: res.aa }))
-      .catch((err: unknown) => notifyError(errorText(err)));
-  };
-
-  // View mode is a transient debug output, not project config — optimistic + echo, no undo record.
-  const onViewMode = (mode: ViewMode): void => {
-    optimistic({ viewMode: mode });
-    void client
-      .setViewMode(mode)
-      .then((res) => optimistic({ viewMode: res.viewMode }))
       .catch((err: unknown) => notifyError(errorText(err)));
   };
 
@@ -310,28 +287,6 @@ export function RenderPanel() {
               </SelectTrigger>
               <SelectContent>
                 {AA_MODES.map((m) => (
-                  <SelectItem key={m.value} value={m.value} className="text-[11px]">
-                    {m.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-[1fr_auto] items-center gap-1.5">
-            <Label className="truncate text-[11px] font-normal text-muted-foreground">
-              View Mode
-            </Label>
-            <Select
-              value={cfg.viewMode}
-              disabled={!ready}
-              onValueChange={(v) => onViewMode(v as ViewMode)}
-            >
-              <SelectTrigger size="sm" className="h-7 w-[112px] font-mono text-[11px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {VIEW_MODES.map((m) => (
                   <SelectItem key={m.value} value={m.value} className="text-[11px]">
                     {m.label}
                   </SelectItem>

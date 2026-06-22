@@ -6,6 +6,9 @@
 import { Fragment } from "react";
 import {
   Anchor,
+  ChevronDown,
+  CircleIcon,
+  Layers,
   Move3D,
   Pause,
   Play,
@@ -23,7 +26,8 @@ import { useEditorStore } from "../state/store";
 import { canRedo, canUndo, redoLabel, undoLabel } from "../lib/undo";
 import { useShallow } from "zustand/react/shallow";
 import { COMMANDS_BY_ID, bindingFor, formatBinding, type CommandId } from "../lib/keybindings";
-import { notify } from "../lib/flash";
+import { errorText, notify, notifyError } from "../lib/flash";
+import { VIEW_MODE_BY_VALUE, VIEW_MODES, type ViewMode, type ViewModeDef } from "../lib/view-modes";
 import type { GizmoState } from "../protocol";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -32,7 +36,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ProjectMenu } from "../app/ProjectMenu";
@@ -51,6 +60,86 @@ const TOOL_GROUPS: { label: string; group: PanelGroup }[] = [
 
 type GizmoOp = GizmoState["op"];
 type GizmoSpace = GizmoState["space"];
+
+/// The UE5-style View Modes picker: a radio group of shading modes with the per-channel
+/// buffer visualizations under a submenu, left of the Tools button. The mode is transient
+/// (optimistic write + echo, no undo); it reads back from `renderStats.viewMode`. Isolated in
+/// its own component so only it re-renders when the mode changes (the Topbar does not).
+function ViewModeMenu() {
+  logRender("ViewModeMenu");
+  const ready = useEditorStore((s) => s.engineStatus.phase === "ready");
+  const viewMode: ViewMode = useEditorStore((s) => s.renderStats?.viewMode ?? "lit");
+  const active = VIEW_MODE_BY_VALUE[viewMode] ?? VIEW_MODE_BY_VALUE.lit;
+  const ActiveIcon = active.icon;
+  // The submenu trigger carries the radio dot when its active child owns the selection.
+  const bufferActive = active.group === "buffer";
+
+  const onViewMode = (value: string): void => {
+    const mode = value as ViewMode;
+    const apply = (m: ViewMode): void => {
+      const cur = useEditorStore.getState().renderStats;
+      if (cur) {
+        useEditorStore.getState().setRenderStats({ ...cur, viewMode: m });
+      }
+    };
+    apply(mode); // optimistic
+    void client
+      .setViewMode(mode)
+      .then((res) => apply(res.viewMode))
+      .catch((err: unknown) => notifyError(errorText(err)));
+  };
+
+  const renderItem = (m: ViewModeDef) => {
+    const Icon = m.icon;
+    return (
+      <DropdownMenuRadioItem key={m.value} value={m.value} className="text-[12px]">
+        <Icon className="size-3.5 opacity-80" />
+        {m.label}
+      </DropdownMenuRadioItem>
+    );
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={!ready}
+          className="h-8 gap-1.5 px-2 font-normal"
+          aria-label="View mode"
+        >
+          <ActiveIcon className="size-4" />
+          <span className="text-[12px]">{active.label}</span>
+          <ChevronDown className="size-3 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-48">
+        <DropdownMenuRadioGroup value={viewMode} onValueChange={onViewMode}>
+          {VIEW_MODES.filter((m) => m.group === "shading").map(renderItem)}
+          <DropdownMenuSeparator />
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="relative pl-8">
+              {bufferActive ? (
+                <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+                  <CircleIcon className="size-2 fill-current" />
+                </span>
+              ) : null}
+              <Layers className="size-3.5 opacity-80" />
+              Buffer Visualization
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {VIEW_MODES.filter((m) => m.group === "buffer").map(renderItem)}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSeparator />
+          {VIEW_MODES.filter((m) => m.group === "analysis").map(renderItem)}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 export function Topbar() {
   logRender("Topbar");
@@ -349,6 +438,7 @@ export function Topbar() {
       </div>
       <div className="flex items-center justify-end gap-1.5">
         <AlarmBadge />
+        <ViewModeMenu />
         <div className="flex items-center gap-0.5" role="group" aria-label="Tools">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
