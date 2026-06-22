@@ -1,0 +1,476 @@
+//! [`RuntimeSession`]: the shared play-mode simulation spine — build the Jolt world from a
+//! scene, then each frame advance animation, step physics, dispatch contacts, and tick
+//! scripts. One code path, consumed by both the editor host (its play mode) and the
+//! standalone `saffron-player`.
+//!
+//! The session owns the simulation subsystems (animation runtime, script VM, registry) and
+//! operates on a `&mut Scene` and `&mut AssetServer` handed in per call — it owns neither, so
+//! the host can drive its editor-owned play scene and the player its own scene through the
+//! same methods. The live Jolt [`World`] lives behind an `Rc<RefCell<Option<…>>>` cell shared
+//! with the script bridge (so an `sa.raycast` re-enters the world mid-tick); everything else
+//! is a plain owned field, so the borrow dance the editor seam once needed is gone.
+
+use std::cell::RefCell;
+use std::path::Path;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use saffron_animation::{AnimMode, AnimationRuntime};
+use saffron_assets::AssetServer;
+use saffron_core::Uuid;
+use saffron_physics::{ContactKind, PoseTarget, World};
+use saffron_scene::{
+    CharacterController, ComponentRegistry, Entity, Scene, ScriptInputState,
+    derive_script_input_edges, register_builtin_components,
+};
+use saffron_script::{ContactInfo, ScriptHost, ScriptHostBridge, ScriptRunError};
+
+use crate::bridge::{
+    RuntimeScriptBridge, ScriptLogLine, SharedPhysics, SharedScene, SharedScriptSink,
+};
+
+/// The shared play-mode simulation spine.
+///
+/// Lifecycle: [`start`](Self::start) builds the world + script VM from a scene; each frame the
+/// consumer calls [`tick_animation`](Self::tick_animation) and (while simulating)
+/// [`step`](Self::step); [`stop`](Self::stop) ends the session. Buffered script logs/errors are
+/// drained by the consumer via [`take_logs`](Self::take_logs) / [`take_errors`](Self::take_errors)
+/// so the host routes them into the editor rings and the player to its console.
+pub struct RuntimeSession {
+    /// The per-session animation player (clip cache + transitions + IK).
+    animation: AnimationRuntime,
+    /// The play session's script VM + instances.
+    script: ScriptHost,
+    /// The component reflection table the script start/tick/contact calls bind, built once.
+    registry: Arc<ComponentRegistry>,
+    /// The live Jolt world, present between [`start`](Self::start) and [`stop`](Self::stop)
+    /// (`None` otherwise). Behind the shared cell so the bridge's `sa.raycast`/impulse bindings
+    /// reach it without owning it.
+    physics: SharedPhysics,
+    /// The host bridge, kept alive across sessions so the same `Rc` re-installs on each start.
+    bridge: Rc<dyn ScriptHostBridge>,
+    /// The shared `sa.log` buffer the bridge appends to; drained by [`take_logs`](Self::take_logs).
+    log_sink: SharedScriptSink,
+    /// Errors a tick recorded; drained by [`take_errors`](Self::take_errors).
+    error_sink: Vec<ScriptRunError>,
+    /// This frame's ragdoll pose targets, snapshotted from the animation runtime before the
+    /// physics step so active ragdolls motor toward the animated pose.
+    pose_targets: Vec<PoseTarget>,
+    /// The per-tick contact → script dispatch high-water cursor.
+    contact_cursor: u64,
+    /// Whether a script VM is live (set by [`start`](Self::start), cleared by [`stop`](Self::stop)).
+    script_vm_active: bool,
+    /// Whether the Jolt process globals are installed — set true the first time a world is built.
+    /// They outlive every world, so teardown shuts them down once, after the last world drops.
+    physics_init: bool,
+}
+
+impl Default for RuntimeSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RuntimeSession {
+    /// Builds an idle session: the animation runtime, an empty script VM, the component
+    /// registry, and the script bridge over the shared world / log cells. No world exists until
+    /// [`start`](Self::start).
+    #[must_use]
+    pub fn new() -> Self {
+        let physics: SharedPhysics = Rc::new(RefCell::new(None));
+        let log_sink: SharedScriptSink = Rc::new(RefCell::new(Vec::new()));
+        // The bridge's scene cell backs only the script-driven `sa.set_ragdoll_enabled(rig)`
+        // off-gate path; control/runtime-driven ragdoll enabling goes straight through the
+        // world, so it stays empty here.
+        let bridge_scene: SharedScene = Rc::new(RefCell::new(Scene::new()));
+        let bridge: Rc<dyn ScriptHostBridge> = Rc::new(RuntimeScriptBridge::new(
+            Rc::clone(&physics),
+            bridge_scene,
+            Rc::clone(&log_sink),
+        ));
+        Self {
+            animation: AnimationRuntime::new(),
+            script: ScriptHost::new(),
+            registry: Arc::new(register_builtin_components()),
+            physics,
+            bridge,
+            log_sink,
+            error_sink: Vec::new(),
+            pose_targets: Vec::new(),
+            contact_cursor: 0,
+            script_vm_active: false,
+            physics_init: false,
+        }
+    }
+
+    /// Starts a play session against `scene`: builds the Jolt world (cooking collider/rigidbody
+    /// shapes through `assets`, adding per-bone kinematic bodies + a `CharacterVirtual` per
+    /// controller), then starts the script VM (loading `<project_root>/src` classes + injecting
+    /// fields). A world-create or script-start failure is logged and leaves that part inactive;
+    /// physics still steps without scripts. Drain any buffered `on_create` logs afterward with
+    /// [`take_logs`](Self::take_logs).
+    pub fn start(&mut self, scene: &mut Scene, assets: &mut AssetServer, project_root: &Path) {
+        let world = match World::new() {
+            Ok(world) => world,
+            Err(err) => {
+                tracing::error!("physics world create failed: {err}");
+                return;
+            }
+        };
+        self.physics_init = true; // globals installed by `World::new`; teardown shuts them down once.
+        *self.physics.borrow_mut() = Some(world);
+        self.contact_cursor = 0;
+        self.populate_world(scene, assets);
+        self.start_scripts(scene, project_root);
+    }
+
+    /// Populates the live world from the scene's components: collider/rigidbody bodies (cooking
+    /// convex-hull/mesh shapes through the asset reader), per-bone kinematic bodies, and a
+    /// `CharacterVirtual` per controller entity.
+    fn populate_world(&mut self, scene: &mut Scene, assets: &mut AssetServer) {
+        let mut world_ref = self.physics.borrow_mut();
+        let Some(world) = world_ref.as_mut() else {
+            return;
+        };
+        let mut cook = |id: Uuid| {
+            assets
+                .load_mesh_cpu_asset(id)
+                .map_err(|err| err.to_string())
+        };
+        world.populate(scene, &mut cook);
+        world.build_bone_bodies(scene);
+
+        let mut characters: Vec<Entity> = Vec::new();
+        scene.for_each::<&CharacterController, _>(|entity, _| {
+            characters.push(entity);
+        });
+        for entity in characters {
+            if let Err(err) = world.add_character(entity, scene) {
+                tracing::warn!("character controller setup failed: {err}");
+            }
+        }
+    }
+
+    /// Starts the script VM and installs the bridge. A start failure leaves the VM inactive.
+    fn start_scripts(&mut self, scene: &mut Scene, project_root: &Path) {
+        self.script.install_bridge(Rc::clone(&self.bridge));
+        let src_dir = project_root.join("src");
+        let registry = Arc::clone(&self.registry);
+        match self.script.start_scripts(scene, registry, &src_dir) {
+            Ok(()) => self.script_vm_active = true,
+            Err(err) => {
+                tracing::error!("script start failed: {err}");
+                self.script_vm_active = false;
+            }
+        }
+    }
+
+    /// Advances the animation runtime over `scene` for this frame. Runs in both `Edit` (the
+    /// editor's preview) and `Play`; the simulation [`step`](Self::step) is separate (play only),
+    /// so a script can still override a bone the same frame physics settles it. Resolves clips
+    /// through `assets`.
+    pub fn tick_animation(
+        &mut self,
+        scene: &mut Scene,
+        assets: &mut AssetServer,
+        dt: f32,
+        mode: AnimMode,
+    ) {
+        let mut load = |id: Uuid| {
+            assets
+                .load_anim_clip(id)
+                .map_err(|err| saffron_animation::Error::ClipLoad(err.to_string()))
+        };
+        saffron_animation::tick_animation(&mut self.animation, scene, dt, mode, &mut load);
+    }
+
+    /// Steps the simulation one tick over `scene`: snapshots the animated pose for ragdoll
+    /// motors, steps physics (writing dynamic/ragdoll poses back into `scene`), dispatches the
+    /// tick's new contacts to scripts, derives this tick's input edges from `input`, and runs
+    /// every instance's `on_update`. Physics-then-scripts, so a script reads this frame's
+    /// settled transforms. Buffers contained script failures for [`take_errors`](Self::take_errors).
+    ///
+    /// The world borrow is scoped and released before any script runs, so a contact /
+    /// `on_update` handler may `sa.raycast` back into the world through the bridge.
+    pub fn step(&mut self, scene: &mut Scene, dt: f32, input: &mut ScriptInputState) {
+        // Snapshot this frame's animated poses for the ragdoll motors (cheap when no rig is
+        // driven; meaningful only with a live VM + rigs).
+        if self.script_vm_active {
+            self.pose_targets.clear();
+            for (rig, pose) in self.animation.last_poses() {
+                self.pose_targets.push(PoseTarget {
+                    rig: Uuid(rig),
+                    local: pose.to_vec(),
+                });
+            }
+        }
+
+        let events = {
+            let mut world_ref = self.physics.borrow_mut();
+            let Some(world) = world_ref.as_mut() else {
+                return;
+            };
+            // Drive active ragdolls toward the animated pose, ease the per-bone weight, then
+            // step — drive before the step so the motors are read in the solve.
+            world.drive_ragdolls_to_pose(&self.pose_targets);
+            world.advance_ragdoll_blend(dt);
+            world.step(scene, dt);
+            // Physics wins the frame: write each ragdoll part's pose into the bone override.
+            world.write_ragdoll_poses(scene);
+
+            if self.script_vm_active {
+                let drain = world.drain_contacts(self.contact_cursor);
+                self.contact_cursor = drain.high_water_seq;
+                drain.events
+            } else {
+                Vec::new()
+            }
+        };
+
+        if !self.script_vm_active {
+            return;
+        }
+
+        // Dispatch the drained contacts before `on_update`, so a trigger/contact handler runs
+        // the same frame the contact fired.
+        for event in events {
+            let contact = ContactInfo {
+                entity_a: event.entity_a,
+                entity_b: event.entity_b,
+                begin: event.kind == ContactKind::Begin,
+                sensor: event.sensor,
+                point: event.point,
+                normal: event.normal,
+            };
+            if let Some(err) =
+                self.script
+                    .dispatch_contact(scene, Arc::clone(&self.registry), contact)
+            {
+                tracing::error!(
+                    "script contact handler in '{}': {}",
+                    err.script,
+                    err.message
+                );
+                self.error_sink.push(err);
+                return;
+            }
+        }
+
+        // Derive this tick's input edges, then run every instance's `on_update`.
+        derive_script_input_edges(input);
+        if let Some(err) =
+            self.script
+                .tick_scripts(scene, Arc::clone(&self.registry), Some(input), dt)
+        {
+            tracing::error!("script error in '{}': {}", err.script, err.message);
+            self.error_sink.push(err);
+        }
+    }
+
+    /// Advances the world one frame in play: ticks animation in `Play` mode then steps the
+    /// simulation. The convenience entry for an always-playing consumer (the standalone
+    /// player); the editor host instead calls [`tick_animation`](Self::tick_animation) (with its
+    /// Edit/Play mode) and the gated [`step`](Self::step) separately.
+    pub fn advance(
+        &mut self,
+        scene: &mut Scene,
+        assets: &mut AssetServer,
+        dt: f32,
+        input: &mut ScriptInputState,
+    ) {
+        self.tick_animation(scene, assets, dt, AnimMode::Play);
+        self.step(scene, dt, input);
+    }
+
+    /// Ends the play session: stops the VM, drops the world, and clears the transient buffers.
+    /// Leaves the Jolt process globals installed (they persist across sessions); call
+    /// [`shutdown_physics_globals`](Self::shutdown_physics_globals) once at final teardown.
+    pub fn stop(&mut self) {
+        self.script.stop_scripts();
+        self.script_vm_active = false;
+        *self.physics.borrow_mut() = None;
+        self.pose_targets.clear();
+        self.log_sink.borrow_mut().clear();
+        self.error_sink.clear();
+        self.contact_cursor = 0;
+    }
+
+    /// Stops the script VM (a teardown step; it never touches the scene, so it tears down before
+    /// the world).
+    pub fn stop_scripts(&mut self) {
+        self.script.stop_scripts();
+        self.script_vm_active = false;
+    }
+
+    /// Drops the live world (a teardown step; RAII frees its Jolt bodies before the globals
+    /// shut down).
+    pub fn drop_physics_world(&mut self) {
+        *self.physics.borrow_mut() = None;
+    }
+
+    /// Shuts down the Jolt process globals — only after the last world is gone (a live world
+    /// holds Jolt bodies). Idempotent.
+    pub fn shutdown_physics_globals(&mut self) {
+        if self.physics_init {
+            saffron_physics::shutdown_physics();
+            self.physics_init = false;
+        }
+    }
+
+    /// Drops the runtime's per-session animation transition/pose entries (the host calls this on
+    /// an asset-preview transition edge so a re-entered preview starts clean).
+    pub fn prune_animation(&mut self) {
+        self.animation.prune_session();
+    }
+
+    /// Drains the buffered `sa.log` lines (the consumer routes them: editor ring / player stdout).
+    pub fn take_logs(&mut self) -> Vec<ScriptLogLine> {
+        self.log_sink.borrow_mut().drain(..).collect()
+    }
+
+    /// Drains the script errors a tick recorded (non-empty means the consumer should surface
+    /// them — the host pauses play, the player logs).
+    pub fn take_errors(&mut self) -> Vec<ScriptRunError> {
+        std::mem::take(&mut self.error_sink)
+    }
+
+    /// An owned clone of the shared world cell, for a consumer that must lend the live world
+    /// elsewhere mid-frame (the host hands `borrow_mut().as_mut()` into its control plane). The
+    /// clone is cheap (`Rc`) and borrowing it does not alias the session's other state.
+    #[must_use]
+    pub fn physics_cell(&self) -> SharedPhysics {
+        Rc::clone(&self.physics)
+    }
+
+    /// Whether a live world is present.
+    #[must_use]
+    pub fn has_physics(&self) -> bool {
+        self.physics.borrow().is_some()
+    }
+
+    /// Whether a script VM is live.
+    #[must_use]
+    pub fn script_vm_active(&self) -> bool {
+        self.script_vm_active
+    }
+
+    /// Whether the Jolt process globals are still flagged installed.
+    #[must_use]
+    pub fn physics_init(&self) -> bool {
+        self.physics_init
+    }
+
+    /// The live script instance count.
+    #[must_use]
+    pub fn instance_count(&self) -> usize {
+        self.script.instance_count()
+    }
+
+    /// The per-tick contact dispatch high-water cursor.
+    #[must_use]
+    pub fn contact_cursor(&self) -> u64 {
+        self.contact_cursor
+    }
+
+    /// The animation runtime (for tests / the host's preview-prune assertions).
+    #[must_use]
+    pub fn animation(&self) -> &AnimationRuntime {
+        &self.animation
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use saffron_scene::{Collider, Rigidbody, Transform};
+    use std::sync::Mutex;
+
+    // The Jolt `Factory::sInstance` is a process global; serialize the tests that build/drop a
+    // world so they never race it. Recover from a poisoned lock (it only guards the global init).
+    static JOLT_GLOBAL: Mutex<()> = Mutex::new(());
+    fn jolt_guard() -> std::sync::MutexGuard<'static, ()> {
+        JOLT_GLOBAL.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn scratch_root(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("saffron-runtime-{tag}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn idle_session_has_no_world_or_vm() {
+        let session = RuntimeSession::new();
+        assert!(!session.has_physics());
+        assert!(!session.script_vm_active());
+        assert!(!session.physics_init());
+        assert_eq!(session.instance_count(), 0);
+    }
+
+    /// Start builds a world from the scene and steps it; the dynamic box falls under gravity and
+    /// settles on the static floor, and stop drops the world. The CPU-only mirror of
+    /// `physics-falling-box.test.ts`.
+    #[test]
+    fn start_builds_a_world_and_steps_the_box() {
+        let _guard = jolt_guard();
+        match World::new() {
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("skipping: World::new failed: {err}");
+                return;
+            }
+        }
+
+        let mut scene = Scene::new();
+        let floor = scene.create_entity("Floor");
+        scene
+            .add_component(
+                floor,
+                Collider {
+                    half_extents: glam::Vec3::new(10.0, 0.1, 10.0),
+                    ..Collider::default()
+                },
+            )
+            .expect("floor collider");
+        let cube = scene.create_entity("Box");
+        scene
+            .add_component(
+                cube,
+                Transform {
+                    translation: glam::Vec3::new(0.0, 5.0, 0.0),
+                    scale: glam::Vec3::ONE,
+                    rotation: glam::Vec3::ZERO,
+                },
+            )
+            .expect("box transform");
+        scene
+            .add_component(cube, Collider::default())
+            .expect("box collider");
+        scene
+            .add_component(cube, Rigidbody::default())
+            .expect("box rigidbody");
+
+        let mut assets = AssetServer::new(scratch_root("falling-box"));
+        let mut session = RuntimeSession::new();
+        session.start(
+            &mut scene,
+            &mut assets,
+            std::path::Path::new("/nonexistent-project"),
+        );
+        assert!(session.has_physics(), "the world is live after start");
+
+        let mut input = ScriptInputState::default();
+        for _ in 0..200 {
+            session.step(&mut scene, 0.016, &mut input);
+        }
+        let settled_y = scene.world_matrix(cube).w_axis.y;
+        assert!(settled_y < 5.0, "the box fell from 5: now {settled_y}");
+        assert!(
+            (0.4..1.0).contains(&settled_y),
+            "the box settled at ~floor-top + half-extent: {settled_y}"
+        );
+
+        session.stop();
+        assert!(!session.has_physics(), "the world dropped on stop");
+        session.shutdown_physics_globals();
+        assert!(!session.physics_init(), "the Jolt globals shut down");
+    }
+}

@@ -1,0 +1,24 @@
+[package]
+name = "saffron-runtime"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "saffron_runtime"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing.workspace = true
+saffron-core = { path = "../core" }
+saffron-scene = { path = "../scene" }
+saffron-assets = { path = "../assets" }
+saffron-animation = { path = "../animation" }
+saffron-script = { path = "../script" }
+saffron-physics = { path = "../physics" }
+glam.workspace = true
