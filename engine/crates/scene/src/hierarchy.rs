@@ -12,7 +12,7 @@
 
 use glam::{Mat3, Mat4, Quat, Vec3};
 
-use saffron_core::{Uuid, log_warn};
+use saffron_core::Uuid;
 
 use crate::component::{
     AnimationPlayer, Camera, IdComponent, ModelInstance, PoseOverride, Relationship, SkinnedMesh,
@@ -235,7 +235,7 @@ impl Scene {
                     } else {
                         "is the entity itself"
                     };
-                    log_warn!(
+                    tracing::warn!(
                         "relationship parent {} {}; treating as root",
                         rel.parent.0,
                         reason
@@ -268,7 +268,7 @@ impl Scene {
             while let Some(a) = ancestor {
                 steps += 1;
                 if steps > entity_count {
-                    log_warn!(
+                    tracing::warn!(
                         "relationship parent {} forms a cycle; treating as root",
                         parent_uuid.0
                     );
@@ -308,7 +308,7 @@ impl Scene {
                 .map(|bone| {
                     let resolved = uuid_to_handle.get(bone).copied();
                     if resolved.is_none() {
-                        log_warn!(
+                        tracing::warn!(
                             "skinned mesh joint {} not found; deforming with identity",
                             bone.0
                         );

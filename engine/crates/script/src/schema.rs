@@ -12,8 +12,6 @@ use std::path::Path;
 
 use mlua::{Table, Value as LuaValue};
 
-use saffron_core::log_info;
-
 use crate::error::{Error, Result};
 use crate::value::SaVec3;
 use crate::vm::ScriptVm;
@@ -160,7 +158,9 @@ fn read_property_fields(properties: &Table, source: &str) -> Result<Vec<ScriptFi
         let name = name.to_owned();
         match infer_field(name.clone(), &default) {
             Some(field) => fields.push(field),
-            None => log_info!("script schema '{source}': skipping '{name}' (uninferable default)"),
+            None => {
+                tracing::info!("script schema '{source}': skipping '{name}' (uninferable default)")
+            }
         }
     }
     Ok(fields)

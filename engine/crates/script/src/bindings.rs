@@ -16,7 +16,7 @@
 
 use mlua::{Lua, Table, Value as LuaValue};
 
-use saffron_core::{Uuid, log_info};
+use saffron_core::Uuid;
 use saffron_scene::{Camera, Name, Transform};
 
 use crate::bridge::ScriptRayHit;
@@ -536,7 +536,7 @@ pub fn register_no_scene_globals(lua: &Lua) -> Result<()> {
     // The base `sa.log`; the play VM overrides it with the host log-sink variant.
     let log = lua
         .create_function(|_, message: String| {
-            log_info!("{message}");
+            tracing::info!("{message}");
             Ok(())
         })
         .map_err(runtime)?;
@@ -715,7 +715,7 @@ pub fn register_scene_globals(lua: &Lua) -> Result<()> {
     // running instance's uuid.
     let log = lua
         .create_function(|_, message: String| {
-            log_info!("{message}");
+            tracing::info!("{message}");
             let sender = session::current_sender();
             session::with_bridge(|bridge| bridge.log_sink(sender, &message));
             Ok(())

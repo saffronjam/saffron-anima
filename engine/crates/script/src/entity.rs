@@ -16,7 +16,7 @@
 use mlua::{Lua, UserData, UserDataMethods, Value as LuaValue};
 use serde_json::Value as JsonValue;
 
-use saffron_core::{Uuid, log_warn};
+use saffron_core::Uuid;
 use saffron_scene::{
     CharacterController, Entity, IdComponent, Name, Relationship, Scene, Transform,
     quat_to_euler_zyx,
@@ -82,11 +82,11 @@ impl EntityHandle {
         });
         match resolved {
             None => {
-                log_warn!("script: {op} outside a script callback is ignored");
+                tracing::warn!("script: {op} outside a script callback is ignored");
                 None
             }
             Some(Err(_)) => {
-                log_warn!("script: {op} on a missing entity/transform is ignored");
+                tracing::warn!("script: {op} on a missing entity/transform is ignored");
                 None
             }
             Some(Ok(value)) => value,
@@ -104,8 +104,8 @@ impl EntityHandle {
             true
         });
         match resolved {
-            None => log_warn!("script: {op} outside a script callback is ignored"),
-            Some(false) => log_warn!("script: {op} on a missing entity/transform is ignored"),
+            None => tracing::warn!("script: {op} outside a script callback is ignored"),
+            Some(false) => tracing::warn!("script: {op} on a missing entity/transform is ignored"),
             Some(true) => {}
         }
     }
@@ -163,11 +163,11 @@ impl EntityHandle {
         });
         match resolved {
             None => {
-                log_warn!("script: {op} outside a script callback is ignored");
+                tracing::warn!("script: {op} outside a script callback is ignored");
                 SaVec3::default()
             }
             Some(Err(_)) => {
-                log_warn!("script: {op} on a missing entity/transform is ignored");
+                tracing::warn!("script: {op} on a missing entity/transform is ignored");
                 SaVec3::default()
             }
             Some(Ok(value)) => value,
@@ -238,12 +238,12 @@ impl EntityHandle {
     ) -> Option<R> {
         let active = session::session_active() && session::with_registry(|_| ()).is_some();
         if !active {
-            log_warn!("script: {op} outside a script callback is ignored");
+            tracing::warn!("script: {op} outside a script callback is ignored");
             return None;
         }
         let valid = session::with_scene(|scene| scene.valid(self.entity)).unwrap_or(false);
         if !valid {
-            log_warn!("script: {op} on a dead entity is ignored");
+            tracing::warn!("script: {op} on a dead entity is ignored");
             return None;
         }
         session::with_registry(|registry| {
@@ -275,18 +275,20 @@ impl EntityHandle {
     #[must_use]
     pub fn set_component_json(self, component_name: &str, value: &JsonValue) -> bool {
         if is_structural_component(component_name) {
-            log_warn!("script: set_component('{component_name}') refused (structural component)");
+            tracing::warn!(
+                "script: set_component('{component_name}') refused (structural component)"
+            );
             return false;
         }
         self.with_session("set_component", |scene, registry| {
             let Some(traits) = registry.find_by_name(component_name) else {
-                log_warn!("script: set_component('{component_name}') — unknown component");
+                tracing::warn!("script: set_component('{component_name}') — unknown component");
                 return false;
             };
             match (traits.deserialize)(scene, self.entity, value) {
                 Ok(()) => true,
                 Err(err) => {
-                    log_warn!("script: set_component('{component_name}'): {err}");
+                    tracing::warn!("script: set_component('{component_name}'): {err}");
                     false
                 }
             }
@@ -300,7 +302,9 @@ impl EntityHandle {
     #[must_use]
     pub fn add_component(self, component_name: &str) -> bool {
         if is_structural_component(component_name) {
-            log_warn!("script: add_component('{component_name}') refused (structural component)");
+            tracing::warn!(
+                "script: add_component('{component_name}') refused (structural component)"
+            );
             return false;
         }
         self.with_session("add_component", |scene, registry| {
@@ -367,7 +371,9 @@ impl EntityHandle {
         .flatten();
         match uuid {
             Some(uuid) => session::defer_destroy(uuid),
-            None => log_warn!("script: destroy outside a callback / on a dead entity is ignored"),
+            None => {
+                tracing::warn!("script: destroy outside a callback / on a dead entity is ignored")
+            }
         }
     }
 
@@ -388,15 +394,19 @@ impl EntityHandle {
         });
         match resolved {
             None => {
-                log_warn!("script: set_parent outside a callback / on a dead entity is ignored");
+                tracing::warn!(
+                    "script: set_parent outside a callback / on a dead entity is ignored"
+                );
                 false
             }
             Some(Err(())) => {
-                log_warn!("script: set_parent outside a callback / on a dead entity is ignored");
+                tracing::warn!(
+                    "script: set_parent outside a callback / on a dead entity is ignored"
+                );
                 false
             }
             Some(Ok(Err(err))) => {
-                log_warn!("script: set_parent: {err}");
+                tracing::warn!("script: set_parent: {err}");
                 false
             }
             Some(Ok(Ok(()))) => true,
@@ -459,7 +469,7 @@ impl EntityHandle {
         })
         .flatten();
         let Some(target) = target else {
-            log_warn!("script: send outside a callback / on a dead entity is ignored");
+            tracing::warn!("script: send outside a callback / on a dead entity is ignored");
             return;
         };
         let payload_ref = stash_payload(lua, payload);
@@ -494,7 +504,7 @@ impl EntityHandle {
         });
         match resolved {
             Some(true) => {}
-            _ => log_warn!(
+            _ => tracing::warn!(
                 "script: move_character on an entity without a CharacterController is ignored"
             ),
         }

@@ -147,7 +147,7 @@ fn sky_mode_from_name(name: &str) -> SkyMode {
         "texture" => SkyMode::Texture,
         "procedural" => SkyMode::Procedural,
         other => {
-            saffron_core::log_warn!("unknown sky mode '{other}', defaulting to procedural");
+            tracing::warn!("unknown sky mode '{other}', defaulting to procedural");
             SkyMode::Procedural
         }
     }

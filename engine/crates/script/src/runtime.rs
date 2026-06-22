@@ -21,7 +21,7 @@ use std::sync::Arc;
 use mlua::{RegistryKey, Table, Value as LuaValue};
 use serde_json::Value as JsonValue;
 
-use saffron_core::{Uuid, log_error, log_info, log_warn};
+use saffron_core::Uuid;
 use saffron_scene::{ComponentRegistry, Entity, IdComponent, Scene, Script};
 
 use crate::bridge::{NoopBridge, ScriptHostBridge};
@@ -181,7 +181,7 @@ impl ScriptHost {
             match self.build_instance(&slot) {
                 Ok(instance) => self.instances.push(instance),
                 Err(err) => {
-                    log_error!("script: skipping '{}': {err}", slot.script_path);
+                    tracing::error!("script: skipping '{}': {err}", slot.script_path);
                 }
             }
         }
@@ -191,7 +191,7 @@ impl ScriptHost {
         if let Some(vm) = self.vm.as_ref()
             && let Err(err) = scheduler::install(vm.lua())
         {
-            log_error!("script: scheduler prelude failed: {err}");
+            tracing::error!("script: scheduler prelude failed: {err}");
         }
 
         // Run on_create per instance, then flush structural ops + dispatch messages, with
@@ -202,7 +202,7 @@ impl ScriptHost {
             let instance = &self.instances[index];
             session::set_sender(instance.entity_uuid);
             if let Err(err) = self.call_instance_method(&instance.self_ref, "on_create", None) {
-                log_error!("script: on_create '{}': {}", instance.script_path, err);
+                tracing::error!("script: on_create '{}': {}", instance.script_path, err);
             }
         }
         session::set_sender(Uuid(0));
@@ -210,7 +210,7 @@ impl ScriptHost {
         self.dispatch_messages();
         drop(guard);
 
-        log_info!("scripts started: {} instance(s)", self.instances.len());
+        tracing::info!("scripts started: {} instance(s)", self.instances.len());
         Ok(())
     }
 
@@ -425,7 +425,7 @@ impl ScriptHost {
                 let instance = &self.instances[index];
                 if let Err(err) = self.call_instance_method(&instance.self_ref, "on_destroy", None)
                 {
-                    log_warn!("script: on_destroy '{}': {}", instance.script_path, err);
+                    tracing::warn!("script: on_destroy '{}': {}", instance.script_path, err);
                 }
             }
         }
@@ -536,6 +536,9 @@ impl ScriptHost {
         name: &str,
         dt: Option<f32>,
     ) -> Result<()> {
+        // Tag every log emitted under a script handler with its entity, so script lines
+        // read `… script  [entity=42] …`. The sender is set per instance before each call.
+        let _span = tracing::info_span!("script", entity = session::current_sender().0).entered();
         let vm = self
             .vm
             .as_ref()
@@ -625,7 +628,7 @@ impl ScriptHost {
         vm.reset_budget();
         let result: mlua::Result<()> = method.call((self_table, sender_handle, payload));
         if let Err(err) = result {
-            log_warn!("sa: message '{handler}': {}", vm.classify_run_error(&err));
+            tracing::warn!("sa: message '{handler}': {}", vm.classify_run_error(&err));
         }
     }
 
@@ -647,7 +650,7 @@ impl ScriptHost {
         };
         vm.reset_budget();
         if let Err(err) = advance.call::<()>(dt) {
-            log_warn!("sa: scheduler: {}", vm.classify_run_error(&err));
+            tracing::warn!("sa: scheduler: {}", vm.classify_run_error(&err));
         }
     }
 

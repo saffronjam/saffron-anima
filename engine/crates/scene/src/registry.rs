@@ -361,7 +361,7 @@ impl ComponentRegistry {
             .ok_or_else(|| crate::Error::Json("entity components must be a JSON object".into()))?;
         for (name, value) in object {
             let Some(&index) = self.by_name.get(name.as_str()) else {
-                saffron_core::log_warn!("unknown component '{name}', skipping");
+                tracing::warn!("unknown component '{name}', skipping");
                 continue;
             };
             let deserialize = self.rows[index].deserialize;
