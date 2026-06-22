@@ -154,11 +154,11 @@ if host_ready; then
   ) || smoke_ok=1
   cat "$smoke_log"
   # The validation-clean gate (13:phase-5): the boot+render smoke must produce zero
-  # `[saffron:vulkan] error: [validation]` lines. The grep IS the gate — a dirty log is a
+  # `ERROR  vulkan  [validation] …` lines. The grep IS the gate — a dirty log is a
   # render-subsystem bug (a wrong barrier, a layout mismatch) that never throws or corrupts a
   # wire byte, so this is its only automated detector. The regression probe lives in the e2e
   # suite (boots with `SAFFRON_VK_PLANT_VALIDATION_ERROR` and asserts the grep WOULD catch it).
-  if grep -q "\[saffron:vulkan\] error: \[validation\]" "$smoke_log"; then
+  if grep -qE "ERROR[[:space:]]+vulkan[[:space:]]+\[validation\]" "$smoke_log"; then
     smoke_ok=1
     echo "present-only smoke produced Vulkan validation errors (see log above)" >&2
   fi

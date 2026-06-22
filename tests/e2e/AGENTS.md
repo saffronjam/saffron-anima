@@ -23,7 +23,7 @@ cd tests/e2e && bun test       # inside the toolbox (host bun on PATH)
   socket, so tests are isolated and never open a window. Needs `weston` + the engine binary
   (build it first: `just engine`).
 - **Assert on `validationErrors()`.** The engine runs with validation layers on; a test that
-  exercises a feature should assert the log stays free of `[saffron:vulkan] error: [validation]`
+  exercises a feature should assert the log stays free of `ERROR  vulkan  [validation]`
   lines — that is what catches GPU-state bugs (e.g. the MSAA sample-count regression) headlessly.
 - **Two tiers.** Behavioral/state tests assert on control responses + `validationErrors()` (zero-dep).
   Pixel tests drive the `screenshot` command (`target: "viewport"`, a path), wait for the PNG, read it

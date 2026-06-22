@@ -25,9 +25,10 @@ use saffron_control_client::{Client, Error as WireError};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-/// The substring the engine's debug messenger prefixes every validation-layer error with
-/// (`[saffron:vulkan] error: [validation] …`).
-const VALIDATION_ERROR_MARKER: &str = "[saffron:vulkan] error: [validation]";
+/// The message marker the engine's debug messenger emits for a validation-layer issue. A
+/// line counts as a validation *error* when this appears with an `ERROR`-level `vulkan`
+/// head (the compact log line is `<ts>  ERROR  vulkan  [validation] …`).
+const VALIDATION_MARKER: &str = "[validation]";
 
 /// The id-bearing keys the decimal-string-u64 contract scans for. A value under any of these keys
 /// must be a quoted decimal string (or `null`), never a bare JSON number — JS cannot represent a
@@ -327,12 +328,19 @@ impl TestEngine {
     }
 
     /// The validation-layer error lines (empty = clean): the debug messenger prints them as
-    /// `[saffron:vulkan] error: [validation] …`.
+    /// `<ts>  ERROR  vulkan  [validation] …`. A line qualifies when `[validation]` appears
+    /// with an `ERROR`-level `vulkan` head — robust to the subsystem column's padding.
     #[must_use]
     pub fn validation_errors(&self) -> Vec<String> {
         current_log(&self.log)
             .lines()
-            .filter(|line| line.contains(VALIDATION_ERROR_MARKER))
+            .filter(|line| match line.find(VALIDATION_MARKER) {
+                Some(idx) => {
+                    let head = &line[..idx];
+                    head.contains("ERROR") && head.contains("vulkan")
+                }
+                None => false,
+            })
             .map(str::to_owned)
             .collect()
     }

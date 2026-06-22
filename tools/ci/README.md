@@ -17,7 +17,7 @@ summary ending in a clear `ALL GATES PASSED` / `SOME GATES FAILED` verdict.
 4. **self-test-removal assertion** — no `run*SelfTest` / `SAFFRON_SELFTEST` /
    `fn *self_test` appears *outside* a `#[cfg(test)]` module (i.e. no runtime self-test survives).
 5. **present-only smoke + validation-clean** — boots the host bounded to 5 frames
-   (`SAFFRON_EXIT_AFTER_FRAMES=5`) and greps the log for `[saffron:vulkan] error: [validation]`
+   (`SAFFRON_EXIT_AFTER_FRAMES=5`) and greps the log for `ERROR  vulkan  [validation]`
    (the only automated detector for the silent GPU-state-bug class).
 6. **control-schema contract** — `tools/check-control-schema/check.ts` diffs the live host's
    `help`/results against the generated manifest + OpenRPC, including the decimal-string-u64

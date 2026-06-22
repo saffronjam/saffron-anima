@@ -5,7 +5,7 @@
 //! A gate that can never go red is worthless. Every other render-touching e2e asserts
 //! `validation_errors()` is empty; this one boots the host with `SAFFRON_VK_PLANT_VALIDATION_ERROR`
 //! set — which records one out-of-spec `vkCmdSetViewport` into each scene frame — and asserts the
-//! harness *sees* the resulting `[saffron:vulkan] error: [validation] …` lines. If this test ever
+//! harness *sees* the resulting `ERROR  vulkan  [validation] …` lines. If this test ever
 //! goes green-with-empty-errors, the gate has been silently disabled and the suite has lost its
 //! only headless detector for GPU-state bugs.
 

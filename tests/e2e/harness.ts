@@ -50,11 +50,11 @@ export class Engine {
   }
 
   /// Lines the validation layers flagged as errors (empty = clean). The engine's debug
-  /// messenger prints them as `[saffron:vulkan] error: [validation] …`.
+  /// messenger prints them as `<ts>  ERROR  vulkan  [validation] …` (ANSI off when piped).
   validationErrors(): string[] {
     return this.buf
       .split("\n")
-      .filter((line) => line.includes("[saffron:vulkan] error: [validation]"));
+      .filter((line) => /ERROR\s+vulkan\s+\[validation\]/.test(line));
   }
 
   static async boot(env: Record<string, string> = {}): Promise<Engine> {
