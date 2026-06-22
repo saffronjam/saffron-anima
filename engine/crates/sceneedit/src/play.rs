@@ -1,6 +1,6 @@
 //! Editor play mode: the `Edit → Playing ↔ Paused → Edit` state machine, the
-//! JSON-roundtrip play duplicate, the `tick_play` driver and its `sim_tick` simulation
-//! seam, `render_camera_view`, and the bounded script error/log rings.
+//! JSON-roundtrip play duplicate, the `play_step_dt` simulation gate, `render_camera_view`,
+//! and the bounded script error/log rings.
 //!
 //! Session policy — these live on [`SceneEditContext`](crate::SceneEditContext), never on
 //! `Scene`, and never serialize into the project.
@@ -93,7 +93,7 @@ pub struct ScriptLog {
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use saffron_core::{Uuid, log_info};
+use saffron_core::Uuid;
 use saffron_scene::{CameraView, Entity, IdComponent, Scene};
 
 use crate::context::SceneEditContext;
@@ -176,7 +176,7 @@ impl SceneEditContext {
             .unwrap_or(Entity::NULL);
         self.set_selection(twin);
 
-        log_info!("enter_play: duplicated the scene");
+        tracing::info!("enter_play: duplicated the scene");
         Ok(())
     }
 
@@ -209,7 +209,7 @@ impl SceneEditContext {
         Ok(())
     }
 
-    /// Grants `frames` single-step ticks, consumed by [`Self::tick_play`] while paused.
+    /// Grants `frames` single-step ticks, consumed by [`Self::play_step_dt`] while paused.
     ///
     /// # Errors
     ///
@@ -278,20 +278,21 @@ impl SceneEditContext {
         self.active_scene().primary_camera().unwrap_or(fly)
     }
 
-    /// Advances the simulation one frame, the gated driver.
+    /// The simulation gate: returns the `dt` to step this frame, or `None` to skip.
     ///
-    /// No-ops in Edit. Runs when Playing, or while a stepped frame is pending (consuming
-    /// one at the fixed [`PLAY_FIXED_STEP`]). `dt` clamps to [`PLAY_MAX_DELTA`] so a hitch
-    /// never spikes the simulation. Increments `play_tick` and invokes the `sim_tick` seam
-    /// with the active (play) scene; the host points `sim_tick` at the script runtime, so
-    /// SceneEdit stays free of script/physics deps.
-    pub fn tick_play(&mut self, mut dt: f32) {
+    /// `None` in Edit, and while Paused with no stepped frame pending. Returns `Some(dt)` when
+    /// Playing, or while consuming one of the granted stepped frames (at the fixed
+    /// [`PLAY_FIXED_STEP`]). The returned `dt` clamps to [`PLAY_MAX_DELTA`] so a hitch never
+    /// spikes the simulation. Advances `play_tick` on a stepping frame. The consumer (the host
+    /// or the player) drives its own `RuntimeSession` with the returned `dt`, so SceneEdit stays
+    /// free of script/physics deps — there is no simulation seam here.
+    pub fn play_step_dt(&mut self, mut dt: f32) -> Option<f32> {
         if self.play_state == PlayState::Edit {
-            return;
+            return None;
         }
         let run = self.play_state == PlayState::Playing || self.step_frames > 0;
         if !run {
-            return;
+            return None;
         }
         if self.step_frames > 0 {
             self.step_frames -= 1;
@@ -299,14 +300,7 @@ impl SceneEditContext {
         }
         dt = dt.min(PLAY_MAX_DELTA);
         self.play_tick += 1;
-
-        // The simulation seam: physics, scripting, and animation advance the play scene
-        // here. Take the closure out to avoid borrowing `self` twice (the closure needs
-        // `&mut self.active_scene()`), then put it back.
-        if let Some(mut sim_tick) = self.sim_tick.take() {
-            sim_tick(self.active_scene(), dt);
-            self.sim_tick = Some(sim_tick);
-        }
+        Some(dt)
     }
 
     /// Records one contained script failure in the bounded error ring.
@@ -497,70 +491,45 @@ mod tests {
         let (mut ctx, _cube, _uuid, _count) = fixture();
         ctx.enter_play().unwrap();
 
-        // sim_tick records each invocation's clamped dt so we can assert the fixed step.
-        let dts = Rc::new(Cell::new(Vec::<f32>::new()));
-        {
-            let dts = Rc::clone(&dts);
-            ctx.sim_tick = Some(Box::new(move |_scene, dt| {
-                let mut v = dts.take();
-                v.push(dt);
-                dts.set(v);
-            }));
-        }
-
         assert!(ctx.step_play(1).is_err(), "step while playing rejects");
         assert!(ctx.pause_play().is_ok(), "pause from playing succeeds");
         assert!(ctx.pause_play().is_err(), "pause while paused rejects");
         assert!(ctx.step_play(2).is_ok(), "step while paused succeeds");
 
-        ctx.tick_play(1.0);
-        ctx.tick_play(1.0);
+        // The gate yields the fixed step for each granted stepped frame, then `None`.
+        assert_eq!(ctx.play_step_dt(1.0), Some(PLAY_FIXED_STEP));
+        assert_eq!(ctx.play_step_dt(1.0), Some(PLAY_FIXED_STEP));
         assert_eq!(
             ctx.step_frames, 0,
-            "two ticks consume the two stepped frames"
+            "two gated steps consume the two stepped frames"
         );
-        ctx.tick_play(1.0);
         assert_eq!(
-            ctx.step_frames, 0,
-            "a paused tick without steps stays inert"
+            ctx.play_step_dt(1.0),
+            None,
+            "a paused gate without steps stays inert"
         );
-
-        // Two stepped frames ran at the fixed step; the inert paused tick did not.
-        let recorded = dts.take();
-        assert_eq!(recorded, vec![PLAY_FIXED_STEP, PLAY_FIXED_STEP]);
+        assert_eq!(ctx.step_frames, 0);
 
         assert!(ctx.resume_play().is_ok(), "resume from paused succeeds");
         assert!(ctx.resume_play().is_err(), "resume while playing rejects");
     }
 
     #[test]
-    fn tick_play_clamps_dt_to_the_max_delta_while_playing() {
+    fn play_step_dt_clamps_to_the_max_delta_while_playing() {
         let (mut ctx, _cube, _uuid, _count) = fixture();
         ctx.enter_play().unwrap();
-        let seen = Rc::new(Cell::new(0.0f32));
-        {
-            let seen = Rc::clone(&seen);
-            ctx.sim_tick = Some(Box::new(move |_scene, dt| seen.set(dt)));
-        }
-        ctx.tick_play(10.0);
         assert_eq!(
-            seen.get(),
-            PLAY_MAX_DELTA,
+            ctx.play_step_dt(10.0),
+            Some(PLAY_MAX_DELTA),
             "a hitch dt clamps to PLAY_MAX_DELTA"
         );
-        assert_eq!(ctx.play_tick, 1, "a playing tick advances play_tick");
+        assert_eq!(ctx.play_tick, 1, "a playing gate advances play_tick");
     }
 
     #[test]
-    fn tick_play_no_ops_in_edit() {
+    fn play_step_dt_is_none_in_edit() {
         let (mut ctx, _cube, _uuid, _count) = fixture();
-        let ran = Rc::new(Cell::new(false));
-        {
-            let ran = Rc::clone(&ran);
-            ctx.sim_tick = Some(Box::new(move |_scene, _dt| ran.set(true)));
-        }
-        ctx.tick_play(1.0);
-        assert!(!ran.get(), "tick_play in Edit invokes nothing");
+        assert_eq!(ctx.play_step_dt(1.0), None, "the gate is None in Edit");
         assert_eq!(ctx.play_tick, 0);
     }
 

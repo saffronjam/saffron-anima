@@ -19,7 +19,8 @@
 //! [`pause_play`](SceneEditContext::pause_play) /
 //! [`resume_play`](SceneEditContext::resume_play) / [`step_play`](SceneEditContext::step_play)
 //! / [`stop_play`](SceneEditContext::stop_play) transitions, the
-//! [`tick_play`](SceneEditContext::tick_play) driver with its `sim_tick` seam,
+//! [`play_step_dt`](SceneEditContext::play_step_dt) gate (the consumer steps its own
+//! simulation with the returned `dt`),
 //! [`render_camera_view`](SceneEditContext::render_camera_view), and the script error/log
 //! rings — and the gizmo math: the projection / hit-test ([`viewport_project`],
 //! [`pixel_to_ndc`], [`camera_position`], [`ring_basis`], [`gizmo_axes`], [`handle_axis`],
@@ -43,7 +44,7 @@ mod play;
 mod smoothing;
 
 pub use camera::{SceneEditCamera, SceneEditCameraInput, update_scene_edit_camera};
-pub use context::{AssetDragPayload, SceneEditContext, SimTick};
+pub use context::{AssetDragPayload, PlacementPreview, SceneEditContext};
 pub use error::{Error, Result};
 pub use gizmo::{
     GizmoOp, GizmoProjection, GizmoSpace, NativeGizmoHandle, NativeGizmoMode, NativeGizmoSpace,

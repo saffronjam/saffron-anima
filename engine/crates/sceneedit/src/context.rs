@@ -19,11 +19,6 @@ use crate::play::{PlayState, ScriptError, ScriptLog};
 use crate::smoothing::{MaterialSmoothTarget, TransformSmoothTarget};
 use saffron_scene::ScriptInputState;
 
-/// The simulation seam `tick_play` invokes with the active (play) scene and the clamped
-/// `dt`. The host points it at the script runtime; SceneEdit stays free of script/physics
-/// deps. `!Send`, single-thread host loop.
-pub type SimTick = Box<dyn FnMut(&mut Scene, f32)>;
-
 /// The payload dragged from an asset tile onto a component picker field.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AssetDragPayload {
@@ -40,6 +35,18 @@ impl Default for AssetDragPayload {
             asset_type: AssetType::Mesh,
         }
     }
+}
+
+/// A model placement preview rendered in the scene view before the drop is committed.
+pub struct PlacementPreview {
+    /// The model asset being previewed.
+    pub asset: Uuid,
+    /// The transient scene spawned from the model asset.
+    pub scene: Scene,
+    /// The transient scene's root entity.
+    pub root: Entity,
+    /// The transform to apply when the preview is committed into the authored scene.
+    pub transform: Transform,
 }
 
 /// The editor's mutable state: the scene being edited, the component registry that drives
@@ -69,6 +76,8 @@ pub struct SceneEditContext {
     pub project_display_name: String,
     /// The editor fly-camera (the scene-view eye).
     pub camera: SceneEditCamera,
+    /// The transient model placement preview shown during asset DnD.
+    pub placement_preview: Option<PlacementPreview>,
 
     /// Bumped by add/copy/destroy-entity + load (the control-plane diff poll key).
     pub scene_version: u64,
@@ -110,8 +119,6 @@ pub struct SceneEditContext {
     /// The physics/scripting lifecycle seam.
     pub on_play_state_changed: SubscriberList<PlayState>,
 
-    /// The simulation seam, set by the host wiring (`None` until then).
-    pub sim_tick: Option<SimTick>,
     /// Ticks run since `enter_play` (error timestamps).
     pub play_tick: i64,
     /// Live script instances; set by the host wiring.
@@ -165,6 +172,7 @@ impl Default for SceneEditContext {
             project_name: String::new(),
             project_display_name: String::new(),
             camera: SceneEditCamera::default(),
+            placement_preview: None,
             scene_version: 0,
             selection_version: 0,
             gizmo_op: GizmoOp::default(),
@@ -183,7 +191,6 @@ impl Default for SceneEditContext {
             step_frames: 0,
             had_primary_camera: false,
             on_play_state_changed: SubscriberList::new(),
-            sim_tick: None,
             play_tick: 0,
             script_instance_count: 0,
             script_errors: Vec::new(),
@@ -246,6 +253,21 @@ impl SceneEditContext {
             return &mut self.scene;
         }
         self.play_scene.as_mut().expect("play scene present")
+    }
+
+    /// The play scene and the gameplay [`ScriptInputState`], borrowed disjointly for the
+    /// runtime's simulation step.
+    ///
+    /// Only valid while playing (the consumer calls it under a `Some(dt)` from
+    /// [`play_step_dt`](Self::play_step_dt), where the active scene is the play duplicate and
+    /// preview is impossible). [`active_scene`](Self::active_scene) borrows all of `self`, so the
+    /// host could not pass both the play scene and `&mut self.script_input` to the runtime in one
+    /// call; this splits the two field borrows (distinct fields) in one place.
+    pub fn play_scene_and_input(&mut self) -> (&mut Scene, &mut ScriptInputState) {
+        (
+            self.play_scene.as_mut().expect("play scene present"),
+            &mut self.script_input,
+        )
     }
 
     /// The component registry paired with the active scene, borrowed disjointly.
