@@ -24,6 +24,7 @@ import { useMouseHistoryNav } from "./useMouseHistoryNav";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectStartupModal } from "./ProjectStartupModal";
 import { SettingsModal } from "./SettingsModal";
+import { ExportModal } from "./ExportModal";
 import type { ProjectInfo, ViewId } from "../control/client";
 import { AssetPreview } from "../components/AssetViewer";
 import { CaptureFlame } from "../components/CaptureFlame";
@@ -31,6 +32,7 @@ import { MaterialGraphEditor } from "../panels/MaterialGraphEditor";
 import { AssetEditorWorkspace } from "../panels/AssetEditorWorkspace";
 import { DockPanelsHost } from "../components/dock/DockPanelsHost";
 import { DockDropOverlay } from "../components/dock/DockDropOverlay";
+import { AssetDragPreviewTile, firstModelAssetId } from "../components/AssetTile";
 import { emitLayoutSettled } from "./layoutBus";
 import { logRender } from "../lib/renderLog";
 import { Toaster } from "@/components/ui/sonner";
@@ -292,6 +294,7 @@ export function App() {
         <DockPanelsHost space="scene" />
         {/* The torn-drag ghost + drop highlight, above every panel (pointer-events: none). */}
         <DockDropOverlay />
+        <CatalogDragGhost />
         {activeKind === "imageViewer" && <ImageViewerWorkspace asset={activeImage} />}
         {activeKind === "flamegraph" && <FlameGraphWorkspace />}
         {activeKind === "materialGraph" && (
@@ -316,10 +319,66 @@ export function App() {
         )}
         <ProjectStartupModal open={projectModalOpen} onProjectLoaded={handleProjectLoaded} />
         <SettingsModal />
+        <ExportModal />
         <Toaster />
         <StatusFooter />
       </div>
     </TooltipProvider>
+  );
+}
+
+function CatalogDragGhost() {
+  const catalogDrag = useEditorStore((s) => s.catalogDrag);
+  const asset = useEditorStore((s) => {
+    if (!s.catalogDrag) {
+      return null;
+    }
+    const id = firstModelAssetId(s.catalogDrag.assetIds, s.assets);
+    return id ? (s.assets.find((entry) => entry.id === id) ?? null) : null;
+  });
+  const [pointer, setPointer] = useState<{
+    x: number;
+    y: number;
+    overViewport: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!catalogDrag || !asset) {
+      setPointer(null);
+      return;
+    }
+
+    const update = (event: DragEvent): void => {
+      const hit = document.elementFromPoint(event.clientX, event.clientY);
+      const overViewport =
+        hit instanceof Element && hit.closest("[data-viewport-drop-target='true']") !== null;
+      setPointer({ x: event.clientX, y: event.clientY, overViewport });
+    };
+    const clear = (): void => setPointer(null);
+
+    window.addEventListener("dragover", update);
+    window.addEventListener("dragenter", update);
+    window.addEventListener("drop", clear);
+    window.addEventListener("dragend", clear);
+    return () => {
+      window.removeEventListener("dragover", update);
+      window.removeEventListener("dragenter", update);
+      window.removeEventListener("drop", clear);
+      window.removeEventListener("dragend", clear);
+    };
+  }, [asset, catalogDrag]);
+
+  if (!asset || !pointer || pointer.overViewport) {
+    return null;
+  }
+
+  return (
+    <div
+      className="pointer-events-none fixed z-[110]"
+      style={{ left: pointer.x + 12, top: pointer.y + 12 }}
+    >
+      <AssetDragPreviewTile entry={asset} />
+    </div>
   );
 }
 

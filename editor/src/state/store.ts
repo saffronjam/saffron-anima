@@ -118,6 +118,11 @@ export type PlayState = "edit" | "playing" | "paused";
 /// The Assets-grid shift anchor: the last clicked tile, folder or asset.
 export type AssetSelectionAnchor = { kind: "asset" | "folder"; key: string } | null;
 
+export interface CatalogDragPayload {
+  assetIds: string[];
+  folderPaths: string[];
+}
+
 /// One Assets-grid tile in the body's render order (folders sorted first, then
 /// assets) — the coordinate space for shift-range selection.
 export interface AssetGridItem {
@@ -212,6 +217,9 @@ export interface EditorState {
   uiFrameMs: number;
   engineStatus: EngineStatus;
   dragActive: boolean;
+  /// The current asset-browser drag payload, populated at dragstart so hover targets
+  /// can inspect it without relying on DataTransfer.getData during dragover.
+  catalogDrag: CatalogDragPayload | null;
   /// True only when the engine is confirmed rendering the authored scene view, so the reconcile poll may
   /// write `entities` (the Scene hierarchy source). Held false while an asset-editor tab is active and
   /// through a view switch until set-active-view resolves, so the preview scene's entities never reach
@@ -244,6 +252,8 @@ export interface EditorState {
   /// startup until a project loads; the project menu's "New Project" reopens it (then
   /// dismissable, since a project is already loaded).
   projectModalOpen: boolean;
+  /// Whether the "Export App" dialog is open (project-menu action).
+  exportModalOpen: boolean;
   /// Show the SELECTED entity's components as read-only leaf subrows in the
   /// hierarchy (sourced from componentsBySelected — never an extra inspect).
   /// A persisted view preference, default off so the outliner stays clean.
@@ -410,6 +420,7 @@ export interface EditorState {
   setEngineStatus(patch: Partial<EngineStatus>): void;
   setPhase(phase: EnginePhase, error?: string): void;
   setDragActive(dragActive: boolean): void;
+  setCatalogDrag(catalogDrag: CatalogDragPayload | null): void;
   setSceneEntitiesLive(live: boolean): void;
   setGizmo(patch: Partial<GizmoState>): void;
   /// Optimistic play-state write (the reconcile poll repairs it from the engine).
@@ -417,6 +428,7 @@ export interface EditorState {
   setViewportHidden(viewportHidden: boolean): void;
   setNativeDialogOpen(nativeDialogOpen: boolean): void;
   setProjectModalOpen(projectModalOpen: boolean): void;
+  setExportModalOpen(exportModalOpen: boolean): void;
   toggleComponentSubrows(): void;
   toggleHideBones(): void;
   setFocusComponent(focusComponent: string | null): void;
@@ -499,6 +511,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   uiFrameMs: 0,
   engineStatus: { running: false, phase: "idle" },
   dragActive: false,
+  catalogDrag: null,
   // True at startup: the scene view is the active view from the first frame, so authored entities load
   // immediately. App.tsx holds it false while an asset tab is active / during a view switch.
   sceneEntitiesLive: true,
@@ -509,6 +522,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   viewportHidden: false,
   nativeDialogOpen: false,
   projectModalOpen: false,
+  exportModalOpen: false,
   showComponentSubrows: loadShowSubrows(),
   hideBones: loadHideBones(),
   focusComponent: null,
@@ -1094,6 +1108,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       // Every captured prior value is stale against the loaded scene, and the rebuilt
       // viewTabs drop every non-scene tab; clear all per-tab history.
       historyByTab: {},
+      catalogDrag: null,
     });
   },
   setEngineStatus: (patch) => set((s) => ({ engineStatus: { ...s.engineStatus, ...patch } })),
@@ -1107,6 +1122,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       },
     })),
   setDragActive: (dragActive) => set({ dragActive }),
+  setCatalogDrag: (catalogDrag) => set({ catalogDrag }),
   setSceneEntitiesLive: (sceneEntitiesLive) => set({ sceneEntitiesLive }),
   // Keeps the object identity when the patch changes nothing, so the reconcile
   // poll confirming an unchanged gizmo doesn't re-render every subscriber.
@@ -1123,6 +1139,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   setViewportHidden: (viewportHidden) => set({ viewportHidden }),
   setNativeDialogOpen: (nativeDialogOpen) => set({ nativeDialogOpen }),
   setProjectModalOpen: (projectModalOpen) => set({ projectModalOpen }),
+  setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
   toggleComponentSubrows: () =>
     set((s) => {
       const showComponentSubrows = !s.showComponentSubrows;
