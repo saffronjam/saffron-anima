@@ -1,0 +1,6 @@
+{
+  "runtime.version": "Lua 5.4",
+  "workspace.library": ["library"],
+  "diagnostics.globals": ["sa"],
+  "runtime.builtin": { "io": "disable", "os": "disable", "debug": "disable", "package": "disable" }
+}
