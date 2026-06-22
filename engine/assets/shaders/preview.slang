@@ -56,7 +56,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float roughness = clamp(push.pbr.y * mr.g, 0.045, 1.0);
 
     float3 n = normalize(input.normal);
-    if (push.tex.w & FEATURE_NORMAL)
+    if ((push.tex.w & FEATURE_NORMAL) != 0u)
     {
         float3 dp1 = ddx(input.worldPos);
         float3 dp2 = ddy(input.worldPos);

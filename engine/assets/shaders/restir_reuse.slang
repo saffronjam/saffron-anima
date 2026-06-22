@@ -131,7 +131,7 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
     {
         float ang = rng(seed) * 6.2831853;
         float rad = rng(seed) * radius;
-        int2 off = int2(cos(ang) * rad, sin(ang) * rad);
+        int2 off = int2(int(cos(ang) * rad), int(sin(ang) * rad));
         int2 npx = int2(tid.xy) + off;
         if (npx.x < 0 || npx.y < 0 || npx.x >= int(pc.screenSize.x) || npx.y >= int(pc.screenSize.y)) { continue; }
         float2 nuv = (float2(npx) + 0.5) / float2(pc.screenSize.xy);
