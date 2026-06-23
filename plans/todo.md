@@ -13,12 +13,7 @@
 
 ## Physics and animation
 
-- Physics 3D bodies for entities with wireframe representation.
 - Physics-based two-way bound animations after physics.
-
-## Scripting
-
-- Swap the scripting VM from stock Lua 5.5 to Luau for a real in-language gradual type system, replacing the LuaLS-annotation overlay (`library/sa.lua` + the drift tripwire) with actual typed sources; evaluate the impact on the LuaBridge bindings, the sandbox, and cross-platform determinism.
 
 ## Game systems
 
@@ -34,4 +29,3 @@
 ## Assets and distribution
 
 - Research online asset store integration, including an in-editor browser and available/common asset sources.
-- Research production export packaging so the app can run standalone, including whether it should ship as a single binary.
