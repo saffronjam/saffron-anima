@@ -9,7 +9,7 @@ A control plane is an out-of-band channel for driving a running program: an exte
 named requests over a socket, the program runs them against its live state, and replies. It turns an
 otherwise opaque process into something scriptable and inspectable from outside.
 
-In Saffron the control plane makes the host scriptable from the [`sa` CLI](../sa-cli-protocol/) and
+In Anima the control plane makes the host scriptable from the [`sa` CLI](../sa-cli-protocol/) and
 from the e2e harness. The host listens on a unix socket, and each request mutates or inspects the
 scene, the asset catalog, the renderer, or the live physics world.
 

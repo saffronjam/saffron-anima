@@ -23,7 +23,7 @@ One unit conversion lives at the widget boundary, same as `Transform.rotation`: 
 
 ## Fit to mesh, and why there are no handles
 
-Saffron's gizmo translates, rotates, and scales the entity transform — there is no interactive collider-resize handle. So a collider is sized **numerically** (`halfExtents`, `offset`) plus a **Fit to mesh** button on the Collider section that re-fits the shape to the entity's mesh AABB over the `fit-collider` command (the same auto-fit that runs when the collider is first added). The engine bumps the scene version, and the reconcile poll re-reads the fitted values. When the entity has no rigidbody, the Collider section shows a *"No Rigidbody — static body"* note, so the author knows why the object does not fall.
+Anima's gizmo translates, rotates, and scales the entity transform — there is no interactive collider-resize handle. So a collider is sized **numerically** (`halfExtents`, `offset`) plus a **Fit to mesh** button on the Collider section that re-fits the shape to the entity's mesh AABB over the `fit-collider` command (the same auto-fit that runs when the collider is first added). The engine bumps the scene version, and the reconcile poll re-reads the fitted values. When the entity has no rigidbody, the Collider section shows a *"No Rigidbody — static body"* note, so the author knows why the object does not fall.
 
 The Bone Physics section is read-only: its per-bone bodies are auto-fit on skinned import and its ragdoll blend is driven from the Physics panel, not edited as a field grid. Mass, damping, gravity factor, and locks are solver-ignored for static and kinematic bodies; the inspector still shows them (the generic grid does no conditional visibility) and the documentation notes it.
 

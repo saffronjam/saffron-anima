@@ -12,7 +12,7 @@ A shadow map stores depth at finite resolution. A surface compared against its o
 
 ## How it works
 
-Saffron applies bias in two places, each matched to what the map stores. The 2D maps for directional and spot lights are biased in the rasterizer during the depth pass; the point cube is biased in the shader.
+Anima applies bias in two places, each matched to what the map stores. The 2D maps for directional and spot lights are biased in the rasterizer during the depth pass; the point cube is biased in the shader.
 
 The 2D maps are biased by `record_shadow_depth`:
 
@@ -33,7 +33,7 @@ The two failure modes pull in opposite directions:
 | surface shadows itself | shadow lifts off the contact point |
 | dark speckle / moiré on lit faces | gap of light under the caster |
 
-No single value is correct; bias lives in a tuning band. Saffron's constants are tuned on llvmpipe to remove acne without obvious peter-panning. Slope bias does most of the work, since acne is worst exactly where surfaces graze the light, and the constant handles the residual flat-surface case.
+No single value is correct; bias lives in a tuning band. Anima's constants are tuned on llvmpipe to remove acne without obvious peter-panning. Slope bias does most of the work, since acne is worst exactly where surfaces graze the light, and the constant handles the residual flat-surface case.
 
 ## Why these knobs
 

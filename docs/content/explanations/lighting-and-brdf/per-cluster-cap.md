@@ -7,7 +7,7 @@ weight = 10
 
 A per-cluster cap is the fixed maximum number of lights a single cluster can record. Clustered
 lighting stores each froxel's overlapping lights in a fixed-size array, and that array length is
-the cap. In Saffron a cluster holds at most 64 punctual lights.
+the cap. In Anima a cluster holds at most 64 punctual lights.
 
 A fixed array keeps the cluster buffer a flat, predictable allocation that the GPU indexes
 directly. The trade is a hard ceiling: when more than 64 lights overlap one froxel, the surplus

@@ -6,7 +6,7 @@ weight = 6
 # Limits
 
 The limits of a render graph are the optimizations a mature graph can perform but a given
-implementation chooses to leave out. Saffron's graph derives barriers and layout transitions from
+implementation chooses to leave out. Anima's graph derives barriers and layout transitions from
 declared usage and does nothing more; several features a fuller graph eventually grows are absent
 by design.
 

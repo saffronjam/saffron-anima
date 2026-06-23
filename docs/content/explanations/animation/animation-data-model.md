@@ -21,7 +21,7 @@ clip over time and writes the pose onto a rigged entity is a separate layer buil
 A clip mirrors a glTF animation faithfully and losslessly. glTF models an animation as a set of
 *channels*, each pairing a *sampler* (a keyframe curve: input times, output values, an
 interpolation mode) with a *target* (a node and one of its translation / rotation / scale
-properties). Saffron's `AnimTrack` is exactly one such channel:
+properties). Anima's `AnimTrack` is exactly one such channel:
 
 ```rust
 pub struct AnimTrack {

@@ -9,7 +9,7 @@ Device gating is the practice of detecting an optional GPU capability at startup
 code paths only on hardware that supports it. Ray tracing is such a capability: the KHR
 acceleration-structure and ray-query extensions are not present on every device.
 
-Saffron detects RT support during device bring-up, enables the extensions and features only when
+Anima detects RT support during device bring-up, enables the extensions and features only when
 they are present, and resolves the acceleration-structure command dispatch only on a supporting
 device. A single flag, `Capabilities::rt_supported`, records the result and gates every downstream
 RT path.

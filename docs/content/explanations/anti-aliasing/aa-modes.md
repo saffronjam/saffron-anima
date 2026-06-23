@@ -9,7 +9,7 @@ Anti-aliasing reduces the jagged edges that appear where a triangle's boundary c
 A renderer can address it at different points in the pipeline, and each point is a distinct mode with
 its own cost and quality.
 
-Saffron offers three approaches and treats them as mutually exclusive: at most one is active at a
+Anima offers three approaches and treats them as mutually exclusive: at most one is active at a
 time. A single configuration call selects the active mode, and a CLI command fronts it for scripting
 and inspection. The host starts with anti-aliasing off (1×); a loaded
 project's saved [render settings](../../geometry-and-assets/project-serialization/) override it.

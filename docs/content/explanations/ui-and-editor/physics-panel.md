@@ -7,7 +7,7 @@ weight = 8
 
 The Physics panel is the play-mode window into the live Jolt world. It sits in the diagnostics group beside [Stats and the Profiler](../metrics-dashboard/) (open it from the Tools → Diagnostics menu), and while the scene is Playing it shows the world's body counts and a contact/trigger event feed. In Edit it shows an empty state — the Jolt world only exists during play — and, crucially, polls nothing: a closed panel or a panel in Edit makes zero control round-trips.
 
-It also hosts the per-selection **ragdoll** and **character** controls. These are the substitute for tooling Saffron deliberately does not have: there is no interactive per-bone PhAT editor (no 3D bone handles), so a rig's ragdoll is driven by a blend slider and an enable button; and a character is nudged with direction buttons rather than play-testing with the keyboard.
+It also hosts the per-selection **ragdoll** and **character** controls. These are the substitute for tooling Anima deliberately does not have: there is no interactive per-bone PhAT editor (no 3D bone handles), so a rig's ragdoll is driven by a blend slider and an enable button; and a character is nudged with direction buttons rather than play-testing with the keyboard.
 
 ## Telemetry, gated to matter
 

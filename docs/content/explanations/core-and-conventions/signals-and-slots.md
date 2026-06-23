@@ -9,7 +9,7 @@ A signal is a typed broadcast channel: a producer publishes an event, and any nu
 handlers receive it in turn. The pattern decouples the producer from its consumers — the producer
 knows nothing about who listens, only the event's payload type.
 
-Saffron expresses this with one type, `SubscriberList<Args>` in `saffron-signal`. A handler may
+Anima expresses this with one type, `SubscriberList<Args>` in `saffron-signal`. A handler may
 stop the event from reaching the rest, which makes the list both a fan-out channel and a
 prioritized chain. The window reports input through it, and selection changes ripple through the
 editor on it.

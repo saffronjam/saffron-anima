@@ -12,7 +12,7 @@ history sample that corresponds to the same surface point.
 
 Temporal techniques reuse last frame's pixels, but the camera moves between frames, so a surface that
 sat at one pixel last frame lands at a different pixel now. The motion vector closes that gap.
-[TAA](../taa/) follows it backward to the correct history sample. Saffron computes camera-reprojection
+[TAA](../taa/) follows it backward to the correct history sample. Anima computes camera-reprojection
 velocity into an `rg16f` target.
 
 ## How it works

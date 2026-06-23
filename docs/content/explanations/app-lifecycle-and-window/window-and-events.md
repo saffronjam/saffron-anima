@@ -6,7 +6,7 @@ weight = 4
 # Window & events
 
 A window is an on-screen surface that the renderer presents into and that delivers the operating
-system's input events. In Saffron it is a thin facade over a winit window plus a set of typed
+system's input events. In Anima it is a thin facade over a winit window plus a set of typed
 event signals. Input reaches the rest of the program through those signals — a layer subscribes
 in `on_attach` and gets called back when the matching event occurs.
 

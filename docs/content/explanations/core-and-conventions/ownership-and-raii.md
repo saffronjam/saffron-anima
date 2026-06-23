@@ -7,7 +7,7 @@ weight = 4
 
 Ownership is the question of which value is responsible for freeing a resource, and when. Rust
 answers it with the borrow checker: every value has one owner, and when the owner goes out of
-scope its `Drop` runs. A GPU resource in Saffron is a small struct that owns its Vulkan handles
+scope its `Drop` runs. A GPU resource in Anima is a small struct that owns its Vulkan handles
 and frees them in `Drop`; when several places need to read the same resource, it is shared
 through an `Arc<T>` and the last clone to drop runs the destructor.
 

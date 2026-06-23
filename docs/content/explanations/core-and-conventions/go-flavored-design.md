@@ -8,7 +8,7 @@ weight = 1
 The house style is idiomatic Rust with the conventional Rust answers to design questions:
 plain data structs, free functions and inherent methods over them, errors as typed values,
 traits for behaviour, and ownership tracked by the borrow checker rather than by hand. When a
-question has a clear idiomatic Rust answer, that is the answer Saffron takes.
+question has a clear idiomatic Rust answer, that is the answer Anima takes.
 
 Knowing the style first makes the later pages easier to read: the rendering, scene, and control
 code all lean on it.
@@ -55,7 +55,7 @@ type system can't express, and `#[should_panic]` tests pin those.
 ## Why it holds up in a renderer
 
 Graphics code is where engines usually grow the deepest class hierarchies — a `Resource` base, a
-`RenderPass` base, a `Material` base. Saffron has none. A GPU buffer is a plain struct
+`RenderPass` base, a `Material` base. Anima has none. A GPU buffer is a plain struct
 (`Buffer`) whose `Drop` frees its Vulkan handle; a render pass is data the [render
 graph](../../frame-and-render-graph/render-graph-overview/) walks; a component is a plain struct
 the [registry](../../scene-and-ecs/component-registry/) knows how to serialize. The data is

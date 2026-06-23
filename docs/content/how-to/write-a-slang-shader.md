@@ -14,13 +14,13 @@ Add a `.slang` file, have the `xtask` shader pipeline compile it to SPIR-V, and 
 2. Run the shader pipeline. It scans every `*.slang` under `engine/assets/shaders/` and compiles each to `<name>.spv` next to the host binary:
    ```sh
    toolbox run -c saffron-build bash -lc '
-     cd /var/home/saffronjam/repos/SaffronEngine/engine && cargo run -p xtask -- shaders'
+     cd /var/home/saffronjam/repos/saffron-anima/engine && cargo run -p xtask -- shaders'
    ```
    `xtask shaders` compiles each entry-point shader with `slangc <shader>.slang -profile glsl_450 -target spirv -emit-spirv-directly -fvk-use-entrypoint-name -matrix-layout-column-major -I <shader_dir> -o <out>`. The shared `lighting.slang` is precompiled once to `lighting.slang-module` (`slangc … -emit-ir`, no `.spv`) and every other shader `import lighting` against it. Staleness is mtime-tracked, so a re-run recompiles nothing untouched.
 3. The full engine build runs the same pipeline after the Cargo build, so a plain build picks up the new file too:
    ```sh
    toolbox run -c saffron-build bash -lc '
-     cd /var/home/saffronjam/repos/SaffronEngine/engine && cargo build --workspace && cargo run -p xtask -- shaders'
+     cd /var/home/saffronjam/repos/saffron-anima/engine && cargo build --workspace && cargo run -p xtask -- shaders'
    ```
    (`just engine` wraps both steps.)
 4. Reference the `.spv` by its runtime-relative path when building a pipeline. A `Material` names its shader (default `"shaders/mesh.spv"`); the renderer loads it via `load_shader_module(...)` and caches the PSO with `request_mesh_pipeline`.

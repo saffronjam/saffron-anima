@@ -6,7 +6,7 @@ weight = 1
 # Main loop
 
 The main loop is the single function that owns a program's window and renderer, and runs
-one fixed sequence of work every frame until the window closes. In Saffron that function is
+one fixed sequence of work every frame until the window closes. In Anima that function is
 `run` (the `saffron_app` crate). A client fills an `AppConfig` and calls `run`; `run` drives
 everything and calls back into the client's layers at fixed points.
 

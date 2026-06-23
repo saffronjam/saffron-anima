@@ -7,7 +7,7 @@ math = true
 # Light components
 
 A light component is an ECS component that carries the radiometric and shape parameters of one
-light source. Saffron has three: a directional sun, point lights, and spot lights. Nothing is
+light source. Anima has three: a directional sun, point lights, and spot lights. Nothing is
 baked. Each frame the lights are gathered from the scene, packed into GPU structs, and uploaded
 into the lighting set the fragment shader reads.
 

@@ -7,7 +7,7 @@ bookCollapseSection = true
 # Anti-aliasing
 
 Anti-aliasing smooths the jagged edges that arise when continuous geometry is sampled onto a
-discrete grid of pixels. Saffron offers three techniques, each trading quality for cost and
+discrete grid of pixels. Anima offers three techniques, each trading quality for cost and
 switchable at runtime with `sa set-aa`:
 
 - **MSAA** cleans geometry edges by multisampling.

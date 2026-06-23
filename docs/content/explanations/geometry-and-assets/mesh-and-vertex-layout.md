@@ -6,7 +6,7 @@ weight = 1
 # Vertex layout
 
 A vertex layout is the fixed memory format of a single mesh vertex: which attributes it
-carries, in what order, and at what total stride. Saffron uses one CPU-side mesh type,
+carries, in what order, and at what total stride. Anima uses one CPU-side mesh type,
 `Mesh`, and one 32-byte vertex struct for every importer.
 
 A single fixed layout lets one mesh pipeline, one `.smesh` on-disk stride, and one upload

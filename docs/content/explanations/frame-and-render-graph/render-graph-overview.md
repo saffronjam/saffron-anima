@@ -70,9 +70,9 @@ optimizations that graphs may or may not implement:
 - **Pass culling** — drop a pass whose outputs nothing reads.
 - **Async scheduling** — move independent passes onto a separate queue to run concurrently.
 
-## In Saffron
+## In Anima
 
-Saffron's graph implements the core job and leaves the optimizations as seams. A pass is a small
+Anima's graph implements the core job and leaves the optimizations as seams. A pass is a small
 struct — a name, its resource accesses, its attachments, and a closure that records the draw or
 dispatch. Each access carries one `RgUsage` value (`ColorWrite`, `SampledRead`,
 `StorageImageRwCompute`, …), and a table maps each case to the stage, access mask, and layout a
@@ -81,7 +81,7 @@ barrier needs.
 The graph allocates nothing. Resources are *imported*: `import_image` and `import_buffer` register an
 existing Vulkan handle and return an `RgResource` index the passes refer to. The graph is rebuilt
 from scratch each frame, which costs little and keeps the per-frame state simple to reason about.
-There are no `VkRenderPass` or `VkFramebuffer` objects — Saffron targets Vulkan 1.4 and binds
+There are no `VkRenderPass` or `VkFramebuffer` objects — Anima targets Vulkan 1.4 and binds
 attachments per-pass through dynamic rendering.
 
 Engine passes (light culling, the scene pass, shadows, post-processing) are added at the start of

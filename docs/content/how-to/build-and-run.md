@@ -28,7 +28,7 @@ You can also drive the underlying commands by hand:
 
 ```sh
 toolbox run -c saffron-build bash -lc '
-  cd /var/home/saffronjam/repos/SaffronEngine/engine
+  cd /var/home/saffronjam/repos/saffron-anima/engine
   cargo build --workspace
   cargo run -p xtask -- shaders'
 ```

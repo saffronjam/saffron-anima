@@ -5,7 +5,7 @@ weight = 6
 
 # Shader compilation
 
-Shader compilation translates shader source into the SPIR-V binary the GPU driver accepts. Saffron
+Shader compilation translates shader source into the SPIR-V binary the GPU driver accepts. Anima
 writes shaders in Slang and compiles them ahead of time with the `xtask` helper; there is no runtime
 compiler. Every `.slang` entry-point file becomes a `.spv` next to the host binary before the engine
 starts.

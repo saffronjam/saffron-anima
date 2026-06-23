@@ -38,7 +38,7 @@ invocation handles one pixel through four steps:
 The blur runs only on texels that pass the edge test, and only along the detected edge, which
 keeps it from washing out the whole frame.
 
-## In Saffron
+## In Anima
 
 With FXAA enabled, the scene renders into a 1× scratch image instead of straight into the
 offscreen. A compute pass reads the scratch as a sampler and writes the anti-aliased result

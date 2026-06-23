@@ -13,7 +13,7 @@ right list.
 
 The mapping must invert exactly the slicing the [cull pass](../clustered-forward/) used. A fragment
 that resolves to a different froxel than the cull assigned reads a light list built for another
-region of the frustum. Saffron implements the mapping as `clusterIndexFor` in `lighting.slang`.
+region of the frustum. Anima implements the mapping as `clusterIndexFor` in `lighting.slang`.
 
 ## The three coordinates
 

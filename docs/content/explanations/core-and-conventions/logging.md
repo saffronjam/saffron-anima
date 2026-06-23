@@ -6,7 +6,7 @@ weight = 5
 # Logging
 
 Logging is the act of writing a tagged diagnostic line to a stream so a running program reports
-what it is doing. Saffron logs through [`tracing`](https://docs.rs/tracing): call sites emit events
+what it is doing. Anima logs through [`tracing`](https://docs.rs/tracing): call sites emit events
 with the `tracing::{info, warn, error, debug, trace}!` macros, and a single subscriber — installed
 once per process by `saffron-log` — renders them as one compact, colored line. Routing the events
 to a file or the editor UI later is one extra layer on that subscriber, not a change at any call
