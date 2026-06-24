@@ -52,7 +52,7 @@ pub use error::{Error, Result};
 pub use ik::solve_two_bone_ik;
 pub use pose::{JointPose, PoseBuffer, PoseDelta, TwoBoneIkResult};
 pub use runtime::{AnimationRuntime, ClipLoader, tick_animation};
-pub use sample::{sample_clip, sample_track};
+pub use sample::{sample_track, sample_weights};
 
 /// Whether the evaluator previews a single rig or advances every rig.
 ///
@@ -69,7 +69,7 @@ pub enum AnimMode {
 #[cfg(test)]
 mod tests {
     use glam::{Quat, Vec3, Vec4};
-    use saffron_geometry::{AnimClip, AnimInterp, AnimPath, AnimTrack};
+    use saffron_geometry::{AnimInterp, AnimPath, AnimTarget, AnimTrack};
     use saffron_test_support::{EPS, quat_close};
 
     use super::*;
@@ -173,57 +173,42 @@ mod tests {
     }
 
     #[test]
-    fn sample_clip_writes_tracked_joints_and_keeps_rest() {
-        // Joint 0 gets cubic T / slerp R / step S; the untracked joint 1 keeps its
-        // pre-filled rest value.
-        let s = 0.5_f32.sqrt();
-        let clip = AnimClip {
-            name: "selftest".to_string(),
-            duration: 1.0,
-            tracks: vec![
-                AnimTrack {
-                    joint: 0,
-                    path: AnimPath::Translation,
-                    interp: AnimInterp::CubicSpline,
-                    times: vec![0.0, 1.0],
-                    values: vec![
-                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, //
-                        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    ],
-                    ..Default::default()
-                },
-                AnimTrack {
-                    joint: 0,
-                    path: AnimPath::Rotation,
-                    interp: AnimInterp::Linear,
-                    times: vec![0.0, 1.0],
-                    values: vec![0.0, 0.0, 0.0, 1.0, 0.0, s, 0.0, s],
-                    ..Default::default()
-                },
-                AnimTrack {
-                    joint: 0,
-                    path: AnimPath::Scale,
-                    interp: AnimInterp::Step,
-                    times: vec![0.0, 1.0],
-                    values: vec![1.0, 1.0, 1.0, 3.0, 3.0, 3.0],
-                    ..Default::default()
-                },
-            ],
-        };
-
-        let mut pose = PoseBuffer {
-            local: vec![JointPose::default(); 2],
+    fn sample_weights_interpolates_each_lane_and_keeps_rest_when_empty() {
+        // A 2-wide morph-weight track, two keys: lane 0 ramps 0→1, lane 1 ramps 1→0.
+        let track = AnimTrack {
+            target: AnimTarget::Node,
+            path: AnimPath::Weights,
+            interp: AnimInterp::Linear,
+            morph_count: 2,
+            times: vec![0.0, 1.0],
+            values: vec![0.0, 1.0, 1.0, 0.0],
             ..Default::default()
         };
-        pose.local[0].translation = Vec3::splat(99.0); // overwritten by the T track
-        pose.local[1].translation = Vec3::new(7.0, 8.0, 9.0); // untracked rest sentinel
-        sample_clip(&clip, 0.5, &mut pose);
+        let mut w = vec![0.0; 2];
+        sample_weights(&track, 0.0, &mut w);
+        assert!((w[0] - 0.0).abs() < EPS && (w[1] - 1.0).abs() < EPS);
+        sample_weights(&track, 1.0, &mut w);
+        assert!((w[0] - 1.0).abs() < EPS && (w[1] - 0.0).abs() < EPS);
+        sample_weights(&track, 0.5, &mut w);
+        assert!((w[0] - 0.5).abs() < EPS && (w[1] - 0.5).abs() < EPS);
 
-        assert!((pose.local[0].translation.x - 0.75).abs() < EPS);
-        let q45 = Quat::from_axis_angle(Vec3::Y, 45.0_f32.to_radians());
-        assert!(quat_close(pose.local[0].rotation, q45));
-        assert!(pose.local[0].scale.distance(Vec3::ONE) < EPS);
-        assert!(pose.local[1].translation.distance(Vec3::new(7.0, 8.0, 9.0)) < EPS);
+        // Step holds the previous key.
+        let step = AnimTrack {
+            interp: AnimInterp::Step,
+            ..track.clone()
+        };
+        let mut s = vec![0.0; 2];
+        sample_weights(&step, 0.4, &mut s);
+        assert!((s[0] - 0.0).abs() < EPS && (s[1] - 1.0).abs() < EPS);
+
+        // A zero-count / empty track leaves the seeded rest weights untouched.
+        let empty = AnimTrack {
+            morph_count: 0,
+            ..track.clone()
+        };
+        let mut rest = vec![0.3, 0.7];
+        sample_weights(&empty, 0.5, &mut rest);
+        assert!((rest[0] - 0.3).abs() < EPS && (rest[1] - 0.7).abs() < EPS);
     }
 
     #[test]

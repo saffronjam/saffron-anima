@@ -7,10 +7,11 @@ use std::collections::HashMap;
 
 use glam::{Quat, Vec3};
 use saffron_core::Uuid;
-use saffron_geometry::{AnimClip, AnimPath};
+use saffron_geometry::{AnimClip, AnimPath, AnimTarget};
 use saffron_scene::{
-    AnimationPlayer, Entity, FootIk, IdComponent, Name, PoseOverride, Relationship, Scene,
-    SkinnedMesh, Transform, Transition, Wrap, quat_from_euler_xyz,
+    AnimationPlayer, Entity, FootIk, IdComponent, MorphComponent, MorphWeightOverride, Name,
+    PoseOverride, Relationship, Scene, SkinnedMesh, Transform, Transition, Wrap,
+    quat_from_euler_xyz,
 };
 
 use crate::AnimMode;
@@ -18,7 +19,7 @@ use crate::algebra::{apply_delta, blend_joint, pose_diff, quintic_decay, smooths
 use crate::error::Result;
 use crate::ik::solve_two_bone_ik;
 use crate::pose::{JointPose, PoseBuffer, PoseDelta};
-use crate::sample::sample_track;
+use crate::sample::{sample_track, sample_weights};
 
 /// An in-flight clip switch, captured once at the switch frame and decayed over the
 /// transition.
@@ -61,6 +62,10 @@ pub struct AnimationRuntime {
     /// of every tick. The host's play tick reads it to motor each active ragdoll toward this
     /// frame's animated pose.
     last_pose: HashMap<u64, Vec<JointPose>>,
+    /// Node-forest player bindings by player entity uuid: parallel to the player clip's
+    /// distinct node-track targets, each the resolved forest [`Entity`] (`None` until
+    /// resolved). Re-resolved by the scoped name walk on a stale handle.
+    node_bindings: HashMap<u64, Vec<Option<Entity>>>,
 }
 
 impl AnimationRuntime {
@@ -78,6 +83,7 @@ impl AnimationRuntime {
         self.clip_cache.clear();
         self.transitions.clear();
         self.last_pose.clear();
+        self.node_bindings.clear();
     }
 
     /// Drops the per-entity transition and last-pose state, keeping the clip cache.
@@ -89,6 +95,7 @@ impl AnimationRuntime {
     pub fn prune_session(&mut self) {
         self.transitions.clear();
         self.last_pose.clear();
+        self.node_bindings.clear();
     }
 
     /// The number of live per-entity session entries (transitions + last-pose keys),
@@ -216,14 +223,19 @@ fn sample_clip_resolved(
 ) {
     let joint_count = out.local.len() as i32;
     for track in &clip.tracks {
-        let mut joint = track.joint;
+        // Only bone tracks write the joint pose buffer. Node-TRS and morph-weight tracks
+        // bind by name to their own write seams in the runtime evaluator.
+        if track.target != AnimTarget::Bone {
+            continue;
+        }
+        let mut joint = track.index;
         let stale = joint < 0
             || joint >= joint_count
-            || (!track.joint_name.is_empty()
+            || (!track.target_name.is_empty()
                 && (joint as usize) < bone_names.len()
-                && bone_names[joint as usize] != track.joint_name);
+                && bone_names[joint as usize] != track.target_name);
         if stale {
-            joint = name_to_index.get(&track.joint_name).copied().unwrap_or(-1);
+            joint = name_to_index.get(&track.target_name).copied().unwrap_or(-1);
         }
         if joint < 0 || joint >= joint_count {
             continue;
@@ -234,6 +246,7 @@ fn sample_clip_resolved(
             AnimPath::Translation => out.local[j].translation = v.truncate(),
             AnimPath::Rotation => out.local[j].rotation = Quat::from_vec4(v),
             AnimPath::Scale => out.local[j].scale = v.truncate(),
+            AnimPath::Weights => {}
         }
     }
 }
@@ -258,8 +271,8 @@ fn sample_into(
 /// The bone's current pose — last frame's [`PoseOverride`] if present, else its rest pose.
 ///
 /// The outgoing pose a just-started transition freezes at the switch frame.
-fn outgoing_at(scene: &Scene, bone_handles: &[Entity], rest: &[JointPose], i: usize) -> JointPose {
-    if let Some(&handle) = bone_handles.get(i)
+fn outgoing_at(scene: &Scene, targets: &[Entity], rest: &[JointPose], i: usize) -> JointPose {
+    if let Some(&handle) = targets.get(i)
         && handle != Entity::NULL
         && scene.valid(handle)
         && let Ok(over) = scene.component::<PoseOverride>(handle)
@@ -354,6 +367,17 @@ fn apply_foot_ik(scene: &Scene, skin: &SkinnedMesh, ik: &FootIk, final_local: &m
     }
 }
 
+/// The kind of rig a player drives.
+enum RigKind {
+    /// A skinned rig: the bone handles drive a joint palette.
+    Skinned {
+        bone_handles: Vec<Entity>,
+        joint_count: usize,
+    },
+    /// A node-forest rig at the container root: tracks bind to forest entities by name.
+    Node,
+}
+
 /// The per-rig data gathered from a single `for_each` pass, then processed with full
 /// scene access (the `for_each` query borrows the world exclusively, so the per-entity
 /// work cannot run inside the closure).
@@ -361,8 +385,7 @@ struct Rig {
     entity: Entity,
     key: u64,
     clip_id: Uuid,
-    bone_handles: Vec<Entity>,
-    joint_count: usize,
+    kind: RigKind,
 }
 
 /// Sample and (when playing) advance every rig with both an [`AnimationPlayer`] and a
@@ -381,14 +404,20 @@ pub fn tick_animation(
     load: ClipLoader<'_>,
 ) {
     let mut rigs: Vec<Rig> = Vec::new();
-    scene.for_each::<(&AnimationPlayer, &SkinnedMesh, Option<&IdComponent>), _>(
+    scene.for_each::<(&AnimationPlayer, Option<&SkinnedMesh>, Option<&IdComponent>), _>(
         |entity, (player, skin, id)| {
+            let kind = match skin {
+                Some(skin) => RigKind::Skinned {
+                    bone_handles: skin.bone_handles.clone(),
+                    joint_count: skin.bones.len(),
+                },
+                None => RigKind::Node,
+            };
             rigs.push(Rig {
                 entity,
                 key: id.map_or(0, |id| id.id.0),
                 clip_id: player.clip,
-                bone_handles: skin.bone_handles.clone(),
-                joint_count: skin.bones.len(),
+                kind,
             });
         },
     );
@@ -427,14 +456,138 @@ fn tick_rig(
         // No clip (inactive rig, unset uuid, or no loader): clear overrides and drop the
         // per-entity transition / last-pose state. A negative-cached (empty) clip is NOT
         // this case — it resolves to a valid empty clip and drives the rig to rest.
-        clear_overrides(scene, &rig.bone_handles);
+        match &rig.kind {
+            RigKind::Skinned { bone_handles, .. } => clear_overrides(scene, bone_handles),
+            RigKind::Node => clear_node_overrides(runtime, scene, rig.key),
+        }
         runtime.transitions.remove(&rig.key);
         runtime.last_pose.remove(&rig.key);
         return;
     };
 
-    let joint_count = rig.joint_count;
+    match &rig.kind {
+        RigKind::Skinned { joint_count, .. } => {
+            tick_skinned_rig(runtime, scene, dt, rig, &clip, *joint_count);
+        }
+        RigKind::Node => tick_node_rig(runtime, scene, dt, rig, &clip),
+    }
+}
 
+/// Advance the player's playhead (when playing), opening a Loop-wrap blend across the seam.
+/// Returns the post-advance clip time. Shared by both rig kinds.
+fn advance_playback(scene: &mut Scene, entity: Entity, duration: f32, dt: f32) -> f32 {
+    let (prev_time, playing) = scene
+        .with_component::<AnimationPlayer, _>(entity, |p| (p.time, p.playing))
+        .unwrap_or((0.0, false));
+    if playing && duration > 0.0 {
+        let _ = scene.with_component_mut::<AnimationPlayer, _>(entity, |p| {
+            advance_time(p, duration, dt);
+        });
+    }
+    let (time, wrap, loop_blend, transition, transition_duration) = scene
+        .with_component::<AnimationPlayer, _>(entity, |p| {
+            (
+                p.time,
+                p.wrap,
+                p.loop_blend,
+                p.transition,
+                p.transition_duration,
+            )
+        })
+        .unwrap_or((0.0, Wrap::Loop, 0.0, 0.0, 0.0));
+    let wrapped = wrap == Wrap::Loop && time < prev_time;
+    if wrapped && loop_blend > 0.0 && transition >= transition_duration {
+        // A Loop wrap is a transition from the end pose to the start pose.
+        let _ = scene.with_component_mut::<AnimationPlayer, _>(entity, |p| {
+            p.prev_clip = p.clip;
+            p.transition = 0.0;
+            p.transition_duration = p.loop_blend;
+        });
+    }
+    time
+}
+
+/// Apply the in-flight transition (cross-fade or inertialize) to `final_local` over the
+/// driven `targets`, advancing the player's transition clock. Generalized off bone handles:
+/// `targets[i]` is the i-th driven entity (a bone for a skinned rig, a node entity for a
+/// node-forest rig), `rest[i]` its rest pose. The frozen outgoing pose reads each target's
+/// current `PoseOverride`, so the same core serves both rig kinds (decision #12).
+#[allow(clippy::too_many_arguments)]
+fn apply_transition(
+    runtime: &mut AnimationRuntime,
+    scene: &mut Scene,
+    entity: Entity,
+    key: u64,
+    targets: &[Entity],
+    rest: &[JointPose],
+    final_local: &mut [JointPose],
+    dt: f32,
+) {
+    let (transition, transition_duration, transition_mode) = scene
+        .with_component::<AnimationPlayer, _>(entity, |p| {
+            (p.transition, p.transition_duration, p.transition_mode)
+        })
+        .unwrap_or((0.0, 0.0, Transition::Inertialize));
+
+    let transitioning = transition_duration > 0.0 && transition < transition_duration;
+    if !transitioning {
+        runtime.transitions.remove(&key);
+        return;
+    }
+
+    let count = final_local.len();
+    // Freeze the outgoing pose + capture the offset once, at the switch frame.
+    if transition <= 0.0 || !runtime.transitions.contains_key(&key) {
+        let mut state = TransitionState {
+            outgoing: vec![JointPose::default(); count],
+            offset: vec![PoseDelta::default(); count],
+        };
+        for (i, incoming) in final_local.iter().enumerate() {
+            state.outgoing[i] = outgoing_at(scene, targets, rest, i);
+            state.offset[i] = pose_diff(&state.outgoing[i], incoming);
+        }
+        runtime.transitions.insert(key, state);
+    }
+    let state = &runtime.transitions[&key];
+    let x = (transition / transition_duration).clamp(0.0, 1.0);
+    let n = count.min(state.offset.len());
+    for (joint, (outgoing, offset)) in final_local
+        .iter_mut()
+        .zip(state.outgoing.iter().zip(state.offset.iter()))
+        .take(n)
+    {
+        *joint = if transition_mode == Transition::CrossFade {
+            blend_joint(outgoing, joint, smoothstep01(x))
+        } else {
+            apply_delta(joint, offset, quintic_decay(x))
+        };
+    }
+    let done = scene
+        .with_component_mut::<AnimationPlayer, _>(entity, |p| {
+            p.transition += dt;
+            p.transition >= p.transition_duration
+        })
+        .unwrap_or(false);
+    if done {
+        runtime.transitions.remove(&key);
+        let _ = scene.with_component_mut::<AnimationPlayer, _>(entity, |p| {
+            p.prev_clip = Uuid(0);
+            p.transition = 0.0;
+            p.transition_duration = 0.0;
+        });
+    }
+}
+
+/// Process a skinned rig: seed rest from the bones, sample bone-TRS tracks, apply the
+/// transition + foot-IK, and write a `PoseOverride` per bone.
+fn tick_skinned_rig(
+    runtime: &mut AnimationRuntime,
+    scene: &mut Scene,
+    dt: f32,
+    rig: &Rig,
+    clip: &AnimClip,
+    joint_count: usize,
+) {
     // Seed each bone's rest local TRS so untracked joints (and untracked channels of a
     // tracked joint) keep their authored value, and collect the name↔index maps for
     // durable track resolution.
@@ -456,89 +609,18 @@ fn tick_rig(
         }
     }
 
-    // Advance playback, noting a Loop wrap so it can be blended across the seam.
-    let (prev_time, playing, duration) = scene
-        .with_component::<AnimationPlayer, _>(rig.entity, |p| (p.time, p.playing, clip.duration))
-        .unwrap_or((0.0, false, 0.0));
-    if playing && duration > 0.0 {
-        let _ = scene.with_component_mut::<AnimationPlayer, _>(rig.entity, |p| {
-            advance_time(p, duration, dt);
-        });
-    }
-    let (time, wrap, loop_blend, transition, transition_duration) = scene
-        .with_component::<AnimationPlayer, _>(rig.entity, |p| {
-            (
-                p.time,
-                p.wrap,
-                p.loop_blend,
-                p.transition,
-                p.transition_duration,
-            )
-        })
-        .unwrap_or((0.0, Wrap::Loop, 0.0, 0.0, 0.0));
-    let wrapped = wrap == Wrap::Loop && time < prev_time;
-    if wrapped && loop_blend > 0.0 && transition >= transition_duration {
-        // A Loop wrap is a transition from the end pose to the start pose.
-        let _ = scene.with_component_mut::<AnimationPlayer, _>(rig.entity, |p| {
-            p.prev_clip = p.clip;
-            p.transition = 0.0;
-            p.transition_duration = p.loop_blend;
-        });
-    }
-
-    let mut final_local = sample_into(&clip, time, &rest, &bone_names, &name_to_index);
-
-    let (transition, transition_duration, transition_mode) = scene
-        .with_component::<AnimationPlayer, _>(rig.entity, |p| {
-            (p.transition, p.transition_duration, p.transition_mode)
-        })
-        .unwrap_or((0.0, 0.0, Transition::Inertialize));
-
-    let transitioning = transition_duration > 0.0 && transition < transition_duration;
-    if transitioning {
-        // Freeze the outgoing pose + capture the offset once, at the switch frame.
-        if transition <= 0.0 || !runtime.transitions.contains_key(&rig.key) {
-            let mut state = TransitionState {
-                outgoing: vec![JointPose::default(); joint_count],
-                offset: vec![PoseDelta::default(); joint_count],
-            };
-            for (i, incoming) in final_local.iter().enumerate() {
-                state.outgoing[i] = outgoing_at(scene, &skin.bone_handles, &rest, i);
-                state.offset[i] = pose_diff(&state.outgoing[i], incoming);
-            }
-            runtime.transitions.insert(rig.key, state);
-        }
-        let state = &runtime.transitions[&rig.key];
-        let x = (transition / transition_duration).clamp(0.0, 1.0);
-        let count = joint_count.min(state.offset.len());
-        for (joint, (outgoing, offset)) in final_local
-            .iter_mut()
-            .zip(state.outgoing.iter().zip(state.offset.iter()))
-            .take(count)
-        {
-            *joint = if transition_mode == Transition::CrossFade {
-                blend_joint(outgoing, joint, smoothstep01(x))
-            } else {
-                apply_delta(joint, offset, quintic_decay(x))
-            };
-        }
-        let done = scene
-            .with_component_mut::<AnimationPlayer, _>(rig.entity, |p| {
-                p.transition += dt;
-                p.transition >= p.transition_duration
-            })
-            .unwrap_or(false);
-        if done {
-            runtime.transitions.remove(&rig.key);
-            let _ = scene.with_component_mut::<AnimationPlayer, _>(rig.entity, |p| {
-                p.prev_clip = Uuid(0);
-                p.transition = 0.0;
-                p.transition_duration = 0.0;
-            });
-        }
-    } else {
-        runtime.transitions.remove(&rig.key);
-    }
+    let time = advance_playback(scene, rig.entity, clip.duration, dt);
+    let mut final_local = sample_into(clip, time, &rest, &bone_names, &name_to_index);
+    apply_transition(
+        runtime,
+        scene,
+        rig.entity,
+        rig.key,
+        &skin.bone_handles,
+        &rest,
+        &mut final_local,
+        dt,
+    );
 
     // External pose producer: kinematic foot IK feeds the same override/weight blend
     // layer ragdoll will use, mixed into final_local before the bones are written. Gated
@@ -570,6 +652,199 @@ fn tick_rig(
 
     // Snapshot this frame's final pose: the active ragdoll reads it as the per-bone target
     // its constraint motors drive toward (the physics handoff). Cheap.
+    runtime.last_pose.insert(rig.key, final_local);
+}
+
+/// A node entity's authored rest local TRS, read from its [`Transform`] (Euler → quat).
+fn node_rest_pose(scene: &Scene, entity: Entity) -> JointPose {
+    if entity == Entity::NULL || !scene.valid(entity) {
+        return JointPose::default();
+    }
+    scene
+        .with_component::<Transform, _>(entity, |t| JointPose {
+            translation: t.translation,
+            rotation: quat_from_euler_xyz(t.rotation),
+            scale: t.scale,
+        })
+        .unwrap_or_default()
+}
+
+/// First-match pre-order descendant of `root` whose [`Name`] equals `name`, scoped to
+/// `root`'s subtree (the player's forest). Never a global scan, so two instances of the
+/// same-named forest each bind their own subtree.
+fn find_named_descendant(scene: &Scene, root: Entity, name: &str) -> Option<Entity> {
+    let children = scene
+        .with_component::<Relationship, _>(root, |r| r.children.clone())
+        .unwrap_or_default();
+    for child in children {
+        if !scene.valid(child) {
+            continue;
+        }
+        let matches = scene
+            .with_component::<Name, _>(child, |n| n.name == name)
+            .unwrap_or(false);
+        if matches {
+            return Some(child);
+        }
+        if let Some(found) = find_named_descendant(scene, child, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Resolve each node-track target name to a forest [`Entity`], using the cached binding
+/// when its handle is still valid and re-resolving by the scoped name walk on a stale
+/// (destroyed / reordered) handle. The cache (`node_bindings[key]`) is rebuilt parallel to
+/// `names` when its length disagrees (the clip changed).
+fn resolve_node_targets(
+    runtime: &mut AnimationRuntime,
+    scene: &Scene,
+    key: u64,
+    root: Entity,
+    names: &[String],
+) -> Vec<Entity> {
+    let slots = runtime
+        .node_bindings
+        .entry(key)
+        .or_insert_with(|| vec![None; names.len()]);
+    if slots.len() != names.len() {
+        *slots = vec![None; names.len()];
+    }
+    let mut out = Vec::with_capacity(names.len());
+    for (i, name) in names.iter().enumerate() {
+        let cached = slots[i].filter(|&e| scene.valid(e));
+        let resolved = cached
+            .or_else(|| find_named_descendant(scene, root, name))
+            .unwrap_or(Entity::NULL);
+        slots[i] = (resolved != Entity::NULL).then_some(resolved);
+        out.push(resolved);
+    }
+    out
+}
+
+/// Drop a node-forest rig's `PoseOverride` + `MorphWeightOverride` from its bound entities
+/// and forget its bindings, so the forest reverts to rest and the durable
+/// `MorphComponent.weights`, and a re-entered player re-resolves fresh.
+fn clear_node_overrides(runtime: &mut AnimationRuntime, scene: &mut Scene, key: u64) {
+    if let Some(slots) = runtime.node_bindings.remove(&key) {
+        for entity in slots.into_iter().flatten() {
+            if entity != Entity::NULL && scene.valid(entity) {
+                scene.remove_component::<PoseOverride>(entity);
+                scene.remove_component::<MorphWeightOverride>(entity);
+            }
+        }
+    }
+}
+
+/// Process a node-forest rig: bind each node track to a forest entity by name, seed rest
+/// from those entities' transforms, sample node-TRS tracks into `PoseOverride`s and
+/// morph-weight tracks into `MorphWeightOverride`s, with the full transition path over the
+/// driven node entities.
+fn tick_node_rig(
+    runtime: &mut AnimationRuntime,
+    scene: &mut Scene,
+    dt: f32,
+    rig: &Rig,
+    clip: &AnimClip,
+) {
+    // Distinct node-track target names (TRS + weights), in first-appearance order.
+    let mut names: Vec<String> = Vec::new();
+    for track in &clip.tracks {
+        if track.target == AnimTarget::Node && !names.iter().any(|n| n == &track.target_name) {
+            names.push(track.target_name.clone());
+        }
+    }
+    if names.is_empty() {
+        runtime.last_pose.remove(&rig.key);
+        return;
+    }
+
+    let targets = resolve_node_targets(runtime, scene, rig.key, rig.entity, &names);
+    let time = advance_playback(scene, rig.entity, clip.duration, dt);
+
+    let count = targets.len();
+    let mut rest: Vec<JointPose> = Vec::with_capacity(count);
+    for &entity in &targets {
+        rest.push(node_rest_pose(scene, entity));
+    }
+    let mut final_local = rest.clone();
+    let mut pose_driven = vec![false; count];
+
+    // Node-TRS tracks write the bound entity's pose; weight tracks are handled after.
+    for track in &clip.tracks {
+        if track.target != AnimTarget::Node {
+            continue;
+        }
+        let Some(idx) = names.iter().position(|n| n == &track.target_name) else {
+            continue;
+        };
+        match track.path {
+            AnimPath::Translation => {
+                pose_driven[idx] = true;
+                final_local[idx].translation = sample_track(track, time).truncate();
+            }
+            AnimPath::Rotation => {
+                pose_driven[idx] = true;
+                final_local[idx].rotation = Quat::from_vec4(sample_track(track, time));
+            }
+            AnimPath::Scale => {
+                pose_driven[idx] = true;
+                final_local[idx].scale = sample_track(track, time).truncate();
+            }
+            AnimPath::Weights => {}
+        }
+    }
+
+    apply_transition(
+        runtime,
+        scene,
+        rig.entity,
+        rig.key,
+        &targets,
+        &rest,
+        &mut final_local,
+        dt,
+    );
+
+    for (i, &entity) in targets.iter().enumerate() {
+        if !pose_driven[i] || entity == Entity::NULL || !scene.valid(entity) {
+            continue;
+        }
+        let pose = final_local[i];
+        let _ = scene.add_component(
+            entity,
+            PoseOverride {
+                translation: pose.translation,
+                rotation: pose.rotation,
+                scale: pose.scale,
+            },
+        );
+    }
+
+    // Morph-weight tracks: seed from the durable `MorphComponent` weights (rest), sample,
+    // and write the runtime-only `MorphWeightOverride`.
+    for track in &clip.tracks {
+        if track.path != AnimPath::Weights {
+            continue;
+        }
+        let Some(idx) = names.iter().position(|n| n == &track.target_name) else {
+            continue;
+        };
+        let entity = targets[idx];
+        if entity == Entity::NULL || !scene.valid(entity) {
+            continue;
+        }
+        let mut weights = scene
+            .with_component::<MorphComponent, _>(entity, |m| m.weights.clone())
+            .unwrap_or_default();
+        if weights.len() < track.morph_count as usize {
+            weights.resize(track.morph_count as usize, 0.0);
+        }
+        sample_weights(track, time, &mut weights);
+        let _ = scene.add_component(entity, MorphWeightOverride { weights });
+    }
+
     runtime.last_pose.insert(rig.key, final_local);
 }
 
@@ -642,7 +917,7 @@ mod tests {
             name: "test".to_string(),
             duration: 1.0,
             tracks: vec![AnimTrack {
-                joint,
+                index: joint,
                 path: AnimPath::Translation,
                 interp: AnimInterp::Linear,
                 times: vec![0.0, 1.0],
@@ -700,13 +975,14 @@ mod tests {
             name: "spin".to_string(),
             duration: 1.0,
             tracks: vec![AnimTrack {
-                joint: 0,
-                joint_name: "Root".to_string(),
+                index: 0,
+                target_name: "Root".to_string(),
                 path: AnimPath::Rotation,
                 interp: AnimInterp::Linear,
                 times: vec![0.0, 1.0],
                 // xyzw: identity, then 90° about Y.
                 values: vec![0.0, 0.0, 0.0, 1.0, 0.0, s, 0.0, s],
+                ..Default::default()
             }],
         };
         (scene, rig, root_bone, clip)
@@ -733,6 +1009,179 @@ mod tests {
             .component::<PoseOverride>(bones[1])
             .expect("every bone gets a PoseOverride seeded from rest");
         assert!(over1.translation.distance(Vec3::new(1.0, 0.0, 0.0)) < 1e-4);
+    }
+
+    /// A node-forest scene: a container root "Forest" carrying an [`AnimationPlayer`] and
+    /// **no** `SkinnedMesh`, with "NodeA" parented under it and "NodeB" nested under NodeA.
+    /// Returns `(scene, container, [node_a, node_b])`.
+    fn node_forest_scene(clip: Uuid) -> (Scene, Entity, Vec<Entity>) {
+        let mut scene = Scene::new();
+        let container = scene.create_entity("Forest");
+        let node_a = scene.create_entity("NodeA");
+        let node_b = scene.create_entity("NodeB");
+        scene.set_parent(node_a, Some(container), false).unwrap();
+        scene.set_parent(node_b, Some(node_a), false).unwrap();
+        scene
+            .add_component(
+                container,
+                AnimationPlayer {
+                    clip,
+                    playing: true,
+                    wrap: Wrap::Loop,
+                    ..AnimationPlayer::default()
+                },
+            )
+            .unwrap();
+        scene.relink_hierarchy();
+        (scene, container, vec![node_a, node_b])
+    }
+
+    /// A clip with one node-TRS translation track binding by name, 0→`(end_x,0,0)` over 1s.
+    fn node_translate_clip(name: &str, end_x: f32) -> AnimClip {
+        AnimClip {
+            name: "node".to_string(),
+            duration: 1.0,
+            tracks: vec![AnimTrack {
+                target: AnimTarget::Node,
+                index: -1,
+                target_name: name.to_string(),
+                path: AnimPath::Translation,
+                interp: AnimInterp::Linear,
+                morph_count: 0,
+                times: vec![0.0, 1.0],
+                values: vec![0.0, 0.0, 0.0, end_x, 0.0, 0.0],
+            }],
+        }
+    }
+
+    #[test]
+    fn node_player_writes_pose_override_on_bound_node() {
+        // A skinless node-forest player ticks in Play and writes a PoseOverride onto the
+        // node bound by name; the world transform reflects it.
+        let clip_id = Uuid(20);
+        let (mut scene, _c, nodes) = node_forest_scene(clip_id);
+        let mut runtime = AnimationRuntime::new();
+        let mut load = clip_loader(node_translate_clip("NodeA", 4.0));
+
+        tick_animation(&mut runtime, &mut scene, 0.5, AnimMode::Play, &mut load);
+
+        let over = scene
+            .component::<PoseOverride>(nodes[0])
+            .expect("the bound node gets a PoseOverride");
+        assert!(over.translation.distance(Vec3::new(2.0, 0.0, 0.0)) < 1e-4);
+        // The unbound nested node is untouched.
+        assert!(!scene.has_component::<PoseOverride>(nodes[1]));
+        scene.update_world_transforms();
+        assert!(
+            scene
+                .world_translation(nodes[0])
+                .distance(Vec3::new(2.0, 0.0, 0.0))
+                < 1e-4
+        );
+    }
+
+    #[test]
+    fn node_rig_ignores_bone_tracks_no_cross_routing() {
+        // The joint-index-coupling hazard: a Bone track on a node-forest player must never
+        // be interpreted as a node index. The node track drives its node; the bone track is
+        // skipped (no panic, no stray override).
+        let clip_id = Uuid(22);
+        let (mut scene, _c, nodes) = node_forest_scene(clip_id);
+        let mut clip = node_translate_clip("NodeA", 4.0);
+        clip.tracks.push(AnimTrack {
+            target: AnimTarget::Bone,
+            index: 0,
+            target_name: "NodeB".to_string(),
+            path: AnimPath::Translation,
+            interp: AnimInterp::Linear,
+            morph_count: 0,
+            times: vec![0.0, 1.0],
+            values: vec![0.0, 0.0, 0.0, 9.0, 0.0, 0.0],
+        });
+        let mut runtime = AnimationRuntime::new();
+        let mut load = clip_loader(clip);
+        tick_animation(&mut runtime, &mut scene, 0.5, AnimMode::Play, &mut load);
+        assert!(scene.has_component::<PoseOverride>(nodes[0]));
+    }
+
+    #[test]
+    fn weights_track_writes_override_and_clears_on_stop() {
+        let clip_id = Uuid(21);
+        let (mut scene, _c, nodes) = node_forest_scene(clip_id);
+        scene
+            .add_component(
+                nodes[0],
+                MorphComponent {
+                    weights: vec![0.0, 0.0],
+                    names: vec!["a".to_string(), "b".to_string()],
+                },
+            )
+            .unwrap();
+        let clip = AnimClip {
+            name: "w".to_string(),
+            duration: 1.0,
+            tracks: vec![AnimTrack {
+                target: AnimTarget::Node,
+                index: -1,
+                target_name: "NodeA".to_string(),
+                path: AnimPath::Weights,
+                interp: AnimInterp::Linear,
+                morph_count: 2,
+                times: vec![0.0, 1.0],
+                values: vec![0.0, 0.0, 1.0, 0.5],
+            }],
+        };
+        let mut runtime = AnimationRuntime::new();
+        let mut load = clip_loader(clip);
+
+        // Half a second into the 1s clip: lane 0 lerps 0→1 to 0.5, lane 1 lerps 0→0.5 to 0.25.
+        tick_animation(&mut runtime, &mut scene, 0.5, AnimMode::Play, &mut load);
+        let (w0, w1) = scene
+            .with_component::<MorphWeightOverride, _>(nodes[0], |m| (m.weights[0], m.weights[1]))
+            .expect("a weights track writes a MorphWeightOverride");
+        assert!((w0 - 0.5).abs() < 1e-4 && (w1 - 0.25).abs() < 1e-4);
+
+        // Inactive (Edit, no preview) clears the runtime-only override + the binding, so the
+        // mesh reverts to the durable MorphComponent weights.
+        tick_animation(&mut runtime, &mut scene, 0.0, AnimMode::Edit, &mut load);
+        assert!(!scene.has_component::<MorphWeightOverride>(nodes[0]));
+        assert_eq!(runtime.node_bindings.len(), 0);
+    }
+
+    #[test]
+    fn node_binding_is_scoped_per_instance() {
+        // Two instances of the same-named forest: each player binds its OWN NodeA, never the
+        // other instance's (the global-scan cross-instance hazard).
+        let clip_id = Uuid(23);
+        let (mut scene, _c0, nodes0) = node_forest_scene(clip_id);
+        // A second forest in the same scene.
+        let container1 = scene.create_entity("Forest");
+        let node_a1 = scene.create_entity("NodeA");
+        scene.set_parent(node_a1, Some(container1), false).unwrap();
+        scene
+            .add_component(
+                container1,
+                AnimationPlayer {
+                    clip: clip_id,
+                    playing: true,
+                    wrap: Wrap::Loop,
+                    ..AnimationPlayer::default()
+                },
+            )
+            .unwrap();
+        scene.relink_hierarchy();
+
+        let mut runtime = AnimationRuntime::new();
+        let mut load = clip_loader(node_translate_clip("NodeA", 4.0));
+        tick_animation(&mut runtime, &mut scene, 0.5, AnimMode::Play, &mut load);
+
+        // Each instance's own NodeA is driven; neither leaks into the other.
+        assert!(scene.has_component::<PoseOverride>(nodes0[0]));
+        assert!(scene.has_component::<PoseOverride>(node_a1));
+        let a0 = scene.component::<PoseOverride>(nodes0[0]).unwrap();
+        let a1 = scene.component::<PoseOverride>(node_a1).unwrap();
+        assert!(a0.translation.distance(Vec3::new(2.0, 0.0, 0.0)) < 1e-4);
+        assert!(a1.translation.distance(Vec3::new(2.0, 0.0, 0.0)) < 1e-4);
     }
 
     #[test]
@@ -1013,12 +1462,13 @@ mod tests {
             name: "spin90".to_string(),
             duration: 1.0,
             tracks: vec![AnimTrack {
-                joint: 0,
-                joint_name: "J0".to_string(),
+                index: 0,
+                target_name: "J0".to_string(),
                 path: AnimPath::Rotation,
                 interp: AnimInterp::Linear,
                 times: vec![0.0, 1.0],
                 values: vec![0.0, s, 0.0, s, 0.0, s, 0.0, s],
+                ..Default::default()
             }],
         };
         let mut runtime = AnimationRuntime::new();
@@ -1102,13 +1552,14 @@ mod tests {
             name: "ramp".to_string(),
             duration: 1.0,
             tracks: vec![AnimTrack {
-                joint: 0,
-                joint_name: "J0".to_string(),
+                index: 0,
+                target_name: "J0".to_string(),
                 path: AnimPath::Rotation,
                 interp: AnimInterp::Linear,
                 times: vec![0.0, 1.0],
                 // identity -> 90° about Y.
                 values: vec![0.0, 0.0, 0.0, 1.0, 0.0, s, 0.0, s],
+                ..Default::default()
             }],
         };
         let mut runtime = AnimationRuntime::new();
