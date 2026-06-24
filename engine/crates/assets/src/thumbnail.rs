@@ -33,9 +33,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
 use saffron_core::Uuid;
+use saffron_geometry::glam::{Mat3, Mat4};
 use saffron_geometry::{
-    ChunkKind, decode_image, decode_image_from_memory, decode_image_from_memory_hdr,
-    decode_image_hdr, load_mesh, load_mesh_from_bytes,
+    ChunkKind, Mesh, Submesh, Vertex, decode_image, decode_image_from_memory,
+    decode_image_from_memory_hdr, decode_image_hdr, load_mesh, load_mesh_from_bytes,
 };
 use saffron_rendering::{GpuMesh, GpuTexture, PngTransfer, SubmeshMaterial};
 use saffron_scene::{AssetType, Colorspace};
@@ -194,15 +195,29 @@ pub enum ThumbnailContent {
         /// The material's referenced textures (decoded + uploaded on the worker thread).
         textures: Vec<ThumbnailTextureSource>,
     },
-    /// A model preview: the primary mesh chunk shaded with its per-submesh materials.
+    /// A model preview: every mesh-bearing node of the model's forest, each at its node world
+    /// transform, shaded with the container's per-submesh materials. The worker bakes the
+    /// transforms and merges the chunks into one mesh before rendering, so a multi-node model
+    /// previews as the assembled whole, not a single node's fragment.
     Model {
-        /// The primary mesh chunk image (resolved on the main thread at enqueue).
-        mesh_bytes: Vec<u8>,
-        /// One material per slot, in submesh-slot order.
+        /// One `.smesh` chunk per mesh-bearing forest node, with its node world transform
+        /// (resolved on the main thread at enqueue).
+        meshes: Vec<ModelMeshChunk>,
+        /// One material per slot, in submesh-slot order (container-wide).
         materials: Vec<MaterialAsset>,
         /// The referenced textures across the model's materials.
         textures: Vec<ThumbnailTextureSource>,
     },
+}
+
+/// One mesh chunk of a model thumbnail: a node's `.smesh` image plus the node's world
+/// transform, which the worker bakes into the vertices when assembling the forest.
+#[derive(Clone, Debug)]
+pub struct ModelMeshChunk {
+    /// The node's `.smesh` chunk image.
+    pub bytes: Vec<u8>,
+    /// The node's world transform (composed up its parent chain).
+    pub transform: Mat4,
 }
 
 /// One unit of work for the thumbnail worker: a resolved {asset, size} request.
@@ -435,7 +450,7 @@ fn generate_thumbnail(
                 .map_err(|e| Error::Thumbnail(e.to_string()))?)
         }
         ThumbnailContent::Model {
-            mesh_bytes,
+            meshes,
             materials,
             textures,
         } => {
@@ -450,7 +465,13 @@ fn generate_thumbnail(
                 .iter()
                 .map(|mat| build_submesh_material(mat, &mut |tid| local.get(&tid.value()).cloned()))
                 .collect();
-            let mesh = load_mesh_from_bytes(mesh_bytes)?;
+            // Decode each node chunk, bake its world transform, and merge into one mesh so the
+            // single-mesh render path frames the assembled forest by its full bounds.
+            let mut chunks = Vec::with_capacity(meshes.len());
+            for chunk in meshes {
+                chunks.push((load_mesh_from_bytes(&chunk.bytes)?, chunk.transform));
+            }
+            let mesh = merge_model_meshes(&chunks);
             let mesh_ref = gpu
                 .upload_mesh(&mesh, &[], None)
                 .map_err(|e| Error::Thumbnail(e.to_string()))?;
@@ -891,45 +912,74 @@ fn build_embedded_job(
     entry: &saffron_scene::AssetEntry,
 ) -> Result<(ThumbnailContent, String)> {
     let is_model = entry.asset_type == AssetType::Model;
-    let (container_id, mesh_sub_id) = if is_model {
-        let model = assets
-            .load_model_asset(id)
-            .ok_or_else(|| Error::Thumbnail(format!("model {} is not loadable", id.value())))?;
-        let mesh_sub = model
-            .meta
-            .sub_assets
-            .iter()
-            .find(|s| s.asset_type == AssetType::Mesh)
-            .map(|s| s.sub_id)
-            .ok_or_else(|| {
-                Error::Thumbnail(format!("model {} has no mesh to preview", id.value()))
-            })?;
-        (id, mesh_sub)
-    } else {
-        (entry.container, id)
-    };
-
-    let container = assets.load_model_asset(container_id).ok_or_else(|| {
-        Error::Thumbnail(format!("model {} is not loadable", container_id.value()))
-    })?;
-    let source = assets.chunk_source_for(&container, ChunkKind::Mesh, mesh_sub_id);
-    if source.is_empty() {
-        return Err(Error::Thumbnail(format!(
-            "no mesh chunk for sub-asset {}",
-            mesh_sub_id.value()
-        )));
-    }
-    let mesh_bytes = source.read()?;
     let stamp = assets.thumbnail_source_stamp(&entry.path);
 
+    // An embedded mesh sub-asset previews that one chunk; a model previews its whole forest.
     if !is_model {
+        let container = assets.load_model_asset(entry.container).ok_or_else(|| {
+            Error::Thumbnail(format!("model {} is not loadable", entry.container.value()))
+        })?;
+        let source = assets.chunk_source_for(&container, ChunkKind::Mesh, id);
+        if source.is_empty() {
+            return Err(Error::Thumbnail(format!(
+                "no mesh chunk for sub-asset {}",
+                id.value()
+            )));
+        }
         return Ok((
             ThumbnailContent::Mesh {
                 path: String::new(),
-                bytes: mesh_bytes,
+                bytes: source.read()?,
             },
             stamp,
         ));
+    }
+
+    let container = assets
+        .load_model_asset(id)
+        .ok_or_else(|| Error::Thumbnail(format!("model {} is not loadable", id.value())))?;
+    // Every mesh sub-asset (one per mesh-bearing node), each at its node world transform, so the
+    // thumbnail assembles the forest rather than rendering a single node. The transform comes from
+    // the node whose `mesh` references the sub-asset; a model with no node table renders its
+    // chunks at the identity (correct for the single-node case).
+    let nodes = crate::spawn::imported_nodes_from_json(&container.meta.nodes);
+    let node_mesh_ids = crate::spawn::node_mesh_ids_from_json(&container.meta.nodes);
+    let world = node_world_transforms(&nodes);
+    let mut transform_by_mesh: std::collections::HashMap<u64, Mat4> =
+        std::collections::HashMap::new();
+    for (i, mesh_id) in node_mesh_ids.iter().enumerate() {
+        if mesh_id.value() != 0 {
+            transform_by_mesh
+                .entry(mesh_id.value())
+                .or_insert_with(|| world.get(i).copied().unwrap_or(Mat4::IDENTITY));
+        }
+    }
+    let mesh_subs: Vec<Uuid> = container
+        .meta
+        .sub_assets
+        .iter()
+        .filter(|s| s.asset_type == AssetType::Mesh)
+        .map(|s| s.sub_id)
+        .collect();
+    let mut meshes = Vec::new();
+    for sub_id in mesh_subs {
+        let source = assets.chunk_source_for(&container, ChunkKind::Mesh, sub_id);
+        if source.is_empty() {
+            continue; // a degenerate / missing node chunk drops out, not the whole model
+        }
+        meshes.push(ModelMeshChunk {
+            bytes: source.read()?,
+            transform: transform_by_mesh
+                .get(&sub_id.value())
+                .copied()
+                .unwrap_or(Mat4::IDENTITY),
+        });
+    }
+    if meshes.is_empty() {
+        return Err(Error::Thumbnail(format!(
+            "model {} has no mesh to preview",
+            id.value()
+        )));
     }
 
     // Textured model preview: resolve each material slot (sub-asset order matches the
@@ -961,12 +1011,66 @@ fn build_embedded_job(
 
     Ok((
         ThumbnailContent::Model {
-            mesh_bytes,
+            meshes,
             materials,
             textures,
         },
         stamp,
     ))
+}
+
+/// World transforms for an imported node forest: each node's local `T·R·S` composed up its
+/// parent chain. Parallel to `nodes`.
+fn node_world_transforms(nodes: &[saffron_geometry::ImportedNode]) -> Vec<Mat4> {
+    let locals: Vec<Mat4> = nodes
+        .iter()
+        .map(|n| Mat4::from_scale_rotation_translation(n.scale, n.rotation, n.translation))
+        .collect();
+    (0..nodes.len())
+        .map(|i| {
+            let mut m = locals[i];
+            let mut parent = nodes[i].parent;
+            while parent >= 0 && (parent as usize) < nodes.len() {
+                m = locals[parent as usize] * m;
+                parent = nodes[parent as usize].parent;
+            }
+            m
+        })
+        .collect()
+}
+
+/// Bakes each chunk's world transform into its vertices (normals through the inverse-transpose)
+/// and concatenates them into one mesh, rebasing every submesh's indices onto the shared vertex
+/// stream. Material slots are preserved (the container's material table is shared across nodes).
+fn merge_model_meshes(chunks: &[(Mesh, Mat4)]) -> Mesh {
+    let mut out = Mesh::default();
+    for (mesh, world) in chunks {
+        let normal_mat = Mat3::from_mat4(*world).inverse().transpose();
+        let base_vertex = out.vertices.len() as i64;
+        for v in &mesh.vertices {
+            out.vertices.push(Vertex {
+                position: world.transform_point3(v.position),
+                normal: (normal_mat * v.normal).normalize_or_zero(),
+                uv0: v.uv0,
+            });
+        }
+        for sm in &mesh.submeshes {
+            let first_index = out.indices.len() as u32;
+            let start = sm.first_index as usize;
+            let end = start + sm.index_count as usize;
+            for &idx in &mesh.indices[start..end] {
+                let rebased = i64::from(idx) + i64::from(sm.vertex_offset) + base_vertex;
+                out.indices.push(rebased as u32);
+            }
+            out.submeshes.push(Submesh {
+                first_index,
+                index_count: sm.index_count,
+                vertex_offset: 0,
+                material_slot: sm.material_slot,
+            });
+        }
+    }
+    out
 }
 
 /// The five texture slot ids of a material, in slot order.
