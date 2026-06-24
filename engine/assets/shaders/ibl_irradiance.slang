@@ -4,6 +4,13 @@
 
 static const float PI = 3.14159265359;
 
+// Sampling the convolution from a pre-averaged mid mip instead of mip 0 matches each cosine
+// sample's solid angle to a source texel's, so a bright sun is integrated smoothly rather than
+// hit by a handful of samples. Without this the sparse 64x16 hemisphere integral aliases the sun
+// into per-texel fireflies that magnify into blocks on the 32^2 irradiance cube. The chosen mip
+// (~log2(IBL_ENV_SIZE) - 4 → 16^2 source for a 256^2 env) requires the env cube to carry a mip chain.
+static const float ConvolveMip = 4.0;
+
 [[vk::binding(0, 0)]] SamplerCube envCube;
 [[vk::image_format("rgba16f")]]
 [[vk::binding(1, 0)]] RWTexture2DArray<float4> outCube;
@@ -51,7 +58,7 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
             float theta = 0.5 * PI * (float(t) + 0.5) / float(thetaSteps);
             float3 tangent = float3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
             float3 sampleDir = tangent.x * right + tangent.y * up + tangent.z * n;
-            irradiance += envCube.SampleLevel(sampleDir, 0.0).rgb * cos(theta) * sin(theta);
+            irradiance += envCube.SampleLevel(sampleDir, ConvolveMip).rgb * cos(theta) * sin(theta);
             samples = samples + 1;
         }
     }

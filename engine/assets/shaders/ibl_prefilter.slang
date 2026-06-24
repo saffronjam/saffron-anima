@@ -14,6 +14,18 @@ struct Push
 };
 [[vk::push_constant]] Push push;
 
+// The source env cube's mip-0 face size, for the filtered-importance mip select below. Must match
+// IBL_ENV_SIZE (rendering/src/ibl.rs); update both together if the env resolution changes.
+static const float EnvSize = 256.0;
+
+// GGX normal distribution, for the per-sample PDF that drives the source-mip selection below.
+float distributionGGX(float ndoth, float a)
+{
+    float a2 = a * a;
+    float d = ndoth * ndoth * (a2 - 1.0) + 1.0;
+    return a2 / max(PI * d * d, 1e-5);
+}
+
 float3 cubeFaceDir(uint face, float2 uv)
 {
     float3 d;
@@ -71,7 +83,7 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
     float3 r = n;
     float3 v = n;  // split-sum approximation: view = normal = reflection
 
-    const uint sampleCount = 64;
+    const uint sampleCount = 128;
     float3 prefiltered = float3(0.0);
     float totalWeight = 0.0;
     for (uint i = 0; i < sampleCount; i = i + 1)
@@ -82,7 +94,23 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
         float ndotl = max(dot(n, l), 0.0);
         if (ndotl > 0.0)
         {
-            prefiltered += envCube.SampleLevel(l, 0.0).rgb * ndotl;
+            // Filtered importance sampling (Karis 2013 / Frostbite / Filament): sample a SOURCE mip
+            // chosen from this sample's solid angle vs a texel's, so each importance sample reads a
+            // pre-averaged region of the env instead of one aliased mip-0 texel. This is what kills
+            // fireflies + aliasing with a low sample count (a single bright emissive texel gets
+            // averaged into a coarse mip before the GGX sum), so the hard luminance clamp can go.
+            float a = push.roughness * push.roughness;
+            float ndoth = max(dot(n, h), 0.0);
+            float vdoth = max(dot(v, h), 1e-4);
+            float d = distributionGGX(ndoth, a);
+            float pdf = (d * ndoth / (4.0 * vdoth)) + 1e-4;
+            float saTexel = 4.0 * PI / (6.0 * EnvSize * EnvSize);
+            float saSample = 1.0 / (float(sampleCount) * pdf);
+            float mip = push.roughness < 1e-3 ? 0.0 : max(0.5 * log2(saSample / saTexel), 0.0);
+            // No firefly clamp: the source mip chain (filtered importance sampling) is the variance
+            // control now — a bright emissive texel is pre-averaged into the coarse mip this sample
+            // reads, so it no longer scatters, and the reflection keeps its true (unclamped) energy.
+            prefiltered += envCube.SampleLevel(l, mip).rgb * ndotl;
             totalWeight += ndotl;
         }
     }

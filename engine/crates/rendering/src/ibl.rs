@@ -31,12 +31,14 @@ use crate::{Device, Error, Result, checked};
 /// The IBL cube / LUT format — `R16G16B16A16_SFLOAT`, sampled and storage-written by the
 /// convolution compute passes.
 pub const IBL_COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
-/// Source environment cube resolution per face.
-pub const IBL_ENV_SIZE: u32 = 128;
+/// Source environment cube resolution per face. (Mirrored as `EnvSize` in `ibl_prefilter.slang` —
+/// update both together.)
+pub const IBL_ENV_SIZE: u32 = 256;
 /// Diffuse irradiance cube resolution per face.
 pub const IBL_IRRADIANCE_SIZE: u32 = 32;
-/// Prefiltered specular cube base resolution per face.
-pub const IBL_PREFILTER_SIZE: u32 = 128;
+/// Prefiltered specular cube base resolution per face: 256² mip-0 gives near-mirror metals 4× the
+/// texels of the old 128².
+pub const IBL_PREFILTER_SIZE: u32 = 256;
 /// Prefiltered specular mip count — `mesh.slang`'s `IblPrefilterMaxMip` must be this − 1.
 pub const IBL_PREFILTER_MIPS: u32 = 5;
 /// Split-sum BRDF LUT resolution.
@@ -324,7 +326,14 @@ impl IblCube {
             .array_layers(6)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE)
+            // TRANSFER_SRC|DST so the env cube can blit-generate its mip chain (filtered
+            // importance sampling reads coarser source mips); harmless on the other cubes.
+            .usage(
+                vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::STORAGE
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST,
+            )
             .initial_layout(vk::ImageLayout::UNDEFINED);
         let alloc_info = vk_mem::AllocationCreateInfo {
             usage: vk_mem::MemoryUsage::Auto,
@@ -548,7 +557,10 @@ impl Ibl {
     pub fn new(device: &Device, descriptors: &Descriptors) -> Result<Self> {
         let resources = Arc::clone(device.resources());
         let mips = IBL_PREFILTER_MIPS;
-        let env_cube = IblCube::new(&resources, IBL_ENV_SIZE, 1)?;
+        // The env cube carries a full mip chain so the prefilter's filtered importance sampling can
+        // read coarser (pre-averaged) source mips — the firefly/aliasing fix.
+        let env_mips = IBL_ENV_SIZE.ilog2() + 1;
+        let env_cube = IblCube::new(&resources, IBL_ENV_SIZE, env_mips)?;
         let irradiance_cube = IblCube::new(&resources, IBL_IRRADIANCE_SIZE, 1)?;
         let prefiltered_cube = IblCube::new(&resources, IBL_PREFILTER_SIZE, mips)?;
         let brdf_lut = IblImage::new(&resources, IBL_LUT_SIZE, IBL_LUT_SIZE)?;
@@ -781,18 +793,16 @@ impl Ibl {
                     6,
                 );
             }
-            cube_barrier(
+            // Generate the env cube's mip chain (mip 0 was just written, in GENERAL) and leave
+            // every mip in SHADER_READ — the prefilter's filtered importance sampling reads the
+            // coarser mips to kill fireflies/aliasing.
+            let env_mips = IBL_ENV_SIZE.ilog2() + 1;
+            generate_cube_mips(
                 &raw,
                 scratch.cmd,
                 self.env_cube.image,
-                vk::ImageLayout::GENERAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::PipelineStageFlags2::COMPUTE_SHADER,
-                vk::AccessFlags2::SHADER_STORAGE_WRITE,
-                vk::PipelineStageFlags2::COMPUTE_SHADER,
-                vk::AccessFlags2::SHADER_SAMPLED_READ,
-                0,
-                1,
+                IBL_ENV_SIZE,
+                env_mips,
             );
 
             // Diffuse irradiance.
@@ -1644,6 +1654,126 @@ fn cube_barrier(
     let dep = vk::DependencyInfo::default().image_memory_barriers(&barrier);
     // SAFETY: the ash seam. The barrier references an image the bake created/owns.
     unsafe { raw.cmd_pipeline_barrier2(cmd, &dep) };
+}
+
+/// Generates a cube image's mip chain by successive linear blits, then leaves every mip in
+/// `SHADER_READ_ONLY` for the convolution passes. Mip 0 must already be filled and in `GENERAL`
+/// (the env bake just wrote it). The filtered-importance prefilter reads these coarser, pre-averaged
+/// mips, which is what suppresses fireflies/aliasing with a low GGX sample count.
+///
+/// # Safety
+///
+/// The ash blit/barrier seam: `image` must be a 6-layer cube with `mip_levels` mips and
+/// `TRANSFER_SRC|DST` usage, mip 0 in `GENERAL`; `cmd` is recording.
+unsafe fn generate_cube_mips(
+    raw: &ash::Device,
+    cmd: vk::CommandBuffer,
+    image: vk::Image,
+    base_size: u32,
+    mip_levels: u32,
+) {
+    // Mip 0: GENERAL (just written by the env dispatch) → TRANSFER_SRC.
+    cube_barrier(
+        raw,
+        cmd,
+        image,
+        vk::ImageLayout::GENERAL,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        vk::PipelineStageFlags2::COMPUTE_SHADER,
+        vk::AccessFlags2::SHADER_STORAGE_WRITE,
+        vk::PipelineStageFlags2::ALL_TRANSFER,
+        vk::AccessFlags2::TRANSFER_READ,
+        0,
+        1,
+    );
+    for m in 1..mip_levels {
+        let src = (base_size >> (m - 1)).max(1) as i32;
+        let dst = (base_size >> m).max(1) as i32;
+        // Dest mip: UNDEFINED → TRANSFER_DST.
+        cube_barrier(
+            raw,
+            cmd,
+            image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::PipelineStageFlags2::TOP_OF_PIPE,
+            vk::AccessFlags2::empty(),
+            vk::PipelineStageFlags2::ALL_TRANSFER,
+            vk::AccessFlags2::TRANSFER_WRITE,
+            m,
+            1,
+        );
+        let region = vk::ImageBlit::default()
+            .src_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: m - 1,
+                base_array_layer: 0,
+                layer_count: 6,
+            })
+            .src_offsets([
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D {
+                    x: src,
+                    y: src,
+                    z: 1,
+                },
+            ])
+            .dst_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: m,
+                base_array_layer: 0,
+                layer_count: 6,
+            })
+            .dst_offsets([
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D {
+                    x: dst,
+                    y: dst,
+                    z: 1,
+                },
+            ]);
+        // SAFETY: the ash seam. Both subresources are valid mips of `image`, in the layouts the
+        // barriers above just set; the regions are within the per-mip extents.
+        unsafe {
+            raw.cmd_blit_image(
+                cmd,
+                image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[region],
+                vk::Filter::LINEAR,
+            );
+        }
+        // This mip becomes the source for the next blit: TRANSFER_DST → TRANSFER_SRC.
+        cube_barrier(
+            raw,
+            cmd,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            vk::PipelineStageFlags2::ALL_TRANSFER,
+            vk::AccessFlags2::TRANSFER_WRITE,
+            vk::PipelineStageFlags2::ALL_TRANSFER,
+            vk::AccessFlags2::TRANSFER_READ,
+            m,
+            1,
+        );
+    }
+    // Every mip is now TRANSFER_SRC → move them all to SHADER_READ for the convolution passes.
+    cube_barrier(
+        raw,
+        cmd,
+        image,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        vk::PipelineStageFlags2::ALL_TRANSFER,
+        vk::AccessFlags2::TRANSFER_READ,
+        vk::PipelineStageFlags2::COMPUTE_SHADER,
+        vk::AccessFlags2::SHADER_SAMPLED_READ,
+        0,
+        mip_levels,
+    );
 }
 
 /// Binds `pso` + `set` and dispatches `(x, y, z)` groups (no push).
