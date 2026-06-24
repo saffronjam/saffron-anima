@@ -25,7 +25,7 @@ use ash::vk;
 use saffron_geometry::Vertex;
 use saffron_geometry::glam::Mat4;
 
-use crate::draw_list::SkinnedRtInstance;
+use crate::draw_list::DeformedRtInstance;
 use crate::frame::MAX_FRAMES_IN_FLIGHT;
 use crate::resources::{AccelerationStructure, Buffer, DeviceResources, GpuMesh};
 use crate::{Device, Result, checked};
@@ -231,9 +231,9 @@ impl Rt {
         self.build_pending = self.supported && self.use_rt_shadows;
     }
 
-    /// Whether this frame has any RT instances (static or skinned) to build a TLAS over.
-    pub fn has_instances(&self, skinned: &[SkinnedRtInstance]) -> bool {
-        !self.scene.models.is_empty() || !skinned.is_empty()
+    /// Whether this frame has any RT instances (static or deforming) to build a TLAS over.
+    pub fn has_instances(&self, deformed: &[DeformedRtInstance]) -> bool {
+        !self.scene.models.is_empty() || !deformed.is_empty()
     }
 
     /// Clears the per-frame static-scene capture + the ready/pending flags at the top of a
@@ -279,23 +279,23 @@ impl Rt {
         &mut self,
         device: &Device,
         frame: usize,
-        skinned: &[SkinnedRtInstance],
+        deformed: &[DeformedRtInstance],
         deformed_buffer: Option<vk::Buffer>,
     ) -> Option<TlasBuildPlan> {
         self.tlas_ready = false;
         self.skinned_blas_count = 0;
-        if !self.supported || (self.scene.models.is_empty() && skinned.is_empty()) {
+        if !self.supported || (self.scene.models.is_empty() && deformed.is_empty()) {
             return None;
         }
         let dispatch = self.dispatch.clone()?;
 
-        // Plan each skinned BLAS refit (create on first sight), sizing the shared scratch.
+        // Plan each deforming BLAS refit (create on first sight), sizing the shared scratch.
         let blas_ops =
-            self.plan_skinned_blas_refits(device, &dispatch, frame, skinned, deformed_buffer);
+            self.plan_skinned_blas_refits(device, &dispatch, frame, deformed, deformed_buffer);
 
-        // Pack one instance per static mesh that has a BLAS, then one per skinned instance.
+        // Pack one instance per static mesh that has a BLAS, then one per deforming instance.
         let mut instances: Vec<vk::AccelerationStructureInstanceKHR> =
-            Vec::with_capacity(self.scene.models.len() + skinned.len());
+            Vec::with_capacity(self.scene.models.len() + deformed.len());
         let mut retained: Vec<Arc<AccelerationStructure>> = Vec::new();
         for (model, mesh) in self.scene.models.iter().zip(self.scene.meshes.iter()) {
             let Some(blas) = mesh.blas.as_ref() else {
@@ -305,14 +305,20 @@ impl Rt {
             instances.push(make_instance(transform_rows(model), index, blas.address));
             retained.push(Arc::clone(blas));
         }
-        // Skinned instances reference their refit BLAS with an IDENTITY transform: the
-        // deformed vertices are already in world space, so any extra transform double-applies.
-        for inst in skinned {
+        // A deforming instance references its refit BLAS at its `world_transform`: identity
+        // for a skinned (or skin+morph) instance — the deformed vertices are already in world
+        // space — and the node world matrix for an unskinned-morph instance, whose deformed
+        // vertices are mesh-local.
+        for inst in deformed {
             let Some(slot) = self.frames[frame].skinned_blas.get(&inst.entity) else {
                 continue;
             };
             let index = instances.len() as u32;
-            instances.push(make_instance(IDENTITY_ROWS, index, slot.accel.address));
+            instances.push(make_instance(
+                transform_rows(&inst.world_transform),
+                index,
+                slot.accel.address,
+            ));
             retained.push(Arc::clone(&slot.accel));
         }
 
@@ -370,29 +376,31 @@ impl Rt {
         })
     }
 
-    /// Plans each skinned instance's BLAS refit: creates the AS on first sight, sizes the
+    /// Plans each deforming instance's BLAS refit: creates the AS on first sight, sizes the
     /// shared scratch, and records the build mode (`BUILD` first, then in-place `UPDATE`).
-    /// The recording is deferred to [`record_tlas_build_plan`].
+    /// The first-sight build reads the live deformed buffer — which the morph + skin passes
+    /// already wrote this frame — so it builds over the resolved-weight pose, never the
+    /// zero-weight base. The recording is deferred to [`record_tlas_build_plan`].
     fn plan_skinned_blas_refits(
         &mut self,
         device: &Device,
         dispatch: &accel::Device,
         frame: usize,
-        skinned: &[SkinnedRtInstance],
+        instances: &[DeformedRtInstance],
         deformed_buffer: Option<vk::Buffer>,
     ) -> Vec<BlasRefitOp> {
         let Some(deformed) = deformed_buffer else {
             return Vec::new();
         };
-        if skinned.is_empty() {
+        if instances.is_empty() {
             return Vec::new();
         }
         let deformed_base = device.buffer_device_address(deformed);
         let vertex_stride = size_of::<Vertex>() as vk::DeviceSize;
 
-        let mut ops: Vec<BlasRefitOp> = Vec::with_capacity(skinned.len());
+        let mut ops: Vec<BlasRefitOp> = Vec::with_capacity(instances.len());
         let mut scratch_needed: vk::DeviceSize = 0;
-        for inst in skinned {
+        for inst in instances {
             if inst.vertex_count == 0 || inst.index_count < 3 || inst.entity == 0 {
                 continue;
             }
@@ -980,7 +988,10 @@ fn instances_geometry(
 }
 
 /// The row-major 3×4 transform of an identity placement (a skinned instance: its deformed
-/// vertices are already world-space).
+/// vertices are already world-space). The placement loop derives every instance's rows from
+/// `transform_rows(&inst.world_transform)`, so this is the source-of-truth constant the
+/// byte-identity test pins `transform_rows(&Mat4::IDENTITY)` against.
+#[cfg(test)]
 const IDENTITY_ROWS: [f32; 12] = [
     1.0, 0.0, 0.0, 0.0, //
     0.0, 1.0, 0.0, 0.0, //
@@ -1173,12 +1184,21 @@ mod tests {
     }
 
     /// A skinned instance's TLAS transform is the row-major identity (its deformed vertices
-    /// are already in world space).
+    /// are already in world space). The placement loop now derives the row matrix from
+    /// `transform_rows(&inst.world_transform)` for every deforming instance, so a skinned
+    /// instance (`world_transform == IDENTITY`) must produce bytes identical to the
+    /// `IDENTITY_ROWS` constant — this is what keeps the skin RT placement provably unchanged
+    /// after generalizing to morph.
     #[test]
     fn identity_rows_is_the_3x4_identity() {
         assert_eq!(
             IDENTITY_ROWS,
             [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+        );
+        assert_eq!(
+            transform_rows(&Mat4::IDENTITY),
+            IDENTITY_ROWS,
+            "a skinned instance's identity world_transform places byte-identical to IDENTITY_ROWS"
         );
     }
 
@@ -1335,7 +1355,7 @@ mod tests {
                 material_slot: 0,
             }],
         };
-        let gpu_mesh = uploader.upload_mesh(&mesh, &[]).expect("upload_mesh");
+        let gpu_mesh = uploader.upload_mesh(&mesh, &[], None).expect("upload_mesh");
         assert!(
             gpu_mesh.blas.is_some(),
             "RT device builds the mesh BLAS at upload"

@@ -27,13 +27,13 @@ use saffron_geometry::glam::{Mat4, UVec4, Vec4};
 
 use crate::descriptors::Descriptors;
 use crate::draw_list::{
-    DrawBatch, DrawItem, RenderStats, SceneDrawList, SkinDispatch, SkinnedRtInstance,
-    SubmeshMaterial,
+    DeformedRtInstance, DrawBatch, DrawItem, MorphDispatch, RenderStats, SceneDrawList,
+    SkinDispatch, SubmeshMaterial,
 };
 use crate::frame::MAX_FRAMES_IN_FLIGHT;
 use crate::gpu_types::{InstanceData, MaterialParamsData};
 use crate::pipelines::Pipelines;
-use crate::resources::{Buffer, DeviceResources};
+use crate::resources::{Buffer, DeviceResources, GpuMesh};
 use crate::skinning::{SkinBucket, SkinBufferSet, Skinning, clamp_to_set_budget};
 use crate::{Device, Result};
 
@@ -66,6 +66,25 @@ const INITIAL_MATERIAL_CAPACITY: u32 = 64;
 /// Initial joint-palette capacity (in [`Mat4`] matrices).
 const INITIAL_JOINT_CAPACITY: u32 = 128;
 
+/// Initial active-target capacity (in [`ActiveTarget`] entries).
+const INITIAL_ACTIVE_CAPACITY: u32 = 128;
+
+/// Morph weights below this magnitude are dropped during compaction (UE's
+/// `GMorphTargetWeightThreshold` analogue), so a rest-pose morph mesh dispatches nothing.
+const MORPH_WEIGHT_THRESHOLD: f32 = 1.0e-3;
+
+/// One compacted active morph target, matching `morph.slang`'s `ActiveTarget` (16 bytes):
+/// the target index into the mesh's ranges, the cumulative delta count of preceding active
+/// targets (the flat scatter base), and the resolved weight.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ActiveTarget {
+    target_index: u32,
+    scatter_base: u32,
+    weight: f32,
+    _pad: f32,
+}
+
 /// One frame-in-flight's grow-only storage: the instance + material SSBOs, the current +
 /// previous joint palettes (and their element capacities), plus the descriptor set
 /// binding the instance + material + current-palette SSBOs.
@@ -82,6 +101,11 @@ struct FrameInstancing {
     /// to the prev skin dispatch for motion. Not bound to set 2.
     prev_joints: Option<Buffer>,
     prev_joint_capacity: u32,
+    /// The frame's compacted active-target list (all morph instances concatenated), bound
+    /// by every morph dispatch's set at binding 3. Each instance reads its slice; the
+    /// per-instance `scatter_base` chain is relative to that instance's slice.
+    active_targets: Option<Buffer>,
+    active_capacity: u32,
 }
 
 /// The per-frame instance + material storage and the draw-list batcher.
@@ -117,6 +141,8 @@ impl Instancing {
                 joint_capacity: 0,
                 prev_joints: None,
                 prev_joint_capacity: 0,
+                active_targets: None,
+                active_capacity: 0,
             });
         }
         Ok(Self {
@@ -187,13 +213,18 @@ impl Instancing {
                 continue;
             };
 
-            // Find an existing (pipeline, mesh) bucket; skinned items never merge (each
-            // deforms once into its own deformed-buffer slice).
-            let bucket_index = if item.skinned {
+            // A morph item carries per-target weights and a mesh with morph buffers; it
+            // deforms into its own slice (before skin), so it never merges either.
+            let is_morph = !item.morph_weights.is_empty() && item.mesh.morph().is_some();
+
+            // Find an existing (pipeline, mesh) bucket; a deforming item (skinned or morph)
+            // never merges (each deforms once into its own deformed-buffer slice).
+            let bucket_index = if item.skinned || is_morph {
                 None
             } else {
                 buckets.iter().position(|b| {
                     !b.skinned
+                        && b.morph_weights.is_empty()
                         && Arc::ptr_eq(&b.pipeline, &pipeline)
                         && Arc::ptr_eq(&b.mesh, &item.mesh)
                 })
@@ -208,6 +239,12 @@ impl Instancing {
                         joint_offset: item.joint_offset,
                         joint_count: item.joint_count,
                         entity: item.entity,
+                        morph_weights: if is_morph {
+                            item.morph_weights.clone()
+                        } else {
+                            Vec::new()
+                        },
+                        model: item.model,
                         instances: Vec::new(),
                     });
                     buckets.len() - 1
@@ -242,7 +279,18 @@ impl Instancing {
         let mut instances: Vec<InstanceData> = Vec::new();
         let mut batches: Vec<DrawBatch> = Vec::new();
         let mut skin_buckets: Vec<SkinBucket> = Vec::new();
-        let mut skinned_rt: Vec<SkinnedRtInstance> = Vec::new();
+        let mut skinned_rt: Vec<DeformedRtInstance> = Vec::new();
+        // The morph deform work: one cur + one prev dispatch + mesh per morph-active bucket,
+        // and the frame's concatenated active-target list (each dispatch reads its
+        // `active_base` slice — cur and prev both index the same buffer, differing only in
+        // the output buffer their set binds). The morph pass runs before skin.
+        let mut morph_dispatches: Vec<MorphDispatch> = Vec::new();
+        let mut prev_morph_dispatches: Vec<MorphDispatch> = Vec::new();
+        let mut morph_meshes: Vec<Arc<GpuMesh>> = Vec::new();
+        let mut active_targets: Vec<ActiveTarget> = Vec::new();
+        // RT instances for unskinned-morph buckets (skinned ones ride `skinned_rt`, wired +
+        // budget-clamped in `wire_skin_dispatches`); appended to the draw list after wiring.
+        let mut morph_rt: Vec<DeformedRtInstance> = Vec::new();
         // The previous palette, laid out exactly like `joints`: a copy of the current
         // palette (uncached slots → zero deformation motion), each skinned bucket's slice
         // replaced by the entity's cached last-frame slice.
@@ -253,41 +301,106 @@ impl Instancing {
                 continue;
             }
             let submesh_count = bucket.instances[0].len() as u32;
+            // A morph bucket's above-threshold targets (empty if all-rest or not a morph
+            // bucket); a bucket deforms when it is skinned OR has active morph targets.
+            let (morph_active, scatter_count) = match bucket.mesh.morph() {
+                Some(morph) if !bucket.morph_weights.is_empty() => {
+                    build_active_targets(morph, &bucket.morph_weights)
+                }
+                _ => (Vec::new(), 0),
+            };
+            let has_morph = !morph_active.is_empty();
+            let deformed = bucket.skinned || has_morph;
+
             let mut batch = DrawBatch {
                 pipeline: Arc::clone(&bucket.pipeline),
                 mesh: Arc::clone(&bucket.mesh),
                 base_instance: instances.len() as u32,
                 instance_count: bucket.instances.len() as u32,
-                skinned: bucket.skinned,
+                deformed,
                 deformed_vertex_offset: 0,
             };
-            if bucket.skinned {
+            if deformed {
                 batch.deformed_vertex_offset = deformed_cursor;
                 let vertex_count = bucket.mesh.vertex_count;
-                skin_buckets.push(SkinBucket {
-                    mesh: Arc::clone(&bucket.mesh),
-                    joint_offset: bucket.joint_offset,
-                    deformed_offset: deformed_cursor,
-                });
-                // The refit BLAS reads exactly this instance's deformed slice; it needs an
-                // entity to key the grow-only per-instance BLAS. A placeholder (entity 0)
-                // keeps parity with the dispatch list and is dropped at the end.
-                skinned_rt.push(SkinnedRtInstance {
-                    entity: if rt_skinned { bucket.entity } else { 0 },
-                    deformed_offset: deformed_cursor,
-                    vertex_count,
-                    index_count: bucket.mesh.index_count,
-                    mesh: Arc::clone(&bucket.mesh),
-                });
-                deformed_cursor += vertex_count;
-                // Replace this bucket's slice in the prev palette with the entity's cached
-                // last-frame slice (or leave the current copy → no first-frame ghost).
-                let lo = bucket.joint_offset as usize;
-                let hi = lo + bucket.joint_count as usize;
-                if bucket.entity != 0 && bucket.joint_count > 0 && hi <= joints.len() {
-                    let cached = skinning.swap_palette(bucket.entity, &joints[lo..hi]);
-                    prev_joints[lo..hi].copy_from_slice(&cached);
+                if bucket.skinned {
+                    skin_buckets.push(SkinBucket {
+                        mesh: Arc::clone(&bucket.mesh),
+                        joint_offset: bucket.joint_offset,
+                        deformed_offset: deformed_cursor,
+                    });
+                    // The refit BLAS reads exactly this instance's deformed slice; it needs
+                    // an entity to key the grow-only per-instance BLAS. A placeholder
+                    // (entity 0) keeps parity with the dispatch list and is dropped at the end.
+                    skinned_rt.push(DeformedRtInstance {
+                        entity: if rt_skinned { bucket.entity } else { 0 },
+                        deformed_offset: deformed_cursor,
+                        vertex_count,
+                        index_count: bucket.mesh.index_count,
+                        mesh: Arc::clone(&bucket.mesh),
+                        // Skinned (and skin+morph) deformed vertices are already world-space.
+                        world_transform: Mat4::IDENTITY,
+                    });
+                    // Replace this bucket's slice in the prev palette with the entity's
+                    // cached last-frame slice (or leave the current copy → no frame-1 ghost).
+                    let lo = bucket.joint_offset as usize;
+                    let hi = lo + bucket.joint_count as usize;
+                    if bucket.entity != 0 && bucket.joint_count > 0 && hi <= joints.len() {
+                        let cached = skinning.swap_palette(bucket.entity, &joints[lo..hi]);
+                        prev_joints[lo..hi].copy_from_slice(&cached);
+                    }
                 }
+                if has_morph {
+                    // The morph pass runs before skin and writes this same deformed slice;
+                    // a skinned-morph instance then has skin read+overwrite it in place.
+                    let active_base = active_targets.len() as u32;
+                    let active_count = morph_active.len() as u32;
+                    active_targets.extend_from_slice(&morph_active);
+                    morph_dispatches.push(MorphDispatch {
+                        set: vk::DescriptorSet::null(),
+                        vertex_count,
+                        scatter_count,
+                        active_count,
+                        active_base,
+                        deformed_offset: deformed_cursor,
+                    });
+                    // The prev-pose morph dispatch (previous weights → prev-deformed) for
+                    // deformation motion: build the active list from the entity's cached
+                    // last-frame weights (uncached / length change → prev == cur → zero
+                    // motion). Both lists share the one active-target buffer; only the prev
+                    // set's output buffer differs (prev-deformed).
+                    let prev_weights =
+                        skinning.swap_morph_weights(bucket.entity, &bucket.morph_weights);
+                    let (prev_active, prev_scatter) = match bucket.mesh.morph() {
+                        Some(morph) => build_active_targets(morph, &prev_weights),
+                        None => (Vec::new(), 0),
+                    };
+                    let prev_active_base = active_targets.len() as u32;
+                    let prev_active_count = prev_active.len() as u32;
+                    active_targets.extend_from_slice(&prev_active);
+                    prev_morph_dispatches.push(MorphDispatch {
+                        set: vk::DescriptorSet::null(),
+                        vertex_count,
+                        scatter_count: prev_scatter,
+                        active_count: prev_active_count,
+                        active_base: prev_active_base,
+                        deformed_offset: deformed_cursor,
+                    });
+                    morph_meshes.push(Arc::clone(&bucket.mesh));
+                    // An unskinned-morph instance enters the TLAS at its node world matrix
+                    // (its deformed vertices are mesh-local). Skinned-morph rides skinned_rt.
+                    if !bucket.skinned {
+                        morph_rt.push(DeformedRtInstance {
+                            entity: if rt_skinned { bucket.entity } else { 0 },
+                            deformed_offset: deformed_cursor,
+                            vertex_count,
+                            index_count: bucket.mesh.index_count,
+                            mesh: Arc::clone(&bucket.mesh),
+                            world_transform: bucket.model,
+                        });
+                    }
+                }
+                deformed_cursor += vertex_count;
             }
             for s in 0..submesh_count as usize {
                 for rows in &bucket.instances {
@@ -343,7 +456,8 @@ impl Instancing {
         // Size the deformed buffers + wire the per-instance skin dispatches. A skinned
         // bucket with no palette this frame can't be deformed: drop the skin work so the
         // skin pass is skipped and the batches read the undeformed bind pose.
-        if !skin_buckets.is_empty() && !joints.is_empty() {
+        let skin_ran = !skin_buckets.is_empty() && !joints.is_empty();
+        if skin_ran {
             self.wire_skin_dispatches(
                 frame,
                 skinning,
@@ -358,6 +472,49 @@ impl Instancing {
             );
         }
 
+        // Upload the frame's active-target list + wire the per-instance morph dispatches
+        // (recorded before skin). The pool is reset here only when skin didn't run; the
+        // accumulator is sized to the largest single morph mesh (reused serially).
+        if !morph_dispatches.is_empty() {
+            let accum_vertices = morph_meshes
+                .iter()
+                .map(|m| m.vertex_count)
+                .max()
+                .unwrap_or(0);
+            self.ensure_active_capacity(frame, active_targets.len() as u32)?;
+            upload_into(
+                self.frames[frame]
+                    .active_targets
+                    .as_mut()
+                    .expect("active buffer"),
+                bytemuck::cast_slice(&active_targets),
+            );
+            let (active_buf, active_size) = {
+                let buffer = self.frames[frame]
+                    .active_targets
+                    .as_ref()
+                    .expect("active buffer");
+                (buffer.handle(), buffer.size())
+            };
+            skinning.wire_morph_dispatches(
+                frame,
+                deformed_cursor,
+                accum_vertices,
+                !skin_ran,
+                active_buf,
+                active_size,
+                &morph_meshes,
+                &mut morph_dispatches,
+                &mut prev_morph_dispatches,
+            )?;
+            list.morph_dispatches = morph_dispatches;
+            list.prev_morph_dispatches = prev_morph_dispatches;
+            // Unskinned-morph instances enter the TLAS here (skinned ones were added by
+            // `wire_skin_dispatches`); drop the non-RT-armed placeholders.
+            list.deformed_rt_instances
+                .extend(morph_rt.into_iter().filter(|s| s.entity != 0));
+        }
+
         let stats = compute_stats(&batches, pipelines.pipelines_created() - pipelines_before);
 
         list.batches = batches;
@@ -368,7 +525,7 @@ impl Instancing {
 
     /// Clamps the skin work to the per-frame set budget, sizes the deformed buffers, and
     /// wires one descriptor set per dispatch (current + prev pose) through `skinning`,
-    /// filling `list.skin_dispatches` / `prev_skin_dispatches` / `skinned_rt_instances`.
+    /// filling `list.skin_dispatches` / `prev_skin_dispatches` / `deformed_rt_instances`.
     /// A wiring failure leaves the lists empty (the skin pass is skipped).
     fn wire_skin_dispatches(
         &mut self,
@@ -376,7 +533,7 @@ impl Instancing {
         skinning: &mut Skinning,
         deformed_cursor: u32,
         skin_buckets: &mut Vec<SkinBucket>,
-        skinned_rt: &mut Vec<SkinnedRtInstance>,
+        skinned_rt: &mut Vec<DeformedRtInstance>,
         list: &mut SceneDrawList,
     ) -> Result<()> {
         let kept = clamp_to_set_budget(skin_buckets.len());
@@ -418,7 +575,7 @@ impl Instancing {
             list.skin_dispatches = dispatches;
             list.prev_skin_dispatches = prev_dispatches;
             // Keep only the real RT skinned instances (drop entity-less placeholders).
-            list.skinned_rt_instances = skinned_rt.drain(..).filter(|s| s.entity != 0).collect();
+            list.deformed_rt_instances = skinned_rt.drain(..).filter(|s| s.entity != 0).collect();
         }
         Ok(())
     }
@@ -516,6 +673,53 @@ impl Instancing {
         self.frames[frame].prev_joint_capacity = capacity;
         Ok(())
     }
+
+    /// Ensures the frame's active-target buffer holds at least `count` [`ActiveTarget`]
+    /// entries (same grow-only policy). Not bound to set 2 — each morph dispatch's own set
+    /// binds it at binding 3, indexed by the dispatch's `active_base`.
+    fn ensure_active_capacity(&mut self, frame: usize, count: u32) -> Result<()> {
+        if self.frames[frame].active_targets.is_some()
+            && self.frames[frame].active_capacity >= count
+        {
+            return Ok(());
+        }
+        let capacity = grow_capacity(
+            self.frames[frame].active_capacity,
+            INITIAL_ACTIVE_CAPACITY,
+            count,
+        );
+        let size = u64::from(capacity) * size_of::<ActiveTarget>() as u64;
+        let buffer = make_mapped_storage_buffer(&self.resources, size)?;
+        self.frames[frame].active_targets = Some(buffer);
+        self.frames[frame].active_capacity = capacity;
+        Ok(())
+    }
+}
+
+/// Compacts a morph instance's per-target weights into the above-threshold active list,
+/// each entry carrying its cumulative scatter base (the running delta count of preceding
+/// active targets). Returns the active list + the total scatter count (its dispatch size).
+/// An all-rest (every weight below threshold) instance returns an empty list.
+fn build_active_targets(
+    morph: &crate::resources::MorphBuffers,
+    weights: &[f32],
+) -> (Vec<ActiveTarget>, u32) {
+    let mut active = Vec::new();
+    let mut scatter_base = 0u32;
+    for (k, &weight) in weights.iter().enumerate() {
+        if weight.abs() < MORPH_WEIGHT_THRESHOLD || k >= morph.cpu_ranges.len() {
+            continue;
+        }
+        let delta_count = morph.cpu_ranges[k][1];
+        active.push(ActiveTarget {
+            target_index: k as u32,
+            scatter_base,
+            weight,
+            _pad: 0.0,
+        });
+        scatter_base += delta_count;
+    }
+    (active, scatter_base)
 }
 
 /// One (pipeline, mesh) bucket accumulating instance rows before the submesh-major
@@ -531,6 +735,11 @@ struct Bucket {
     joint_count: u32,
     /// Skinned only: the source entity uuid, keying the cross-frame motion caches.
     entity: u64,
+    /// Per-target morph weights (empty = not a morph bucket); a morph bucket never merges.
+    morph_weights: Vec<f32>,
+    /// The instance's world matrix (used as the RT `world_transform` for an unskinned-morph
+    /// instance, whose deformed vertices are mesh-local; skinned instances place identity).
+    model: Mat4,
     instances: Vec<Vec<InstanceData>>,
 }
 
@@ -816,8 +1025,12 @@ mod tests {
             return;
         };
 
-        let mesh_a = uploader.upload_mesh(&triangle(), &[]).expect("upload A");
-        let mesh_b = uploader.upload_mesh(&triangle(), &[]).expect("upload B");
+        let mesh_a = uploader
+            .upload_mesh(&triangle(), &[], None)
+            .expect("upload A");
+        let mesh_b = uploader
+            .upload_mesh(&triangle(), &[], None)
+            .expect("upload B");
         let item = |mesh: &Arc<crate::GpuMesh>| {
             DrawItem::new(
                 Arc::clone(mesh),
@@ -886,7 +1099,9 @@ mod tests {
         else {
             return;
         };
-        let mesh = uploader.upload_mesh(&triangle(), &[]).expect("upload");
+        let mesh = uploader
+            .upload_mesh(&triangle(), &[], None)
+            .expect("upload");
 
         // Two items sharing one material (same factors), then a third with a different
         // base color. Distinct meshes would still share the deduped material table.
@@ -1035,7 +1250,9 @@ mod tests {
             };
             3
         ];
-        uploader.upload_mesh(&mesh, &skin).expect("upload skinned")
+        uploader
+            .upload_mesh(&mesh, &skin, None)
+            .expect("upload skinned")
     }
 
     /// A skinned draw item keyed by `entity` with a one-joint palette slice.
@@ -1118,7 +1335,7 @@ mod tests {
         );
         // The batch draws the deformed buffer as a static stream (its base vertex offset).
         assert_eq!(list.batches.len(), 1);
-        assert!(list.batches[0].skinned);
+        assert!(list.batches[0].deformed);
         assert_eq!(list.batches[0].deformed_vertex_offset, 0);
 
         drop(static_list);

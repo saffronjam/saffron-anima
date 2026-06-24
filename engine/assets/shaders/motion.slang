@@ -5,10 +5,10 @@
 //
 // Two sources of motion are reprojected together:
 //   - object motion: inst.model vs inst.prevModel (the whole entity moved).
-//   - deformation motion (skinned meshes): binding 0 = this frame's deformed position,
-//     binding 1 = the previous frame's deformed position. For a static mesh both bindings
-//     point at the same static stream, so prevPosition == position and only object motion
-//     contributes.
+//   - deformation motion (deforming meshes — skinned or morph): binding 0 = this frame's
+//     deformed position, binding 1 = the previous frame's deformed position. For a static
+//     mesh both bindings point at the same static stream, so prevPosition == position and
+//     only object motion contributes.
 // current clip = curViewProj  * model     * position
 // previous clip = prevViewProj * prevModel * prevPosition
 

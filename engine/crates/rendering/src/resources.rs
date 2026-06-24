@@ -636,6 +636,8 @@ pub struct GpuMesh {
     index_alloc: vk_mem::Allocation,
     /// The skin stream buffer + allocation (`None` for unskinned meshes).
     skin: Option<(vk::Buffer, vk_mem::Allocation)>,
+    /// The morph (blend-shape) buffers (`None` for a mesh without morph targets).
+    morph: Option<MorphBuffers>,
     /// Number of indices across every submesh.
     pub index_count: u32,
     /// Number of vertices.
@@ -655,6 +657,24 @@ pub struct GpuMesh {
     pub cpu_skin: Vec<VertexSkin>,
     /// The ray-tracing BLAS (`None` when RT is unsupported or not yet built).
     pub blas: Option<Arc<AccelerationStructure>>,
+}
+
+/// The device-local morph buffers a [`GpuMesh`] carries when it has blend shapes: the flat
+/// `MorphDelta` array (28 B stride) and the per-target `{first_delta, delta_count}` ranges,
+/// plus the counts the deform pass dispatches over.
+pub struct MorphBuffers {
+    /// The flat `MorphDelta` array buffer + allocation.
+    pub deltas: (vk::Buffer, vk_mem::Allocation),
+    /// The per-target range array buffer + allocation (`uint2` per target).
+    pub ranges: (vk::Buffer, vk_mem::Allocation),
+    /// CPU copy of the per-target `[first_delta, delta_count]` ranges, parallel to the GPU
+    /// `ranges` buffer — the instancing pass reads these to compute each active target's
+    /// scatter base + the total scatter dispatch size.
+    pub cpu_ranges: Vec<[u32; 2]>,
+    /// Number of morph targets.
+    pub target_count: u32,
+    /// Total `MorphDelta` records across all targets.
+    pub delta_count: u32,
 }
 
 // SAFETY: the buffers/allocations carry no thread-affine state; the CPU-side
@@ -677,6 +697,8 @@ pub struct GpuMeshParts {
     pub index: (vk::Buffer, vk_mem::Allocation),
     /// The optional device-local skin stream buffer + allocation.
     pub skin: Option<(vk::Buffer, vk_mem::Allocation)>,
+    /// The optional device-local morph buffers.
+    pub morph: Option<MorphBuffers>,
     /// Number of indices across every submesh.
     pub index_count: u32,
     /// Number of vertices.
@@ -707,6 +729,7 @@ impl GpuMesh {
             index_buffer: parts.index.0,
             index_alloc: parts.index.1,
             skin: parts.skin,
+            morph: parts.morph,
             index_count: parts.index_count,
             vertex_count: parts.vertex_count,
             submeshes: parts.submeshes,
@@ -733,6 +756,11 @@ impl GpuMesh {
     pub fn skin_buffer(&self) -> Option<vk::Buffer> {
         self.skin.as_ref().map(|(buffer, _)| *buffer)
     }
+
+    /// The morph buffers, or `None` for a mesh without blend shapes.
+    pub fn morph(&self) -> Option<&MorphBuffers> {
+        self.morph.as_ref()
+    }
 }
 
 impl Drop for GpuMesh {
@@ -745,6 +773,10 @@ impl Drop for GpuMesh {
             allocator.destroy_buffer(self.index_buffer, &mut self.index_alloc);
             if let Some((buffer, allocation)) = self.skin.as_mut() {
                 allocator.destroy_buffer(*buffer, allocation);
+            }
+            if let Some(morph) = self.morph.as_mut() {
+                allocator.destroy_buffer(morph.deltas.0, &mut morph.deltas.1);
+                allocator.destroy_buffer(morph.ranges.0, &mut morph.ranges.1);
             }
         }
     }
@@ -1102,6 +1134,7 @@ mod tests {
                 vertex: make_buffer(96, vk::BufferUsageFlags::VERTEX_BUFFER),
                 index: make_buffer(48, vk::BufferUsageFlags::INDEX_BUFFER),
                 skin: None,
+                morph: None,
                 index_count: 12,
                 vertex_count: 3,
                 submeshes: Vec::new(),

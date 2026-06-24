@@ -253,16 +253,12 @@ pub fn record_motion(
         );
     }
     for batch in &list.batches {
-        // Binding 0 = this frame's position, binding 1 = the previous frame's. A skinned
-        // batch reads the current + prev deformed buffers; a static batch binds the same
-        // static stream to both (prev == cur, so object motion comes from `prev_model`).
-        let (cur, prev) = match (batch.skinned, deformed, prev_deformed) {
-            (true, Some(deformed), Some(prev_deformed)) => (deformed, prev_deformed),
-            _ => {
-                let buffer = batch.mesh.vertex_buffer();
-                (buffer, buffer)
-            }
-        };
+        let (cur, prev) = select_motion_streams(
+            batch.deformed,
+            deformed,
+            prev_deformed,
+            batch.mesh.vertex_buffer(),
+        );
         // SAFETY: the ash seam. The bound streams outlive the recorded command (pinned by
         // the batch `Arc` / the frame's `Skinning`); the index buffer + draw cover the batch.
         unsafe {
@@ -273,9 +269,58 @@ pub fn record_motion(
     }
 }
 
+/// Selects the motion pass's (current, previous) position streams for one batch. Binding 0
+/// is this frame's position, binding 1 the previous frame's. A deforming batch (skin or
+/// morph) with both deformed buffers present reads the current + prev deformed buffers; every
+/// other batch binds the same static stream to both (prev == cur, so motion comes purely from
+/// `prev_model`). A morph-only batch (`deformed == true`) takes the first arm exactly like a
+/// skinned batch — only the buffers the host wired differ.
+fn select_motion_streams(
+    deformed_flag: bool,
+    deformed: Option<vk::Buffer>,
+    prev_deformed: Option<vk::Buffer>,
+    static_buffer: vk::Buffer,
+) -> (vk::Buffer, vk::Buffer) {
+    match (deformed_flag, deformed, prev_deformed) {
+        (true, Some(deformed), Some(prev_deformed)) => (deformed, prev_deformed),
+        _ => (static_buffer, static_buffer),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deforming batch (skin or morph) with both deformed buffers present binds the current
+    /// + prev deformed streams to motion bindings 0/1; a static batch — or a deforming batch
+    /// missing a deformed buffer — binds the static stream to both. A morph-only batch
+    /// (`deformed == true`) takes the deforming arm exactly like a skinned batch.
+    #[test]
+    fn select_motion_streams_keys_on_the_deform_flag() {
+        use ash::vk::Handle;
+        let static_buf = vk::Buffer::from_raw(0x5747);
+        let deformed = vk::Buffer::from_raw(0xDEF0);
+        let prev = vk::Buffer::from_raw(0xDEF1);
+
+        // Morph-only / skinned: both deformed buffers present → cur + prev deformed.
+        assert_eq!(
+            select_motion_streams(true, Some(deformed), Some(prev), static_buf),
+            (deformed, prev),
+            "a deforming batch binds the current + prev deformed buffers"
+        );
+        // Static batch: the static stream on both bindings.
+        assert_eq!(
+            select_motion_streams(false, Some(deformed), Some(prev), static_buf),
+            (static_buf, static_buf),
+            "a static batch binds the static stream to both"
+        );
+        // Deforming batch but the deformed buffers were never grown this frame → static.
+        assert_eq!(
+            select_motion_streams(true, None, None, static_buf),
+            (static_buf, static_buf),
+            "a deforming batch with no deformed buffers falls back to the static stream"
+        );
+    }
 
     /// `clamp_sample_count` returns the largest supported count ≤ requested, `TYPE_1` when
     /// none. Pure logic, runs on any host.

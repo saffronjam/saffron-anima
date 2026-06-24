@@ -19,11 +19,13 @@ use std::sync::{Arc, Mutex};
 
 use ash::vk;
 use saffron_geometry::glam::Vec3;
-use saffron_geometry::{Mesh, VertexSkin};
+use saffron_geometry::{Mesh, MorphData, MorphDelta, VertexSkin};
 use vk_mem::Alloc;
 
 use crate::descriptors::Descriptors;
-use crate::resources::{DeviceResources, GpuMesh, GpuMeshParts, GpuTexture, GpuTextureParts};
+use crate::resources::{
+    DeviceResources, GpuMesh, GpuMeshParts, GpuTexture, GpuTextureParts, MorphBuffers,
+};
 use crate::{Device, Error, Result, checked};
 
 /// The externally-synchronized graphics queue, shared behind a mutex.
@@ -272,7 +274,12 @@ impl Uploader {
     /// Returns [`Error::EmptyMesh`] for an empty mesh, [`Error::SkinMismatch`] when a
     /// skin stream does not parallel the vertices, or [`Error::Vk`] for a failing
     /// Vulkan/VMA call. Resources allocated before a failure are freed before return.
-    pub fn upload_mesh(&self, mesh: &Mesh, skin: &[VertexSkin]) -> Result<Arc<GpuMesh>> {
+    pub fn upload_mesh(
+        &self,
+        mesh: &Mesh,
+        skin: &[VertexSkin],
+        morph: Option<&MorphData>,
+    ) -> Result<Arc<GpuMesh>> {
         if mesh.vertices.is_empty() || mesh.indices.is_empty() {
             return Err(Error::EmptyMesh);
         }
@@ -424,10 +431,28 @@ impl Uploader {
             }
         };
 
+        // Build the morph buffers (flat delta array + per-target ranges) when the mesh
+        // carries blend shapes; free the already-owned buffers on a morph-upload failure.
+        let morph_buffers = match morph.filter(|m| !m.targets.is_empty()) {
+            Some(data) => match self.upload_morph_buffers(data) {
+                Ok(buffers) => Some(buffers),
+                Err(err) => {
+                    free_one(allocator, vertex);
+                    free_one(allocator, index);
+                    if let Some(buf) = skin_buf {
+                        free_one(allocator, buf);
+                    }
+                    return Err(err);
+                }
+            },
+            None => None,
+        };
+
         let parts = GpuMeshParts {
             vertex,
             index,
             skin: skin_buf,
+            morph: morph_buffers,
             index_count: mesh.indices.len() as u32,
             vertex_count: mesh.vertices.len() as u32,
             submeshes: mesh.submeshes.clone(),
@@ -439,6 +464,94 @@ impl Uploader {
             blas,
         };
         Ok(Arc::new(GpuMesh::from_parts(&self.resources, parts)))
+    }
+
+    /// Builds the device-local morph buffers from [`MorphData`]: the flat `MorphDelta`
+    /// array (each target's deltas concatenated) and the per-target `[first_delta,
+    /// delta_count]` ranges, both `STORAGE` for the morph compute pass. Frees the delta
+    /// buffer if the range buffer or the copy fails.
+    fn upload_morph_buffers(&self, data: &MorphData) -> Result<MorphBuffers> {
+        let mut deltas: Vec<MorphDelta> = Vec::new();
+        let mut ranges: Vec<[u32; 2]> = Vec::with_capacity(data.targets.len());
+        for target in &data.targets {
+            let first = deltas.len() as u32;
+            ranges.push([first, target.deltas.len() as u32]);
+            deltas.extend_from_slice(&target.deltas);
+        }
+        let delta_count = deltas.len() as u32;
+        let target_count = ranges.len() as u32;
+
+        // Each device buffer must be non-empty even when a count is zero (a rest-only morph
+        // mesh); pad to one record. The shader never reads past the real counts.
+        let delta_used = std::mem::size_of_val(deltas.as_slice());
+        let range_used = std::mem::size_of_val(ranges.as_slice());
+        let delta_bytes = delta_used.max(std::mem::size_of::<MorphDelta>()) as vk::DeviceSize;
+        let range_bytes = range_used.max(std::mem::size_of::<[u32; 2]>()) as vk::DeviceSize;
+
+        let mut staging = StagingBuffer::new(self.allocator(), delta_bytes + range_bytes)?;
+        {
+            let bytes = staging.mapped_slice();
+            if delta_used > 0 {
+                bytes[..delta_used].copy_from_slice(bytemuck::cast_slice(&deltas));
+            }
+            if range_used > 0 {
+                let base = delta_bytes as usize;
+                bytes[base..base + range_used].copy_from_slice(bytemuck::cast_slice(&ranges));
+            }
+        }
+        staging.flush();
+
+        let allocator = self.allocator();
+        let deltas_buf =
+            make_device_buffer(allocator, delta_bytes, vk::BufferUsageFlags::STORAGE_BUFFER)?;
+        let ranges_buf = match make_device_buffer(
+            allocator,
+            range_bytes,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+        ) {
+            Ok(buf) => buf,
+            Err(err) => {
+                free_one(allocator, deltas_buf);
+                return Err(err);
+            }
+        };
+
+        let copy = self.with_one_off_commands(|cmd| {
+            // SAFETY: the ash seam. Both device buffers outlive the submit-wait; the staging
+            // buffer is the source.
+            unsafe {
+                let raw = self.raw();
+                raw.cmd_copy_buffer(
+                    cmd,
+                    staging.handle(),
+                    deltas_buf.0,
+                    &[vk::BufferCopy::default().size(delta_bytes)],
+                );
+                raw.cmd_copy_buffer(
+                    cmd,
+                    staging.handle(),
+                    ranges_buf.0,
+                    &[vk::BufferCopy::default()
+                        .src_offset(delta_bytes)
+                        .dst_offset(0)
+                        .size(range_bytes)],
+                );
+            }
+        });
+        drop(staging);
+        if let Err(err) = copy {
+            free_one(allocator, deltas_buf);
+            free_one(allocator, ranges_buf);
+            return Err(err);
+        }
+
+        Ok(MorphBuffers {
+            deltas: deltas_buf,
+            ranges: ranges_buf,
+            cpu_ranges: ranges,
+            target_count,
+            delta_count,
+        })
     }
 
     /// Uploads tightly packed RGBA8 pixels as a sampled, mipmapped texture in the
@@ -1198,7 +1311,9 @@ mod tests {
         let uploader = Uploader::new(&device, &queue).expect("Uploader::new");
         let mesh = triangle();
 
-        let plain = uploader.upload_mesh(&mesh, &[]).expect("unskinned upload");
+        let plain = uploader
+            .upload_mesh(&mesh, &[], None)
+            .expect("unskinned upload");
         assert_eq!(plain.index_count, 3);
         assert_eq!(plain.vertex_count, 3);
         assert!(
@@ -1209,7 +1324,9 @@ mod tests {
         assert_eq!(plain.cpu_positions.len(), 3);
 
         let skin = vec![VertexSkin::default(); mesh.vertices.len()];
-        let skinned = uploader.upload_mesh(&mesh, &skin).expect("skinned upload");
+        let skinned = uploader
+            .upload_mesh(&mesh, &skin, None)
+            .expect("skinned upload");
         assert!(
             skinned.skin_buffer().is_some(),
             "a parallel skin stream → non-null skin buffer"
@@ -1217,7 +1334,7 @@ mod tests {
         assert_eq!(skinned.cpu_skin.len(), 3);
 
         // A mismatched skin stream is rejected before any allocation.
-        let bad = uploader.upload_mesh(&mesh, &[VertexSkin::default()]);
+        let bad = uploader.upload_mesh(&mesh, &[VertexSkin::default()], None);
         assert!(matches!(bad, Err(Error::SkinMismatch { .. })));
 
         drop(plain);

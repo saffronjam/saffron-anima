@@ -106,6 +106,9 @@ pub struct Pipelines {
     /// The compute skinning PSO (skin set layout, a 16-byte push), built lazily.
     skin: Option<Arc<Pipeline>>,
 
+    /// The compute morph PSO (morph set layout, a 20-byte push), built lazily.
+    morph: Option<Arc<Pipeline>>,
+
     /// The cluster compute set layout the cull PSO binds (set 0).
     cluster_set_layout: vk::DescriptorSetLayout,
 
@@ -213,6 +216,7 @@ impl Pipelines {
             point_shadow: None,
             light_cull: None,
             skin: None,
+            morph: None,
             cluster_set_layout: descriptors.cluster_set_layout(),
             gbuffer: None,
             gtao: None,
@@ -412,6 +416,29 @@ impl Pipelines {
             }
             Err(err) => {
                 tracing::error!("request_skin: {err}");
+                None
+            }
+        }
+    }
+
+    /// The compute morph PSO (morph set layout, a 20-byte `MorphPush`), built + cached on
+    /// first request. Returns `None` on a build failure (logged).
+    pub fn request_morph(
+        &mut self,
+        morph_set_layout: vk::DescriptorSetLayout,
+    ) -> Option<Arc<Pipeline>> {
+        if let Some(pipeline) = &self.morph {
+            return Some(Arc::clone(pipeline));
+        }
+        match self.build_compute("shaders/morph.spv", morph_set_layout, 24) {
+            Ok(pipeline) => {
+                let pipeline = Arc::new(pipeline);
+                self.morph = Some(Arc::clone(&pipeline));
+                self.pipelines_created += 1;
+                Some(pipeline)
+            }
+            Err(err) => {
+                tracing::error!("request_morph: {err}");
                 None
             }
         }

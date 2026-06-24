@@ -61,8 +61,8 @@ pub use descriptors::{
 };
 pub use device::{Capabilities, Device, ProfilerFacts, SurfaceSource, validation_issue_count};
 pub use draw_list::{
-    DrawBatch, DrawItem, RenderStats, SceneDrawList, SkinDispatch, SkinnedRtInstance,
-    SubmeshMaterial, normal_matrix,
+    DeformedRtInstance, DrawBatch, DrawItem, MorphDispatch, RenderStats, SceneDrawList,
+    SkinDispatch, SubmeshMaterial, normal_matrix,
 };
 pub use frame::MAX_FRAMES_IN_FLIGHT;
 pub use frame_history::{
@@ -120,7 +120,10 @@ pub use scene_pass::{
 pub use shm_publish::{
     MIN_SHM_SLOT_CAPACITY, SHM_HEADER_BYTES, SHM_MAGIC, SHM_RING_SLOTS, ShmPublish,
 };
-pub use skinning::{SKIN_MAX_SETS_PER_FRAME, Skinning};
+pub use skinning::{
+    MORPH_FIXED_SCALE, SKIN_MAX_SETS_PER_FRAME, Skinning, record_morph, request_morph_pipeline,
+    wire_morph_set,
+};
 pub use ssao::{
     AO_FORMAT, ContactPush, G_NORMAL_FORMAT, GbufferPush, GtaoPush, SSGI_HISTORY_WEIGHT, Ssao,
     SsgiAccumPush, SsgiPush,

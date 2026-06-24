@@ -65,7 +65,7 @@ fn bind_batch_vertices(
     batch: &DrawBatch,
     deformed: Option<vk::Buffer>,
 ) {
-    let vertex_buffer = match (batch.skinned, deformed) {
+    let vertex_buffer = match (batch.deformed, deformed) {
         (true, Some(deformed)) => deformed,
         _ => batch.mesh.vertex_buffer(),
     };
@@ -695,7 +695,7 @@ mod tests {
                 material_slot: 0,
             }],
         };
-        uploader.upload_mesh(&mesh, &[]).expect("upload")
+        uploader.upload_mesh(&mesh, &[], None).expect("upload")
     }
 
     /// The directional shadow depth pass + the point-shadow cube pass run on a real

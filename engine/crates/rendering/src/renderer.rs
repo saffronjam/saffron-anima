@@ -218,6 +218,8 @@ struct FramePipelines {
     cull: Option<Arc<crate::Pipeline>>,
     /// The compute skinning PSO, resolved when the frame has skinned dispatches.
     skin: Option<Arc<crate::Pipeline>>,
+    /// The compute morph PSO, resolved when the frame has morph dispatches.
+    morph: Option<Arc<crate::Pipeline>>,
     shadow: Option<Arc<crate::Pipeline>>,
     point_shadow: Option<Arc<crate::Pipeline>>,
     /// The thin G-buffer prepass + the screen-space compute PSOs, resolved when the
@@ -2624,6 +2626,13 @@ impl Renderer {
         } else {
             None
         };
+        // The morph compute PSO, resolved only when the frame built morph dispatches. The
+        // morph pass deforms each morph instance into the deformed buffer before skin.
+        let morph_pipeline = if !self.scene_draw_list.morph_dispatches.is_empty() {
+            crate::skinning::request_morph_pipeline(&mut self.pipelines, &self.skinning)
+        } else {
+            None
+        };
         let shadow_pipeline =
             if self.lighting.shadow_pending() || self.lighting.spot_shadow_pending() {
                 self.pipelines.request_shadow_depth()
@@ -2837,6 +2846,7 @@ impl Renderer {
             depth_prepass,
             cull: cull_pipeline,
             skin: skin_pipeline,
+            morph: morph_pipeline,
             shadow: shadow_pipeline,
             point_shadow: point_shadow_pipeline,
             gbuffer,
@@ -3040,43 +3050,84 @@ impl Renderer {
             && !self.scene_draw_list.skin_dispatches.is_empty()
             && self.skinning.deformed_buffer(frame).is_some()
             && self.skinning.prev_deformed_buffer(frame).is_some();
-        let deformed_handle = if do_skin {
+        let do_morph = pipelines.morph.is_some()
+            && !self.scene_draw_list.morph_dispatches.is_empty()
+            && self.skinning.deformed_buffer(frame).is_some()
+            && self.skinning.prev_deformed_buffer(frame).is_some();
+        let do_deform = do_skin || do_morph;
+        let deformed_handle = if do_deform {
             self.skinning.deformed_buffer(frame)
         } else {
             None
         };
-        let prev_deformed_handle = if do_skin {
+        // The prev-deformed buffer carries the previous pose for the motion pass. Both the
+        // morph and skin passes write it (each deforms its prev-pose slice), so it is
+        // imported once for the whole deform scope and shared between them.
+        let prev_deformed_handle = if do_deform {
             self.skinning.prev_deformed_buffer(frame)
         } else {
             None
         };
-        let (deformed_res, prev_deformed_res) = if do_skin {
+        let (deformed_res, prev_deformed_res) = if do_deform {
             let deformed = graph.import_buffer(deformed_handle.expect("deformed buffer"));
             let prev_deformed =
                 graph.import_buffer(prev_deformed_handle.expect("prev-deformed buffer"));
-            let skin = pipelines.skin.as_ref().expect("skin PSO");
-            let skin = Arc::clone(skin);
-            let skin_handle = skin.handle();
-            let skin_layout = skin.layout();
-            let raw_body = raw.clone();
-            let list = self.scene_draw_list.shallow_clone();
-            // Both deformed buffers are written this pass (current + previous pose), so the
-            // graph emits a compute-write barrier for each before the consumers read them.
-            let pass = RgPass::compute("skin")
-                .access(deformed, RgUsage::StorageWriteCompute)
-                .access(prev_deformed, RgUsage::StorageWriteCompute)
-                .body(move |cmd| {
-                    crate::skinning::Skinning::record_skin(
-                        &raw_body,
-                        cmd,
-                        skin_handle,
-                        skin_layout,
-                        &list.skin_dispatches,
-                        &list.prev_skin_dispatches,
-                    );
-                    drop(skin);
-                });
-            graph.add_pass(pass);
+
+            // Morph pre-pass: scatter each active blend-shape's sparse deltas into the
+            // deformed (current weights) + prev-deformed (previous weights) buffers, then
+            // resolve to vertex positions/normals — before skin and before any geometry pass
+            // reads the deformed stream. It writes the same buffers as skin, so the graph
+            // orders morph → skin (write-after-write) automatically.
+            if do_morph {
+                let morph = pipelines.morph.as_ref().expect("morph PSO");
+                let morph = Arc::clone(morph);
+                let morph_handle = morph.handle();
+                let morph_layout = morph.layout();
+                let raw_morph = raw.clone();
+                let morph_list = self.scene_draw_list.shallow_clone();
+                let pass = RgPass::compute("morph")
+                    .access(deformed, RgUsage::StorageWriteCompute)
+                    .access(prev_deformed, RgUsage::StorageWriteCompute)
+                    .body(move |cmd| {
+                        crate::skinning::record_morph(
+                            &raw_morph,
+                            cmd,
+                            morph_handle,
+                            morph_layout,
+                            &morph_list.morph_dispatches,
+                            &morph_list.prev_morph_dispatches,
+                        );
+                        drop(morph);
+                    });
+                graph.add_pass(pass);
+            }
+
+            if do_skin {
+                let skin = pipelines.skin.as_ref().expect("skin PSO");
+                let skin = Arc::clone(skin);
+                let skin_handle = skin.handle();
+                let skin_layout = skin.layout();
+                let raw_body = raw.clone();
+                let list = self.scene_draw_list.shallow_clone();
+                // Both deformed buffers are written this pass (current + previous pose), so
+                // the graph emits a compute-write barrier for each before the consumers read
+                // them.
+                let pass = RgPass::compute("skin")
+                    .access(deformed, RgUsage::StorageWriteCompute)
+                    .access(prev_deformed, RgUsage::StorageWriteCompute)
+                    .body(move |cmd| {
+                        crate::skinning::Skinning::record_skin(
+                            &raw_body,
+                            cmd,
+                            skin_handle,
+                            skin_layout,
+                            &list.skin_dispatches,
+                            &list.prev_skin_dispatches,
+                        );
+                        drop(skin);
+                    });
+                graph.add_pass(pass);
+            }
             (Some(deformed), Some(prev_deformed))
         } else {
             (None, None)
@@ -3090,12 +3141,12 @@ impl Renderer {
         // `&mut self.rt` prep (AS create / set-6 write / instance copy) happens here, outside
         // the `'static` pass closure, which replays the resulting plan.
         self.rt.reset_frame_ready();
-        let skinned_rt = self.scene_draw_list.skinned_rt_instances.clone();
-        let has_skinned_rt = !skinned_rt.is_empty();
-        if self.rt.build_pending() && self.rt.has_instances(&skinned_rt) {
+        let deformed_rt = self.scene_draw_list.deformed_rt_instances.clone();
+        let has_skinned_rt = !deformed_rt.is_empty();
+        if self.rt.build_pending() && self.rt.has_instances(&deformed_rt) {
             if let Some(plan) =
                 self.rt
-                    .prepare_tlas_build(&self.device, frame, &skinned_rt, deformed_handle)
+                    .prepare_tlas_build(&self.device, frame, &deformed_rt, deformed_handle)
             {
                 let raw_body = raw.clone();
                 let mut tlas_pass = RgPass::compute("tlas-build").body(move |cmd| {
@@ -5967,7 +6018,7 @@ mod tests {
                 material_slot: 0,
             }],
         };
-        let mesh = uploader.upload_mesh(&mesh, &[]).expect("upload");
+        let mesh = uploader.upload_mesh(&mesh, &[], None).expect("upload");
         let item = DrawItem::new(
             Arc::clone(&mesh),
             Mat4::IDENTITY,
