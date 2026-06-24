@@ -285,10 +285,18 @@ export interface RenderStatsDto {
   ssao: boolean;
   contactShadows: boolean;
   ssgi: boolean;
+  quality: string;
+  tonemap: string;
+  idle: boolean;
+  converged: boolean;
+  redrawReasons: string[];
+  powerState: string;
   ddgi: boolean;
   rtSupported: boolean;
   rtShadows: boolean;
   restir: boolean;
+  ssr: boolean;
+  rtReflections: boolean;
   blasCount: number;
   pipelines: number;
   bindlessTextures: number;
@@ -424,10 +432,12 @@ export interface PerfConfigDto {
   frozenMs: number;
   vramWarnFrac: number;
   vramCritFrac: number;
+  autoQuality: boolean;
 }
 
 export interface SetPerfConfigParams {
   targetFps?: number;
+  autoQuality?: boolean;
   greenBudgetFrac?: number;
   greenMedianMul?: number;
   amberMedianMul?: number;
@@ -504,16 +514,23 @@ export interface SetIblResult {
   ibl: boolean;
 }
 
-export interface SetSsaoResult {
-  ssao: boolean;
+export interface SetRenderQualityParams {
+  tier: string;
 }
 
-export interface SetContactShadowsResult {
+export interface RenderQualityResult {
+  tier: string;
+  ssgi: boolean;
+  gtao: boolean;
   contactShadows: boolean;
 }
 
-export interface SetSsgiResult {
-  ssgi: boolean;
+export interface SetTonemapParams {
+  mode: string;
+}
+
+export interface TonemapResult {
+  mode: string;
 }
 
 export interface SetRtShadowsResult {
@@ -522,6 +539,14 @@ export interface SetRtShadowsResult {
 
 export interface SetRestirResult {
   restir: boolean;
+}
+
+export interface SetSsrResult {
+  ssr: boolean;
+}
+
+export interface SetRtReflectionsResult {
+  rtReflections: boolean;
 }
 
 export interface SetGiParams {
@@ -552,6 +577,14 @@ export interface ViewportNativeInfoResult {
   width: number;
   height: number;
   message: string;
+}
+
+export interface SetViewportPowerStateParams {
+  state: string;
+}
+
+export interface ViewportPowerStateResult {
+  state: string;
 }
 
 export interface SetViewportSizeParams {
@@ -1781,16 +1814,19 @@ export interface CommandParamsMap {
   "set-view-mode": SetViewModeParams;
   "set-clustered": ToggleParams;
   "set-ibl": ToggleParams;
-  "set-ssao": ToggleParams;
-  "set-contact-shadows": ToggleParams;
-  "set-ssgi": ToggleParams;
+  "set-render-quality": SetRenderQualityParams;
+  "get-render-quality": EmptyParams;
+  "set-tonemap": SetTonemapParams;
   "set-rt-shadows": ToggleParams;
   "set-restir": ToggleParams;
+  "set-ssr": ToggleParams;
+  "set-rt-reflections": ToggleParams;
   "set-gi": SetGiParams;
   "set-shadows": ToggleParams;
   "set-skinning": ToggleParams;
   "set-depth-prepass": ToggleParams;
   "viewport-native-info": EmptyParams;
+  "set-viewport-power-state": SetViewportPowerStateParams;
   "set-viewport-size": SetViewportSizeParams;
   "list-entities": EmptyParams;
   "list-components": EmptyParams;
@@ -1944,16 +1980,19 @@ export interface CommandResultMap {
   "set-view-mode": SetViewModeResult;
   "set-clustered": SetClusteredResult;
   "set-ibl": SetIblResult;
-  "set-ssao": SetSsaoResult;
-  "set-contact-shadows": SetContactShadowsResult;
-  "set-ssgi": SetSsgiResult;
+  "set-render-quality": RenderQualityResult;
+  "get-render-quality": RenderQualityResult;
+  "set-tonemap": TonemapResult;
   "set-rt-shadows": SetRtShadowsResult;
   "set-restir": SetRestirResult;
+  "set-ssr": SetSsrResult;
+  "set-rt-reflections": SetRtReflectionsResult;
   "set-gi": SetGiResult;
   "set-shadows": SetShadowsResult;
   "set-skinning": SetSkinningResult;
   "set-depth-prepass": SetDepthPrepassResult;
   "viewport-native-info": ViewportNativeInfoResult;
+  "set-viewport-power-state": ViewportPowerStateResult;
   "set-viewport-size": SetViewportSizeResult;
   "list-entities": EntityList;
   "list-components": ComponentList;
