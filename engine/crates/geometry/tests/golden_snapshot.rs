@@ -10,8 +10,9 @@
 
 use saffron_geometry::glam::{Vec2, Vec3};
 use saffron_geometry::{
-    AnimClip, AnimInterp, AnimPath, AnimTrack, ChunkKind, ContainerChunk, Mesh, Submesh, Vertex,
-    read_container, save_animation_to_buffer, save_mesh_to_buffer, write_container,
+    AnimClip, AnimInterp, AnimPath, AnimTarget, AnimTrack, ChunkKind, ContainerChunk, Mesh,
+    Submesh, Vertex, read_container, save_animation_to_buffer, save_mesh_to_buffer,
+    write_container,
 };
 use saffron_test_support::assert_bytes_match_golden;
 
@@ -109,10 +110,12 @@ fn cube_clip() -> AnimClip {
         duration: 2.0,
         tracks: vec![
             AnimTrack {
-                joint: 0,
-                joint_name: "Root".to_owned(),
+                target: AnimTarget::Bone,
+                index: 0,
+                target_name: "Root".to_owned(),
                 path: AnimPath::Rotation,
                 interp: AnimInterp::Linear,
+                morph_count: 0,
                 times: vec![0.0, 1.0, 2.0],
                 values: vec![
                     0.0,
@@ -130,10 +133,12 @@ fn cube_clip() -> AnimClip {
                 ],
             },
             AnimTrack {
-                joint: 1,
-                joint_name: "Lid".to_owned(),
+                target: AnimTarget::Bone,
+                index: 1,
+                target_name: "Lid".to_owned(),
                 path: AnimPath::Translation,
                 interp: AnimInterp::Step,
+                morph_count: 0,
                 times: vec![0.0, 2.0],
                 values: vec![0.0, 0.0, 0.0, 0.0, 0.5, 0.0],
             },
@@ -143,7 +148,7 @@ fn cube_clip() -> AnimClip {
 
 #[test]
 fn cube_smesh_bytes_match_cpp_golden() {
-    let bytes = save_mesh_to_buffer(&cube_mesh());
+    let bytes = save_mesh_to_buffer(&cube_mesh(), &[], None).unwrap();
     assert_bytes_match_golden("cube.smesh", &bytes);
 }
 
@@ -165,7 +170,7 @@ fn cube_smodel_bytes_match_cpp_golden() {
         "  \"schemaVersion\": 1\n",
         "}"
     );
-    let mesh_bytes = save_mesh_to_buffer(&cube_mesh());
+    let mesh_bytes = save_mesh_to_buffer(&cube_mesh(), &[], None).unwrap();
     let chunks = [
         ContainerChunk {
             kind: ChunkKind::Meta,

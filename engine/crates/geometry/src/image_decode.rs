@@ -28,10 +28,15 @@ pub fn decode_image_from_memory(encoded: &[u8]) -> Result<DecodedImage> {
     Ok(to_rgba8(img))
 }
 
-/// Decode an HDR image file into tightly packed linear RGBA f32.
+/// Decode an HDR image file into tightly packed linear RGBA f32. Detection is by content,
+/// not extension: our float textures are stored under a `.hdr` name regardless of the real
+/// container (a Radiance `.hdr` or an OpenEXR `.exr`), so `image::open`'s extension-based
+/// dispatch would force the wrong decoder.
 pub fn decode_image_hdr(path: impl AsRef<Path>) -> Result<DecodedImageFloat> {
     let path = path.as_ref();
-    let img = image::open(path)
+    let bytes = std::fs::read(path)
+        .map_err(|e| Error::Decode(format!("cannot read HDR image '{}': {e}", path.display())))?;
+    let img = image::load_from_memory(&bytes)
         .map_err(|e| Error::Decode(format!("cannot decode HDR image '{}': {e}", path.display())))?;
     Ok(to_rgba32f(img))
 }

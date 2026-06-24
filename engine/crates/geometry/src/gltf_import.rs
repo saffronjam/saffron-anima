@@ -1,38 +1,47 @@
 //! glTF (`.gltf`/`.glb`) import onto the `gltf` crate.
 //!
-//! The `gltf` crate exposes an index-only typed API. Three deterministic glue pieces
-//! are reconstructed by hand and pinned by tests so the output stays byte-stable for
-//! the asset bake hashes that depend on it:
+//! The `gltf` crate exposes an index-only typed API. Two deterministic glue pieces are
+//! reconstructed by hand and pinned by tests so the output stays byte-stable for the
+//! asset bake hashes that depend on it:
 //!
 //! - **The parent map** ([`build_parents`]) — the crate's `Node` exposes `children`,
 //!   not a parent, so parent indices are built by one walk over every node's children.
-//! - **The world-transform walk** ([`world_transform`]) — for the unskinned path the
-//!   mesh node's world transform is baked into its vertices; this composes each node's
-//!   local TRS up the parent chain.
-//! - **Node ordering** — joint-index and channel→joint resolution depend on the node
+//! - **Node ordering** — joint-index and channel→node resolution depend on the node
 //!   array being in document order. The crate iterates `nodes()` in document order and
 //!   exposes `node.index()`; both index the same array.
+//!
+//! Every import — skinned, unskinned-multinode, OBJ, or static — produces a node forest
+//! ([`build_node_forest`]) whose mesh-bearing nodes carry a node-local [`Mesh`], plus one
+//! heterogeneous [`AnimClip`] set ([`decode_clips`]) of bone, node, and morph-weight
+//! tracks. Geometry stays node-local (no world-transform bake), so a node a node-TRS
+//! track drives keeps its drivable local transform.
 
 use std::path::Path;
 
-use glam::{Affine3A, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
-use gltf::animation::{Interpolation, Property};
+use glam::{Affine3A, Mat4, Quat, Vec2, Vec3, Vec4};
+use gltf::animation::Interpolation;
 use gltf::mesh::Mode;
 
 use crate::error::{Error, Result};
 use crate::picking::generate_normals;
 use crate::types::{
-    AnimClip, AnimInterp, AnimPath, AnimTrack, ImportedMaterial, ImportedModel, ImportedNode,
-    ImportedSkin, Mesh, SkinPayload, Submesh, TextureSource, Vertex, VertexSkin,
+    AnimClip, AnimInterp, AnimPath, AnimTarget, AnimTrack, ImportedMaterial, ImportedModel,
+    ImportedNode, ImportedSkin, Mesh, MorphData, MorphDelta, MorphTarget, SkinPayload, Submesh,
+    TextureSource, Vertex, VertexSkin,
 };
+
+/// Below this squared magnitude a morph delta is treated as zero and dropped, keeping the
+/// sparse delta bank to genuinely moved vertices.
+const MORPH_DELTA_EPSILON_SQ: f32 = 1e-12;
 
 /// Import a `.gltf`/`.glb` model into the in-memory [`ImportedModel`] graph.
 ///
-/// Decodes the merged triangle mesh (first-seen material slots), the optional skin
-/// payload (joint list, inverse-bind matrices, the source node forest, decoded
-/// clips), and the materials with their texture byte blobs. The skin is imported
-/// only when the first skin covers every triangle primitive; a mixed skinned/
-/// unskinned model imports as plain geometry.
+/// Decodes a node forest with node-local meshes (first-seen material slots), one
+/// heterogeneous clip set (bone, node, and morph-weight tracks), the optional skin
+/// payload (joint list, inverse-bind matrices, the skinned mesh node's per-vertex
+/// stream), and the materials with their texture byte blobs. The skin is imported only
+/// when the first skin covers every triangle primitive; a mixed skinned/unskinned model
+/// imports as plain geometry.
 pub fn import_gltf_model(path: impl AsRef<Path>) -> Result<ImportedModel> {
     let path = path.as_ref();
     let gltf = gltf::Gltf::open(path)
@@ -47,9 +56,8 @@ pub fn import_gltf_model(path: impl AsRef<Path>) -> Result<ImportedModel> {
     })?;
 
     let parents = build_parents(&document);
+    let mut nodes = build_node_forest(&document, &parents);
 
-    let mut mesh = Mesh::default();
-    let mut vertex_skins: Vec<VertexSkin> = Vec::new();
     let mut saw_skinned = false;
     let mut saw_unskinned = false;
     // Distinct source materials in first-seen order, keyed by the material's document
@@ -64,63 +72,53 @@ pub fn import_gltf_model(path: impl AsRef<Path>) -> Result<ImportedModel> {
         slot
     };
 
-    let skins_count = document.skins().count();
-
-    if skins_count == 0 {
-        let mut saw_mesh_node = false;
-        for node in document.nodes() {
-            let Some(node_mesh) = node.mesh() else {
-                continue;
-            };
-            saw_mesh_node = true;
-            let node_transform = world_transform(&document, &parents, node.index());
-            for prim in node_mesh.primitives() {
-                append_primitive(
-                    &prim,
-                    &buffers,
-                    Some(&node_transform),
-                    &mut mesh,
-                    &mut vertex_skins,
-                    &mut saw_skinned,
-                    &mut saw_unskinned,
-                    &mut material_slot_of,
-                    path,
-                )?;
+    // Append every mesh-bearing node's primitives into that node's local mesh — no world
+    // bake. For a skinned node, keep its per-vertex skin stream; the skin's mesh node
+    // supplies the payload stream. Morph deltas are sparse-compacted per mesh; the model
+    // carries one mesh-global `MorphData` (the first mesh-bearing node that has targets).
+    let mut skin_streams: Vec<(usize, Vec<VertexSkin>)> = Vec::new();
+    let mut model_morph: Option<MorphData> = None;
+    for node in document.nodes() {
+        let Some(node_mesh) = node.mesh() else {
+            continue;
+        };
+        let mut local = Mesh::default();
+        let mut local_skins: Vec<VertexSkin> = Vec::new();
+        let mut local_morph = MorphData::default();
+        for prim in node_mesh.primitives() {
+            append_primitive(
+                &prim,
+                &buffers,
+                &mut local,
+                &mut local_skins,
+                &mut local_morph,
+                &mut saw_skinned,
+                &mut saw_unskinned,
+                &mut material_slot_of,
+                path,
+            )?;
+        }
+        if local.vertices.is_empty() {
+            continue;
+        }
+        if !any_normals_present(&local) {
+            generate_normals(&mut local);
+        }
+        if node.skin().is_some() {
+            skin_streams.push((node.index(), std::mem::take(&mut local_skins)));
+        }
+        if !local_morph.targets.is_empty() {
+            finalize_morph(&mut local_morph, &node_mesh, path);
+            if model_morph.is_none() {
+                model_morph = Some(local_morph);
+            } else {
+                tracing::warn!(
+                    "gltf: '{}' has morph targets on more than one mesh node; only the first is kept",
+                    path.display()
+                );
             }
         }
-        if !saw_mesh_node {
-            for gltf_mesh in document.meshes() {
-                for prim in gltf_mesh.primitives() {
-                    append_primitive(
-                        &prim,
-                        &buffers,
-                        None,
-                        &mut mesh,
-                        &mut vertex_skins,
-                        &mut saw_skinned,
-                        &mut saw_unskinned,
-                        &mut material_slot_of,
-                        path,
-                    )?;
-                }
-            }
-        }
-    } else {
-        for gltf_mesh in document.meshes() {
-            for prim in gltf_mesh.primitives() {
-                append_primitive(
-                    &prim,
-                    &buffers,
-                    None,
-                    &mut mesh,
-                    &mut vertex_skins,
-                    &mut saw_skinned,
-                    &mut saw_unskinned,
-                    &mut material_slot_of,
-                    path,
-                )?;
-            }
-        }
+        nodes[node.index()].mesh = Some(local);
     }
 
     let mut materials: Vec<ImportedMaterial> = Vec::with_capacity(material_table.len());
@@ -136,19 +134,25 @@ pub fn import_gltf_model(path: impl AsRef<Path>) -> Result<ImportedModel> {
             None => materials.push(ImportedMaterial::default()),
         }
     }
+    if materials.is_empty() {
+        materials.push(ImportedMaterial::default());
+    }
 
     // Skin payload: only when the FIRST skin covers every triangle primitive (a mixed
     // skinned/unskinned model would deform unweighted vertices to the origin, so it
-    // imports as plain geometry instead).
+    // imports as plain geometry instead). The payload stream is the skinned mesh node's
+    // per-vertex influences.
+    let skins_count = document.skins().count();
     let mut skin: Option<SkinPayload> = None;
     if skins_count > 0 && saw_skinned && !saw_unskinned {
-        skin = Some(build_skin(
-            &document,
-            &buffers,
-            &parents,
-            vertex_skins,
-            path,
-        ));
+        let desc = build_skin_desc(&document, &buffers);
+        let stream = skin_streams
+            .iter()
+            .find(|(idx, _)| *idx as i32 == desc.mesh_node)
+            .or_else(|| skin_streams.first())
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default();
+        skin = Some(SkinPayload { stream, desc });
     } else if saw_skinned && saw_unskinned {
         tracing::warn!(
             "gltf: '{}' mixes skinned and unskinned primitives; importing unskinned",
@@ -156,21 +160,52 @@ pub fn import_gltf_model(path: impl AsRef<Path>) -> Result<ImportedModel> {
         );
     }
 
-    if mesh.vertices.is_empty() {
+    let animations = {
+        let joints: &[i32] = skin
+            .as_ref()
+            .map(|s| s.desc.joints.as_slice())
+            .unwrap_or(&[]);
+        decode_clips(&document, &buffers, joints, &nodes, path)
+    };
+
+    if nodes.iter().all(|n| n.mesh.is_none()) {
         return Err(Error::Import(format!(
             "gltf: '{}' has no triangle geometry",
             path.display()
         )));
     }
-    if !any_normals_present(&mesh) {
-        generate_normals(&mut mesh);
-    }
 
     Ok(ImportedModel {
-        mesh,
+        nodes,
         materials,
+        animations,
         skin,
+        morph: model_morph,
     })
+}
+
+/// Fill in a decoded morph target's rest weights (the mesh-level `weights`, else 0) and
+/// names (synthesized `morph_{k}`). Cross-primitive target-count disagreement was already
+/// reconciled per-primitive in [`append_primitive`]; here we only attach the mesh-level
+/// metadata. The canonical count is the mesh `weights` length when it disagrees with the
+/// decoded target count (decisions #6/#7), padding or trimming with a warning.
+fn finalize_morph(morph: &mut MorphData, node_mesh: &gltf::Mesh, path: &Path) {
+    let weights = node_mesh.weights().unwrap_or(&[]);
+    if !weights.is_empty() && weights.len() != morph.targets.len() {
+        tracing::warn!(
+            "gltf: '{}' mesh weights ({}) disagree with morph target count ({}); reconciling to the weights length",
+            path.display(),
+            weights.len(),
+            morph.targets.len()
+        );
+        morph
+            .targets
+            .resize_with(weights.len(), MorphTarget::default);
+    }
+    for (k, target) in morph.targets.iter_mut().enumerate() {
+        target.rest_weight = weights.get(k).copied().unwrap_or(0.0);
+        target.name = format!("morph_{k}");
+    }
 }
 
 /// Build the parent index of every node (`-1` for a root).
@@ -188,41 +223,59 @@ fn build_parents(document: &gltf::Document) -> Vec<i32> {
     parents
 }
 
-/// The world transform of a node: the product of its local TRS matrices up the parent
-/// chain.
-fn world_transform(document: &gltf::Document, parents: &[i32], index: usize) -> Mat4 {
-    let mut transform = local_matrix(document, index);
-    let mut parent = parents[index];
-    while parent >= 0 {
-        let p = parent as usize;
-        transform = local_matrix(document, p) * transform;
-        parent = parents[p];
+/// Build the imported node forest in document order: name, parent index, and local TRS
+/// for every node. Mesh payloads are filled in by [`import_gltf_model`]; every node here
+/// starts with `mesh: None`.
+fn build_node_forest(document: &gltf::Document, parents: &[i32]) -> Vec<ImportedNode> {
+    let mut nodes: Vec<ImportedNode> = Vec::with_capacity(document.nodes().count());
+    for node in document.nodes() {
+        let index = node.index();
+        let name = node
+            .name()
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("Node {index}"));
+        let (translation, rotation, scale) = match node.transform() {
+            gltf::scene::Transform::Matrix { matrix } => {
+                let (s, r, t) = Affine3A::from_mat4(Mat4::from_cols_array_2d(&matrix))
+                    .to_scale_rotation_translation();
+                (t, r, s)
+            }
+            gltf::scene::Transform::Decomposed {
+                translation,
+                rotation,
+                scale,
+            } => (
+                Vec3::from_array(translation),
+                // glam's Quat is xyzw, matching the glTF storage order.
+                Quat::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3]),
+                Vec3::from_array(scale),
+            ),
+        };
+        nodes.push(ImportedNode {
+            name,
+            parent: parents[index],
+            translation,
+            rotation,
+            scale,
+            mesh: None,
+        });
     }
-    transform
+    nodes
 }
 
-/// A node's local TRS as a column-major `Mat4`.
-fn local_matrix(document: &gltf::Document, index: usize) -> Mat4 {
-    let node = document
-        .nodes()
-        .nth(index)
-        .expect("node index within document range");
-    Mat4::from_cols_array_2d(&node.transform().matrix())
-}
-
-/// Read one triangle primitive's attributes, optionally bake the node world
-/// transform into its vertices, and append the resulting vertex/index/submesh data.
+/// Read one triangle primitive's attributes and append the resulting vertex/index/
+/// submesh data into the node-local mesh (object space, no transform bake).
 ///
-/// Non-triangle primitives and primitives without positions are skipped. Tracks
-/// whether a skinned (joints + weights) or an unskinned primitive was seen, and the
-/// first-seen material slot.
+/// Non-triangle primitives and primitives without positions are skipped. Tracks whether
+/// a skinned (joints + weights) or an unskinned primitive was seen, and the first-seen
+/// material slot.
 #[allow(clippy::too_many_arguments)]
 fn append_primitive(
     prim: &gltf::Primitive,
     buffers: &[gltf::buffer::Data],
-    node_transform: Option<&Mat4>,
     mesh: &mut Mesh,
     vertex_skins: &mut Vec<VertexSkin>,
+    morph: &mut MorphData,
     saw_skinned: &mut bool,
     saw_unskinned: &mut bool,
     material_slot_of: &mut impl FnMut(Option<usize>) -> u32,
@@ -256,24 +309,13 @@ fn append_primitive(
 
     let vertex_offset = mesh.vertices.len() as i32;
     let first_index = mesh.indices.len() as u32;
-    let normal_transform = node_transform.map(|m| {
-        // Inverse-transpose of the upper-3x3 transforms normals correctly under a
-        // non-uniform scale.
-        Mat3::from_mat4(*m).inverse().transpose()
-    });
 
     for i in 0..vertex_count {
-        let mut position = Vec3::from_array(positions[i]);
-        if let Some(m) = node_transform {
-            position = m.transform_point3(position);
-        }
-        let mut normal = Vec3::ZERO;
-        if let Some(ns) = &normals {
-            normal = Vec3::from_array(ns[i]);
-            if let Some(nt) = &normal_transform {
-                normal = (*nt * normal).normalize();
-            }
-        }
+        let position = Vec3::from_array(positions[i]);
+        let normal = match &normals {
+            Some(ns) => Vec3::from_array(ns[i]),
+            None => Vec3::ZERO,
+        };
         let uv0 = match &texcoords {
             Some(uvs) => Vec2::from_array(uvs[i]),
             None => Vec2::ZERO,
@@ -290,6 +332,39 @@ fn append_primitive(
             influence.weights = ws[i];
         }
         vertex_skins.push(influence);
+    }
+
+    // Sparse morph deltas: the `gltf` reader resolves sparse accessors internally and
+    // hands back a dense iterator per target; we compact to genuinely moved vertices and
+    // shift each delta's index by this primitive's base in the node-local mesh.
+    for (ti, (positions, normals, _tangents)) in reader.read_morph_targets().enumerate() {
+        let dps: Vec<[f32; 3]> = positions.map(|it| it.collect()).unwrap_or_default();
+        let dns: Vec<[f32; 3]> = normals.map(|it| it.collect()).unwrap_or_default();
+        if morph.targets.len() <= ti {
+            morph.targets.resize_with(ti + 1, MorphTarget::default);
+        }
+        let target = &mut morph.targets[ti];
+        for v in 0..vertex_count {
+            let dp = dps
+                .get(v)
+                .copied()
+                .map(Vec3::from_array)
+                .unwrap_or(Vec3::ZERO);
+            let dn = dns
+                .get(v)
+                .copied()
+                .map(Vec3::from_array)
+                .unwrap_or(Vec3::ZERO);
+            if dp.length_squared() > MORPH_DELTA_EPSILON_SQ
+                || dn.length_squared() > MORPH_DELTA_EPSILON_SQ
+            {
+                target.deltas.push(MorphDelta {
+                    vertex_index: vertex_offset as u32 + v as u32,
+                    d_position: dp,
+                    d_normal: dn,
+                });
+            }
+        }
     }
 
     match reader.read_indices() {
@@ -321,50 +396,10 @@ fn append_primitive(
     Ok(())
 }
 
-/// Build the [`SkinPayload`] from the document's first skin: the source node forest,
-/// the joint index list, the inverse-bind matrices, the skeleton root and mesh node,
-/// the moved skin stream, and the decoded clips.
-fn build_skin(
-    document: &gltf::Document,
-    buffers: &[gltf::buffer::Data],
-    parents: &[i32],
-    stream: Vec<VertexSkin>,
-    path: &Path,
-) -> SkinPayload {
+/// Build the [`ImportedSkin`] descriptor from the document's first skin: the joint index
+/// list, the inverse-bind matrices, the skeleton root, and the skinned mesh node.
+fn build_skin_desc(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> ImportedSkin {
     let gltf_skin = document.skins().next().expect("skins_count > 0");
-
-    let mut nodes: Vec<ImportedNode> = Vec::with_capacity(document.nodes().count());
-    for node in document.nodes() {
-        let index = node.index();
-        let name = node
-            .name()
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("Node {index}"));
-        let (translation, rotation, scale) = match node.transform() {
-            gltf::scene::Transform::Matrix { matrix } => {
-                let (s, r, t) = Affine3A::from_mat4(Mat4::from_cols_array_2d(&matrix))
-                    .to_scale_rotation_translation();
-                (t, r, s)
-            }
-            gltf::scene::Transform::Decomposed {
-                translation,
-                rotation,
-                scale,
-            } => (
-                Vec3::from_array(translation),
-                // glam's Quat is xyzw, matching the glTF storage order.
-                Quat::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3]),
-                Vec3::from_array(scale),
-            ),
-        };
-        nodes.push(ImportedNode {
-            name,
-            parent: parents[index],
-            translation,
-            rotation,
-            scale,
-        });
-    }
 
     let joints: Vec<i32> = gltf_skin.joints().map(|j| j.index() as i32).collect();
     let joint_count = joints.len();
@@ -389,35 +424,30 @@ fn build_skin(
         }
     }
 
-    let desc = ImportedSkin {
+    ImportedSkin {
         joints,
         inverse_bind,
         skeleton_root,
         mesh_node,
-    };
-
-    let animations = decode_clips(document, buffers, &desc, &nodes, path);
-
-    SkinPayload {
-        stream,
-        nodes,
-        desc,
-        animations,
     }
 }
 
-/// Decode the document's skeletal clips.
+/// Decode the document's clips into heterogeneous tracks.
 ///
-/// A channel binds to a joint by its position in the skin's joint list; channels
-/// targeting a non-joint node, morph weights, or sparse/empty samplers are skipped
-/// with a warning. A clip with no surviving tracks is dropped.
+/// A channel targeting a node in `joints` decodes as a [`AnimTarget::Bone`] track keyed
+/// by joint position; any other node decodes as a [`AnimTarget::Node`] track bound by
+/// name. A morph-weights channel decodes as an [`AnimPath::Weights`] node track carrying
+/// the N-wide weight stream. A genuinely empty sampler is skipped with a warning; sparse
+/// samplers resolve internally through the `gltf` reader. A clip with no surviving tracks
+/// is dropped.
 fn decode_clips(
     document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
-    desc: &ImportedSkin,
+    joints: &[i32],
     nodes: &[ImportedNode],
     path: &Path,
 ) -> Vec<AnimClip> {
+    use gltf::animation::util::ReadOutputs;
     let mut clips: Vec<AnimClip> = Vec::new();
     for (a, anim) in document.animations().enumerate() {
         let name = anim
@@ -431,76 +461,78 @@ fn decode_clips(
         };
         for channel in anim.channels() {
             let target = channel.target();
-            let property = target.property();
-            if property == Property::MorphTargetWeights {
-                tracing::warn!(
-                    "gltf: '{}' clip '{}' has a morph-weights channel; skipped",
-                    path.display(),
-                    clip.name
-                );
-                continue;
-            }
-            let node_index = target.node().index() as i32;
-            let joint = desc.joints.iter().position(|j| *j == node_index);
-            let Some(joint) = joint else {
-                tracing::warn!(
-                    "gltf: '{}' clip '{}' targets a non-skin node; channel skipped",
-                    path.display(),
-                    clip.name
-                );
-                continue;
-            };
+            let node_index = target.node().index();
+            let target_name = nodes
+                .get(node_index)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
 
             let sampler = channel.sampler();
-            if sampler.input().sparse().is_some() || sampler.output().sparse().is_some() {
-                tracing::warn!(
-                    "gltf: '{}' clip '{}' has a sparse or empty sampler; channel skipped",
-                    path.display(),
-                    clip.name
-                );
-                continue;
-            }
+            let interp = to_track_interp(sampler.interpolation());
+            let stride = if interp == AnimInterp::CubicSpline {
+                3
+            } else {
+                1
+            };
 
             let reader =
                 channel.reader(|buffer| buffers.get(buffer.index()).map(|d| d.0.as_slice()));
             let (Some(inputs), Some(outputs)) = (reader.read_inputs(), reader.read_outputs())
             else {
                 tracing::warn!(
-                    "gltf: '{}' clip '{}' has a sparse or empty sampler; channel skipped",
+                    "gltf: '{}' clip '{}' has an empty sampler; channel skipped",
                     path.display(),
                     clip.name
                 );
                 continue;
             };
-
             let times: Vec<f32> = inputs.collect();
-            let mut values: Vec<f32> = Vec::new();
-            use gltf::animation::util::ReadOutputs;
-            match outputs {
+
+            // A node-TRS channel binds to a bone when its node is a skin joint, else to a
+            // plain node by name. A morph-weights channel is always a node target.
+            let (bone_target, bone_index) =
+                match joints.iter().position(|j| *j == node_index as i32) {
+                    Some(pos) => (AnimTarget::Bone, pos as i32),
+                    None => (AnimTarget::Node, -1),
+                };
+
+            let (path_kind, anim_target, index, morph_count, values) = match outputs {
                 ReadOutputs::Translations(it) => {
-                    for v in it {
-                        values.extend_from_slice(&v);
+                    let mut v = Vec::with_capacity(times.len() * 3 * stride);
+                    for t in it {
+                        v.extend_from_slice(&t);
                     }
+                    (AnimPath::Translation, bone_target, bone_index, 0, v)
                 }
                 ReadOutputs::Scales(it) => {
-                    for v in it {
-                        values.extend_from_slice(&v);
+                    let mut v = Vec::with_capacity(times.len() * 3 * stride);
+                    for s in it {
+                        v.extend_from_slice(&s);
                     }
+                    (AnimPath::Scale, bone_target, bone_index, 0, v)
                 }
                 ReadOutputs::Rotations(it) => {
-                    for v in it.into_f32() {
-                        values.extend_from_slice(&v);
+                    let mut v = Vec::with_capacity(times.len() * 4 * stride);
+                    for r in it.into_f32() {
+                        v.extend_from_slice(&r);
                     }
+                    (AnimPath::Rotation, bone_target, bone_index, 0, v)
                 }
-                // Morph-weights channels are skipped above; nothing reaches here.
-                ReadOutputs::MorphTargetWeights(_) => continue,
-            }
+                ReadOutputs::MorphTargetWeights(w) => {
+                    let v: Vec<f32> = w.into_f32().collect();
+                    let denom = times.len().max(1) * stride;
+                    let morph_count = (v.len() / denom) as u32;
+                    (AnimPath::Weights, AnimTarget::Node, -1, morph_count, v)
+                }
+            };
 
             let track = AnimTrack {
-                joint: joint as i32,
-                joint_name: nodes[node_index as usize].name.clone(),
-                path: to_track_path(property),
-                interp: to_track_interp(sampler.interpolation()),
+                target: anim_target,
+                index,
+                target_name,
+                path: path_kind,
+                interp,
+                morph_count,
                 times,
                 values,
             };
@@ -516,15 +548,6 @@ fn decode_clips(
         }
     }
     clips
-}
-
-/// Map a glTF target property onto the engine's [`AnimPath`].
-fn to_track_path(property: Property) -> AnimPath {
-    match property {
-        Property::Rotation => AnimPath::Rotation,
-        Property::Scale => AnimPath::Scale,
-        _ => AnimPath::Translation,
-    }
 }
 
 /// Map a glTF sampler interpolation onto the engine's [`AnimInterp`].

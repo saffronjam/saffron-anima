@@ -20,7 +20,9 @@ use glam::{Vec2, Vec3, Vec4};
 
 use crate::error::{Error, Result};
 use crate::picking::generate_normals;
-use crate::types::{ImportedMaterial, ImportedModel, Mesh, Submesh, TextureSource, Vertex};
+use crate::types::{
+    ImportedMaterial, ImportedModel, ImportedNode, Mesh, Submesh, TextureSource, Vertex,
+};
 
 /// Import an `.obj` model into the in-memory [`ImportedModel`] graph.
 ///
@@ -104,10 +106,25 @@ pub fn import_obj_model(path: impl AsRef<Path>) -> Result<ImportedModel> {
         out_materials.push(extract_obj_material(obj_material, &materials, base_dir));
     }
 
+    // One mesh-ownership shape: the OBJ geometry rides a single identity root node, so
+    // spawn collapses it to one entity exactly like a single-node glTF.
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("mesh")
+        .to_owned();
+    let node = ImportedNode {
+        name,
+        mesh: Some(mesh),
+        ..ImportedNode::default()
+    };
+
     Ok(ImportedModel {
-        mesh,
+        nodes: vec![node],
         materials: out_materials,
+        animations: Vec::new(),
         skin: None,
+        morph: None,
     })
 }
 
@@ -272,21 +289,31 @@ mod tests {
             .join(name)
     }
 
+    /// The first mesh-bearing node's node-local mesh (OBJ rides a single root node).
+    fn mesh_of(model: &ImportedModel) -> &Mesh {
+        model
+            .nodes
+            .iter()
+            .find_map(|n| n.mesh.as_ref())
+            .expect("a mesh-bearing node")
+    }
+
     #[test]
     fn cube_obj_imports_with_expected_counts() {
         // cube.obj: 24 verts / 24 normals / 24 texcoords, 12 triangulated faces, no
         // material. Every (v, n, t) triple is distinct, so dedup keeps 24 vertices,
         // 36 indices, one submesh, and one default material slot.
         let model = import_obj_model(fixture("cube.obj")).expect("import cube.obj");
-        assert_eq!(model.mesh.vertices.len(), 24);
-        assert_eq!(model.mesh.indices.len(), 36);
-        assert_eq!(model.mesh.submeshes.len(), 1);
+        let mesh = mesh_of(&model);
+        assert_eq!(mesh.vertices.len(), 24);
+        assert_eq!(mesh.indices.len(), 36);
+        assert_eq!(mesh.submeshes.len(), 1);
         assert_eq!(model.materials.len(), 1);
         assert!(model.skin.is_none());
         // The lone submesh covers the whole index range against the default slot.
-        assert_eq!(model.mesh.submeshes[0].first_index, 0);
-        assert_eq!(model.mesh.submeshes[0].index_count, 36);
-        assert_eq!(model.mesh.submeshes[0].material_slot, 0);
+        assert_eq!(mesh.submeshes[0].first_index, 0);
+        assert_eq!(mesh.submeshes[0].index_count, 36);
+        assert_eq!(mesh.submeshes[0].material_slot, 0);
     }
 
     #[test]
@@ -294,7 +321,7 @@ mod tests {
         // cube.obj ships normals, so the importer keeps them (no generate_normals
         // fallback); every vertex normal is unit length.
         let model = import_obj_model(fixture("cube.obj")).expect("import cube.obj");
-        for (i, v) in model.mesh.vertices.iter().enumerate() {
+        for (i, v) in mesh_of(&model).vertices.iter().enumerate() {
             let len = v.normal.length();
             assert!((len - 1.0).abs() < 1e-4, "vertex {i} normal length {len}");
         }
@@ -306,7 +333,7 @@ mod tests {
         // top-left, so every uv0.v lands in [0, 1] as `1 - source_v` (the cube uses
         // 0/1 texcoords, so the flipped values stay 0 or 1 but swapped).
         let model = import_obj_model(fixture("cube.obj")).expect("import cube.obj");
-        for v in &model.mesh.vertices {
+        for v in &mesh_of(&model).vertices {
             assert!((0.0..=1.0).contains(&v.uv0.y));
         }
     }
@@ -318,9 +345,9 @@ mod tests {
         // FULL vertex vector is identical, not just the counts.
         let first = import_obj_model(fixture("cube.obj")).expect("first import");
         let second = import_obj_model(fixture("cube.obj")).expect("second import");
-        assert_eq!(first.mesh.vertices, second.mesh.vertices);
-        assert_eq!(first.mesh.indices, second.mesh.indices);
-        assert_eq!(first.mesh.submeshes, second.mesh.submeshes);
+        assert_eq!(mesh_of(&first).vertices, mesh_of(&second).vertices);
+        assert_eq!(mesh_of(&first).indices, mesh_of(&second).indices);
+        assert_eq!(mesh_of(&first).submeshes, mesh_of(&second).submeshes);
         assert_eq!(first, second);
     }
 }

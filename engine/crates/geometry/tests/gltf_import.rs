@@ -6,9 +6,9 @@
 use std::path::PathBuf;
 
 use saffron_geometry::{
-    AnimInterp, AnimPath, ImportedModel, load_animation_from_bytes, load_mesh_from_bytes,
-    load_mesh_skin_from_bytes, save_animation_to_buffer, save_mesh_skinned_to_buffer,
-    save_mesh_to_buffer, translate_model,
+    AnimInterp, AnimPath, AnimTarget, ImportedModel, Mesh, load_animation_from_bytes,
+    load_mesh_from_bytes, load_mesh_skin_from_bytes, save_animation_to_buffer, save_mesh_to_buffer,
+    translate_model,
 };
 
 /// Path to a fixture under `tests/fixtures/`.
@@ -22,13 +22,24 @@ fn import(name: &str) -> ImportedModel {
     translate_model(fixture(name)).unwrap_or_else(|e| panic!("import {name} failed: {e}"))
 }
 
+/// The first mesh-bearing node's node-local mesh — every import now owns its geometry on
+/// a forest node, never a top-level model mesh.
+fn mesh_of(model: &ImportedModel) -> &Mesh {
+    model
+        .nodes
+        .iter()
+        .find_map(|n| n.mesh.as_ref())
+        .expect("a mesh-bearing node")
+}
+
 #[test]
 fn cube_imports_with_expected_counts_and_a_material_slot() {
     let model = import("cube.gltf");
     // cube.gltf: one node carrying a mesh, one primitive (24 verts, 36 indices).
-    assert_eq!(model.mesh.vertices.len(), 24);
-    assert_eq!(model.mesh.indices.len(), 36);
-    assert_eq!(model.mesh.submeshes.len(), 1);
+    let mesh = mesh_of(&model);
+    assert_eq!(mesh.vertices.len(), 24);
+    assert_eq!(mesh.indices.len(), 36);
+    assert_eq!(mesh.submeshes.len(), 1);
     // A null source material still yields one default slot.
     assert_eq!(model.materials.len(), 1);
     assert!(model.skin.is_none());
@@ -39,7 +50,7 @@ fn cube_normals_survive_import() {
     // cube.gltf ships normals, so the importer keeps them (never falls back to
     // generate_normals); every vertex normal is unit length.
     let model = import("cube.gltf");
-    for (i, v) in model.mesh.vertices.iter().enumerate() {
+    for (i, v) in mesh_of(&model).vertices.iter().enumerate() {
         let len = v.normal.length();
         assert!((len - 1.0).abs() < 1e-4, "vertex {i} normal length {len}");
     }
@@ -49,20 +60,21 @@ fn cube_normals_survive_import() {
 fn animated_strip_imports_a_skin_with_a_decoded_clip() {
     let model = import("animated-strip.gltf");
     let skin = model.skin.as_ref().expect("animated-strip is skinned");
-    assert!(!skin.animations.is_empty(), "expected at least one clip");
+    assert!(!model.animations.is_empty(), "expected at least one clip");
 
-    // The skin stream parallels the vertices one-for-one.
-    assert_eq!(skin.stream.len(), model.mesh.vertices.len());
+    // The skin stream parallels the skinned node's vertices one-for-one.
+    assert_eq!(skin.stream.len(), mesh_of(&model).vertices.len());
     // joints [1, 2] of a 3-node forest.
     assert_eq!(skin.desc.joints, vec![1, 2]);
-    assert_eq!(skin.nodes.len(), 3);
+    assert_eq!(model.nodes.len(), 3);
 
-    let clip = &skin.animations[0];
+    let clip = &model.animations[0];
     assert_eq!(clip.name, "Bend");
     let track = &clip.tracks[0];
     // The "Bend" channel targets node 1 (RootJoint), which is joints[0].
-    assert_eq!(track.joint, 0);
-    assert_eq!(track.joint_name, "RootJoint");
+    assert_eq!(track.target, AnimTarget::Bone);
+    assert_eq!(track.index, 0);
+    assert_eq!(track.target_name, "RootJoint");
     assert_eq!(track.path, AnimPath::Rotation);
     assert_eq!(track.interp, AnimInterp::Linear);
     // A rotation track stores 4 floats (xyzw) per key.
@@ -78,9 +90,10 @@ fn two_materials_yields_two_slots_in_first_seen_order() {
     assert_eq!(model.materials[0].name, "ShinyMetal");
     assert_eq!(model.materials[1].name, "RoughDielectric");
     // Two primitives, two submeshes, each pointing at its own slot.
-    assert_eq!(model.mesh.submeshes.len(), 2);
-    assert_eq!(model.mesh.submeshes[0].material_slot, 0);
-    assert_eq!(model.mesh.submeshes[1].material_slot, 1);
+    let mesh = mesh_of(&model);
+    assert_eq!(mesh.submeshes.len(), 2);
+    assert_eq!(mesh.submeshes[0].material_slot, 0);
+    assert_eq!(mesh.submeshes[1].material_slot, 1);
 }
 
 #[test]
@@ -88,18 +101,20 @@ fn cube_import_is_deterministic() {
     // Two imports of the same source yield structurally identical graphs.
     let first = import("cube.gltf");
     let second = import("cube.gltf");
-    assert_eq!(first.mesh.vertices.len(), second.mesh.vertices.len());
-    assert_eq!(first.mesh.indices.len(), second.mesh.indices.len());
-    assert_eq!(first.mesh.submeshes.len(), second.mesh.submeshes.len());
+    let first_mesh = mesh_of(&first);
+    let second_mesh = mesh_of(&second);
+    assert_eq!(first_mesh.vertices.len(), second_mesh.vertices.len());
+    assert_eq!(first_mesh.indices.len(), second_mesh.indices.len());
+    assert_eq!(first_mesh.submeshes.len(), second_mesh.submeshes.len());
     assert_eq!(first.materials.len(), second.materials.len());
     assert_eq!(first.skin.is_some(), second.skin.is_some());
     assert_eq!(
-        first.mesh.vertices.first().map(|v| v.position),
-        second.mesh.vertices.first().map(|v| v.position),
+        first_mesh.vertices.first().map(|v| v.position),
+        second_mesh.vertices.first().map(|v| v.position),
     );
     assert_eq!(
-        first.mesh.vertices.last().map(|v| v.position),
-        second.mesh.vertices.last().map(|v| v.position),
+        first_mesh.vertices.last().map(|v| v.position),
+        second_mesh.vertices.last().map(|v| v.position),
     );
     // The whole import graph compares equal (it is `PartialEq`).
     assert_eq!(first, second);
@@ -116,28 +131,29 @@ fn unsupported_extension_is_rejected() {
 
 #[test]
 fn skinned_strip_round_trips_through_smesh_and_sanim() {
-    // Import a skinned model, bake the mesh + skin into a v2 `.smesh` buffer, read it
-    // back, and round-trip a clip through `.sanim`.
+    // Import a skinned model, bake the mesh + skin into a `.smesh` buffer, read it back,
+    // and round-trip a clip through `.sanim`.
     let model = import("animated-strip.gltf");
     let skin = model.skin.as_ref().expect("animated-strip is skinned");
+    let mesh = mesh_of(&model);
 
-    let baked = save_mesh_skinned_to_buffer(&model.mesh, &skin.stream)
+    let baked = save_mesh_to_buffer(mesh, &skin.stream, None)
         .expect("skinned encode parallels the vertices");
-    let loaded_mesh = load_mesh_from_bytes(&baked).expect("load mesh from baked v2 .smesh");
-    let loaded_skin = load_mesh_skin_from_bytes(&baked).expect("load skin from baked v2 .smesh");
+    let loaded_mesh = load_mesh_from_bytes(&baked).expect("load mesh from baked skinned .smesh");
+    let loaded_skin = load_mesh_skin_from_bytes(&baked).expect("load skin from baked .smesh");
 
-    assert_eq!(loaded_mesh.vertices, model.mesh.vertices);
-    assert_eq!(loaded_mesh.indices, model.mesh.indices);
-    assert_eq!(loaded_mesh.submeshes, model.mesh.submeshes);
+    assert_eq!(loaded_mesh.vertices, mesh.vertices);
+    assert_eq!(loaded_mesh.indices, mesh.indices);
+    assert_eq!(loaded_mesh.submeshes, mesh.submeshes);
     assert_eq!(loaded_skin, skin.stream);
 
-    let clip = &skin.animations[0];
+    let clip = &model.animations[0];
     let anim_bytes = save_animation_to_buffer(clip);
     let loaded_clip = load_animation_from_bytes(&anim_bytes).expect("load clip from .sanim");
     assert_eq!(&loaded_clip, clip);
 
-    // An unskinned bake of the same mesh also round-trips (the v1 path).
-    let unskinned = save_mesh_to_buffer(&model.mesh);
-    let back = load_mesh_from_bytes(&unskinned).expect("v1 round-trip");
-    assert_eq!(back.vertices, model.mesh.vertices);
+    // An unskinned bake of the same mesh also round-trips.
+    let unskinned = save_mesh_to_buffer(mesh, &[], None).expect("unskinned round-trip encode");
+    let back = load_mesh_from_bytes(&unskinned).expect("unskinned round-trip");
+    assert_eq!(back.vertices, mesh.vertices);
 }
