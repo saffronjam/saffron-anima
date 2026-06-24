@@ -184,6 +184,8 @@ export function AssetsPanel() {
   const openImageViewerTab = useEditorStore((s) => s.openImageViewerTab);
   const openAssetEditorForAsset = useEditorStore((s) => s.openAssetEditorForAsset);
   const closeViewTab = useEditorStore((s) => s.closeViewTab);
+  const setAssetsPanelHovered = useEditorStore((s) => s.setAssetsPanelHovered);
+  const setAssetsFolderNav = useEditorStore((s) => s.setAssetsFolderNav);
   const [history, setHistory] = useState<FolderHistory>({ stack: [null], index: 0 });
   const [creatingFolder, setCreatingFolder] = useState<CreatingFolder | null>(null);
   const [creatingFolderName, setCreatingFolderName] = useState("");
@@ -249,6 +251,18 @@ export function AssetsPanel() {
 
   const canGoBack = nearestHistoryIndex(history, folders, -1) >= 0;
   const canGoForward = nearestHistoryIndex(history, folders, 1) >= 0;
+
+  // Register this panel's folder back/forward so the central mouse dispatcher can drive it
+  // while the pointer is over the panel (`assetsPanelHovered`). Re-registers when the
+  // handlers' identity changes (they close over `folders`); cleared on unmount.
+  useEffect(() => {
+    setAssetsFolderNav({ back: goBack, forward: goForward });
+    return () => setAssetsFolderNav(null);
+  }, [goBack, goForward, setAssetsFolderNav]);
+
+  // Clear the hover flag if the panel unmounts (a tab switch) so a stale `true` never
+  // misroutes the side buttons away from tab navigation.
+  useEffect(() => () => setAssetsPanelHovered(false), [setAssetsPanelHovered]);
 
   useEffect(() => {
     if (currentFolder && !folders.includes(currentFolder)) {
@@ -735,7 +749,12 @@ export function AssetsPanel() {
     gridSize.width > 0 && gridSize.width < 480 ? "bottom" : "right";
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-asset-panel="true">
+    <div
+      className="flex h-full min-h-0 flex-col"
+      data-asset-panel="true"
+      onPointerEnter={() => setAssetsPanelHovered(true)}
+      onPointerLeave={() => setAssetsPanelHovered(false)}
+    >
       <div className="flex h-10 flex-none items-center gap-1 border-b border-border px-3">
         <Button
           type="button"

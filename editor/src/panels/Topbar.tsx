@@ -18,6 +18,7 @@ import {
   Settings,
   Square,
   StepForward,
+  Store,
   Undo2,
   Wrench,
 } from "lucide-react";
@@ -151,6 +152,7 @@ export function Topbar() {
   const keyBindings = useEditorStore((s) => s.keyBindings);
   const openPanel = useEditorStore((s) => s.openPanel);
   const setSettingsOpen = useEditorStore((s) => s.setSettingsOpen);
+  const openStoreTab = useEditorStore((s) => s.openStoreTab);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
   // The active main tab's history drives the undo/redo buttons' enabled state + labels.
@@ -440,6 +442,20 @@ export function Topbar() {
         <AlarmBadge />
         <ViewModeMenu />
         <div className="flex items-center gap-0.5" role="group" aria-label="Tools">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => openStoreTab()}
+                aria-label="Store"
+              >
+                <Store />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Asset Store</TooltipContent>
+          </Tooltip>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button type="button" size="icon-sm" variant="ghost" aria-label="Tools">

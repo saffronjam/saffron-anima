@@ -20,7 +20,7 @@ import { Layout } from "./Layout";
 import { WindowTitlebar } from "./WindowTitlebar";
 import { useGizmoShortcuts } from "./useGizmoShortcuts";
 import { useUndoRedoShortcuts } from "./useUndoRedoShortcuts";
-import { useMouseHistoryNav } from "./useMouseHistoryNav";
+import { useMouseBindings } from "./useMouseBindings";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectStartupModal } from "./ProjectStartupModal";
 import { SettingsModal } from "./SettingsModal";
@@ -30,6 +30,7 @@ import { AssetPreview } from "../components/AssetViewer";
 import { CaptureFlame } from "../components/CaptureFlame";
 import { MaterialGraphEditor } from "../panels/MaterialGraphEditor";
 import { AssetEditorWorkspace } from "../panels/AssetEditorWorkspace";
+import { StoreWorkspace } from "../storefront/StoreWorkspace";
 import { DockPanelsHost } from "../components/dock/DockPanelsHost";
 import { DockDropOverlay } from "../components/dock/DockDropOverlay";
 import { AssetDragPreviewTile, firstModelAssetId } from "../components/AssetTile";
@@ -78,6 +79,9 @@ export function App() {
     const tab = s.viewTabs.find((candidate) => candidate.id === s.activeViewTabId);
     return tab?.kind === "assetEditor" ? tab.assetId : null;
   });
+  // The Store tab stays mounted (hidden when inactive) while its tab exists, so the search
+  // query and results survive switching to another tab and back.
+  const storeTabExists = useEditorStore((s) => s.viewTabs.some((tab) => tab.kind === "store"));
   // Keep one asset editor mounted across tab switches (like the scene dock) so returning is instant: it
   // suspends/resumes the engine preview on `active` rather than remounting + re-entering. We keep the
   // most-recently-active asset tab mounted, sticky until its tab closes; switching to a different asset
@@ -117,8 +121,8 @@ export function App() {
   useGizmoShortcuts();
   // Ctrl+Z / Ctrl+Shift+Z (+ Ctrl+Y) → undo/redo on the active tab's history.
   useUndoRedoShortcuts();
-  // Mouse Back/Forward → undo/redo; also kills the webview's default Back/Forward nav.
-  useMouseHistoryNav();
+  // Mouse-button commands (tab back/forward, close hovered tab) via the keybinding registry.
+  useMouseBindings();
 
   useEffect(() => {
     if (didRevealWindow) {
@@ -297,6 +301,18 @@ export function App() {
         <CatalogDragGhost />
         {activeKind === "imageViewer" && <ImageViewerWorkspace asset={activeImage} />}
         {activeKind === "flamegraph" && <FlameGraphWorkspace />}
+        {/* Kept mounted (hidden when inactive) so the search query + results persist across
+            tab switches, like the scene dock and asset editor. */}
+        {storeTabExists && (
+          <div
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              activeKind !== "store" && "hidden",
+            )}
+          >
+            <StoreWorkspace active={activeKind === "store"} />
+          </div>
+        )}
         {activeKind === "materialGraph" && (
           <MaterialGraphWorkspace materialId={activeGraphMaterialId} />
         )}

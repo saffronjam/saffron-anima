@@ -39,6 +39,8 @@ import type {
   GizmoState,
   InspectResult,
   ListClipsResult,
+  ClipBindingsResult,
+  MorphWeightsResult,
   Material,
   PerfConfigDto,
   PlayStateResult,
@@ -317,6 +319,22 @@ export const client = {
   /// Clear the Edit preview and stop, reverting the entity to its rest pose.
   stopPreview(entity: string): Promise<AnimationStateResult> {
     return call("stop-preview", { entity });
+  },
+
+  /// Set a morph mesh's blend-shape weights (canonical 0..1; the length must match the
+  /// mesh's target count). Writes the runtime override when a preview is live, else the
+  /// durable component.
+  setMorphWeights(entity: string, weights: number[]): Promise<MorphWeightsResult> {
+    return call("set-morph-weights", { entity, weights });
+  },
+  /// A morph mesh's live blend-shape weights (override-or-component) + the durable target names.
+  getMorphWeights(entity: string): Promise<MorphWeightsResult> {
+    return call("get-morph-weights", { entity });
+  },
+  /// A clip's channels resolved against the entity's live forest — node labels resolve to the
+  /// bound entity name (raw glTF name on a broken binding); morph labels are the raw target name.
+  listClipBindings(entity: string, clip: string): Promise<ClipBindingsResult> {
+    return call("list-clip-bindings", { entity, clip });
   },
 
   /// A model's capabilities + bone tree + clips, read from its .smodel container. Accepts the model, a
@@ -746,6 +764,14 @@ export const client = {
   /// Write catalog + scene to `path` (engine default `project.json` when omitted).
   saveProject(path?: string): Promise<ProjectInfo> {
     return call("save-project", path === undefined ? {} : { path });
+  },
+  /// The project's enabled asset-store connector ids (the `stores` block).
+  getStores(): Promise<CommandResultMap["get-stores"]> {
+    return call("get-stores");
+  },
+  /// Set the project's enabled asset-store connector ids (persisted by save-project).
+  setStores(enabled: string[]): Promise<CommandResultMap["set-stores"]> {
+    return call("set-stores", { enabled });
   },
   /// Cook the loaded project into a standalone app folder at `outputDir`, writing `app` as the
   /// runtime manifest (`app.json`). Returns the staged path + any non-fatal cook warnings.

@@ -9,17 +9,20 @@
 /// Same-scope conflicts are advisory, VS Code-style: the rebind is accepted and
 /// every row whose effective binding collides inside its scope shows a warning.
 import { useEffect, useMemo, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { RotateCcw, TriangleAlert } from "lucide-react";
 import {
   COMMANDS,
   bindingFor,
   findConflict,
   formatBinding,
+  mouseToken,
   normalizePressEvent,
   type CommandDef,
   type CommandId,
 } from "../lib/keybindings";
 import { useEditorStore } from "../state/store";
+import { ApiKeyField } from "../storefront/ApiKeyField";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -38,6 +41,7 @@ import { cn } from "@/lib/utils";
 const SECTIONS = [
   { id: "keyboard", label: "Keyboard" },
   { id: "layout", label: "Layout" },
+  { id: "api", label: "API & Secrets" },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -94,12 +98,31 @@ export function SettingsModal() {
           </nav>
           {section === "keyboard" ? (
             <KeyboardSection capturingId={capturingId} setCapturingId={setCapturingId} />
-          ) : (
+          ) : section === "layout" ? (
             <LayoutSection />
+          ) : (
+            <ApiSecretsSection />
           )}
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/// The API & Secrets section: paste/clear API keys for store connectors that need one.
+/// Keys are stored in the OS keyring on this machine only — never in the project file.
+function ApiSecretsSection() {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      <div className="rounded-md border border-border p-3">
+        <p className="text-sm font-medium text-foreground">Poly Pizza</p>
+        <p className="mb-2 text-xs text-muted-foreground">
+          A free key (poly.pizza account) enables Poly Pizza in the asset Store. Stored only on this
+          machine.
+        </p>
+        <ApiKeyField connectorId="poly-pizza" displayName="Poly Pizza" />
+      </div>
+    </div>
   );
 }
 
@@ -147,10 +170,47 @@ function KeyboardSection({
   const capturing = capturingId ? COMMANDS.find((def) => def.id === capturingId) : undefined;
 
   // The capture listener: capture-phase on window so it pre-empts the global
-  // shortcut hook and Radix's own Escape handling while listening.
+  // shortcut hook and Radix's own Escape handling while listening. Mouse commands
+  // capture a button (middle via the DOM, the side buttons via the native bridge
+  // event, since WebKitGTK never hands those to the page); Esc cancels either kind.
   useEffect(() => {
     if (!capturing) {
       return;
+    }
+    if (capturing.kind === "mouse") {
+      const onKeyDown = (event: KeyboardEvent): void => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          setCapturingId(null);
+        }
+      };
+      const onPointerDown = (event: PointerEvent): void => {
+        if (event.button !== 1) {
+          return; // Only the middle button is capturable from the DOM.
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        setKeyBinding(capturing.id, mouseToken("middle"));
+        setCapturingId(null);
+      };
+      let off: UnlistenFn | null = null;
+      let disposed = false;
+      void listen<number>("mouse-button", (event) => {
+        const name = event.payload === 8 ? "back" : event.payload === 9 ? "forward" : null;
+        if (name) {
+          setKeyBinding(capturing.id, mouseToken(name));
+          setCapturingId(null);
+        }
+      }).then((fn) => (disposed ? fn() : (off = fn)));
+      window.addEventListener("keydown", onKeyDown, { capture: true });
+      window.addEventListener("pointerdown", onPointerDown, { capture: true });
+      return () => {
+        disposed = true;
+        off?.();
+        window.removeEventListener("keydown", onKeyDown, { capture: true });
+        window.removeEventListener("pointerdown", onPointerDown, { capture: true });
+      };
     }
     const onKeyDown = (event: KeyboardEvent): void => {
       event.preventDefault();
@@ -323,7 +383,11 @@ function BindingRow({
         className={cn("w-44 flex-none font-mono text-xs", capturing && "ring-1 ring-ring")}
         onClick={onCapture}
       >
-        {capturing ? "Press any key…" : formatBinding(def, bindingFor(def.id, overrides))}
+        {capturing
+          ? def.kind === "mouse"
+            ? "Press a mouse button…"
+            : "Press any key…"
+          : formatBinding(def, bindingFor(def.id, overrides))}
       </Button>
     </div>
   );

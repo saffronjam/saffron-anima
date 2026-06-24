@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { Box, Check, ChevronsUpDown, File, Image as ImageIcon, Loader2 } from "lucide-react";
 import { getCachedThumbnailUrl, getThumbnailUrl, useEditorStore } from "../state/store";
-import { ASSET_DND_MIME, readAssetPayload } from "./AssetTile";
+import { ASSET_DND_MIME, assetIdsFromPayload, readAssetPayload } from "./AssetTile";
 import type { AssetEntry } from "../protocol";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -121,9 +121,14 @@ export function AssetPicker({ value, assetType, onChange }: AssetPickerProps) {
   const onDrop = (event: React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault();
     setDropActive(false);
-    const payload = readAssetPayload(event.dataTransfer);
-    if (payload?.id && payload.type === assetType) {
-      onChange(payload.id);
+    // The catalog drag carries asset ids (single or multi-select) without a type, so
+    // resolve them against the catalog and assign the first one matching this field.
+    const ids = assetIdsFromPayload(readAssetPayload(event.dataTransfer));
+    const match = ids
+      .map((id) => assets.find((a) => a.id === id))
+      .find((a) => a?.type === assetType);
+    if (match) {
+      onChange(match.id);
     }
   };
   const onDragOver = (event: React.DragEvent<HTMLDivElement>): void => {

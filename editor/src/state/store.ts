@@ -91,6 +91,7 @@ export type CaptureState = "idle" | "arming" | "recording" | "ready";
 export type ViewTab =
   | { id: "scene"; kind: "scene"; title: "Scene"; closable: false }
   | { id: "flamegraph"; kind: "flamegraph"; title: "Flame graph"; closable: true }
+  | { id: "store"; kind: "store"; title: "Store"; closable: true }
   | { id: string; kind: "materialGraph"; materialId: string; title: string; closable: true }
   // The asset editor is keyed by the resolved model (the container uuid), not the clicked asset, so a
   // model, its mesh, and any of its clips open or focus the SAME tab — and the engine's one-previewScene
@@ -105,6 +106,50 @@ export type ViewTab =
       assetType: AssetEntry["type"];
       closable: true;
     };
+
+/// The Scene tab — always present, never closable, the ultimate navigation fallback.
+const SCENE_TAB: ViewTab = { id: "scene", kind: "scene", title: "Scene", closable: false };
+
+/// Cross-tab navigation history with browser semantics: each activation snapshots the
+/// landed-on tab, navigating truncates the forward tail, and back/forward reopen a tab
+/// that was closed from its stored snapshot. Distinct from `historyByTab` (per-tab
+/// undo/redo of edits).
+interface TabNavHistory {
+  entries: ViewTab[];
+  cursor: number;
+}
+
+/// Cap on retained navigation entries; older ones drop off the front.
+const TAB_HISTORY_CAP = 100;
+
+/// The Assets panel's folder back/forward, exposed to the central mouse dispatcher.
+export interface AssetsFolderNav {
+  back(): void;
+  forward(): void;
+}
+
+/// Fold a tab activation into a state patch: set the active tab, remember the tab we
+/// left as `previousActiveTabId` (for the close-to-last-active behaviour), and push the
+/// landed-on tab onto the navigation history (truncating any forward tail). Re-activating
+/// the already-active tab records nothing.
+function recordActivation(
+  s: EditorState,
+  patch: Partial<EditorState>,
+  activeViewTabId: string,
+): Partial<EditorState> {
+  const previousActiveTabId =
+    activeViewTabId === s.activeViewTabId ? s.previousActiveTabId : s.activeViewTabId;
+  const viewTabs = patch.viewTabs ?? s.viewTabs;
+  const tab = viewTabs.find((t) => t.id === activeViewTabId);
+  let tabHistory = s.tabHistory;
+  if (tab && s.tabHistory.entries[s.tabHistory.cursor]?.id !== activeViewTabId) {
+    const entries = [...s.tabHistory.entries.slice(0, s.tabHistory.cursor + 1), tab].slice(
+      -TAB_HISTORY_CAP,
+    );
+    tabHistory = { entries, cursor: entries.length - 1 };
+  }
+  return { ...patch, activeViewTabId, previousActiveTabId, tabHistory };
+}
 
 export interface EngineStatus {
   running: boolean;
@@ -153,8 +198,25 @@ export interface EditorState {
   /// True while the Assets-grid marquee is sweeping; gates the details overlay so
   /// it opens once on release instead of flickering per crossed tile.
   assetMarqueeActive: boolean;
+  /// True while the pointer is over the Assets panel. Arbitrates the mouse side
+  /// buttons: when set, back/forward drive the Assets folder history; otherwise they
+  /// drive cross-tab navigation.
+  assetsPanelHovered: boolean;
+  /// The Assets panel's folder back/forward, registered while it is mounted so the
+  /// central mouse dispatcher can drive it without owning the panel's local history.
+  assetsFolderNav: AssetsFolderNav | null;
   viewTabs: ViewTab[];
+  /// The main-tab id under the pointer, or null. Drives the "close hovered tab" mouse
+  /// command; set by the titlebar tab strip on enter/leave.
+  hoveredTabId: string | null;
   activeViewTabId: string;
+  /// The tab that was active immediately before `activeViewTabId`. Closing the active
+  /// tab returns here when it is still open; otherwise it falls back to the left
+  /// neighbour. Not an MRU walk — only the single previous tab is consulted.
+  previousActiveTabId: string | null;
+  /// Browser-style back/forward across tabs, driven by the mouse side buttons; reopens
+  /// a tab that was closed since it was last visited.
+  tabHistory: TabNavHistory;
   /// One dock-layout tree PER main-tab kind (Scene, asset editor). The two kinds carry
   /// disjoint `DockPanelId` spaces, so a panel can never resolve into the other island's
   /// tree — the structural no-cross-main-tab guarantee. Region emptiness (a leaf's
@@ -341,10 +403,15 @@ export interface EditorState {
   /// Rewrite selected folder paths through a folder move (prefix rename).
   rewriteSelectedFolderPaths(rewrite: (path: string) => string): void;
   setAssetMarqueeActive(assetMarqueeActive: boolean): void;
+  setAssetsPanelHovered(assetsPanelHovered: boolean): void;
+  setAssetsFolderNav(assetsFolderNav: AssetsFolderNav | null): void;
+  setHoveredTabId(hoveredTabId: string | null): void;
   /// Open (or focus) the image/texture viewer for a texture asset.
   openImageViewerTab(asset: AssetEntry): void;
   /// Open (or focus) the Flame graph main tab.
   openFlameTab(): void;
+  /// Open (or focus) the asset Store main tab.
+  openStoreTab(): void;
   /// Open (or focus) the node-graph editor for a material as a main tab.
   openMaterialGraphTab(materialId: string): void;
   /// Open (or focus) the asset editor for a model, keyed by its resolved container uuid. The caller
@@ -357,6 +424,10 @@ export interface EditorState {
   closeViewTab(id: string): void;
   setActiveViewTab(id: string): void;
   moveViewTab(id: string, index: number): void;
+  /// Step through the cross-tab navigation history (mouse back/forward): -1 is back, +1
+  /// is forward. A target tab that was closed is reopened from its snapshot; a no-op past
+  /// either end.
+  navigateTabHistory(step: -1 | 1): void;
   /// Focus-or-open a panel: activate it if already open, else resolve a leaf
   /// (last-location ⇒ default ⇒ first non-locked ⇒ a fresh leaf) and insert it.
   openPanel(id: DockPanelId): void;
@@ -477,8 +548,13 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectedFolderPaths: new Set<string>(),
   assetSelectionAnchor: null,
   assetMarqueeActive: false,
-  viewTabs: [{ id: "scene", kind: "scene", title: "Scene", closable: false }],
+  assetsPanelHovered: false,
+  assetsFolderNav: null,
+  viewTabs: [SCENE_TAB],
+  hoveredTabId: null,
   activeViewTabId: "scene",
+  previousActiveTabId: null,
+  tabHistory: { entries: [SCENE_TAB], cursor: 0 },
   dockLayouts: defaultDockLayouts(),
   lastLocation: {},
   environment: null,
@@ -776,64 +852,67 @@ export const useEditorStore = create<EditorState>((set) => ({
       return changed ? { selectedFolderPaths: next } : {};
     }),
   setAssetMarqueeActive: (assetMarqueeActive) => set({ assetMarqueeActive }),
+  setAssetsPanelHovered: (assetsPanelHovered) => set({ assetsPanelHovered }),
+  setAssetsFolderNav: (assetsFolderNav) => set({ assetsFolderNav }),
+  setHoveredTabId: (hoveredTabId) => set({ hoveredTabId }),
   openImageViewerTab: (asset) =>
     set((s) => {
       const id = `imageViewer:${asset.id}`;
-      const existing = s.viewTabs.some((tab) => tab.id === id);
-      return {
-        activeViewTabId: id,
-        viewTabs: existing
-          ? s.viewTabs
-          : [
-              ...s.viewTabs,
-              {
-                id,
-                kind: "imageViewer",
-                assetId: asset.id,
-                title: asset.name,
-                assetType: asset.type,
-                closable: true,
-              },
-            ],
+      const tab: ViewTab = {
+        id,
+        kind: "imageViewer",
+        assetId: asset.id,
+        title: asset.name,
+        assetType: asset.type,
+        closable: true,
       };
+      const existing = s.viewTabs.some((t) => t.id === id);
+      return recordActivation(s, { viewTabs: existing ? s.viewTabs : [...s.viewTabs, tab] }, id);
     }),
   openFlameTab: () =>
     set((s) => {
-      const existing = s.viewTabs.some((tab) => tab.id === "flamegraph");
-      return {
-        activeViewTabId: "flamegraph",
-        viewTabs: existing
-          ? s.viewTabs
-          : [
-              ...s.viewTabs,
-              { id: "flamegraph", kind: "flamegraph", title: "Flame graph", closable: true },
-            ],
+      const tab: ViewTab = {
+        id: "flamegraph",
+        kind: "flamegraph",
+        title: "Flame graph",
+        closable: true,
       };
+      const existing = s.viewTabs.some((t) => t.id === "flamegraph");
+      return recordActivation(
+        s,
+        { viewTabs: existing ? s.viewTabs : [...s.viewTabs, tab] },
+        "flamegraph",
+      );
+    }),
+  openStoreTab: () =>
+    set((s) => {
+      const tab: ViewTab = { id: "store", kind: "store", title: "Store", closable: true };
+      const existing = s.viewTabs.some((t) => t.id === "store");
+      return recordActivation(
+        s,
+        { viewTabs: existing ? s.viewTabs : [...s.viewTabs, tab] },
+        "store",
+      );
     }),
   openMaterialGraphTab: (materialId) =>
     set((s) => {
       const id = `materialGraph:${materialId}`;
-      const existing = s.viewTabs.some((tab) => tab.id === id);
-      return {
-        activeViewTabId: id,
-        viewTabs: existing
-          ? s.viewTabs
-          : [
-              ...s.viewTabs,
-              { id, kind: "materialGraph", materialId, title: "Material graph", closable: true },
-            ],
+      const tab: ViewTab = {
+        id,
+        kind: "materialGraph",
+        materialId,
+        title: "Material graph",
+        closable: true,
       };
+      const existing = s.viewTabs.some((t) => t.id === id);
+      return recordActivation(s, { viewTabs: existing ? s.viewTabs : [...s.viewTabs, tab] }, id);
     }),
   openAssetEditorTab: (assetId, title) =>
     set((s) => {
       const id = `assetEditor:${assetId}`;
-      const existing = s.viewTabs.some((tab) => tab.id === id);
-      return {
-        activeViewTabId: id,
-        viewTabs: existing
-          ? s.viewTabs
-          : [...s.viewTabs, { id, kind: "assetEditor", assetId, title, closable: true }],
-      };
+      const tab: ViewTab = { id, kind: "assetEditor", assetId, title, closable: true };
+      const existing = s.viewTabs.some((t) => t.id === id);
+      return recordActivation(s, { viewTabs: existing ? s.viewTabs : [...s.viewTabs, tab] }, id);
     }),
   openAssetEditorForAsset: (assetId, fallbackName) => {
     void (async () => {
@@ -854,20 +933,46 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
       const index = s.viewTabs.findIndex((tab) => tab.id === id);
       const viewTabs = s.viewTabs.filter((tab) => tab.id !== id);
-      const activeViewTabId =
-        s.activeViewTabId === id
-          ? (viewTabs[Math.max(0, index - 1)]?.id ?? "scene")
-          : s.activeViewTabId;
-      const patch: Partial<EditorState> = { viewTabs, activeViewTabId };
+      const patch: Partial<EditorState> = { viewTabs };
       if (id in s.historyByTab) {
         const historyByTab = { ...s.historyByTab };
         delete historyByTab[id];
         patch.historyByTab = historyByTab;
       }
-      return patch;
+      if (s.activeViewTabId !== id) {
+        // A background tab closed: the active tab is unchanged. Forget it as the
+        // remembered previous tab if that is what it was.
+        return {
+          ...patch,
+          previousActiveTabId: s.previousActiveTabId === id ? null : s.previousActiveTabId,
+        };
+      }
+      // The active tab closed: land on the last active tab if it is still open,
+      // otherwise the tab to the left (the historical fallback), else Scene.
+      const previous = s.previousActiveTabId;
+      const target =
+        previous && previous !== id && viewTabs.some((tab) => tab.id === previous)
+          ? previous
+          : (viewTabs[Math.max(0, index - 1)]?.id ?? "scene");
+      return recordActivation(s, patch, target);
     }),
   setActiveViewTab: (id) =>
-    set((s) => (s.viewTabs.some((tab) => tab.id === id) ? { activeViewTabId: id } : {})),
+    set((s) => (s.viewTabs.some((tab) => tab.id === id) ? recordActivation(s, {}, id) : {})),
+  navigateTabHistory: (step) =>
+    set((s) => {
+      const cursor = s.tabHistory.cursor + step;
+      if (cursor < 0 || cursor >= s.tabHistory.entries.length) {
+        return {};
+      }
+      const entry = s.tabHistory.entries[cursor];
+      const reopened = !s.viewTabs.some((tab) => tab.id === entry.id);
+      return {
+        activeViewTabId: entry.id,
+        viewTabs: reopened ? [...s.viewTabs, entry] : s.viewTabs,
+        tabHistory: { ...s.tabHistory, cursor },
+        previousActiveTabId: s.activeViewTabId,
+      };
+    }),
   moveViewTab: (id, index) =>
     set((s) => {
       if (id === "scene") {
@@ -1095,8 +1200,10 @@ export const useEditorStore = create<EditorState>((set) => ({
       selectedFolderPaths: new Set<string>(),
       assetSelectionAnchor: null,
       assetMarqueeActive: false,
-      viewTabs: [{ id: "scene", kind: "scene", title: "Scene", closable: false }],
+      viewTabs: [SCENE_TAB],
       activeViewTabId: "scene",
+      previousActiveTabId: null,
+      tabHistory: { entries: [SCENE_TAB], cursor: 0 },
       environment: null,
       // Force the reconcile poll's version diff to fire on the next tick so the
       // hierarchy/inspector/assets/env all re-fetch against the loaded scene.
