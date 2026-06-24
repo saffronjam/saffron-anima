@@ -24,7 +24,7 @@ use glam::Vec3;
 
 use saffron_core::Uuid;
 use saffron_physics::World;
-use saffron_scene::Scene;
+use saffron_scene::{MorphComponent, MorphWeightOverride, Scene};
 use saffron_script::{ScriptHostBridge, ScriptRagdollState, ScriptRayHit};
 
 /// The live play physics world, shared between the session and the bridge (`None` before
@@ -118,6 +118,40 @@ impl ScriptHostBridge for RuntimeScriptBridge {
     fn set_velocity(&self, entity: Uuid, velocity: Vec3) {
         if let Some(world) = self.physics.borrow_mut().as_mut() {
             world.set_linear_velocity(entity, velocity);
+        }
+    }
+
+    fn set_morph_weights(&self, entity: Uuid, weights: &[f32]) {
+        let mut scene = self.scene.borrow_mut();
+        let Some(e) = scene.find_entity_by_uuid(entity) else {
+            return;
+        };
+        if !scene.valid(e) {
+            return;
+        }
+        // The morph mesh is the entity itself or its animatable descendant (the spawn
+        // collapses a morph mesh onto the rig/container descendant).
+        let target = if scene.has_component::<MorphComponent>(e) {
+            e
+        } else {
+            scene.animatable_descendant(e)
+        };
+        // A non-morph entity or a length mismatch is a silent no-op (the bridge contract).
+        let Ok(count) = scene.with_component::<MorphComponent, _>(target, |c| c.weights.len())
+        else {
+            return;
+        };
+        if weights.len() != count {
+            return;
+        }
+        if scene.has_component::<MorphWeightOverride>(target) {
+            let _ = scene.with_component_mut::<MorphWeightOverride, _>(target, |o| {
+                o.weights = weights.to_vec();
+            });
+        } else {
+            let _ = scene.with_component_mut::<MorphComponent, _>(target, |c| {
+                c.weights = weights.to_vec();
+            });
         }
     }
 
