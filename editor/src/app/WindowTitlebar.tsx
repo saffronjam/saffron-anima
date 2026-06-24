@@ -11,6 +11,7 @@ import {
   Maximize2,
   Minus,
   Square,
+  Store,
   Workflow,
   X,
 } from "lucide-react";
@@ -30,6 +31,10 @@ export function WindowTitlebar() {
   const setActiveViewTab = useEditorStore((s) => s.setActiveViewTab);
   const closeViewTab = useEditorStore((s) => s.closeViewTab);
   const moveViewTab = useEditorStore((s) => s.moveViewTab);
+  const setHoveredTabId = useEditorStore((s) => s.setHoveredTabId);
+
+  // Drop the hovered-tab target when the strip unmounts so a stale id never lingers.
+  useEffect(() => () => setHoveredTabId(null), [setHoveredTabId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,6 +109,7 @@ export function WindowTitlebar() {
         containerProps={{ "data-titlebar-control": "true" }}
         onActivate={(id) => setActiveViewTab(id)}
         onClose={closeViewTab}
+        onTabHover={setHoveredTabId}
         drag={{ domain: "view", pinnedIds: ["scene"], onReorder: moveViewTab }}
       />
       <div className="min-w-0 flex-1 self-stretch" data-tauri-drag-region />
@@ -141,6 +147,9 @@ function tabIcon(tab: ViewTab): LucideIcon {
   }
   if (tab.kind === "assetEditor") {
     return Box;
+  }
+  if (tab.kind === "store") {
+    return Store;
   }
   if (tab.assetType === "texture") {
     return ImageIcon;

@@ -26,6 +26,9 @@ export interface TabStripProps {
   size: "main" | "dock";
   onActivate(id: string): void;
   onClose(id: string): void;
+  /// Called with the tab id the pointer enters and null when it leaves, so a mouse
+  /// command (e.g. middle-click close) can target the hovered tab.
+  onTabHover?(id: string | null): void;
   drag: Omit<UseTabStripDragOptions, "onActivate">;
   className?: string;
   /// Extra attributes for the strip container (e.g. `data-titlebar-control` on the titlebar,
@@ -78,6 +81,7 @@ export function TabStrip({
   size,
   onActivate,
   onClose,
+  onTabHover,
   drag,
   className,
   containerProps,
@@ -127,6 +131,8 @@ export function TabStrip({
                 onActivate(item.id);
               }
             }}
+            onPointerEnter={() => onTabHover?.(item.id)}
+            onPointerLeave={() => onTabHover?.(null)}
             {...api.handlersFor(item.id)}
           >
             {Icon ? (
