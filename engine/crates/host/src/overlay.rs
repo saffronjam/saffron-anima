@@ -1633,6 +1633,7 @@ mod tests {
             &self,
             _mesh: &saffron_geometry::Mesh,
             _skin: &[saffron_geometry::VertexSkin],
+            _morph: Option<&saffron_geometry::MorphData>,
         ) -> saffron_rendering::Result<std::sync::Arc<saffron_rendering::GpuMesh>> {
             unreachable!("an empty catalog never reaches the uploader")
         }

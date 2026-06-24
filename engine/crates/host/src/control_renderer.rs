@@ -357,8 +357,9 @@ impl GpuUploader for HostThumbnailGpu<'_> {
         &self,
         mesh: &Mesh,
         skin: &[VertexSkin],
+        morph: Option<&saffron_geometry::MorphData>,
     ) -> saffron_rendering::Result<Arc<GpuMesh>> {
-        self.uploader.upload_mesh(mesh, skin)
+        self.uploader.upload_mesh(mesh, skin, morph)
     }
 
     fn upload_texture(
@@ -521,8 +522,9 @@ impl GpuUploader for WorkerThumbnailGpu {
         &self,
         mesh: &Mesh,
         skin: &[VertexSkin],
+        morph: Option<&saffron_geometry::MorphData>,
     ) -> saffron_rendering::Result<Arc<GpuMesh>> {
-        self.uploader.upload_mesh(mesh, skin)
+        self.uploader.upload_mesh(mesh, skin, morph)
     }
 
     fn upload_texture(
