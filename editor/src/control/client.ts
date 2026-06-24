@@ -46,6 +46,7 @@ import type {
   PlayStateResult,
   ProfilerModeResult,
   RenderPassTimingsDto,
+  RenderQualityResult,
   RenderStats,
   AssetPreviewOptionsResult,
   AssetModelResult,
@@ -721,17 +722,23 @@ export const client = {
   setIbl(on: boolean): Promise<{ ibl: boolean }> {
     return call("set-ibl", { enabled: on });
   },
-  /// Screen-space ambient occlusion. Echoes `{ ssao }`.
-  setSsao(on: boolean): Promise<{ ssao: boolean }> {
-    return call("set-ssao", { enabled: on });
+  /// The render-quality tier — the single knob for the SSGI / GTAO / contact-shadow stack.
+  /// Echoes the resolved per-effect state.
+  setRenderQuality(tier: string): Promise<RenderQualityResult> {
+    return call("set-render-quality", { tier });
   },
-  /// Contact shadows. Echoes `{ contactShadows }`.
-  setContactShadows(on: boolean): Promise<{ contactShadows: boolean }> {
-    return call("set-contact-shadows", { enabled: on });
+  /// The active render-quality tier + resolved per-effect state.
+  getRenderQuality(): Promise<RenderQualityResult> {
+    return call("get-render-quality", {});
   },
-  /// Screen-space global illumination. Echoes `{ ssgi }`.
-  setSsgi(on: boolean): Promise<{ ssgi: boolean }> {
-    return call("set-ssgi", { enabled: on });
+  /// Reports the editor viewport visibility so the host idles a hidden view. `occluded` suppresses
+  /// rendering entirely; `unfocused`/`focused` render on demand.
+  setViewportPowerState(state: "focused" | "unfocused" | "occluded"): Promise<{ state: string }> {
+    return call("set-viewport-power-state", { state });
+  },
+  /// The HDR→display tonemap operator. Echoes `{ mode }`.
+  setTonemap(mode: "reinhard" | "aces" | "agx" | "pbr-neutral"): Promise<{ mode: string }> {
+    return call("set-tonemap", { mode });
   },
   /// Shadow pass. Echoes `{ shadows }`.
   setShadows(on: boolean): Promise<{ shadows: boolean }> {
@@ -754,6 +761,15 @@ export const client = {
   /// echoes `{ restir }` otherwise.
   setRestir(on: boolean): Promise<{ restir: boolean }> {
     return call("set-restir", { enabled: on });
+  },
+  /// Screen-space reflections (sharp mirror reflections on smooth surfaces).
+  setSsr(on: boolean): Promise<{ ssr: boolean }> {
+    return call("set-ssr", { enabled: on });
+  },
+  /// Ray-traced reflections (off-screen-aware). Rejects with the typed error
+  /// when ray tracing is unsupported; echoes `{ rtReflections }` otherwise.
+  setRtReflections(on: boolean): Promise<{ rtReflections: boolean }> {
+    return call("set-rt-reflections", { enabled: on });
   },
   /// Tonemap exposure in stops (exp2). This is the EFFECTIVE exposure; the env's
   /// `exposure` field is reserved on the wire. Echoes `{ exposureEv }`.
@@ -837,6 +853,12 @@ export const client = {
   /// surface detaches; its ring retains the last frame, so unparking re-shows it instantly.
   setViewportParked(view: ViewId, parked: boolean): Promise<void> {
     return invoke<void>("set_viewport_parked", { view, parked });
+  },
+  /// The true monitor refresh (Hz) of the viewport's output, from the Wayland presenter's
+  /// presentation feedback — the WebKitGTK webview's rAF is pinned to ~60 Hz and can't see it.
+  /// `0` until the first presented frame reports it.
+  viewportRefreshHz(): Promise<number> {
+    return invoke<number>("viewport_refresh_hz");
   },
   quitEngine(): Promise<void> {
     return invoke<void>("quit_engine");
