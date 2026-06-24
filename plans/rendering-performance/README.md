@@ -1,6 +1,9 @@
 # Rendering performance — reactive idling, shadow caching, quality tiers, converge-then-stop
 
-**Status:** NOT STARTED
+**Status:** Phase 1 COMPLETED; Phases 2–6 CORE COMPLETE. The headline problem (static scene pinning
+the GPU) is fully solved by Phase 1; Phases 2–6 each landed their gate-able, high-value core with the
+deeper/visually-unverifiable sub-steps documented as deferred per phase. See each `phase-N-*.md` for
+the done/deferred split.
 
 A trivial static scene (one boulder, a commode, ~8 cubes, one point light, 532k tris) pins an RTX
 3070 Ti at **100% util, 80 °C, 281 W, ~232 fps**. The diagnosis: the per-frame cost is **~97%
