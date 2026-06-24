@@ -7,9 +7,10 @@ weight = 5
 
 A headless run is an instance of the loop that terminates on its own, without a person at the
 window, so a script can boot the engine, render a known number of frames, and exit. A normal
-run continues until the window closes, which automated verification cannot wait for. Two
-environment variables bound and pace the loop; capture of the result is a separate, control-plane
-concern.
+run continues until the window closes, which automated verification cannot wait for. One
+environment variable bounds the loop (`SAFFRON_EXIT_AFTER_FRAMES`); the render *rate* is not an
+env knob — the loop paces itself reactively (see [the main loop](../main-loop-and-run/)). Capture
+of the result is a separate, control-plane concern.
 
 ## Two host modes
 
@@ -26,33 +27,31 @@ like `10x` is logged and ignored rather than parsed as its leading digits. A lim
 or malformed) means run forever.
 
 ```rust
-fn parse_strict_u64(text: &str, reject_zero: bool) -> Option<u64> {
-    match text.parse::<u64>() {
-        Ok(value) if !(reject_zero && value == 0) => Some(value),
-        _ => None,
-    }
+fn parse_strict_u64(text: &str) -> Option<u64> {
+    text.parse::<u64>().ok()
 }
 ```
 
 When `frame_count` reaches the limit, `step_frame` sets `app.running = false` and the loop exits
 through the normal teardown path: the same `wait_gpu_idle` → `on_detach` → `on_exit` ordering as
 a manual close. A frame counts whether or not it rendered, so a minimized window (a zero viewport
-axis) still advances the count even though its frame body is skipped.
+axis) — or a reactive idle iteration that skipped its render — still advances the count, so a
+headless run always terminates on schedule.
 
 ## Pace the loop
 
-`SAFFRON_MAX_FPS=N` caps the loop rate. `max_fps_from_env` parses it strictly and rejects a
-literal `0` (no cap). `pace_loop` sleeps to the next-frame deadline each iteration, catching up
-without accumulating debt after a slow frame, so an unbounded headless run does not spin a core
-flat out. Both knobs are read once into `LoopLimits` and threaded through `step_frame`, so the
-loop body never touches the environment itself — which keeps the loop's unit tests free of
-process-global env mutation.
+There is no FPS-cap env knob. The loop paces itself reactively in `pace_iteration`: a rendered
+frame sleeps to the renderer's `target_fps` ([`FrameHost::pace_target_fps`], the perf-config field
+the editor drives over the control plane), and an idle iteration — one the `RedrawController`
+verdict skipped because the scene is static — sleeps one short poll interval so the loop keeps
+draining the control socket without spinning a core or waking the GPU. See
+[the main loop](../main-loop-and-run/) for the reactive verdict itself.
 
 ```mermaid
 flowchart TD
     S[step_frame] --> C{frame_count >= frame_limit?}
     C -- yes --> R["running = false"]
-    C -- no --> P[pace_loop honors SAFFRON_MAX_FPS]
+    C -- no --> P["pace_iteration (target_fps, or idle poll)"]
     R --> WI[wait_gpu_idle]
     WI --> D[on_detach → on_exit]
 ```
@@ -72,9 +71,8 @@ mechanics.
 | What | File | Symbols |
 |---|---|---|
 | Frame-limit parse | `app/src/lib.rs` | `frame_limit_from_env`, `parse_strict_u64` |
-| FPS cap parse | `app/src/lib.rs` | `max_fps_from_env`, `LoopLimits` |
-| Counting + exit | `app/src/lib.rs` | `step_frame` — `frame_count`, `frame_limit` |
-| Pacing | `app/src/lib.rs` | `pace_loop` |
+| Counting + exit | `app/src/lib.rs` | `step_frame` — `frame_count`, `frame_limit`, `LoopLimits` |
+| Reactive pacing | `app/src/lib.rs` | `pace_iteration`, `RedrawController`, `FrameHost::pace_target_fps` |
 | Headless mode | `app/src/lib.rs` | `HostMode::Headless`, `run_inner` |
 | Viewport / window capture | `rendering/src/renderer.rs` | `capture_viewport`, `request_window_capture` |
 | PNG encode | `rendering/src/thumbnail.rs` | `write_png_file`, `encode_to_png`, `format_pixel_bytes` |
