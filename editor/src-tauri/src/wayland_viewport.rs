@@ -4,18 +4,18 @@
 // GTK3's ~60Hz paint loop. Uses GTK's own wl_display connection (system libwayland
 // backend) with a private event queue, so it coexists with GDK's dispatching.
 
-use std::ffi::{c_void, CString};
+use std::ffi::{CString, c_void};
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use glib::translate::ToGlibPtr;
 use gtk::glib;
 use gtk::prelude::*;
-use webkit2gtk::WebViewExt;
+use tauri::{Emitter, Manager};
 use wayland_backend::client::{Backend, ObjectId};
 use wayland_client::protocol::{
     wl_buffer::{self, WlBuffer},
@@ -33,7 +33,10 @@ use wayland_protocols::wp::presentation_time::client::{
     wp_presentation::{self, WpPresentation},
     wp_presentation_feedback::{self, Kind as FeedbackKind, WpPresentationFeedback},
 };
-use wayland_protocols::wp::viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter};
+use wayland_protocols::wp::viewporter::client::{
+    wp_viewport::WpViewport, wp_viewporter::WpViewporter,
+};
+use webkit2gtk::WebViewExt;
 
 const SHM_MAGIC: u32 = 0x5346_5632; // "SFV2"
 const SHM_HEADER_BYTES: usize = 32;
@@ -149,7 +152,11 @@ impl PresentationStats {
                 names.push(name);
             }
         }
-        if names.is_empty() { "none".to_string() } else { names.join("+") }
+        if names.is_empty() {
+            "none".to_string()
+        } else {
+            names.join("+")
+        }
     }
 
     fn reset_window(&mut self) {
@@ -173,10 +180,19 @@ struct State {
 
 impl Dispatch<WlRegistry, ()> for State {
     fn event(
-        state: &mut Self, _: &WlRegistry, event: wl_registry::Event, _: &(), _: &Connection,
+        state: &mut Self,
+        _: &WlRegistry,
+        event: wl_registry::Event,
+        _: &(),
+        _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global { name, interface, version } = event {
+        if let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        {
             state.globals.push((name, interface, version));
         }
     }
@@ -184,7 +200,11 @@ impl Dispatch<WlRegistry, ()> for State {
 
 impl Dispatch<WlCallback, usize> for State {
     fn event(
-        state: &mut Self, _: &WlCallback, event: wl_callback::Event, view: &usize, _: &Connection,
+        state: &mut Self,
+        _: &WlCallback,
+        event: wl_callback::Event,
+        view: &usize,
+        _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         if let wl_callback::Event::Done { .. } = event {
@@ -197,7 +217,12 @@ impl Dispatch<WlCallback, usize> for State {
 
 impl Dispatch<WlBuffer, ()> for State {
     fn event(
-        _: &mut Self, _: &WlBuffer, _: wl_buffer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>,
+        _: &mut Self,
+        _: &WlBuffer,
+        _: wl_buffer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
     ) {
         // Release events: the 4-slot ring makes writer/reader collisions unlikely; v1
         // accepts the (cosmetic) risk instead of cross-process backpressure.
@@ -205,12 +230,24 @@ impl Dispatch<WlBuffer, ()> for State {
 }
 
 impl Dispatch<WlShm, ()> for State {
-    fn event(_: &mut Self, _: &WlShm, _: wl_shm::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WlShm,
+        _: wl_shm::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WpPresentation, ()> for State {
     fn event(
-        _: &mut Self, _: &WpPresentation, event: wp_presentation::Event, _: &(), _: &Connection,
+        _: &mut Self,
+        _: &WpPresentation,
+        event: wp_presentation::Event,
+        _: &(),
+        _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         if let wp_presentation::Event::ClockId { clk_id } = event {
@@ -221,12 +258,20 @@ impl Dispatch<WpPresentation, ()> for State {
 
 impl Dispatch<WpPresentationFeedback, ()> for State {
     fn event(
-        state: &mut Self, _: &WpPresentationFeedback, event: wp_presentation_feedback::Event,
-        _: &(), _: &Connection, _: &QueueHandle<Self>,
+        state: &mut Self,
+        _: &WpPresentationFeedback,
+        event: wp_presentation_feedback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
     ) {
         match event {
             wp_presentation_feedback::Event::Presented {
-                refresh, seq_hi, seq_lo, flags, ..
+                refresh,
+                seq_hi,
+                seq_lo,
+                flags,
+                ..
             } => {
                 let stats = &mut state.stats;
                 let seq = ((seq_hi as u64) << 32) | seq_lo as u64;
@@ -260,7 +305,10 @@ wayland_client::delegate_noop!(State: ignore WpViewport);
 /// toplevel's wl_surface exists. Must run on the GTK main thread; requires a Wayland session.
 /// Each view binds its own shm segment (`scene_shm` / `asset_shm`) and shared state.
 pub fn install(
-    window: &tauri::WebviewWindow, scene_shm: String, asset_shm: String, viewports: &Viewports,
+    window: &tauri::WebviewWindow,
+    scene_shm: String,
+    asset_shm: String,
+    viewports: &Viewports,
 ) -> Result<(), String> {
     let scene_shared = Arc::clone(viewports.view(View::Scene));
     let asset_shared = Arc::clone(viewports.view(View::AssetPreview));
@@ -271,8 +319,12 @@ pub fn install(
         return Err("the viewport presenter requires a Wayland session".to_string());
     }
 
-    let gtk_window = window.gtk_window().map_err(|err| format!("gtk_window: {err}"))?;
-    let vbox = window.default_vbox().map_err(|err| format!("default_vbox: {err}"))?;
+    let gtk_window = window
+        .gtk_window()
+        .map_err(|err| format!("gtk_window: {err}"))?;
+    let vbox = window
+        .default_vbox()
+        .map_err(|err| format!("default_vbox: {err}"))?;
     let webview = vbox
         .children()
         .into_iter()
@@ -284,7 +336,33 @@ pub fn install(
     gtk_window.set_app_paintable(true);
     match webview.clone().downcast::<webkit2gtk::WebView>() {
         Ok(view) => view.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0)),
-        Err(_) => tracing::warn!(target: "viewport", "webview is not a webkit2gtk::WebView; transparency may not apply"),
+        Err(_) => {
+            tracing::warn!(target: "viewport", "webview is not a webkit2gtk::WebView; transparency may not apply")
+        }
+    }
+
+    // WebKitGTK never hands the mouse side buttons (GDK 8 = back, 9 = forward) to the page
+    // as DOM events — it handles them in its widget `event` vfunc to drive its own history
+    // navigation, returning before the specific `button-press-event` signal is ever emitted.
+    // So we hook the generic `event` signal (user handlers run before that vfunc), forward
+    // each side button press to the frontend as a `mouse-button` event (the keybinding
+    // registry decides the action), and stop WebKit's own handling. All other events proceed
+    // untouched so normal clicking (and middle-click, which reaches the DOM) still works.
+    {
+        let app_handle = window.app_handle().clone();
+        webview.add_events(gdk::EventMask::BUTTON_PRESS_MASK);
+        webview.connect_event(move |_widget, event| {
+            if event.event_type() != gdk::EventType::ButtonPress {
+                return glib::Propagation::Proceed;
+            }
+            match event.button() {
+                Some(button @ (8 | 9)) => {
+                    let _ = app_handle.emit("mouse-button", button);
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
+            }
+        });
     }
 
     // The opaque backdrop lives BELOW the toplevel as its own subsurface (see run()) —
@@ -362,7 +440,10 @@ pub fn install(
         let display_addr = display_ptr as usize;
         let surface_addr = surface_ptr as usize;
         thread::spawn(move || {
-            let views = [(View::Scene, scene_shm, scene_shared), (View::AssetPreview, asset_shm, asset_shared)];
+            let views = [
+                (View::Scene, scene_shm, scene_shared),
+                (View::AssetPreview, asset_shm, asset_shared),
+            ];
             if let Err(err) = run(display_addr, surface_addr, views) {
                 tracing::warn!(target: "viewport", "wayland presenter failed: {err}");
             }
@@ -376,7 +457,11 @@ pub fn install(
         glib::timeout_add_local(Duration::from_millis(250), move || {
             redraw_window.queue_draw();
             redraws += 1;
-            if redraws >= 20 { glib::ControlFlow::Break } else { glib::ControlFlow::Continue }
+            if redraws >= 20 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
         });
         glib::ControlFlow::Break
     });
@@ -415,7 +500,9 @@ struct ViewSurface {
 }
 
 fn run(
-    display_addr: usize, parent_addr: usize, views: [(View, String, Arc<ViewportShared>); 2],
+    display_addr: usize,
+    parent_addr: usize,
+    views: [(View, String, Arc<ViewportShared>); 2],
 ) -> Result<(), String> {
     let stats_enabled = std::env::var_os("SAFFRON_VIEWPORT_STATS").is_some();
     let backend = unsafe { Backend::from_foreign_display(display_addr as *mut _) };
@@ -425,10 +512,16 @@ fn run(
 
     let registry = conn.display().get_registry(&qh, ());
     let mut state = State::default();
-    queue.roundtrip(&mut state).map_err(|err| format!("registry roundtrip: {err}"))?;
+    queue
+        .roundtrip(&mut state)
+        .map_err(|err| format!("registry roundtrip: {err}"))?;
 
     let find = |wanted: &str| -> Option<(u32, u32)> {
-        state.globals.iter().find(|(_, name, _)| name == wanted).map(|(id, _, ver)| (*id, *ver))
+        state
+            .globals
+            .iter()
+            .find(|(_, name, _)| name == wanted)
+            .map(|(id, _, ver)| (*id, *ver))
     };
     let (compositor_id, compositor_ver) = find("wl_compositor").ok_or("no wl_compositor global")?;
     let (subcompositor_id, _) = find("wl_subcompositor").ok_or("no wl_subcompositor global")?;
@@ -573,7 +666,15 @@ fn run(
         let mut committed = false;
         let mut all_parked = true;
         for vs in &mut surfaces {
-            if step_view(vs, &mut state, &conn, &mut queue, &qh, &wl_shm, &presentation) {
+            if step_view(
+                vs,
+                &mut state,
+                &conn,
+                &mut queue,
+                &qh,
+                &wl_shm,
+                &presentation,
+            ) {
                 committed = true;
             }
             if !vs.parked {
@@ -615,7 +716,11 @@ fn run(
         // committed). When idle, a short rest if a view is still live (waiting on the next
         // frame), a longer one when both panes are parked.
         if !committed {
-            thread::sleep(if all_parked { Duration::from_millis(20) } else { Duration::from_micros(500) });
+            thread::sleep(if all_parked {
+                Duration::from_millis(20)
+            } else {
+                Duration::from_micros(500)
+            });
         }
     }
 }
@@ -624,8 +729,13 @@ fn run(
 /// per its shared flag, and attaches+commits the next seqlock frame if one arrived and the
 /// view is unthrottled. Returns true when this view committed a new frame this tick.
 fn step_view(
-    vs: &mut ViewSurface, state: &mut State, conn: &Connection, queue: &mut wayland_client::EventQueue<State>,
-    qh: &QueueHandle<State>, wl_shm: &WlShm, presentation: &Option<WpPresentation>,
+    vs: &mut ViewSurface,
+    state: &mut State,
+    conn: &Connection,
+    queue: &mut wayland_client::EventQueue<State>,
+    qh: &QueueHandle<State>,
+    wl_shm: &WlShm,
+    presentation: &Option<WpPresentation>,
 ) -> bool {
     let pending_slot = vs.view.index();
 
@@ -740,8 +850,10 @@ fn step_view(
     let slots = unsafe { ptr::read_volatile(vs.header.add(4)) }.max(1);
     let capacity = unsafe { ptr::read_volatile(vs.header.add(5)) } as usize;
     let pixel_bytes = (width as usize) * (height as usize) * 4;
-    if pixel_bytes == 0 || capacity == 0 ||
-        SHM_HEADER_BYTES + (slots as usize) * capacity > vs.total || pixel_bytes > capacity
+    if pixel_bytes == 0
+        || capacity == 0
+        || SHM_HEADER_BYTES + (slots as usize) * capacity > vs.total
+        || pixel_bytes > capacity
     {
         return false;
     }
@@ -802,7 +914,14 @@ fn backdrop_pixel_fd() -> Option<OwnedFd> {
             libc::close(fd);
             return None;
         }
-        let base = libc::mmap(ptr::null_mut(), 4, libc::PROT_WRITE, libc::MAP_SHARED, fd, 0);
+        let base = libc::mmap(
+            ptr::null_mut(),
+            4,
+            libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
         if base == libc::MAP_FAILED {
             libc::close(fd);
             return None;
@@ -826,12 +945,24 @@ fn open_shm(name: &std::ffi::CStr) -> Option<(OwnedFd, *const u8, usize, u64)> {
             return None;
         }
         let size = st.st_size as usize;
-        let base = libc::mmap(ptr::null_mut(), size, libc::PROT_READ, libc::MAP_SHARED, fd, 0);
+        let base = libc::mmap(
+            ptr::null_mut(),
+            size,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
         if base == libc::MAP_FAILED {
             libc::close(fd);
             return None;
         }
-        Some((OwnedFd::from_raw_fd(fd), base as *const u8, size, st.st_ino as u64))
+        Some((
+            OwnedFd::from_raw_fd(fd),
+            base as *const u8,
+            size,
+            st.st_ino as u64,
+        ))
     }
 }
 
@@ -846,6 +977,10 @@ fn stat_shm(name: &std::ffi::CStr) -> Option<(u64, usize)> {
         let mut st: libc::stat = std::mem::zeroed();
         let ok = libc::fstat(fd, &mut st) == 0;
         libc::close(fd);
-        if ok { Some((st.st_ino as u64, st.st_size as usize)) } else { None }
+        if ok {
+            Some((st.st_ino as u64, st.st_size as usize))
+        } else {
+            None
+        }
     }
 }
