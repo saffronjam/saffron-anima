@@ -10,6 +10,7 @@
 
 - Improve PBR effect, seems a bit foggy.
 - Improve lighting support for transparency, opacity, and self-shadowing.
+- Performance: reactive idling, shadow caching, quality tiers, converge-then-stop → `plans/rendering-performance/` (a static scene currently pins the GPU at 100% / 281 W).
 
 ## Physics and animation
 
@@ -18,14 +19,5 @@
 ## Game systems
 
 - Research game UI and overlay authoring for health bars and HUDs, including how Unreal Engine 5 and Unity approach it.
-- Research sound and music systems, including ambient audio, spatial playback, and whether Saffron needs its own sound asset container.
 
-## Networking
-
-- Research networking architecture for server/client games and playing with friends.
-- Research replication, authority, prediction, reconciliation, and rollback models for multiplayer.
-- Research matchmaking, lobbies, hosting, NAT traversal, and deployment options for multiplayer games.
-
-## Assets and distribution
-
-- Research online asset store integration, including an in-editor browser and available/common asset sources.
+> Audio, networking, and asset-store research moved out of this list: audio → `plans/pending-ideas/audio-system.md`, networking → `plans/pending-ideas/networking-multiplayer.md`, asset store → the `plans/assets-connectors/` plan.
