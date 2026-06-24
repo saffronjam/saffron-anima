@@ -83,6 +83,8 @@ export type {
   ImportTextureResult,
   InspectResult,
   ListClipsResult,
+  ClipBindingsResult,
+  MorphWeightsResult,
   ListProbesResult,
   Material,
   Mesh,

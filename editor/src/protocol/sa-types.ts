@@ -778,6 +778,7 @@ export interface AnimationStateResult {
   wrap: string;
   speed: number;
   animationVersion: number;
+  morphWeights: number[];
 }
 
 export interface ListClipsParams {
@@ -792,7 +793,16 @@ export interface AnimationClipDto {
   id: WireUuid;
   name: string;
   duration: number;
-  tracks: number;
+  channels: AnimationChannelDto[];
+}
+
+export interface AnimationChannelDto {
+  kind: string;
+  label: string;
+  targetName: string;
+  times: number[];
+  width: number;
+  values: number[];
 }
 
 export interface PlayAnimationParams {
@@ -886,6 +896,29 @@ export interface SetFootIkParams {
   entity: WireUuid | string | number;
   enabled?: boolean;
   groundHeight?: number;
+}
+
+export interface SetMorphWeightsParams {
+  entity: unknown;
+  weights: number[];
+}
+
+export interface MorphWeightsResult {
+  weights: number[];
+  names: string[];
+}
+
+export interface GetMorphWeightsParams {
+  entity: unknown;
+}
+
+export interface ListClipBindingsParams {
+  entity: unknown;
+  clip: unknown;
+}
+
+export interface ClipBindingsResult {
+  channels: AnimationChannelDto[];
 }
 
 export interface ScriptStatusResult {
@@ -1242,6 +1275,20 @@ export interface PathParams {
   path: string;
 }
 
+export interface ImportModelParams {
+  path: string;
+  attribution?: AssetAttributionDto;
+}
+
+export interface AssetAttributionDto {
+  licenseId: string;
+  requiresAttribution: boolean;
+  licenseUrl: string;
+  author: string;
+  sourceUrl: string;
+  storeId: string;
+}
+
 export interface ImportModelResult {
   id: WireUuid;
   name: string;
@@ -1274,6 +1321,11 @@ export interface PlacementTransformDto {
   scale: Vec3;
 }
 
+export interface ImportTextureParams {
+  path: string;
+  colorspace?: string;
+}
+
 export interface ImportTextureResult {
   texture: WireUuid;
 }
@@ -1292,6 +1344,7 @@ export interface AssetEntryDto {
   container?: WireUuid;
   duration?: number;
   rigged?: boolean;
+  attribution?: AssetAttributionDto;
 }
 
 export interface ScanAssetsResult {
@@ -1537,6 +1590,7 @@ export interface MaterialAssignResult {
 export interface MaterialImportParams {
   path: string;
   name: string;
+  attribution?: AssetAttributionDto;
 }
 
 export interface MaterialImportResultDto {
@@ -1648,6 +1702,10 @@ export interface PathResult {
 
 export interface OptionalPathParams {
   path?: string;
+}
+
+export interface ProjectStoresDto {
+  enabled: string[];
 }
 
 export interface ScreenshotParams {
@@ -1777,6 +1835,9 @@ export interface CommandParamsMap {
   "set-asset-preview-options": SetAssetPreviewOptionsParams;
   "get-foot-ik": GetFootIkParams;
   "set-foot-ik": SetFootIkParams;
+  "set-morph-weights": SetMorphWeightsParams;
+  "get-morph-weights": GetMorphWeightsParams;
+  "list-clip-bindings": ListClipBindingsParams;
   "get-script-status": EmptyParams;
   "physics-state": EmptyParams;
   "physics-bodies": EmptyParams;
@@ -1813,10 +1874,10 @@ export interface CommandParamsMap {
   "new-project": NewProjectParams;
   "create-script": CreateScriptParams;
   "open-project": PathParams;
-  "import-model": PathParams;
+  "import-model": ImportModelParams;
   "instantiate-model": InstantiateModelParams;
   "asset-placement": AssetPlacementParams;
-  "import-texture": PathParams;
+  "import-texture": ImportTextureParams;
   "list-assets": EmptyParams;
   "scan-assets": EmptyParams;
   "extract-subasset": ExtractSubAssetParams;
@@ -1856,6 +1917,8 @@ export interface CommandParamsMap {
   "save-project": OptionalPathParams;
   "load-project": OptionalPathParams;
   "reload-project": EmptyParams;
+  "get-stores": EmptyParams;
+  "set-stores": ProjectStoresDto;
   "screenshot": ScreenshotParams;
   "get-thumbnail": ThumbnailParams;
   "view-asset": ThumbnailParams;
@@ -1935,6 +1998,9 @@ export interface CommandResultMap {
   "set-asset-preview-options": AssetPreviewOptionsResult;
   "get-foot-ik": FootIkResult;
   "set-foot-ik": FootIkResult;
+  "set-morph-weights": MorphWeightsResult;
+  "get-morph-weights": MorphWeightsResult;
+  "list-clip-bindings": ClipBindingsResult;
   "get-script-status": ScriptStatusResult;
   "physics-state": PhysicsStateResult;
   "physics-bodies": PhysicsBodiesResult;
@@ -2014,6 +2080,8 @@ export interface CommandResultMap {
   "save-project": ProjectInfoDto;
   "load-project": ProjectInfoDto;
   "reload-project": ProjectInfoDto;
+  "get-stores": ProjectStoresDto;
+  "set-stores": ProjectStoresDto;
   "screenshot": ScreenshotResult;
   "get-thumbnail": ThumbnailResult;
   "view-asset": ThumbnailResult;
