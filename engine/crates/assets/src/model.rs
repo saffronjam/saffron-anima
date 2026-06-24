@@ -33,7 +33,7 @@ use crate::names::{asset_type_from_name, asset_type_name};
 /// The metadata-chunk schema version this build writes and accepts. Forward
 /// compatible: a reader ignores unknown keys, so a v1 reader survives a later schema
 /// growing new fields.
-pub const METADATA_SCHEMA_VERSION: u32 = 1;
+pub const METADATA_SCHEMA_VERSION: u32 = 2;
 
 /// The reimport recipe baked into a container's META chunk.
 ///
@@ -124,6 +124,9 @@ pub struct ContainerMetadata {
     pub nodes: Value,
     /// The skin descriptor, or `null` when unskinned.
     pub skin: Value,
+    /// The morph block `{targetNames, targetCount, restWeights}`, or `null` when the
+    /// model has no blend shapes.
+    pub morph: Value,
     /// The extract/remap table `{subId: {external: relPath}}`, opaque JSON object.
     pub remap: Value,
 }
@@ -140,6 +143,7 @@ impl Default for ContainerMetadata {
             materials: Value::Array(Vec::new()),
             nodes: Value::Array(Vec::new()),
             skin: Value::Null,
+            morph: Value::Null,
             remap: Value::Object(serde_json::Map::new()),
         }
     }
@@ -205,14 +209,15 @@ pub fn encode_container_metadata(meta: &ContainerMetadata) -> Vec<u8> {
         "remap": or_default(&meta.remap, Value::Object(serde_json::Map::new())),
     });
 
-    // `skin` is emitted only when present; a null skin key is omitted entirely.
-    let doc = if meta.skin.is_null() {
-        doc
-    } else {
-        let mut map = doc.as_object().cloned().unwrap_or_default();
+    // `skin` and `morph` are emitted only when present; a null key is omitted entirely.
+    let mut map = doc.as_object().cloned().unwrap_or_default();
+    if !meta.skin.is_null() {
         map.insert("skin".to_owned(), meta.skin.clone());
-        Value::Object(map)
-    };
+    }
+    if !meta.morph.is_null() {
+        map.insert("morph".to_owned(), meta.morph.clone());
+    }
+    let doc = Value::Object(map);
 
     dump_json_sorted(&doc, -1).into_bytes()
 }
@@ -322,6 +327,7 @@ fn metadata_from_doc(doc: &Value) -> ContainerMetadata {
         .cloned()
         .unwrap_or_else(|| Value::Array(Vec::new()));
     meta.skin = doc.get("skin").cloned().unwrap_or(Value::Null);
+    meta.morph = doc.get("morph").cloned().unwrap_or(Value::Null);
     meta.remap = doc
         .get("remap")
         .cloned()
@@ -590,6 +596,7 @@ mod tests {
             }]),
             nodes: serde_json::json!([{ "name": "root", "parent": -1, "mesh": 0 }]),
             skin: serde_json::json!({ "joints": [0], "skeletonRoot": 0, "meshNode": 1 }),
+            morph: Value::Null,
             remap: Value::Object(remap),
         }
     }
@@ -623,7 +630,7 @@ mod tests {
                 material_slot: 0,
             }],
         };
-        save_mesh_to_buffer(&mesh)
+        save_mesh_to_buffer(&mesh, &[], None).unwrap()
     }
 
     #[test]

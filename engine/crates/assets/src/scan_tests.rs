@@ -54,12 +54,18 @@ fn triangle_mesh() -> Mesh {
 /// A graph with one material (no textures) so the bake writes a small container.
 fn flat_graph() -> ImportedModel {
     ImportedModel {
-        mesh: triangle_mesh(),
+        nodes: vec![saffron_geometry::ImportedNode {
+            name: "mesh".to_owned(),
+            mesh: Some(triangle_mesh()),
+            ..saffron_geometry::ImportedNode::default()
+        }],
         materials: vec![ImportedMaterial {
             name: "flat".to_owned(),
             ..ImportedMaterial::default()
         }],
+        animations: Vec::new(),
         skin: None,
+        morph: None,
     }
 }
 
@@ -371,7 +377,7 @@ fn import_texture_reads_a_file_and_registers_it() {
 
     let gpu = RendererUploader::new(&fx.uploader, &fx.descriptors, true);
     let id = assets
-        .import_texture(&gpu, external.to_str().unwrap())
+        .import_texture(&gpu, external.to_str().unwrap(), None)
         .expect("import");
     let row = assets.catalog.find(id).expect("row");
     assert_eq!(row.name, "external_albedo", "the name is the filename stem");

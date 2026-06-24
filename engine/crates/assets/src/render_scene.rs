@@ -32,8 +32,9 @@ use saffron_rendering::{
     ReflectionProbeUpload, SceneLighting, SkyRenderSettings, SkygenParams,
 };
 use saffron_scene::{
-    Camera, CameraView, DirectionalLight, Entity, Mesh as MeshComponent, PointLight,
-    ReflectionProbe, Scene, SkinnedMesh, SkyMode, SpotLight, Transform, camera_projection,
+    Camera, CameraView, DirectionalLight, Entity, Mesh as MeshComponent, MorphComponent,
+    MorphWeightOverride, PointLight, ReflectionProbe, Scene, SkinnedMesh, SkyMode, SpotLight,
+    Transform, camera_projection,
 };
 
 use crate::gpu::GpuUploader;
@@ -162,8 +163,9 @@ impl GpuUploader for RendererScene<'_> {
         &self,
         mesh: &saffron_geometry::Mesh,
         skin: &[saffron_geometry::VertexSkin],
+        morph: Option<&saffron_geometry::MorphData>,
     ) -> saffron_rendering::Result<Arc<GpuMesh>> {
-        self.uploader.upload_mesh(mesh, skin)
+        self.uploader.upload_mesh(mesh, skin, morph)
     }
 
     fn upload_texture(
@@ -310,6 +312,21 @@ fn entity_id_or_zero(scene: &Scene, entity: Entity) -> u64 {
         .map_or(0, |id| id.id.value())
 }
 
+/// The morph weights driving `entity` this frame: the runtime-only [`MorphWeightOverride`]
+/// (animated, present while a clip plays) when non-empty, else the durable
+/// [`MorphComponent`] rest weights, else empty (not a morph mesh).
+fn morph_weights_for(scene: &Scene, entity: Entity) -> Vec<f32> {
+    if let Ok(weights) =
+        scene.with_component::<MorphWeightOverride, _>(entity, |m| m.weights.clone())
+        && !weights.is_empty()
+    {
+        return weights;
+    }
+    scene
+        .with_component::<MorphComponent, _>(entity, |m| m.weights.clone())
+        .unwrap_or_default()
+}
+
 /// `transpose(inverse(mat3(model)))` as a [`Mat4`] (the normal matrix).
 fn normal_matrix(model: Mat4) -> Mat4 {
     Mat4::from_mat3(Mat3::from_mat4(model).inverse().transpose())
@@ -378,6 +395,7 @@ fn append_editor_camera_models<R: SceneRenderer>(
             skinned: false,
             joint_offset: 0,
             joint_count: 0,
+            morph_weights: Vec::new(),
             entity: 0,
         });
     }
@@ -778,6 +796,7 @@ fn gather_static_draw_list<R: SceneRenderer>(
             skinned: false,
             joint_offset: 0,
             joint_count: 0,
+            morph_weights: morph_weights_for(scene, entity),
             entity: entity_id_or_zero(scene, entity),
         });
     }
@@ -833,6 +852,7 @@ fn gather_skinned_draw_list<R: SceneRenderer>(
             skinned: true,
             joint_offset: frame_joints.len() as u32,
             joint_count: palette.len() as u32,
+            morph_weights: morph_weights_for(scene, entity),
             entity: entity_id_or_zero(scene, entity),
         });
         frame_joints.extend_from_slice(&palette);
@@ -1192,9 +1212,10 @@ mod tests {
             &self,
             mesh: &saffron_geometry::Mesh,
             skin: &[saffron_geometry::VertexSkin],
+            morph: Option<&saffron_geometry::MorphData>,
         ) -> saffron_rendering::Result<Arc<GpuMesh>> {
             let (uploader, _) = self.gpu.expect("upload_mesh needs a GPU fixture");
-            uploader.upload_mesh(mesh, skin)
+            uploader.upload_mesh(mesh, skin, morph)
         }
 
         fn upload_texture(
@@ -1560,7 +1581,7 @@ mod tests {
         let rel = format!("models/{name}.smesh");
         let full = format!("{}/{rel}", assets.root.display());
         std::fs::create_dir_all(format!("{}/models", assets.root.display())).unwrap();
-        std::fs::write(&full, save_mesh_to_buffer(&mesh)).unwrap();
+        std::fs::write(&full, save_mesh_to_buffer(&mesh, &[], None).unwrap()).unwrap();
         assets.catalog.put(AssetEntry {
             id,
             name: name.to_owned(),
@@ -1742,7 +1763,7 @@ mod tests {
     /// Writes a skinned `.smesh` (a one-bone triangle, all weight on joint 0) + a Mesh row.
     fn write_skinned_triangle(assets: &mut AssetServer, id: saffron_core::Uuid, name: &str) {
         use saffron_geometry::glam::Vec2;
-        use saffron_geometry::{Mesh, Submesh, Vertex, VertexSkin, save_mesh_skinned_to_buffer};
+        use saffron_geometry::{Mesh, Submesh, Vertex, VertexSkin, save_mesh_to_buffer};
         let mesh = Mesh {
             vertices: vec![
                 Vertex {
@@ -1781,7 +1802,7 @@ mod tests {
         std::fs::create_dir_all(format!("{}/models", assets.root.display())).unwrap();
         std::fs::write(
             format!("{}/{rel}", assets.root.display()),
-            save_mesh_skinned_to_buffer(&mesh, &skin).unwrap(),
+            save_mesh_to_buffer(&mesh, &skin, None).unwrap(),
         )
         .unwrap();
         assets.catalog.put(AssetEntry {

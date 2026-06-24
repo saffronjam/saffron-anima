@@ -10,7 +10,7 @@
 
 use saffron_core::Uuid;
 use saffron_json::{Value, json_bool_or, json_f32_or, json_string_or, json_u64_or, uuid_to_json};
-use saffron_scene::{AssetCatalog, AssetEntry, AssetType, Colorspace};
+use saffron_scene::{AssetCatalog, AssetEntry, AssetType, Attribution, Colorspace};
 
 use crate::names::{asset_type_from_name, asset_type_name, colorspace_from_name, colorspace_name};
 
@@ -57,6 +57,9 @@ pub fn catalog_to_json(catalog: &AssetCatalog) -> Value {
         if entry.rigged {
             record.insert("rigged".to_owned(), Value::Bool(true));
         }
+        if let Some(attribution) = &entry.attribution {
+            record.insert("attribution".to_owned(), attribution_to_json(attribution));
+        }
         assets.push(Value::Object(record));
     }
     Value::Array(assets)
@@ -99,11 +102,57 @@ pub fn catalog_from_json(catalog: &mut AssetCatalog, assets: &Value) {
                 "colorspace",
                 "auto".to_owned(),
             )),
+            attribution: record.get("attribution").and_then(attribution_from_json),
         };
         if parsed.id.value() != 0 {
             catalog.put(parsed);
         }
     }
+}
+
+/// Serializes store attribution to a JSON object.
+fn attribution_to_json(attribution: &Attribution) -> Value {
+    let mut record = serde_json::Map::new();
+    record.insert(
+        "licenseId".to_owned(),
+        Value::String(attribution.license_id.clone()),
+    );
+    record.insert(
+        "requiresAttribution".to_owned(),
+        Value::Bool(attribution.requires_attribution),
+    );
+    record.insert(
+        "licenseUrl".to_owned(),
+        Value::String(attribution.license_url.clone()),
+    );
+    record.insert(
+        "author".to_owned(),
+        Value::String(attribution.author.clone()),
+    );
+    record.insert(
+        "sourceUrl".to_owned(),
+        Value::String(attribution.source_url.clone()),
+    );
+    record.insert(
+        "storeId".to_owned(),
+        Value::String(attribution.store_id.clone()),
+    );
+    Value::Object(record)
+}
+
+/// Rebuilds store attribution from a JSON object, or `None` for a non-object.
+fn attribution_from_json(record: &Value) -> Option<Attribution> {
+    if !record.is_object() {
+        return None;
+    }
+    Some(Attribution {
+        license_id: json_string_or(record, "licenseId", String::new()),
+        requires_attribution: json_bool_or(record, "requiresAttribution", false),
+        license_url: json_string_or(record, "licenseUrl", String::new()),
+        author: json_string_or(record, "author", String::new()),
+        source_url: json_string_or(record, "sourceUrl", String::new()),
+        store_id: json_string_or(record, "storeId", String::new()),
+    })
 }
 
 /// Serializes a catalog's folder list to a JSON string array.

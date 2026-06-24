@@ -75,6 +75,9 @@ pub struct ProjectSidecar {
     pub editor_camera: Value,
     /// The opaque debug-overlays block (a `saffron-sceneedit` payload).
     pub debug_overlays: Value,
+    /// The opaque asset-store enablement block (enabled connector ids + non-secret
+    /// per-connector config; never a credential). Owned by the editor.
+    pub stores: Value,
 }
 
 /// The spec for [`AssetServer::create_project`].
@@ -421,6 +424,9 @@ impl AssetServer {
         if sidecar.debug_overlays.is_object() {
             doc.insert("debugOverlays".to_string(), sidecar.debug_overlays.clone());
         }
+        if sidecar.stores.is_object() {
+            doc.insert("stores".to_string(), sidecar.stores.clone());
+        }
 
         let target_path = Path::new(target);
         if let Some(parent) = target_path.parent() {
@@ -510,6 +516,7 @@ impl AssetServer {
         let sidecar = ProjectSidecar {
             editor_camera: doc.get("editorCamera").cloned().unwrap_or(Value::Null),
             debug_overlays: doc.get("debugOverlays").cloned().unwrap_or(Value::Null),
+            stores: doc.get("stores").cloned().unwrap_or(Value::Null),
         };
 
         let scene_doc = doc

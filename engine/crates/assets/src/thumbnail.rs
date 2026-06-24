@@ -407,7 +407,7 @@ fn generate_thumbnail(
                 load_mesh_from_bytes(bytes)?
             };
             let mesh_ref = gpu
-                .upload_mesh(&mesh, &[])
+                .upload_mesh(&mesh, &[], None)
                 .map_err(|e| Error::Thumbnail(e.to_string()))?;
             mesh_out.push((job.id, Arc::clone(&mesh_ref)));
             Ok(gpu
@@ -452,7 +452,7 @@ fn generate_thumbnail(
                 .collect();
             let mesh = load_mesh_from_bytes(mesh_bytes)?;
             let mesh_ref = gpu
-                .upload_mesh(&mesh, &[])
+                .upload_mesh(&mesh, &[], None)
                 .map_err(|e| Error::Thumbnail(e.to_string()))?;
             Ok(gpu
                 .encode_model_thumbnail_png(&mesh_ref, &submesh_materials, job.size)
@@ -797,6 +797,34 @@ fn build_thumbnail_job(assets: &mut AssetServer, id: Uuid, size: u32) -> Result<
                 stamp,
             )
         }
+        // An embedded texture sub-asset lives inside its `.smodel`; read the chunk bytes
+        // from the container instead of decoding the container path as an image.
+        AssetType::Texture if entry.container.value() != 0 => {
+            let stamp = assets.thumbnail_source_stamp(&entry.path);
+            let container = assets.load_model_asset(entry.container).ok_or_else(|| {
+                Error::Thumbnail(format!("model {} is not loadable", entry.container.value()))
+            })?;
+            let tsrc = assets.chunk_source_for(&container, ChunkKind::Texture, id);
+            if tsrc.is_empty() {
+                return Err(Error::Thumbnail(format!(
+                    "no texture sub-asset {}",
+                    id.value()
+                )));
+            }
+            let bytes = tsrc.read().map_err(|e| Error::Thumbnail(e.to_string()))?;
+            let space = container
+                .reader
+                .find(ChunkKind::Texture, id.value())
+                .map_or(Colorspace::Srgb, |toc| colorspace_from_flags(toc.flags));
+            let src = ThumbnailTextureSource {
+                id,
+                path: String::new(),
+                hdr: space == Colorspace::Hdr,
+                srgb: space != Colorspace::Linear && space != Colorspace::Hdr,
+                bytes,
+            };
+            (ThumbnailContent::Texture(src), stamp)
+        }
         AssetType::Texture => {
             let stamp = assets.thumbnail_source_stamp(&entry.path);
             let space = if entry.colorspace != Colorspace::Auto {
@@ -1138,9 +1166,10 @@ mod tests {
             &self,
             mesh: &Mesh,
             skin: &[saffron_geometry::VertexSkin],
+            morph: Option<&saffron_geometry::MorphData>,
         ) -> saffron_rendering::Result<Arc<GpuMesh>> {
             self.mesh_uploads.fetch_add(1, Ordering::SeqCst);
-            self.uploader.upload_mesh(mesh, skin)
+            self.uploader.upload_mesh(mesh, skin, morph)
         }
 
         fn upload_texture(
@@ -1335,7 +1364,7 @@ mod tests {
                 material_slot: 0,
             }],
         };
-        save_mesh_to_buffer(&mesh)
+        save_mesh_to_buffer(&mesh, &[], None).unwrap()
     }
 
     /// Blocks until `predicate(state)` holds or a deadline passes, polling the worker state

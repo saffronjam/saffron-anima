@@ -97,7 +97,11 @@ fn instantiate_flat_model_spawns_one_mesh_entity_with_base_color() {
     let root = dir.join("assets");
     let mut assets = AssetServer::new(&root);
     let graph = ImportedModel {
-        mesh: tri_mesh(),
+        nodes: vec![ImportedNode {
+            name: "mesh".to_owned(),
+            mesh: Some(tri_mesh()),
+            ..ImportedNode::default()
+        }],
         materials: vec![ImportedMaterial {
             name: "flat".to_owned(),
             base_color: saffron_geometry::glam::Vec4::new(0.25, 0.5, 0.75, 1.0),
@@ -105,7 +109,9 @@ fn instantiate_flat_model_spawns_one_mesh_entity_with_base_color() {
             roughness: 0.4,
             ..ImportedMaterial::default()
         }],
+        animations: Vec::new(),
         skin: None,
+        morph: None,
     };
     let model_id = bake_into_catalog(&mut assets, &graph, "/tmp/flat.obj");
 
@@ -144,13 +150,98 @@ fn instantiate_flat_model_spawns_one_mesh_entity_with_base_color() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An *animated* single identity node must NOT collapse to one entity: the clip needs an
+/// `AnimationPlayer` on a container root, so a collapsed (player-less) entity would lose the
+/// animation. This is the glTF `SimpleMorph` shape — one identity node carrying a morph mesh
+/// with a morph-weights clip — which previously collapsed and silently dropped the clip.
+#[test]
+fn instantiate_animated_single_morph_node_keeps_its_player() {
+    let dir = scratch("morphclip");
+    let root = dir.join("assets");
+    let mut assets = AssetServer::new(&root);
+    let clip = saffron_geometry::AnimClip {
+        name: "morph".to_owned(),
+        duration: 1.0,
+        tracks: vec![saffron_geometry::AnimTrack {
+            target: saffron_geometry::AnimTarget::Node,
+            index: -1,
+            target_name: "morphMesh".to_owned(),
+            path: saffron_geometry::AnimPath::Weights,
+            morph_count: 1,
+            times: vec![0.0, 1.0],
+            values: vec![0.0, 1.0],
+            ..saffron_geometry::AnimTrack::default()
+        }],
+    };
+    let graph = ImportedModel {
+        // One node, identity transform, parent -1 — the exact collapse predicate, but animated.
+        nodes: vec![ImportedNode {
+            name: "morphMesh".to_owned(),
+            mesh: Some(tri_mesh()),
+            ..ImportedNode::default()
+        }],
+        materials: vec![ImportedMaterial {
+            name: "m".to_owned(),
+            ..ImportedMaterial::default()
+        }],
+        animations: vec![clip],
+        skin: None,
+        morph: Some(saffron_geometry::MorphData {
+            targets: vec![saffron_geometry::MorphTarget {
+                name: "bulge".to_owned(),
+                rest_weight: 0.0,
+                deltas: vec![saffron_geometry::MorphDelta {
+                    vertex_index: 0,
+                    d_position: Vec3::new(0.0, 1.0, 0.0),
+                    d_normal: Vec3::ZERO,
+                }],
+            }],
+        }),
+    };
+    let model_id = bake_into_catalog(&mut assets, &graph, "/tmp/morph.gltf");
+
+    let mut scene = Scene::new();
+    let container = assets
+        .instantiate_model(&mut scene, model_id, "SimpleMorph")
+        .expect("instantiate");
+    assert!(scene.has_component::<ModelInstance>(container));
+
+    // The clip survived on exactly ONE player (no rival player on the leaf), stopped,
+    // autoplay opt-in (off), with the first clip attached.
+    let mut players: Vec<AnimationPlayer> = Vec::new();
+    scene.for_each::<&AnimationPlayer, _>(|_, p| players.push(*p));
+    assert_eq!(
+        players.len(),
+        1,
+        "exactly one AnimationPlayer for the model (no duplicate on the leaf)"
+    );
+    let player = players[0];
+    assert!(!player.playing, "imported clips spawn stopped");
+    assert!(!player.autoplay, "autoplay is opt-in (off on import)");
+    assert_ne!(player.clip.value(), 0, "the morph clip id is attached");
+
+    // The durable Morph component seeded on the mesh node (its names from the targets).
+    let mut morph_names: Option<Vec<String>> = None;
+    scene.for_each::<&saffron_scene::MorphComponent, _>(|_, m| morph_names = Some(m.names.clone()));
+    assert_eq!(
+        morph_names.as_deref(),
+        Some(["bulge".to_owned()].as_slice()),
+        "the morph mesh keeps its MorphComponent + target names",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn instantiate_multi_material_model_spawns_a_material_set_in_slot_order() {
     let dir = scratch("multimat");
     let root = dir.join("assets");
     let mut assets = AssetServer::new(&root);
     let graph = ImportedModel {
-        mesh: quad_mesh(),
+        nodes: vec![ImportedNode {
+            name: "mesh".to_owned(),
+            mesh: Some(quad_mesh()),
+            ..ImportedNode::default()
+        }],
         materials: vec![
             ImportedMaterial {
                 name: "a".to_owned(),
@@ -163,7 +254,9 @@ fn instantiate_multi_material_model_spawns_a_material_set_in_slot_order() {
                 ..ImportedMaterial::default()
             },
         ],
+        animations: Vec::new(),
         skin: None,
+        morph: None,
     };
     let model_id = bake_into_catalog(&mut assets, &graph, "/tmp/two.obj");
 
@@ -196,42 +289,44 @@ fn rigged_graph() -> ImportedModel {
         name: "idle".to_owned(),
         duration: 1.0,
         tracks: vec![saffron_geometry::AnimTrack {
-            joint: 1,
-            joint_name: "joint".to_owned(),
+            index: 1,
+            target_name: "joint".to_owned(),
             ..saffron_geometry::AnimTrack::default()
         }],
     };
     // A 90-degree rotation about Y, stored on the joint node.
     let joint_rotation = Quat::from_axis_angle(Vec3::Y, std::f32::consts::FRAC_PI_2);
     ImportedModel {
-        mesh: tri_mesh(),
+        nodes: vec![
+            // The skinned mesh node (mesh_node 0) carries the mesh node-locally.
+            ImportedNode {
+                name: "root".to_owned(),
+                mesh: Some(tri_mesh()),
+                ..ImportedNode::default()
+            },
+            ImportedNode {
+                name: "joint".to_owned(),
+                parent: 0,
+                translation: Vec3::new(0.0, 1.0, 0.0),
+                rotation: joint_rotation,
+                ..ImportedNode::default()
+            },
+        ],
         materials: vec![ImportedMaterial {
             name: "skin".to_owned(),
             ..ImportedMaterial::default()
         }],
+        animations: vec![clip],
         skin: Some(SkinPayload {
-            nodes: vec![
-                ImportedNode {
-                    name: "root".to_owned(),
-                    ..ImportedNode::default()
-                },
-                ImportedNode {
-                    name: "joint".to_owned(),
-                    parent: 0,
-                    translation: Vec3::new(0.0, 1.0, 0.0),
-                    rotation: joint_rotation,
-                    ..ImportedNode::default()
-                },
-            ],
             desc: ImportedSkin {
                 joints: vec![1],
                 inverse_bind: vec![Mat4::IDENTITY],
                 skeleton_root: 0,
                 mesh_node: 0,
             },
-            animations: vec![clip],
             stream: vec![VertexSkin::default(); 3],
         }),
+        morph: None,
     }
 }
 

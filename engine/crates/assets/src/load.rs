@@ -24,8 +24,8 @@ use std::sync::Arc;
 use saffron_core::Uuid;
 use saffron_geometry::{
     AnimClip, ChunkKind, Mesh, decode_image_from_memory, decode_image_from_memory_hdr,
-    load_animation, load_animation_from_bytes, load_mesh_from_bytes, load_mesh_skin_from_bytes,
-    translate_model,
+    load_animation, load_animation_from_bytes, load_mesh_from_bytes, load_mesh_morph_from_bytes,
+    load_mesh_skin_from_bytes, translate_model,
 };
 use saffron_rendering::{GpuMesh, GpuTexture};
 use saffron_scene::{AssetType, Colorspace};
@@ -119,9 +119,11 @@ impl AssetServer {
             }
         };
         // A skinned `.smesh` carries a parallel skin stream; an unskinned one returns an
-        // empty stream (the uploader treats an empty skin as a static mesh).
+        // empty stream (the uploader treats an empty skin as a static mesh). A morph
+        // `.smesh` carries its sparse deltas; the deform pass reads them on the GPU.
         let skin = load_mesh_skin_from_bytes(&bytes).unwrap_or_default();
-        match gpu.upload_mesh(&mesh, &skin) {
+        let morph = load_mesh_morph_from_bytes(&bytes).ok().flatten();
+        match gpu.upload_mesh(&mesh, &skin, morph.as_ref()) {
             Ok(mesh_ref) => Some(mesh_ref),
             Err(err) => {
                 tracing::warn!("mesh {}: {err}", sub_id.value());
@@ -399,7 +401,13 @@ impl AssetServer {
                 return false;
             }
         };
-        match gpu.upload_mesh(&model.mesh, &[]) {
+        let Some(mesh) = model.primary_mesh() else {
+            tracing::warn!("preview floor mesh: no geometry");
+            self.mesh_by_uuid
+                .insert(PREVIEW_FLOOR_MESH_ID.value(), None);
+            return false;
+        };
+        match gpu.upload_mesh(mesh, &[], None) {
             Ok(mesh_ref) => {
                 self.mesh_by_uuid
                     .insert(PREVIEW_FLOOR_MESH_ID.value(), Some(mesh_ref));
@@ -438,7 +446,12 @@ impl AssetServer {
             .skin
             .as_ref()
             .map_or(&[][..], |skin| skin.stream.as_slice());
-        let mesh_ref = match gpu.upload_mesh(&model.mesh, skin) {
+        let Some(mesh) = model.primary_mesh() else {
+            tracing::warn!("editor camera model: no geometry");
+            return false;
+        };
+        let submesh_count = mesh.submeshes.len().max(1);
+        let mesh_ref = match gpu.upload_mesh(mesh, skin, None) {
             Ok(mesh_ref) => mesh_ref,
             Err(err) => {
                 tracing::warn!("editor camera model: {err}");
@@ -447,7 +460,6 @@ impl AssetServer {
         };
         self.editor_camera_model.mesh = Some(mesh_ref);
         let material = editor_camera_material();
-        let submesh_count = model.mesh.submeshes.len().max(1);
         self.editor_camera_model.submesh_materials = vec![material; submesh_count];
         true
     }
@@ -617,9 +629,10 @@ mod tests {
             &self,
             mesh: &Mesh,
             skin: &[saffron_geometry::VertexSkin],
+            morph: Option<&saffron_geometry::MorphData>,
         ) -> saffron_rendering::Result<Arc<GpuMesh>> {
             self.mesh_uploads.fetch_add(1, Ordering::SeqCst);
-            self.inner.upload_mesh(mesh, skin)
+            self.inner.upload_mesh(mesh, skin, morph)
         }
 
         fn upload_texture(
@@ -710,7 +723,11 @@ mod tests {
         let rel = format!("meshes/{name}.smesh");
         let full = format!("{}/{rel}", assets.root.display());
         std::fs::create_dir_all(format!("{}/meshes", assets.root.display())).unwrap();
-        std::fs::write(&full, save_mesh_to_buffer(&triangle_mesh())).unwrap();
+        std::fs::write(
+            &full,
+            save_mesh_to_buffer(&triangle_mesh(), &[], None).unwrap(),
+        )
+        .unwrap();
         assets.catalog.put(AssetEntry {
             id,
             name: name.to_owned(),
@@ -849,7 +866,7 @@ mod tests {
         };
         std::fs::write(
             format!("{}/{rel}", root.display()),
-            save_mesh_to_buffer(&empty),
+            save_mesh_to_buffer(&empty, &[], None).unwrap(),
         )
         .unwrap();
         assets.catalog.put(AssetEntry {
@@ -1302,7 +1319,7 @@ mod tests {
         assert_eq!(cpu.indices, vec![0, 1, 2]);
 
         // Embedded.
-        let mesh_bytes = save_mesh_to_buffer(&triangle_mesh());
+        let mesh_bytes = save_mesh_to_buffer(&triangle_mesh(), &[], None).unwrap();
         let mut meta = ContainerMetadata {
             model_id: Uuid(8400),
             name: "c".to_owned(),

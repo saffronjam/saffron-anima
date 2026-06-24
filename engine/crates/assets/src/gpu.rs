@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use saffron_geometry::{Mesh, VertexSkin};
+use saffron_geometry::{Mesh, MorphData, VertexSkin};
 use saffron_rendering::{Descriptors, GpuMesh, GpuTexture, Uploader};
 
 /// The GPU-facing operations the resolve/load paths drive.
@@ -32,6 +32,7 @@ pub trait GpuUploader {
         &self,
         mesh: &Mesh,
         skin: &[VertexSkin],
+        morph: Option<&MorphData>,
     ) -> saffron_rendering::Result<Arc<GpuMesh>>;
 
     /// Uploads tightly packed RGBA8 (already decoded by the caller) as an sRGB or unorm
@@ -101,8 +102,9 @@ impl GpuUploader for RendererUploader<'_> {
         &self,
         mesh: &Mesh,
         skin: &[VertexSkin],
+        morph: Option<&MorphData>,
     ) -> saffron_rendering::Result<Arc<GpuMesh>> {
-        self.uploader.upload_mesh(mesh, skin)
+        self.uploader.upload_mesh(mesh, skin, morph)
     }
 
     fn upload_texture(

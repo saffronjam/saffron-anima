@@ -1041,7 +1041,11 @@ mod tests {
     /// A static model with one material that references an embedded texture (albedo).
     fn one_material_graph() -> ImportedModel {
         ImportedModel {
-            mesh: tri_mesh(),
+            nodes: vec![saffron_geometry::ImportedNode {
+                name: "mesh".to_owned(),
+                mesh: Some(tri_mesh()),
+                ..saffron_geometry::ImportedNode::default()
+            }],
             materials: vec![ImportedMaterial {
                 name: "paint".to_owned(),
                 albedo: Some(TextureSource {
@@ -1050,7 +1054,9 @@ mod tests {
                 }),
                 ..ImportedMaterial::default()
             }],
+            animations: Vec::new(),
             skin: None,
+            morph: None,
         }
     }
 
@@ -1238,7 +1244,7 @@ mod tests {
             let rel = format!("models/{}.smesh", id.value());
             std::fs::write(
                 root.join(&rel),
-                saffron_geometry::save_mesh_to_buffer(&tri_mesh()),
+                saffron_geometry::save_mesh_to_buffer(&tri_mesh(), &[], None).unwrap(),
             )
             .unwrap();
             assets.catalog.put(AssetEntry {
@@ -1306,6 +1312,7 @@ mod tests {
                 &self,
                 _: &Mesh,
                 _: &[saffron_geometry::VertexSkin],
+                _morph: Option<&saffron_geometry::MorphData>,
             ) -> saffron_rendering::Result<std::sync::Arc<saffron_rendering::GpuMesh>> {
                 unreachable!("guard fails before any upload")
             }

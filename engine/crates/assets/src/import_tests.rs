@@ -92,36 +92,38 @@ fn town_graph() -> ImportedModel {
         name: "idle".to_owned(),
         duration: 1.0,
         tracks: vec![AnimTrack {
-            joint: 1,
-            joint_name: "joint".to_owned(),
+            index: 1,
+            target_name: "joint".to_owned(),
             ..AnimTrack::default()
         }],
     };
     ImportedModel {
-        mesh: quad_mesh(),
+        nodes: vec![
+            // The skinned mesh node (mesh_node 0) carries the mesh node-locally.
+            saffron_geometry::ImportedNode {
+                name: "root".to_owned(),
+                mesh: Some(quad_mesh()),
+                ..saffron_geometry::ImportedNode::default()
+            },
+            saffron_geometry::ImportedNode {
+                name: "joint".to_owned(),
+                parent: 0,
+                ..saffron_geometry::ImportedNode::default()
+            },
+        ],
         materials: vec![stone, metal],
+        animations: vec![clip],
         skin: Some(saffron_geometry::SkinPayload {
-            nodes: vec![
-                saffron_geometry::ImportedNode {
-                    name: "root".to_owned(),
-                    ..saffron_geometry::ImportedNode::default()
-                },
-                saffron_geometry::ImportedNode {
-                    name: "joint".to_owned(),
-                    parent: 0,
-                    ..saffron_geometry::ImportedNode::default()
-                },
-            ],
             desc: saffron_geometry::ImportedSkin {
                 joints: vec![1],
                 inverse_bind: vec![saffron_geometry::glam::Mat4::IDENTITY],
                 skeleton_root: 0,
                 mesh_node: 0,
             },
-            animations: vec![clip],
             // A skin influence per vertex (4) so the skinned mesh serializes.
             stream: vec![saffron_geometry::VertexSkin::default(); 4],
         }),
+        morph: None,
     }
 }
 
@@ -152,7 +154,8 @@ fn bake_writes_a_container_with_a_model_parent_and_sub_asset_rows() {
 
     // The mesh chunk decodes to the quad's shape.
     let reader = saffron_geometry::read_container(&full).expect("read_container");
-    let mesh_sub_id = saffron_geometry::sub_id_for("town", "mesh", "0", 0);
+    // The mesh sub-id is keyed by the mesh-bearing node ("root", index 0).
+    let mesh_sub_id = saffron_geometry::sub_id_for("town", "mesh", "root", 0);
     let entry = reader
         .find(saffron_geometry::ChunkKind::Mesh, mesh_sub_id.value())
         .expect("mesh chunk present");
@@ -194,8 +197,9 @@ fn sub_ids_are_stable_across_two_bakes_of_the_same_source() {
     let second_ids: Vec<Uuid> = second.rows[1..].iter().map(|r| r.id).collect();
     assert_eq!(first_ids, second_ids);
 
-    // The ids are exactly the `sub_id_for` values keyed by the source-stem model key.
-    let mesh_id = saffron_geometry::sub_id_for("town", "mesh", "0", 0);
+    // The ids are exactly the `sub_id_for` values keyed by the source-stem model key
+    // (the mesh sub-id is keyed by the mesh-bearing node "root").
+    let mesh_id = saffron_geometry::sub_id_for("town", "mesh", "root", 0);
     assert!(first_ids.contains(&mesh_id));
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -285,12 +289,18 @@ fn unrigged_graph_bakes_no_skin_and_unrigged_rows() {
     let root = dir.join("assets");
     let assets = AssetServer::new(&root);
     let graph = ImportedModel {
-        mesh: quad_mesh(),
+        nodes: vec![saffron_geometry::ImportedNode {
+            name: "flat".to_owned(),
+            mesh: Some(quad_mesh()),
+            ..saffron_geometry::ImportedNode::default()
+        }],
         materials: vec![ImportedMaterial {
             name: "flat".to_owned(),
             ..ImportedMaterial::default()
         }],
+        animations: Vec::new(),
         skin: None,
+        morph: None,
     };
     let bake = assets
         .bake_model(&graph, ImportOptions::default(), "/tmp/flat.obj", Uuid(0))

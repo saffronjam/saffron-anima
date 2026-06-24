@@ -17,8 +17,8 @@
 use saffron_core::Uuid;
 use saffron_geometry::{
     ChunkKind, ContainerChunk, ImportedMaterial, ImportedModel, ImportedNode, ImportedSkin,
-    MaterialMapRole, SkinPayload, save_animation_to_buffer, save_mesh_skinned_to_buffer,
-    save_mesh_to_buffer, sub_id_for, translate_model, write_container,
+    MaterialMapRole, MorphData, VertexSkin, save_animation_to_buffer, save_mesh_to_buffer,
+    sub_id_for, translate_model, write_container,
 };
 use saffron_json::{Value, dump_json, json_bool_or, json_f32_or, json_string_or, uuid_to_json};
 use saffron_scene::{AssetEntry, AssetType, Colorspace};
@@ -216,21 +216,47 @@ pub fn hash_file_fnv(path: &str) -> String {
 }
 
 /// The import node forest as the META `nodes` block (glTF-shaped; the quaternion in
-/// `w,x,y,z` order).
-fn imported_nodes_to_json(nodes: &[ImportedNode]) -> Value {
+/// `w,x,y,z` order). Each entry carries a `mesh` sub-id (decimal string, `"0"` when the
+/// node has no mesh) so spawn re-attaches each node's node-local mesh. `node_mesh_ids`
+/// parallels `nodes`.
+fn imported_nodes_to_json(nodes: &[ImportedNode], node_mesh_ids: &[u64]) -> Value {
     let array = nodes
         .iter()
-        .map(|node| {
+        .enumerate()
+        .map(|(i, node)| {
+            let mesh_id = node_mesh_ids.get(i).copied().unwrap_or(0);
             serde_json::json!({
                 "name": node.name,
                 "parent": node.parent,
                 "t": [node.translation.x, node.translation.y, node.translation.z],
                 "r": [node.rotation.w, node.rotation.x, node.rotation.y, node.rotation.z],
                 "s": [node.scale.x, node.scale.y, node.scale.z],
+                "mesh": uuid_to_json(mesh_id),
             })
         })
         .collect();
     Value::Array(array)
+}
+
+/// The morph data as the META `morph` block: the durable target names, the target count,
+/// and the authored rest weights. The sparse deltas themselves live in the `.smesh` morph
+/// section, not META.
+fn morph_to_json(morph: &MorphData) -> Value {
+    let names: Vec<Value> = morph
+        .targets
+        .iter()
+        .map(|t| Value::String(t.name.clone()))
+        .collect();
+    let rest: Vec<Value> = morph
+        .targets
+        .iter()
+        .map(|t| Value::from(t.rest_weight))
+        .collect();
+    serde_json::json!({
+        "targetNames": names,
+        "targetCount": morph.targets.len() as u32,
+        "restWeights": rest,
+    })
 }
 
 /// The skin descriptor as the META `skin` block; inverse-bind matrices are 16 floats
@@ -378,29 +404,58 @@ impl AssetServer {
             materials: Value::Array(Vec::new()),
             nodes: Value::Array(Vec::new()),
             skin: Value::Null,
+            morph: Value::Null,
             remap: Value::Object(serde_json::Map::new()),
         };
 
-        let mesh_sub_id = sub_id_for(&model_key, "mesh", "0", 0);
-        let mesh_bytes = if let Some(skin) = graph.skin.as_ref() {
-            save_mesh_skinned_to_buffer(&graph.mesh, &skin.stream)?
-        } else {
-            save_mesh_to_buffer(&graph.mesh)
-        };
-        let mesh_chunk = pending.len() as u32;
-        pending.push(Pending {
-            kind: ChunkKind::Mesh,
-            sub_id: mesh_sub_id.value(),
-            flags: 0,
-            bytes: mesh_bytes,
-        });
-        meta.sub_assets.push(SubAsset {
-            sub_id: mesh_sub_id,
-            asset_type: AssetType::Mesh,
-            name: format!("{model_key}_mesh"),
-            chunk: mesh_chunk,
-            ..SubAsset::default()
-        });
+        // One mesh sub-asset per mesh-bearing forest node — the single mesh-ownership
+        // shape. The skin's mesh node carries the skin stream (a skinned `.smesh`); every
+        // other node's mesh is a plain stream. `node_mesh_ids` parallels `graph.nodes`,
+        // `0` where a node has no mesh, and is woven into the META `nodes` block.
+        let skin_mesh_node = graph.skin.as_ref().map(|s| s.desc.mesh_node).unwrap_or(-1);
+        // The mesh-global morph rides the first mesh-bearing node (the importer attaches
+        // its deltas relative to that node's local mesh).
+        let morph_node = graph
+            .morph
+            .as_ref()
+            .and_then(|_| graph.nodes.iter().position(|n| n.mesh.is_some()));
+        let mut node_mesh_ids = vec![0u64; graph.nodes.len()];
+        for (i, node) in graph.nodes.iter().enumerate() {
+            let Some(mesh) = node.mesh.as_ref() else {
+                continue;
+            };
+            let mesh_sub_id = sub_id_for(&model_key, "mesh", &node.name, i as u32);
+            let stream: &[VertexSkin] = if i as i32 == skin_mesh_node {
+                graph
+                    .skin
+                    .as_ref()
+                    .map(|s| s.stream.as_slice())
+                    .unwrap_or(&[])
+            } else {
+                &[]
+            };
+            let node_morph: Option<&MorphData> = if Some(i) == morph_node {
+                graph.morph.as_ref()
+            } else {
+                None
+            };
+            let mesh_bytes = save_mesh_to_buffer(mesh, stream, node_morph)?;
+            let mesh_chunk = pending.len() as u32;
+            pending.push(Pending {
+                kind: ChunkKind::Mesh,
+                sub_id: mesh_sub_id.value(),
+                flags: 0,
+                bytes: mesh_bytes,
+            });
+            meta.sub_assets.push(SubAsset {
+                sub_id: mesh_sub_id,
+                asset_type: AssetType::Mesh,
+                name: format!("{model_key}_{}", node.name),
+                chunk: mesh_chunk,
+                ..SubAsset::default()
+            });
+            node_mesh_ids[i] = mesh_sub_id.value();
+        }
 
         let mut material_summaries = Vec::with_capacity(graph.materials.len());
         for (m, src) in graph.materials.iter().enumerate() {
@@ -501,37 +556,38 @@ impl AssetServer {
         }
         meta.materials = Value::Array(material_summaries);
 
-        if let Some(skin) = graph.skin.as_ref() {
-            for (a, clip) in skin.animations.iter().enumerate() {
-                let clip_name = if clip.name.is_empty() {
-                    format!("clip_{a}")
-                } else {
-                    clip.name.clone()
-                };
-                let clip_id = sub_id_for(&model_key, "animation", &clip_name, a as u32);
-                let clip_bytes = save_animation_to_buffer(clip);
-                let clip_chunk = pending.len() as u32;
-                pending.push(Pending {
-                    kind: ChunkKind::Animation,
-                    sub_id: clip_id.value(),
-                    flags: 0,
-                    bytes: clip_bytes,
-                });
-                meta.sub_assets.push(SubAsset {
-                    sub_id: clip_id,
-                    asset_type: AssetType::Animation,
-                    name: clip_name,
-                    chunk: clip_chunk,
-                    duration: clip.duration,
-                    tracks: clip.tracks.len() as i32,
-                    ..SubAsset::default()
-                });
-            }
+        for (a, clip) in graph.animations.iter().enumerate() {
+            let clip_name = if clip.name.is_empty() {
+                format!("clip_{a}")
+            } else {
+                clip.name.clone()
+            };
+            let clip_id = sub_id_for(&model_key, "animation", &clip_name, a as u32);
+            let clip_bytes = save_animation_to_buffer(clip);
+            let clip_chunk = pending.len() as u32;
+            pending.push(Pending {
+                kind: ChunkKind::Animation,
+                sub_id: clip_id.value(),
+                flags: 0,
+                bytes: clip_bytes,
+            });
+            meta.sub_assets.push(SubAsset {
+                sub_id: clip_id,
+                asset_type: AssetType::Animation,
+                name: clip_name,
+                chunk: clip_chunk,
+                duration: clip.duration,
+                tracks: clip.tracks.len() as i32,
+                ..SubAsset::default()
+            });
         }
 
-        meta.nodes = nodes_for_graph(graph);
+        meta.nodes = imported_nodes_to_json(&graph.nodes, &node_mesh_ids);
         if let Some(skin) = graph.skin.as_ref() {
             meta.skin = imported_skin_to_json(&skin.desc);
+        }
+        if let Some(morph) = graph.morph.as_ref() {
+            meta.morph = morph_to_json(morph);
         }
 
         pending[0].bytes = crate::model::encode_container_metadata(&meta);
@@ -599,15 +655,6 @@ impl AssetServer {
             self.catalog.put(row.clone());
         }
         Ok(model_id)
-    }
-}
-
-/// The META `nodes` block for a graph: a skinned import carries its node forest; an
-/// unskinned import has an empty forest (the node forest is the skin's forest).
-fn nodes_for_graph(graph: &ImportedModel) -> Value {
-    match graph.skin.as_ref() {
-        Some(SkinPayload { nodes, .. }) => imported_nodes_to_json(nodes),
-        None => Value::Array(Vec::new()),
     }
 }
 

@@ -362,6 +362,7 @@ fn load_idles_and_clears_caches_before_swapping_the_catalog() {
             &ProjectSidecar {
                 editor_camera: serde_json::json!({ "kind": "orbit" }),
                 debug_overlays: serde_json::json!({ "grid": true }),
+                stores: serde_json::json!({ "enabled": ["polyhaven"] }),
             },
         )
         .unwrap();

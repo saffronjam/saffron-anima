@@ -422,7 +422,12 @@ impl AssetServer {
     ///
     /// [`Error::Io`] if the file cannot be read, plus any
     /// [`Self::register_texture_bytes`] / [`Self::register_hdr_texture_bytes`] error.
-    pub fn import_texture(&mut self, gpu: &dyn GpuUploader, path: &str) -> Result<Uuid> {
+    pub fn import_texture(
+        &mut self,
+        gpu: &dyn GpuUploader,
+        path: &str,
+        colorspace: Option<Colorspace>,
+    ) -> Result<Uuid> {
         let encoded =
             std::fs::read(path).map_err(|e| Error::Io(format!("cannot open '{path}': {e}")))?;
         let file = std::path::Path::new(path);
@@ -434,10 +439,19 @@ impl AssetServer {
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or_default();
-        if ext.eq_ignore_ascii_case("hdr") {
-            return self.register_hdr_texture_bytes(gpu, &encoded, stem);
+        match colorspace {
+            // Data maps (normal/roughness/metallic/AO/…) must upload linear, not sRGB.
+            Some(Colorspace::Linear) => {
+                self.register_texture_bytes(gpu, &encoded, ext, stem, false)
+            }
+            Some(Colorspace::Srgb) => self.register_texture_bytes(gpu, &encoded, ext, stem, true),
+            Some(Colorspace::Hdr) => self.register_hdr_texture_bytes(gpu, &encoded, stem),
+            // Auto / unspecified: dispatch `.hdr` to the float path, else sRGB (prior behaviour).
+            _ if ext.eq_ignore_ascii_case("hdr") => {
+                self.register_hdr_texture_bytes(gpu, &encoded, stem)
+            }
+            _ => self.register_texture_bytes(gpu, &encoded, ext, stem, true),
         }
-        self.register_texture_bytes(gpu, &encoded, ext, stem, true)
     }
 
     /// Inserts a standalone Texture row with a name uniqued against the live catalog.

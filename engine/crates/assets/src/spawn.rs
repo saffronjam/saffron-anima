@@ -15,8 +15,8 @@ use saffron_geometry::glam::{Mat4, Quat, Vec3, Vec4};
 use saffron_geometry::{ImportedNode, ImportedSkin};
 use saffron_scene::{
     AnimationPlayer, Bone, BonePhysics, BonePhysicsComponent, IdComponent, Joint, Material,
-    MaterialSet, MaterialSlot, Mesh, ModelInstance, Relationship, SkinnedMesh, Transform, Wrap,
-    quat_to_euler_zyx,
+    MaterialSet, MaterialSlot, Mesh, ModelInstance, MorphComponent, Relationship, SkinnedMesh,
+    Transform, Wrap, quat_to_euler_zyx,
 };
 use saffron_scene::{Entity, Scene};
 
@@ -48,10 +48,19 @@ pub struct ModelSpawnInput {
     pub has_skin: bool,
     /// The source node forest.
     pub nodes: Vec<ImportedNode>,
+    /// The mesh sub-id per node, parallel to [`ModelSpawnInput::nodes`] (`Uuid(0)` when a
+    /// node carries no mesh). The node-forest spawn attaches each node's node-local mesh.
+    pub node_meshes: Vec<Uuid>,
     /// The skin descriptor (joints, inverse-bind, roots).
     pub skin_desc: ImportedSkin,
     /// The registered animation clip sub-ids (skinned imports).
     pub animations: Vec<Uuid>,
+    /// The morph target names (META `morph.targetNames`); empty when the model has no
+    /// blend shapes. Seeds the durable [`MorphComponent`] labels.
+    pub morph_target_names: Vec<String>,
+    /// The authored rest weights (META `morph.restWeights`), parallel to
+    /// `morph_target_names`. Seeds the durable [`MorphComponent`] weights (else zeros).
+    pub morph_rest_weights: Vec<f32>,
 }
 
 /// Decodes the META `nodes` block into the node forest.
@@ -100,6 +109,25 @@ pub fn imported_nodes_from_json(nodes: &Value) -> Vec<ImportedNode> {
         out.push(node);
     }
     out
+}
+
+/// Decodes the per-node `mesh` sub-id from the META `nodes` block, parallel to
+/// [`imported_nodes_from_json`]. A missing / `"0"` field decodes to `Uuid(0)` (no mesh).
+#[must_use]
+pub fn node_mesh_ids_from_json(nodes: &Value) -> Vec<Uuid> {
+    let Some(array) = nodes.as_array() else {
+        return Vec::new();
+    };
+    array
+        .iter()
+        .map(|record| {
+            record
+                .get("mesh")
+                .and_then(decimal_u64)
+                .map(Uuid)
+                .unwrap_or(Uuid(0))
+        })
+        .collect()
 }
 
 /// Decodes the META `skin` block into the skin descriptor.
@@ -200,6 +228,28 @@ fn apply_imported_materials(scene: &mut Scene, entity: Entity, input: &ModelSpaw
     let _ = scene.add_component(entity, material);
 }
 
+/// Seeds the durable [`MorphComponent`] on a mesh-bearing entity when the import carries
+/// morph targets: weights from the authored rest weights (else zeros), names from META.
+/// Import-managed, so it is non-addable / non-removable in the editor.
+fn seed_morph(scene: &mut Scene, entity: Entity, input: &ModelSpawnInput) {
+    let count = input.morph_target_names.len();
+    if count == 0 {
+        return;
+    }
+    let weights = if input.morph_rest_weights.len() == count {
+        input.morph_rest_weights.clone()
+    } else {
+        vec![0.0; count]
+    };
+    let _ = scene.add_component(
+        entity,
+        MorphComponent {
+            weights,
+            names: input.morph_target_names.clone(),
+        },
+    );
+}
+
 /// The stable id of `entity` (its [`IdComponent`]); `Uuid(0)` if it carries none.
 fn entity_uuid(scene: &Scene, entity: Entity) -> Uuid {
     scene
@@ -212,6 +262,7 @@ fn spawn_unskinned(scene: &mut Scene, name: String, input: &ModelSpawnInput) -> 
     let entity = scene.create_entity(name);
     let _ = scene.add_component(entity, Mesh { mesh: input.mesh });
     apply_imported_materials(scene, entity, input);
+    seed_morph(scene, entity, input);
     entity
 }
 
@@ -280,6 +331,7 @@ fn spawn_skinned_model(scene: &mut Scene, name: String, input: &ModelSpawnInput)
         },
     );
     apply_imported_materials(scene, mesh_entity, input);
+    seed_morph(scene, mesh_entity, input);
 
     if let Some(&clip) = input.animations.first() {
         let _ = scene.add_component(
@@ -363,14 +415,102 @@ fn autofit_bone_physics(scene: &mut Scene, mesh_entity: Entity) {
     let _ = scene.add_component(mesh_entity, phys);
 }
 
-/// Spawns a model, dispatching to [`spawn_skinned_model`] when the input carries a skin.
+/// Whether the forest is a single identity-transform root — the only shape that
+/// collapses to one entity (a non-identity, multi-node, or *animated* forest keeps its live
+/// local transforms + its container, which a node-TRS or morph-weights track drives). An
+/// animated single node never collapses: the clip needs an [`AnimationPlayer`] on a container
+/// root, and a collapsed entity has no player (e.g. the glTF `SimpleMorph` — one identity node
+/// with a morph-weights clip — would otherwise lose its animation entirely).
+fn is_single_identity_root(input: &ModelSpawnInput) -> bool {
+    input.animations.is_empty() && input.nodes.len() == 1 && {
+        let n = &input.nodes[0];
+        n.parent < 0
+            && n.translation == Vec3::ZERO
+            && n.rotation == Quat::IDENTITY
+            && n.scale == Vec3::new(1.0, 1.0, 1.0)
+    }
+}
+
+/// Instantiates an unskinned node forest: one entity per node (local TRS, parented by
+/// uuid), the node-local mesh + material table on each mesh-bearing node, all under one
+/// container root that holds the single [`AnimationPlayer`]. Returns the container root.
+fn spawn_node_forest(scene: &mut Scene, name: String, input: &ModelSpawnInput) -> Entity {
+    let mut node_entities: Vec<Entity> = Vec::with_capacity(input.nodes.len());
+    let mut node_uuids: Vec<Uuid> = Vec::with_capacity(input.nodes.len());
+    for node in &input.nodes {
+        let entity = scene.create_entity(node.name.clone());
+        let _ = scene.with_component_mut::<Transform, _>(entity, |transform| {
+            transform.translation = node.translation;
+            transform.rotation = quat_to_euler_zyx(node.rotation);
+            transform.scale = node.scale;
+        });
+        node_uuids.push(entity_uuid(scene, entity));
+        node_entities.push(entity);
+    }
+    for (i, node) in input.nodes.iter().enumerate() {
+        let parent = node.parent;
+        if parent >= 0 && (parent as usize) < node_uuids.len() {
+            let parent_uuid = node_uuids[parent as usize];
+            let _ = scene.with_component_mut::<Relationship, _>(node_entities[i], |rel| {
+                rel.parent = parent_uuid
+            });
+        }
+    }
+
+    for (i, &mesh_id) in input.node_meshes.iter().enumerate() {
+        if mesh_id.value() == 0 || i >= node_entities.len() {
+            continue;
+        }
+        let _ = scene.add_component(node_entities[i], Mesh { mesh: mesh_id });
+        apply_imported_materials(scene, node_entities[i], input);
+    }
+    // The mesh-global morph rides the first mesh-bearing node.
+    if let Some(i) = input
+        .node_meshes
+        .iter()
+        .position(|id| id.value() != 0)
+        .filter(|&i| i < node_entities.len())
+    {
+        seed_morph(scene, node_entities[i], input);
+    }
+
+    let container = scene.create_entity(name);
+    let container_uuid = entity_uuid(scene, container);
+    for &node in &node_entities {
+        let _ = scene.with_component_mut::<Relationship, _>(node, |rel| {
+            if rel.parent.value() == 0 {
+                rel.parent = container_uuid;
+            }
+        });
+    }
+    if let Some(&clip) = input.animations.first() {
+        let _ = scene.add_component(
+            container,
+            AnimationPlayer {
+                clip,
+                playing: false,
+                wrap: Wrap::Loop,
+                ..AnimationPlayer::default()
+            },
+        );
+    }
+
+    scene.relink_hierarchy();
+    container
+}
+
+/// Spawns a model, dispatching on shape: a skin spawns the rigged path; a single
+/// identity root collapses to one entity; any other forest spawns a live entity forest.
 /// Returns the root entity.
 pub fn spawn_model(scene: &mut Scene, name: impl Into<String>, input: &ModelSpawnInput) -> Entity {
     let name = name.into();
     if input.has_skin {
         return spawn_skinned_model(scene, name, input);
     }
-    spawn_unskinned(scene, name, input)
+    if is_single_identity_root(input) {
+        return spawn_unskinned(scene, name, input);
+    }
+    spawn_node_forest(scene, name, input)
 }
 
 impl crate::AssetServer {
@@ -402,13 +542,6 @@ impl crate::AssetServer {
         let meta = &model.meta;
 
         let mut input = ModelSpawnInput::default();
-        if let Some(sub) = meta
-            .sub_assets
-            .iter()
-            .find(|s| s.asset_type == AssetType::Mesh)
-        {
-            input.mesh = sub.sub_id;
-        }
 
         // Each baked material sub-asset resolves to its full `.smat` (factors + texture sub-ids)
         // from the container's material chunk, so the spawned entity's `Material` carries the
@@ -457,10 +590,41 @@ impl crate::AssetServer {
         }
 
         input.nodes = imported_nodes_from_json(&meta.nodes);
+        input.node_meshes = node_mesh_ids_from_json(&meta.nodes);
         if !meta.skin.is_null() {
             input.skin_desc = imported_skin_from_json(&meta.skin);
             input.has_skin = !input.skin_desc.joints.is_empty();
         }
+        if let Some(morph) = meta.morph.as_object() {
+            if let Some(names) = morph.get("targetNames").and_then(Value::as_array) {
+                input.morph_target_names = names
+                    .iter()
+                    .filter_map(|n| n.as_str().map(str::to_owned))
+                    .collect();
+            }
+            if let Some(rest) = morph.get("restWeights").and_then(Value::as_array) {
+                input.morph_rest_weights = rest
+                    .iter()
+                    .map(|w| w.as_f64().unwrap_or(0.0) as f32)
+                    .collect();
+            }
+        }
+        // The mesh the collapse / skinned path places: the skin's mesh node when rigged,
+        // else the first mesh-bearing node. The forest path reads `node_meshes` per node.
+        input.mesh = if input.has_skin {
+            input
+                .node_meshes
+                .get(input.skin_desc.mesh_node.max(0) as usize)
+                .copied()
+                .unwrap_or(Uuid(0))
+        } else {
+            input
+                .node_meshes
+                .iter()
+                .copied()
+                .find(|id| id.value() != 0)
+                .unwrap_or(Uuid(0))
+        };
         if let Some(first) = input.materials.first() {
             input.base_color = first.base_color;
             input.albedo_texture = first.albedo_texture;
