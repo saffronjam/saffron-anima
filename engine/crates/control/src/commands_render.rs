@@ -19,13 +19,14 @@ use saffron_protocol::{
     FrameHistoryParams, FrameSampleDto, GiModeDto, ListProbesResult, PerfConfigDto,
     PipelineStatsDto, ProbeRef, ProfileCaptureDto, ProfileCaptureMetadataDto, ProfileLaneDto,
     ProfileSpanDto, ProfilerModeDto, ProfilerModeResult, ProfilerSetModeParams,
-    RecaptureProbesResult, RenderPassTimingDto, RenderPassTimingsDto, RenderStatsDto, SetAaParams,
-    SetAaResult, SetClusteredResult, SetContactShadowsResult, SetDepthPrepassResult,
+    RecaptureProbesResult, RenderPassTimingDto, RenderPassTimingsDto, RenderQualityResult,
+    RenderStatsDto, SetAaParams, SetAaResult, SetClusteredResult, SetDepthPrepassResult,
     SetExposureParams, SetExposureResult, SetGiParams, SetGiResult, SetIblResult,
-    SetPerfConfigParams, SetProbesParams, SetProbesResult, SetRestirResult, SetRtShadowsResult,
-    SetShadowsResult, SetSkinningResult, SetSsaoResult, SetSsgiResult, SetViewModeParams,
-    SetViewModeResult, SetViewportSizeParams, SetViewportSizeResult, ToggleParams, Uuid, Vec3,
-    ViewModeDto, ViewportNativeInfoResult,
+    SetPerfConfigParams, SetProbesParams, SetProbesResult, SetRenderQualityParams, SetRestirResult,
+    SetRtReflectionsResult, SetRtShadowsResult, SetShadowsResult, SetSkinningResult, SetSsrResult,
+    SetTonemapParams, SetViewModeParams, SetViewModeResult, SetViewportPowerStateParams,
+    SetViewportSizeParams, SetViewportSizeResult, ToggleParams, TonemapResult, Uuid, Vec3,
+    ViewModeDto, ViewportNativeInfoResult, ViewportPowerStateResult,
 };
 use saffron_rendering::{
     ActiveAlarm, AlarmDrain, AlarmEvent, AlarmEventKind, AlarmSeverity, CaptureMode, CaptureState,
@@ -35,10 +36,21 @@ use saffron_rendering::{
 use saffron_scene::ReflectionProbe;
 
 use crate::error::Error;
-use crate::registry::{CommandRegistry, ControlRenderer};
+use crate::registry::{CommandRegistry, ControlRenderer, EngineContext};
 use crate::server::control_socket_path;
 
 /// Converts a glam world vector into the wire `Vec3`.
+/// Builds the `RenderQualityResult` reply from the renderer's current tier + resolved per-effect
+/// state (shared by `set-render-quality` and `get-render-quality`).
+fn render_quality_result(ctx: &EngineContext<'_>) -> RenderQualityResult {
+    RenderQualityResult {
+        tier: ctx.renderer.render_quality_tier(),
+        ssgi: ctx.renderer.ssgi_enabled(),
+        gtao: ctx.renderer.ssao_enabled(),
+        contact_shadows: ctx.renderer.contact_shadows_enabled(),
+    }
+}
+
 fn to_vec3(v: saffron_geometry::glam::Vec3) -> Vec3 {
     Vec3 {
         x: v.x,
@@ -201,10 +213,18 @@ fn render_stats_dto(renderer: &dyn ControlRenderer) -> RenderStatsDto {
         ssao: renderer.ssao_enabled(),
         contact_shadows: renderer.contact_shadows_enabled(),
         ssgi: renderer.ssgi_enabled(),
+        quality: renderer.render_quality_tier(),
+        tonemap: renderer.tonemap_mode(),
+        idle: renderer.reactive_idle(),
+        converged: renderer.reactive_converged(),
+        redraw_reasons: renderer.redraw_reasons(),
+        power_state: renderer.power_state(),
         ddgi: renderer.ddgi_enabled(),
         rt_supported: renderer.rt_supported(),
         rt_shadows: renderer.rt_shadows_enabled(),
         restir: renderer.restir_enabled(),
+        ssr: renderer.ssr_enabled(),
+        rt_reflections: renderer.rt_reflections_enabled(),
         blas_count: renderer.rt_blas_count() as i32,
         pipelines: renderer.pipeline_count() as i32,
         bindless_textures: renderer.bindless_texture_count() as i32,
@@ -243,6 +263,7 @@ fn perf_config_dto(config: PerfConfig) -> PerfConfigDto {
         frozen_ms: config.frozen_ms,
         vram_warn_frac: config.vram_warn_frac,
         vram_crit_frac: config.vram_crit_frac,
+        auto_quality: config.auto_quality,
     }
 }
 
@@ -578,6 +599,9 @@ pub fn register_render_commands(reg: &mut CommandRegistry) {
             if let Some(v) = params.vram_crit_frac {
                 config.vram_crit_frac = v;
             }
+            if let Some(v) = params.auto_quality {
+                config.auto_quality = v;
+            }
             ctx.renderer.set_perf_config(config);
             Ok(perf_config_dto(ctx.renderer.perf_config()))
         },
@@ -642,36 +666,38 @@ pub fn register_render_commands(reg: &mut CommandRegistry) {
         },
     );
 
-    reg.register::<ToggleParams, SetSsaoResult>(
-        "set-ssao",
-        "set-ssao {0|1} — toggle screen-space ambient occlusion (GTAO)",
+    reg.register::<SetRenderQualityParams, RenderQualityResult>(
+        "set-render-quality",
+        "set-render-quality {low|medium|high|ultra} — the SSGI/GTAO/contact-shadow quality knob",
         |ctx, params| {
-            ctx.renderer.set_ssao(params.enabled.unwrap_or(true));
-            Ok(SetSsaoResult {
-                ssao: ctx.renderer.ssao_enabled(),
-            })
+            if !ctx.renderer.set_render_quality(&params.tier) {
+                return Err(Error::command(format!(
+                    "unknown render-quality tier '{}' (expected low|medium|high|ultra)",
+                    params.tier
+                )));
+            }
+            Ok(render_quality_result(ctx))
         },
     );
 
-    reg.register::<ToggleParams, SetContactShadowsResult>(
-        "set-contact-shadows",
-        "set-contact-shadows {0|1} — screen-space contact shadows",
-        |ctx, params| {
-            ctx.renderer
-                .set_contact_shadows(params.enabled.unwrap_or(true));
-            Ok(SetContactShadowsResult {
-                contact_shadows: ctx.renderer.contact_shadows_enabled(),
-            })
-        },
+    reg.register::<EmptyParams, RenderQualityResult>(
+        "get-render-quality",
+        "get-render-quality — the active render-quality tier + resolved per-effect state",
+        |ctx, _params| Ok(render_quality_result(ctx)),
     );
 
-    reg.register::<ToggleParams, SetSsgiResult>(
-        "set-ssgi",
-        "set-ssgi {0|1} — screen-space one-bounce global illumination",
+    reg.register::<SetTonemapParams, TonemapResult>(
+        "set-tonemap",
+        "set-tonemap {reinhard|aces|agx|pbr-neutral} — the HDR→display tonemap operator",
         |ctx, params| {
-            ctx.renderer.set_ssgi(params.enabled.unwrap_or(true));
-            Ok(SetSsgiResult {
-                ssgi: ctx.renderer.ssgi_enabled(),
+            if !ctx.renderer.set_tonemap(&params.mode) {
+                return Err(Error::command(format!(
+                    "unknown tonemap '{}' (expected reinhard|aces|agx|pbr-neutral)",
+                    params.mode
+                )));
+            }
+            Ok(TonemapResult {
+                mode: ctx.renderer.tonemap_mode(),
             })
         },
     );
@@ -700,6 +726,32 @@ pub fn register_render_commands(reg: &mut CommandRegistry) {
             ctx.renderer.set_restir(params.enabled.unwrap_or(true));
             Ok(SetRestirResult {
                 restir: ctx.renderer.restir_enabled(),
+            })
+        },
+    );
+
+    reg.register::<ToggleParams, SetSsrResult>(
+        "set-ssr",
+        "set-ssr {0|1} — screen-space reflections (sharp mirror reflections on smooth surfaces)",
+        |ctx, params| {
+            ctx.renderer.set_ssr(params.enabled.unwrap_or(true));
+            Ok(SetSsrResult {
+                ssr: ctx.renderer.ssr_enabled(),
+            })
+        },
+    );
+
+    reg.register::<ToggleParams, SetRtReflectionsResult>(
+        "set-rt-reflections",
+        "set-rt-reflections {0|1} — ray-traced reflections (off-screen-aware, if RT supported)",
+        |ctx, params| {
+            if !ctx.renderer.rt_supported() {
+                return Err(Error::command("ray tracing not supported on this device"));
+            }
+            ctx.renderer
+                .set_rt_reflections(params.enabled.unwrap_or(true));
+            Ok(SetRtReflectionsResult {
+                rt_reflections: ctx.renderer.rt_reflections_enabled(),
             })
         },
     );
@@ -772,6 +824,23 @@ pub fn register_render_commands(reg: &mut CommandRegistry) {
                 message: "engine renders offscreen; the editor presents frames from shared \
                           memory on a wayland subsurface"
                     .to_owned(),
+            })
+        },
+    );
+
+    reg.register::<SetViewportPowerStateParams, ViewportPowerStateResult>(
+        "set-viewport-power-state",
+        "set-viewport-power-state {state} — editor viewport visibility (focused/unfocused/occluded) \
+         for idle throttling; occluded suppresses rendering",
+        |ctx, params| {
+            if !ctx.renderer.set_viewport_power_state(&params.state) {
+                return Err(Error::command(format!(
+                    "unknown power state '{}' (expected focused|unfocused|occluded)",
+                    params.state
+                )));
+            }
+            Ok(ViewportPowerStateResult {
+                state: ctx.renderer.power_state(),
             })
         },
     );
@@ -927,9 +996,6 @@ mod tests {
         let cases: &[(&str, &str)] = &[
             ("set-clustered", "clustered"),
             ("set-ibl", "ibl"),
-            ("set-ssao", "ssao"),
-            ("set-contact-shadows", "contactShadows"),
-            ("set-ssgi", "ssgi"),
             ("set-shadows", "shadows"),
             ("set-skinning", "skinning"),
             ("set-depth-prepass", "depthPrepass"),
@@ -945,6 +1011,39 @@ mod tests {
             let off = run(&mut stub, cmd, json!({ "enabled": false }));
             assert_eq!(off["result"][field], json!(false), "{cmd} off");
         }
+    }
+
+    #[test]
+    fn render_quality_tier_applies_echoes_and_rejects_unknown() {
+        // `set-render-quality` applies a tier and echoes the resolved per-effect state;
+        // `get-render-quality` reads it back. The SSGI / GTAO / contact flags follow the tier.
+        let mut stub = StubRenderer::default();
+        let low = run(&mut stub, "set-render-quality", json!({ "tier": "low" }));
+        assert_eq!(low["ok"], json!(true));
+        assert_eq!(low["result"]["tier"], json!("low"));
+        assert_eq!(low["result"]["ssgi"], json!(false), "low disables SSGI");
+        assert_eq!(low["result"]["gtao"], json!(false), "low disables GTAO");
+
+        let high = run(&mut stub, "set-render-quality", json!({ "tier": "high" }));
+        assert_eq!(high["result"]["ssgi"], json!(true), "high enables SSGI");
+        assert_eq!(
+            high["result"]["contactShadows"],
+            json!(true),
+            "high enables contact shadows"
+        );
+
+        // The read-back command reports the tier just applied.
+        let got = run(&mut stub, "get-render-quality", json!({}));
+        assert_eq!(got["result"]["tier"], json!("high"));
+
+        // An unknown tier name is a typed error, not a silent default.
+        let bad = run(
+            &mut stub,
+            "set-render-quality",
+            json!({ "tier": "cinematic" }),
+        );
+        assert_eq!(bad["ok"], json!(false));
+        assert!(bad.get("error").is_some());
     }
 
     #[test]

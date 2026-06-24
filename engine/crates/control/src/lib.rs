@@ -27,7 +27,7 @@ mod test_support;
 pub use context::ControlContext;
 pub use error::{Error, Result};
 pub use registry::{
-    Command, CommandRegistry, ControlRenderer, EngineContext, positional_or,
+    Command, CommandRegistry, ControlRenderer, EngineContext, is_read_only_command, positional_or,
     register_builtin_commands,
 };
 pub use selector::{entity_ref_dto, entity_uuid, resolve_entity};

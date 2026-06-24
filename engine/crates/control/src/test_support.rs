@@ -99,6 +99,12 @@ impl ThumbnailGpu for StubGpu {
     }
 }
 
+/// Resolves a tier name to its [`saffron_rendering::RenderQuality`], `None` for an unknown name —
+/// so the stub's GTAO / contact / SSGI enabled flags derive from the tier exactly like the renderer.
+fn resolved_tier(name: &str) -> Option<saffron_rendering::RenderQuality> {
+    saffron_rendering::QualityTier::from_name(name).map(saffron_rendering::QualityTier::resolve)
+}
+
 /// An in-memory renderer stub: every toggle round-trips through a plain field so a
 /// handler's "echo the applied state" contract is exercised without a GPU. `rt_supported`
 /// defaults `false`, matching a software device, so the RT-gated handlers take their
@@ -108,15 +114,20 @@ pub struct StubRenderer {
     pub depth_prepass: bool,
     pub shadows: bool,
     pub ibl: bool,
-    pub ssao: bool,
-    pub contact_shadows: bool,
-    pub ssgi: bool,
+    /// The render-quality tier name; the GTAO / contact / SSGI enabled flags derive from it.
+    pub quality_tier: String,
+    /// The editor viewport power state name (`focused`/`unfocused`/`occluded`).
+    pub power_state: String,
+    /// The active tonemap operator name.
+    pub tonemap: String,
     pub ddgi: bool,
     pub reflection_probes: bool,
     pub skinning: bool,
     pub rt_supported: bool,
     pub rt_shadows: bool,
     pub restir: bool,
+    pub ssr: bool,
+    pub rt_reflections: bool,
     pub view_mode: ViewMode,
     pub aa_samples: u32,
     pub aa_fxaa: bool,
@@ -145,15 +156,17 @@ impl Default for StubRenderer {
             depth_prepass: false,
             shadows: true,
             ibl: true,
-            ssao: false,
-            contact_shadows: false,
-            ssgi: false,
+            quality_tier: "high".to_owned(),
+            power_state: "focused".to_owned(),
+            tonemap: "aces".to_owned(),
             ddgi: false,
             reflection_probes: true,
             skinning: true,
             rt_supported: false,
             rt_shadows: false,
             restir: false,
+            ssr: false,
+            rt_reflections: false,
             view_mode: ViewMode::Lit,
             aa_samples: 1,
             aa_fxaa: false,
@@ -212,22 +225,55 @@ impl ControlRenderer for StubRenderer {
         self.ibl = enabled;
     }
     fn ssao_enabled(&self) -> bool {
-        self.ssao
-    }
-    fn set_ssao(&mut self, enabled: bool) {
-        self.ssao = enabled;
+        resolved_tier(&self.quality_tier).is_some_and(|q| q.gtao_enabled)
     }
     fn contact_shadows_enabled(&self) -> bool {
-        self.contact_shadows
-    }
-    fn set_contact_shadows(&mut self, enabled: bool) {
-        self.contact_shadows = enabled;
+        resolved_tier(&self.quality_tier).is_some_and(|q| q.contact_enabled)
     }
     fn ssgi_enabled(&self) -> bool {
-        self.ssgi
+        resolved_tier(&self.quality_tier).is_some_and(|q| q.ssgi_enabled)
     }
-    fn set_ssgi(&mut self, enabled: bool) {
-        self.ssgi = enabled;
+    fn render_quality_tier(&self) -> String {
+        self.quality_tier.clone()
+    }
+    fn set_render_quality(&mut self, tier: &str) -> bool {
+        if saffron_rendering::QualityTier::from_name(tier).is_some() {
+            self.quality_tier = tier.to_owned();
+            true
+        } else {
+            false
+        }
+    }
+    fn tonemap_mode(&self) -> String {
+        self.tonemap.clone()
+    }
+    fn set_tonemap(&mut self, mode: &str) -> bool {
+        if saffron_rendering::TonemapMode::from_name(mode).is_some() {
+            self.tonemap = mode.to_owned();
+            true
+        } else {
+            false
+        }
+    }
+    fn reactive_idle(&self) -> bool {
+        false
+    }
+    fn reactive_converged(&self) -> bool {
+        false
+    }
+    fn redraw_reasons(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn power_state(&self) -> String {
+        self.power_state.clone()
+    }
+    fn set_viewport_power_state(&mut self, state: &str) -> bool {
+        if saffron_rendering::PowerState::from_name(state).is_some() {
+            self.power_state = state.to_owned();
+            true
+        } else {
+            false
+        }
     }
     fn ddgi_enabled(&self) -> bool {
         self.ddgi
@@ -265,6 +311,18 @@ impl ControlRenderer for StubRenderer {
     }
     fn set_restir(&mut self, enabled: bool) {
         self.restir = enabled;
+    }
+    fn ssr_enabled(&self) -> bool {
+        self.ssr
+    }
+    fn set_ssr(&mut self, enabled: bool) {
+        self.ssr = enabled;
+    }
+    fn rt_reflections_enabled(&self) -> bool {
+        self.rt_reflections
+    }
+    fn set_rt_reflections(&mut self, enabled: bool) {
+        self.rt_reflections = enabled;
     }
     fn rt_blas_count(&self) -> u32 {
         0

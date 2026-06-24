@@ -4,6 +4,7 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use saffron_assets::AssetServer;
 use saffron_physics::World;
@@ -118,6 +119,10 @@ impl ControlContext {
     /// failed to bind.
     ///
     /// `physics` is the live play world (non-owning) or `None` in Edit.
+    ///
+    /// Returns `true` when at least one **mutating** command ran this drain (anything not
+    /// [`is_read_only_command`] that completed `ok`), so the host can request a viewport redraw
+    /// while a static scene's read-only pollers leave the GPU idle.
     pub fn poll(
         &mut self,
         window: &mut Window,
@@ -125,9 +130,9 @@ impl ControlContext {
         scene_edit: &mut SceneEditContext,
         assets: &mut AssetServer,
         physics: Option<&mut World>,
-    ) {
+    ) -> bool {
         let Some(server) = self.server.as_mut() else {
-            return;
+            return false;
         };
         let mut ctx = EngineContext {
             window,
@@ -137,13 +142,27 @@ impl ControlContext {
             physics,
         };
         let registry = &self.registry;
+        let mut mutated = false;
         server.drain(|line| match saffron_json::parse_json(line) {
-            Ok(request) => saffron_json::dump_json(&registry.dispatch(&mut ctx, &request), -1),
+            Ok(request) => {
+                let reply = registry.dispatch(&mut ctx, &request);
+                // A command that changed rendered state requests a redraw; reads (the editor's
+                // per-frame pollers) are allow-listed so a static viewport stays GPU-quiet. Only a
+                // successful (`ok`) non-read-only command counts — a failed mutation changed nothing.
+                if reply.get("ok").and_then(Value::as_bool) == Some(true) {
+                    let cmd = request.get("cmd").and_then(Value::as_str).unwrap_or("");
+                    if !crate::registry::is_read_only_command(cmd) {
+                        mutated = true;
+                    }
+                }
+                saffron_json::dump_json(&reply, -1)
+            }
             Err(_) => {
                 // A non-JSON line gets the frozen invalid-request envelope, with
                 // no `id` to echo.
                 r#"{"ok":false,"error":"invalid JSON request"}"#.to_owned()
             }
         });
+        mutated
     }
 }

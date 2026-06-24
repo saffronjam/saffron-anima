@@ -68,18 +68,32 @@ pub trait ControlRenderer {
     fn ibl_enabled(&self) -> bool;
     /// Toggles IBL ambient.
     fn set_ibl(&mut self, enabled: bool);
-    /// Whether GTAO screen-space ambient occlusion is on.
+    /// Whether GTAO screen-space ambient occlusion is on (per the active quality tier).
     fn ssao_enabled(&self) -> bool;
-    /// Toggles GTAO.
-    fn set_ssao(&mut self, enabled: bool);
-    /// Whether screen-space contact shadows are on.
+    /// Whether screen-space contact shadows are on (per the active quality tier).
     fn contact_shadows_enabled(&self) -> bool;
-    /// Toggles contact shadows.
-    fn set_contact_shadows(&mut self, enabled: bool);
-    /// Whether screen-space one-bounce GI is on.
+    /// Whether screen-space one-bounce GI is on (per the active quality tier).
     fn ssgi_enabled(&self) -> bool;
-    /// Toggles SSGI.
-    fn set_ssgi(&mut self, enabled: bool);
+    /// The active render-quality tier name (`low`/`medium`/`high`/`ultra`/`custom`) — the single
+    /// knob for the SSGI / GTAO / contact-shadow stack.
+    fn render_quality_tier(&self) -> String;
+    /// Applies a render-quality tier by name; returns `false` for an unknown name (no change).
+    fn set_render_quality(&mut self, tier: &str) -> bool;
+    /// The active tonemap operator name (`reinhard`/`aces`/`agx`/`pbr-neutral`).
+    fn tonemap_mode(&self) -> String;
+    /// Selects the tonemap operator by name; returns `false` for an unknown name.
+    fn set_tonemap(&mut self, mode: &str) -> bool;
+
+    /// Whether the reactive loop is idling (skipping renders) per the host's last snapshot.
+    fn reactive_idle(&self) -> bool;
+    /// Whether the temporal effects have converged per the host's last snapshot.
+    fn reactive_converged(&self) -> bool;
+    /// The reasons continuous render is currently held (empty when idle).
+    fn redraw_reasons(&self) -> Vec<String>;
+    /// The editor viewport power state name (`focused`/`unfocused`/`occluded`).
+    fn power_state(&self) -> String;
+    /// Sets the editor viewport power state by name; returns `false` for an unknown name.
+    fn set_viewport_power_state(&mut self, state: &str) -> bool;
     /// Whether DDGI multi-bounce GI is on.
     fn ddgi_enabled(&self) -> bool;
     /// Toggles DDGI.
@@ -105,6 +119,14 @@ pub trait ControlRenderer {
     fn restir_enabled(&self) -> bool;
     /// Toggles ReSTIR (the caller gates on [`ControlRenderer::rt_supported`]).
     fn set_restir(&mut self, enabled: bool);
+    /// Whether screen-space reflections are on.
+    fn ssr_enabled(&self) -> bool;
+    /// Toggles screen-space reflections.
+    fn set_ssr(&mut self, enabled: bool);
+    /// Whether ray-traced reflections are on.
+    fn rt_reflections_enabled(&self) -> bool;
+    /// Toggles ray-traced reflections (the caller gates on [`ControlRenderer::rt_supported`]).
+    fn set_rt_reflections(&mut self, enabled: bool);
     /// The built static-mesh BLAS count.
     fn rt_blas_count(&self) -> u32;
 
@@ -523,6 +545,38 @@ pub fn register_builtin_commands(reg: &mut CommandRegistry) {
 /// The process id, for the `ping` reply.
 fn process_id() -> i32 {
     i32::try_from(std::process::id()).unwrap_or(0)
+}
+
+/// Whether a control command leaves the rendered image unchanged — the editor's per-frame
+/// reconcile/stats pollers and every pure query.
+///
+/// The reactive render loop ([`saffron_app::RedrawController`]) renders a frame for any command
+/// **not** listed here, so the classification errs toward rendering: a query missing from this set
+/// costs at most one redundant frame per poll, while a *mutating* command can never be mislabeled
+/// read-only (the default is "mutates"), so a static viewport never shows a stale frame. This is the
+/// single source of truth for the read-vs-mutate split; `poll` consults it after each dispatch.
+#[must_use]
+pub fn is_read_only_command(name: &str) -> bool {
+    // Every `get-*` / `list-*` is a query by construction.
+    if name.starts_with("get-") || name.starts_with("list-") {
+        return true;
+    }
+    matches!(
+        name,
+        // liveness + help
+        "ping" | "help"
+        // telemetry the stats / profiler panels poll each interval
+        | "render-stats" | "pass-timings" | "frame-history" | "profiler.capture-status"
+        // scene / entity / physics queries the reconcile poll runs every tick
+        | "inspect" | "physics-state" | "physics-bodies"
+        // ring-buffer drains: advance a read cursor, never the image
+        | "drain-alarms" | "drain-contacts" | "drain-script-errors" | "drain-script-logs"
+        // asset / material / model introspection
+        | "model-info" | "asset-references" | "asset-usages" | "probe-asset"
+        | "material-get" | "material-list" | "viewport-native-info" | "thumbnail-cache"
+        // spatial queries (cast a ray, read back a hit — no scene change)
+        | "raycast" | "shapecast" | "pick" | "pick-skeleton-joint"
+    )
 }
 
 #[cfg(test)]

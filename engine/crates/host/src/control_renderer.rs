@@ -84,20 +84,56 @@ impl ControlRenderer for HostControlRenderer<'_> {
     fn ssao_enabled(&self) -> bool {
         self.renderer.ssao_enabled()
     }
-    fn set_ssao(&mut self, enabled: bool) {
-        self.renderer.set_ssao(enabled);
-    }
     fn contact_shadows_enabled(&self) -> bool {
         self.renderer.contact_shadows_enabled()
-    }
-    fn set_contact_shadows(&mut self, enabled: bool) {
-        self.renderer.set_contact_shadows(enabled);
     }
     fn ssgi_enabled(&self) -> bool {
         self.renderer.ssgi_enabled()
     }
-    fn set_ssgi(&mut self, enabled: bool) {
-        self.renderer.set_ssgi(enabled);
+    fn render_quality_tier(&self) -> String {
+        self.renderer.render_quality().tier.as_str().to_owned()
+    }
+    fn set_render_quality(&mut self, tier: &str) -> bool {
+        match saffron_rendering::QualityTier::from_name(tier) {
+            Some(tier) => {
+                self.renderer.set_render_quality(tier.resolve());
+                true
+            }
+            None => false,
+        }
+    }
+    fn tonemap_mode(&self) -> String {
+        self.renderer.tonemap_mode().as_str().to_owned()
+    }
+    fn set_tonemap(&mut self, mode: &str) -> bool {
+        match saffron_rendering::TonemapMode::from_name(mode) {
+            Some(mode) => {
+                self.renderer.set_tonemap_mode(mode);
+                true
+            }
+            None => false,
+        }
+    }
+    fn reactive_idle(&self) -> bool {
+        self.renderer.reactive_idle()
+    }
+    fn reactive_converged(&self) -> bool {
+        self.renderer.reactive_converged()
+    }
+    fn redraw_reasons(&self) -> Vec<String> {
+        self.renderer.reactive_reasons().to_vec()
+    }
+    fn power_state(&self) -> String {
+        self.renderer.power_state().as_str().to_owned()
+    }
+    fn set_viewport_power_state(&mut self, state: &str) -> bool {
+        match saffron_rendering::PowerState::from_name(state) {
+            Some(state) => {
+                self.renderer.set_power_state(state);
+                true
+            }
+            None => false,
+        }
     }
     fn ddgi_enabled(&self) -> bool {
         self.renderer.ddgi_enabled()
@@ -135,6 +171,18 @@ impl ControlRenderer for HostControlRenderer<'_> {
     }
     fn set_restir(&mut self, enabled: bool) {
         self.renderer.set_restir(enabled);
+    }
+    fn ssr_enabled(&self) -> bool {
+        self.renderer.ssr_enabled()
+    }
+    fn set_ssr(&mut self, enabled: bool) {
+        self.renderer.set_ssr(enabled);
+    }
+    fn rt_reflections_enabled(&self) -> bool {
+        self.renderer.rt_reflections_enabled()
+    }
+    fn set_rt_reflections(&mut self, enabled: bool) {
+        self.renderer.set_rt_reflections(enabled);
     }
     fn rt_blas_count(&self) -> u32 {
         self.renderer.rt_blas_count()
