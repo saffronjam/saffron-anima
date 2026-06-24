@@ -91,11 +91,39 @@ the skinned draw goes through a dedicated PSO that blends the palette per vertex
 in `mesh.slang`, the extra `VertexSkin` vertex stream). Reparenting a joint out of its skeleton is
 allowed (bones are entities) and simply changes its world matrix, hence the deformation.
 
+## Resolving a model's draw set
+
+A spawned model is a forest, not one entity. A single-identity glTF collapses to one entity that
+carries the `Mesh` directly, but a multi-node model spawns a bare container root with the meshes on
+**child** nodes, and a rigged or animated model puts the `SkinnedMesh` on a child while the container
+carries the `AnimationPlayer`. So a display surface that resolves a single entity and asks whether
+*that* entity has a mesh sees only the container — and wrongly concludes the model is empty, frames a
+point at the origin, or draws no skeleton.
+
+Every surface that asks "what does this model render" therefore resolves the **forest**, through
+matched helpers that walk the subtree:
+
+- `model_mesh_entities(root)` — every `Mesh`/`SkinnedMesh`-bearing entity in the subtree (the draw
+  set); `model_has_renderable(root)` is the cheap predicate the asset-preview gate keys off.
+- `model_rig_entity(root)` — the first `SkinnedMesh` entity, the rig the skeleton overlay and the
+  rig-only commands target. Distinct from `animatable_descendant`, which resolves the *animation
+  authority* (`SkinnedMesh` **or** `AnimationPlayer`) and so stops at a player-bearing container.
+- `model_morph_entity(root)` — the `MorphComponent` carrier a morph-weight write targets.
+
+These compose with `model_root_of` (the nearest `ModelInstance` ancestor), which resolves a picked leaf
+back to the whole model. The forest bounds union — every mesh box transformed to world, skinned ones
+through the joint palette — lives in `assets` as `model_render_aabb` (a subtree) and `scene_render_aabb`
+(the whole scene), since it needs the asset server to read each mesh's box. Preview framing, the
+`focus` command, and the preview floor all consume it, so a multi-part model frames around its
+assembled geometry rather than one node.
+
 ## In the code
 
 | What | File | Symbols |
 |---|---|---|
 | Relationship + world-transform components | `scene/src/component.rs` | `Relationship`, `WorldTransform` |
+| Forest-aware model resolvers | `scene/src/hierarchy.rs` | `model_mesh_entities`, `model_has_renderable`, `model_rig_entity`, `model_morph_entity`, `model_root_of` |
+| Forest bounds union | `assets/src/render_scene.rs` | `model_render_aabb`, `scene_render_aabb` |
 | Cache rebuild + cycle cut | `scene/src/hierarchy.rs` | `relink_hierarchy` |
 | Per-frame flatten + accessors | `scene/src/hierarchy.rs` | `update_world_transforms`, `world_matrix`, `compose_world_matrix`, `local_matrix` |
 | Reparent + subtree destroy | `scene/src/hierarchy.rs` · `scene/src/scene.rs` | `set_parent`, `set_local_from_matrix`, `destroy_entity` |
