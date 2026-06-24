@@ -4,8 +4,19 @@
 //! Provides the [`Layer`] trait (a set of optional lifecycle hooks), the [`App`] /
 //! [`AppConfig`] types, and [`run`] — the
 //! `poll → on_update → begin_frame → on_render → on_ui → begin_frame_graph →
-//! on_render_graph → end_frame` loop with the `SAFFRON_EXIT_AFTER_FRAMES` /
-//! `SAFFRON_MAX_FPS` env knobs and the `wait_gpu_idle`-before-teardown ordering.
+//! on_render_graph → end_frame` loop with the `SAFFRON_EXIT_AFTER_FRAMES` frame
+//! limit and the `wait_gpu_idle`-before-teardown ordering.
+//!
+//! ## Reactive pacing
+//!
+//! The loop is **reactive**, not free-running. A [`RedrawController`] on [`App`] decides each
+//! iteration whether to render or skip: the host sets the per-frame activity in `on_update`
+//! (continuous while an animation/physics sim runs or an edit smooths, a one-shot request when a
+//! mutating control command lands), and the loop renders at the renderer's `target_fps`
+//! ([`FrameHost::pace_target_fps`]) while active, holds a brief keep-warm window after the last
+//! activity, then drops to a poll-only idle (the GPU goes quiet, the last published frame stays on
+//! screen). A layer-less app and the GPU-free test host default to *continuous* — they render every
+//! frame as before.
 //!
 //! Two modes share one [`run`]: a **windowed** standalone host (a winit window +
 //! a surface-bound renderer that presents through a real swapchain) and a
@@ -141,6 +152,14 @@ pub trait FrameHost {
         _dt_seconds: f32,
     ) {
     }
+
+    /// The render rate the reactive loop paces to while active, in frames per second, or `None`
+    /// to run uncapped. The real [`Renderer`] returns its `target_fps` (the perf-config field the
+    /// editor drives over the control plane); the GPU-free test host returns `None` so unit tests
+    /// run flat-out. A non-positive target reads as uncapped.
+    fn pace_target_fps(&self) -> Option<f64> {
+        None
+    }
 }
 
 impl FrameHost for Renderer {
@@ -215,6 +234,162 @@ impl FrameHost for Renderer {
     fn finalize_frame_telemetry(&mut self, busy_seconds: f32, wait_seconds: f32, dt_seconds: f32) {
         self.finalize_frame_telemetry(busy_seconds * 1000.0, wait_seconds * 1000.0, dt_seconds);
     }
+
+    fn pace_target_fps(&self) -> Option<f64> {
+        Some(f64::from(self.perf_config().target_fps))
+    }
+}
+
+/// How long the loop keeps rendering at the full rate after the last activity, before dropping to
+/// idle. The anti-downclock-stutter / post-interaction-smoothness window (a locked decision: never
+/// hard-stop the loop the instant activity ceases).
+const KEEP_WARM: Duration = Duration::from_millis(600);
+
+/// Rendered frames a temporal effect (TAA / SSGI history) needs after an invalidation to converge.
+/// While temporal accumulation is active, the loop renders at least this many frames after the last
+/// activity so a static viewport settles to its converged image before idling on it — the
+/// "converge-then-stop" half of the reactive loop. At a low target fps this outlasts the wall-clock
+/// [`KEEP_WARM`]; at a high one [`KEEP_WARM`] dominates. With no temporal effect on, convergence is
+/// immediate (the keep-warm alone applies).
+const CONVERGE_FRAMES: u32 = 24;
+
+/// The poll interval while fully idle: the loop still drains the control socket this often (so a
+/// command wakes the viewport promptly) but issues no GPU work, so the device goes quiet.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Decides, each loop iteration, whether to render a frame or skip it.
+///
+/// The host sets the per-frame activity in `on_update`: [`RedrawController::set_continuous`] while
+/// something evolves on its own (an animation/physics sim, an edit smoothing),
+/// [`RedrawController::request_redraw`] as a one-shot when a mutating control command lands, and
+/// [`RedrawController::set_temporal_active`] when TAA / SSGI accumulation is on. The loop then asks
+/// [`RedrawController::poll_should_render`]: it renders while active, then keeps rendering until
+/// **both** the wall-clock [`KEEP_WARM`] window has elapsed **and** the temporal effects have had
+/// [`CONVERGE_FRAMES`] frames to settle, then idles holding the converged frame.
+///
+/// The default is `continuous` — a layer-less app and the GPU-free test host render every frame, so
+/// only a host that opts into reactivity ever idles.
+pub struct RedrawController {
+    /// Set each frame by the host: `true` while some state evolves without a new command.
+    continuous: bool,
+    /// One-shot: a mutating command landed this frame; render it (consumed by the decision).
+    dirty: bool,
+    /// Whether a temporal effect (TAA / SSGI history) is accumulating — gates the convergence window.
+    temporal_active: bool,
+    /// Hard override: while set (the viewport is occluded / minimized) the loop renders nothing,
+    /// regardless of activity — the host drives it from the editor's window-visibility signal.
+    suppressed: bool,
+    /// When activity (continuous or dirty) was last seen, for the keep-warm window.
+    last_activity: Option<Instant>,
+    /// Rendered frames since the last activity — the convergence progress counter.
+    frames_since_activity: u32,
+    /// The verdict the last [`Self::poll_should_render`] returned — the accurate idle readout.
+    last_rendered: bool,
+    /// The named reasons currently forcing continuous render, for observability (Phase 5).
+    reasons: Vec<&'static str>,
+}
+
+impl Default for RedrawController {
+    fn default() -> Self {
+        Self {
+            continuous: true,
+            dirty: false,
+            temporal_active: false,
+            suppressed: false,
+            last_activity: None,
+            frames_since_activity: 0,
+            last_rendered: false,
+            reasons: Vec::new(),
+        }
+    }
+}
+
+impl RedrawController {
+    /// Sets whether some state is evolving on its own this frame (animation/physics/smoothing) —
+    /// the host calls this every `on_update`. `true` forces a render and resets convergence.
+    pub fn set_continuous(&mut self, on: bool) {
+        self.continuous = on;
+    }
+
+    /// Sets whether a temporal effect (TAA / SSGI history) is accumulating this frame, so the loop
+    /// renders a convergence window after activity instead of stopping the instant motion ceases.
+    pub fn set_temporal_active(&mut self, on: bool) {
+        self.temporal_active = on;
+    }
+
+    /// Hard-suppresses all rendering (the viewport is occluded / minimized): the loop idles
+    /// regardless of activity until cleared. The host drives it from the editor's visibility signal.
+    pub fn set_suppressed(&mut self, on: bool) {
+        self.suppressed = on;
+    }
+
+    /// Whether the loop is currently idling rather than rendering — the verdict the last
+    /// [`Self::poll_should_render`] returned (so it accounts for the keep-warm window and
+    /// suppression, not just the activity flags).
+    #[must_use]
+    pub fn is_idle(&self) -> bool {
+        !self.last_rendered
+    }
+
+    /// Records the named reasons (for the Phase-5 observability readout) that the host is holding
+    /// continuous render this frame. Purely informational; [`Self::set_continuous`] drives the
+    /// decision.
+    pub fn set_reasons(&mut self, reasons: Vec<&'static str>) {
+        self.reasons = reasons;
+    }
+
+    /// The reasons continuous render is currently held (empty when idle).
+    #[must_use]
+    pub fn reasons(&self) -> &[&'static str] {
+        &self.reasons
+    }
+
+    /// Whether the temporal effects have converged: not actively driven and past the convergence
+    /// window since the last invalidation (the Phase-5 observability bit).
+    #[must_use]
+    pub fn converged(&self) -> bool {
+        !self.continuous && (!self.temporal_active || self.frames_since_activity >= CONVERGE_FRAMES)
+    }
+
+    /// Requests one render next decision (a mutating control command landed). Resets convergence.
+    pub fn request_redraw(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Resolves the render-or-skip verdict for this iteration at `now`, consuming the one-shot dirty
+    /// flag. Renders while active (continuous or a pending request); after activity, keeps rendering
+    /// until both the keep-warm window has elapsed and the temporal effects have converged
+    /// ([`CONVERGE_FRAMES`] frames); idles otherwise, holding the converged frame.
+    fn poll_should_render(&mut self, now: Instant) -> bool {
+        let render = self.decide(now);
+        self.last_rendered = render;
+        render
+    }
+
+    /// The render-or-skip decision (factored out so [`Self::poll_should_render`] can record it).
+    fn decide(&mut self, now: Instant) -> bool {
+        // Occluded / minimized: render nothing, whatever the activity.
+        if self.suppressed {
+            self.dirty = false;
+            return false;
+        }
+        let active = self.continuous || self.dirty;
+        self.dirty = false;
+        if active {
+            self.last_activity = Some(now);
+            self.frames_since_activity = 0;
+            return true;
+        }
+        let warm = self
+            .last_activity
+            .is_some_and(|t| now.saturating_duration_since(t) < KEEP_WARM);
+        let converging = self.temporal_active && self.frames_since_activity < CONVERGE_FRAMES;
+        let render = warm || converging;
+        if render {
+            self.frames_since_activity = self.frames_since_activity.saturating_add(1);
+        }
+        render
+    }
 }
 
 /// The running application state the loop and the [`Layer`] hooks share.
@@ -232,6 +407,9 @@ pub struct App {
     pub window: Option<Window>,
     /// The loop's run latch; a layer or signal handler sets it `false` to exit.
     pub running: bool,
+    /// The reactive-render verdict source; the host drives it each `on_update`, the loop reads it
+    /// in [`step_frame`]. Defaults to continuous, so a layer-less app renders every frame.
+    pub redraw: RedrawController,
     /// The attached layers. `attach_layer` pushes here; the loop `mem::take`s the
     /// vec out for each hook pass and restores it, so it is empty *during* a hook.
     layers: Vec<Box<dyn Layer>>,
@@ -245,6 +423,7 @@ impl App {
             frame_host,
             window,
             running: false,
+            redraw: RedrawController::default(),
             layers: Vec::new(),
         }
     }
@@ -389,47 +568,43 @@ fn run_inner(config: AppConfig, mode: HostMode) -> Result<()> {
     }
 }
 
-/// The loop's frame-limit and pacing knobs, read once from the environment.
+/// The loop's frame-limit knob, read once from the environment.
 ///
 /// Passed into [`drive`] so the loop body never reads the environment itself,
 /// which keeps the loop tests free of process-global env mutation (the crate
-/// denies `unsafe`, so `std::env::set_var` is unavailable here).
+/// denies `unsafe`, so `std::env::set_var` is unavailable here). The render *rate*
+/// is no longer an env knob — the reactive loop paces to the renderer's `target_fps`
+/// ([`FrameHost::pace_target_fps`]).
 #[derive(Clone, Copy, Default)]
 struct LoopLimits {
     /// `SAFFRON_EXIT_AFTER_FRAMES`: exit after this many frames; `0` = no limit.
     frame_limit: u64,
-    /// `SAFFRON_MAX_FPS`: cap the loop rate; `0` = uncapped.
-    max_fps: u64,
 }
 
 impl LoopLimits {
-    /// Reads both knobs from the environment.
+    /// Reads the frame limit from the environment.
     fn from_env() -> Self {
         Self {
             frame_limit: frame_limit_from_env(),
-            max_fps: max_fps_from_env(),
         }
     }
 }
 
 /// The frame-clock state the per-frame step threads between iterations: the loop's
-/// frame count, the previous-frame instant (for `dt`), and the next-frame deadline
-/// (for `SAFFRON_MAX_FPS` pacing). Shared by the plain headless loop and the
-/// winit-driven windowed loop so both pace and count frames identically.
+/// frame count and the previous-iteration instant (for `dt`). Shared by the plain
+/// headless loop and the winit-driven windowed loop so both pace and count frames
+/// identically.
 struct FrameClock {
     frame_count: u64,
     last: Instant,
-    next_frame: Instant,
 }
 
 impl FrameClock {
     /// Starts the clock at `now`.
     fn new() -> Self {
-        let now = Instant::now();
         Self {
             frame_count: 0,
-            last: now,
-            next_frame: now,
+            last: Instant::now(),
         }
     }
 }
@@ -455,18 +630,19 @@ fn finish(app: &mut App, config: &mut AppConfig) {
     on_exit(app);
 }
 
-/// Runs one frame: the timing record, the `on_update` pass, the (non-minimized)
-/// `begin_frame` + render passes, the telemetry finalize, the frame-limit check, and
-/// the FPS pacing. Sets `app.running = false` when the frame limit is hit or a frame
-/// fails. Shared by both drivers so the hook order, minimized guard, telemetry
-/// split, and pacing are one implementation.
+/// Runs one loop iteration: the `on_update` pass (where the host sets the reactive-render
+/// verdict), then — only if a render is due — the timing record, `begin_frame` + render passes, and
+/// the telemetry finalize, then the frame-limit check and the pacing sleep. Sets
+/// `app.running = false` when the frame limit is hit or a frame fails. Shared by both drivers so the
+/// hook order, minimized guard, reactive skip, telemetry split, and pacing are one implementation.
+///
+/// `on_update` (and so the control-socket drain) runs *every* iteration, including idle ones, so a
+/// command lands within one [`IDLE_POLL_INTERVAL`] even while the GPU is quiet. Only the render is
+/// gated by the [`RedrawController`] verdict.
 fn step_frame(app: &mut App, limits: LoopLimits, clock: &mut FrameClock) {
     let now = Instant::now();
     let dt = TimeSpan::from_seconds((now - clock.last).as_secs_f32());
     clock.last = now;
-    // Feed the frame delta to the GPU host so `render-stats` reports live frame timing.
-    // The first frame's delta is the time since loop start, which the EMA seeds on.
-    app.frame_host.record_frame_timing(dt.seconds);
 
     // The CPU busy window opens here (update + render) and closes after `run_frame`; the
     // GPU fence-wait inside `begin_frame` is the wait split. Both feed the renderer's
@@ -476,8 +652,15 @@ fn step_frame(app: &mut App, limits: LoopLimits, clock: &mut FrameClock) {
 
     let (width, height) = app.frame_host.viewport_size();
     let minimized = width == 0 || height == 0;
+    // The reactive verdict: render while the host reports activity or within the keep-warm window,
+    // skip (holding the last published frame) when idle. A minimized host never renders.
+    let render = !minimized && app.redraw.poll_should_render(now);
+
     let mut wait_seconds = 0.0;
-    if !minimized {
+    if render {
+        // Feed the frame delta to the GPU host so `render-stats` reports live frame timing; only
+        // rendered frames advance it, so idle does not pollute the fps EMA.
+        app.frame_host.record_frame_timing(dt.seconds);
         let before_begin = Instant::now();
         match app.frame_host.begin_frame() {
             Ok(true) => {
@@ -491,13 +674,10 @@ fn step_frame(app: &mut App, limits: LoopLimits, clock: &mut FrameClock) {
                 app.running = false;
             }
         }
-    }
-    // Busy = the whole update+render span minus the fence-wait; never negative.
-    let busy_seconds = (busy_start.elapsed().as_secs_f32() - wait_seconds).max(0.0);
-    // Finalize the frame's telemetry (CPU EMA + history ring + alarms + capture advance).
-    // Skipped on a minimized frame (no render happened), so the history + capture only see
-    // real frames.
-    if !minimized {
+        // Busy = the whole update+render span minus the fence-wait; never negative.
+        let busy_seconds = (busy_start.elapsed().as_secs_f32() - wait_seconds).max(0.0);
+        // Finalize the frame's telemetry (CPU EMA + history ring + alarms + capture advance) only
+        // for rendered frames, so the history + capture only see real frames.
         app.frame_host
             .finalize_frame_telemetry(busy_seconds, wait_seconds, dt.seconds);
     }
@@ -508,7 +688,7 @@ fn step_frame(app: &mut App, limits: LoopLimits, clock: &mut FrameClock) {
         app.running = false;
     }
 
-    pace_loop(limits.max_fps, &mut clock.next_frame);
+    pace_iteration(app.frame_host.as_ref(), render, now);
 }
 
 /// Runs the loop over an already-built [`App`]: `on_create`, `on_attach`, the
@@ -646,12 +826,10 @@ impl ApplicationHandler for WindowedApp {
 
         step_frame(app, self.limits, &mut self.clock);
 
-        // A frame limit / failure inside `step_frame` clears `running`; exit promptly.
-        if app.running {
-            if let Some(window) = app.window.as_ref().and_then(Window::winit_window) {
-                window.request_redraw();
-            }
-        } else {
+        // A frame limit / failure inside `step_frame` clears `running`; exit promptly. `step_frame`
+        // paces the iteration itself (rendering at `target_fps`, or sleeping an idle poll when the
+        // viewport is quiet), so the `ControlFlow::Poll` loop never free-runs.
+        if !app.running {
             event_loop.exit();
         }
     }
@@ -700,18 +878,26 @@ fn run_hook(app: &mut App, mut f: impl FnMut(&mut Box<dyn Layer>, &mut App)) {
     app.layers = layers;
 }
 
-/// Sleeps to honor `SAFFRON_MAX_FPS`, catching up without accumulating debt after
-/// a slow frame. A zero `max_fps` disables pacing.
-fn pace_loop(max_fps: u64, next_frame: &mut Instant) {
-    if max_fps == 0 {
-        return;
-    }
-    *next_frame += Duration::from_nanos(1_000_000_000 / max_fps);
-    let now = Instant::now();
-    if *next_frame < now {
-        *next_frame = now;
+/// Sleeps to pace one loop iteration that started at `iter_start`.
+///
+/// A rendered frame paces to the host's `target_fps` ([`FrameHost::pace_target_fps`]); a `None` or
+/// non-positive target runs uncapped (the GPU-free test host). A skipped (idle / minimized)
+/// iteration sleeps one [`IDLE_POLL_INTERVAL`] so the loop keeps draining the control socket
+/// without burning the CPU or waking the GPU. Pacing from the iteration start (not a running
+/// accumulator) means a frame slower than the interval simply runs back-to-back — correct when the
+/// GPU is the bottleneck.
+fn pace_iteration(frame_host: &dyn FrameHost, rendered: bool, iter_start: Instant) {
+    let deadline = if rendered {
+        match frame_host.pace_target_fps() {
+            Some(fps) if fps > 0.0 => iter_start + Duration::from_secs_f64(1.0 / fps),
+            _ => return,
+        }
     } else {
-        std::thread::sleep(*next_frame - now);
+        iter_start + IDLE_POLL_INTERVAL
+    };
+    let now = Instant::now();
+    if now < deadline {
+        std::thread::sleep(deadline - now);
     }
 }
 
@@ -731,46 +917,26 @@ pub fn attach_layer(app: &mut App, layer: Box<dyn Layer>) {
 /// var is `0`. `0` means "no frame limit".
 #[must_use]
 pub fn frame_limit_from_env() -> u64 {
-    parse_u64_env("SAFFRON_EXIT_AFTER_FRAMES", false)
-}
-
-/// Parses `SAFFRON_MAX_FPS` strictly: a valid non-zero `u64`, else `0` (no cap).
-///
-/// Trailing garbage and a literal `0` are both rejected (logged + ignored).
-#[must_use]
-pub fn max_fps_from_env() -> u64 {
-    parse_u64_env("SAFFRON_MAX_FPS", true)
-}
-
-/// Reads `name` and parses it as a strict `u64`. An unset var returns `0`
-/// silently; a present-but-invalid var logs `name` and returns `0`. The parse
-/// strictness is the pure [`parse_strict_u64`], split out so it is testable
-/// without mutating the process environment (the crate denies `unsafe`, so
-/// `std::env::set_var` is unavailable).
-fn parse_u64_env(name: &str, reject_zero: bool) -> u64 {
-    let Some(raw) = std::env::var_os(name) else {
+    let Some(raw) = std::env::var_os("SAFFRON_EXIT_AFTER_FRAMES") else {
         return 0;
     };
     let text = raw.to_string_lossy();
-    match parse_strict_u64(&text, reject_zero) {
+    match parse_strict_u64(&text) {
         Some(value) => value,
         None => {
-            tracing::error!("invalid {name}='{text}', ignoring");
+            tracing::error!("invalid SAFFRON_EXIT_AFTER_FRAMES='{text}', ignoring");
             0
         }
     }
 }
 
 /// Parses `text` as a strict `u64`: the whole string must be a base-10 `u64` (no
-/// trailing garbage, no sign, no whitespace). Returns `None` on any rejection.
-/// `reject_zero` additionally rejects a parsed `0` (the `SAFFRON_MAX_FPS` `== 0`
-/// ignore rule); for `SAFFRON_EXIT_AFTER_FRAMES`, `0` is a valid value meaning "no
-/// limit".
-fn parse_strict_u64(text: &str, reject_zero: bool) -> Option<u64> {
-    match text.parse::<u64>() {
-        Ok(value) if !(reject_zero && value == 0) => Some(value),
-        _ => None,
-    }
+/// trailing garbage, no sign, no whitespace). `0` is a valid value (no frame limit).
+/// Returns `None` on any rejection. Split out pure so it is testable without mutating
+/// the process environment (the crate denies `unsafe`, so `std::env::set_var` is
+/// unavailable).
+fn parse_strict_u64(text: &str) -> Option<u64> {
+    text.parse::<u64>().ok()
 }
 
 #[cfg(test)]
@@ -821,10 +987,7 @@ mod tests {
     /// The frame limit cannot be reached via env in this `unsafe`-free crate, so
     /// the loop tests pass `LoopLimits` explicitly.
     fn limited(frame_limit: u64) -> LoopLimits {
-        LoopLimits {
-            frame_limit,
-            max_fps: 0,
-        }
+        LoopLimits { frame_limit }
     }
 
     #[test]
@@ -847,40 +1010,12 @@ mod tests {
     #[test]
     fn frame_limit_parses_strictly() {
         // `SAFFRON_EXIT_AFTER_FRAMES`: `0` is a valid value (no limit).
-        assert_eq!(
-            parse_strict_u64("10", false),
-            Some(10),
-            "valid count parses"
-        );
-        assert_eq!(
-            parse_strict_u64("0", false),
-            Some(0),
-            "literal 0 is allowed"
-        );
-        assert_eq!(
-            parse_strict_u64("10x", false),
-            None,
-            "trailing garbage rejected"
-        );
-        assert_eq!(parse_strict_u64("", false), None, "empty rejected");
-        assert_eq!(parse_strict_u64("-1", false), None, "sign rejected");
-        assert_eq!(parse_strict_u64(" 5", false), None, "whitespace rejected");
-    }
-
-    #[test]
-    fn max_fps_parses_strictly_and_rejects_zero() {
-        // `SAFFRON_MAX_FPS`: a literal 0 is rejected (the `== 0` ignore rule).
-        assert_eq!(
-            parse_strict_u64("500", true),
-            Some(500),
-            "valid value parses"
-        );
-        assert_eq!(parse_strict_u64("0", true), None, "literal 0 rejected");
-        assert_eq!(
-            parse_strict_u64("60fps", true),
-            None,
-            "trailing garbage rejected"
-        );
+        assert_eq!(parse_strict_u64("10"), Some(10), "valid count parses");
+        assert_eq!(parse_strict_u64("0"), Some(0), "literal 0 is allowed");
+        assert_eq!(parse_strict_u64("10x"), None, "trailing garbage rejected");
+        assert_eq!(parse_strict_u64(""), None, "empty rejected");
+        assert_eq!(parse_strict_u64("-1"), None, "sign rejected");
+        assert_eq!(parse_strict_u64(" 5"), None, "whitespace rejected");
     }
 
     #[test]
@@ -896,6 +1031,83 @@ mod tests {
             HostMode::Headless,
             "present → headless"
         );
+    }
+
+    #[test]
+    fn redraw_controller_renders_while_active_then_idles_past_keep_warm() {
+        let mut rc = RedrawController::default();
+        let t0 = Instant::now();
+        // Default is continuous → renders.
+        assert!(rc.poll_should_render(t0), "default continuous renders");
+
+        // Host marks idle; still within the keep-warm window after the last active frame → renders.
+        rc.set_continuous(false);
+        assert!(
+            rc.poll_should_render(t0 + Duration::from_millis(100)),
+            "renders inside keep-warm after activity"
+        );
+
+        // Past keep-warm with no activity → idles (skip render).
+        rc.set_continuous(false);
+        assert!(
+            !rc.poll_should_render(t0 + KEEP_WARM + Duration::from_millis(200)),
+            "idles once keep-warm elapses"
+        );
+
+        // A mutating command requests one render even while idle, and refreshes keep-warm.
+        rc.set_continuous(false);
+        rc.request_redraw();
+        let t_late = t0 + KEEP_WARM + Duration::from_millis(400);
+        assert!(
+            rc.poll_should_render(t_late),
+            "request_redraw forces a render"
+        );
+        rc.set_continuous(false);
+        assert!(
+            rc.poll_should_render(t_late + Duration::from_millis(50)),
+            "the requested render refreshed keep-warm"
+        );
+    }
+
+    #[test]
+    fn temporal_convergence_renders_a_frame_window_past_keep_warm() {
+        // With a temporal effect active, the loop keeps rendering a convergence window after the
+        // last activity even once the wall-clock keep-warm has elapsed, so a static viewport settles
+        // to its converged image before idling on it.
+        let mut rc = RedrawController::default();
+        rc.set_temporal_active(true);
+        let t0 = Instant::now();
+
+        rc.set_continuous(true);
+        assert!(rc.poll_should_render(t0), "active frame renders");
+
+        // Jump well past keep-warm: only the convergence window keeps it rendering now.
+        let past = t0 + KEEP_WARM + Duration::from_secs(1);
+        let mut rendered = 0u32;
+        loop {
+            rc.set_continuous(false);
+            if rc.poll_should_render(past) {
+                rendered += 1;
+            } else {
+                break;
+            }
+        }
+        assert_eq!(
+            rendered, CONVERGE_FRAMES,
+            "renders exactly the convergence window past keep-warm"
+        );
+        assert!(rc.converged(), "reports converged once the window is spent");
+
+        // With no temporal effect, convergence is immediate — past keep-warm idles at once.
+        let mut plain = RedrawController::default();
+        plain.set_continuous(true);
+        assert!(plain.poll_should_render(t0));
+        plain.set_continuous(false);
+        assert!(
+            !plain.poll_should_render(past),
+            "no temporal effect → no convergence window, idles past keep-warm"
+        );
+        assert!(plain.converged());
     }
 
     #[test]
