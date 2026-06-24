@@ -2,7 +2,7 @@
 // Renders the chip-input field + a clear button.
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -31,6 +31,8 @@ interface AnimaSearchbarProps {
   inputRef?: React.RefObject<HTMLInputElement | null>;
   /** Show the built-in clear (X) button when there is content. Off when the host owns a close button. */
   showClear?: boolean;
+  /** Show a circular spinner at the right edge (e.g. a search request is in flight). */
+  busy?: boolean;
 }
 
 export function AnimaSearchbar({
@@ -43,6 +45,7 @@ export function AnimaSearchbar({
   commitOnBlur = false,
   inputRef,
   showClear = true,
+  busy = false,
 }: AnimaSearchbarProps) {
   const chipKeywords = useMemo(() => chips.map((c) => c.keyword), [chips]);
   const internalRef = useRef<HTMLInputElement | null>(null);
@@ -91,9 +94,12 @@ export function AnimaSearchbar({
     onChange(state);
   };
 
-  const emitNow = () => {
+  // A commit passes the post-commit tokens explicitly: our `tokens` state is still the
+  // pre-commit value here (setTokens hasn't applied), and reading it would drop the just-
+  // committed chip from the emitted query.
+  const emitNow = (next?: Token[]) => {
     clearDebounce();
-    emitFromTokens(tokens);
+    emitFromTokens(next ?? tokens);
   };
 
   // Debounced emit for live-text edits (typing without committing).
@@ -138,7 +144,7 @@ export function AnimaSearchbar({
           onFreeTextCommit={emitNow}
           onBlur={() => commitOnBlur && emitNow()}
         />
-        {hasContent && showClear && (
+        {hasContent && showClear && !busy && (
           <Button
             type="button"
             variant="ghost"
@@ -149,6 +155,12 @@ export function AnimaSearchbar({
           >
             <X className="size-4" />
           </Button>
+        )}
+        {busy && (
+          <Loader2
+            className="ml-auto size-4 shrink-0 animate-spin text-muted-foreground"
+            aria-label="Searching"
+          />
         )}
       </div>
     </div>

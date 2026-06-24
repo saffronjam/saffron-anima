@@ -17,8 +17,10 @@ interface AnimaSearchFieldProps {
   chipConfigs: ChipConfig[];
   placeholder?: string;
   inputRef: React.RefObject<HTMLInputElement | null>;
-  onChipCommit: () => void;
-  onFreeTextCommit: () => void;
+  // Commits pass the post-commit token list so the parent emits the fresh state, not its
+  // stale (pre-setTokens) copy.
+  onChipCommit: (tokens: Token[]) => void;
+  onFreeTextCommit: (tokens: Token[]) => void;
   onBlur?: () => void;
   className?: string;
 }
@@ -105,17 +107,23 @@ export function AnimaSearchField({
 
   const pickValue = (opt: ChipOption) => {
     if (!liveChip) return;
-    setTokens([...tokens.slice(0, -1), { text: `${liveChip.keyword}:${opt.value}` }, { text: "" }]);
+    const next = [
+      ...tokens.slice(0, -1),
+      { text: `${liveChip.keyword}:${opt.value}` },
+      { text: "" },
+    ];
+    setTokens(next);
     setSuggestionIdx(0);
-    onChipCommit();
+    onChipCommit(next);
     focusEnd();
   };
 
   const commitFreeText = () => {
     if (liveText === "") return;
-    setTokens([...tokens, { text: "" }]);
+    const next = [...tokens, { text: "" }];
+    setTokens(next);
     setOpen(false);
-    onFreeTextCommit();
+    onFreeTextCommit(next);
     focusEnd();
   };
 
@@ -123,7 +131,7 @@ export function AnimaSearchField({
     const next = tokens.slice();
     next.splice(index, 1);
     setTokens(next);
-    onChipCommit();
+    onChipCommit(next);
     focusEnd();
   };
 
