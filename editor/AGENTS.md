@@ -179,8 +179,8 @@ user confirms it against real output — say "this should fix it, please verify 
 The Rust bridge sets a per-PID socket under `$XDG_RUNTIME_DIR` and a per-PID, per-view shm
 segment for each viewport (scene + asset preview), spawns `$SAFFRON_ANIMA_BIN` (default
 `engine/target/debug/saffron-host`) with `SAFFRON_VIEWPORT_SHM_SCENE` +
-`SAFFRON_VIEWPORT_SHM_ASSET` + `SAFFRON_MAX_FPS` (and the NVIDIA `VK_ICD_FILENAMES` guard),
-and presents via `wayland_viewport.rs` — one subsurface per view, each glued to its pane,
+`SAFFRON_VIEWPORT_SHM_ASSET` (and the NVIDIA `VK_ICD_FILENAMES` guard), and presents via
+`wayland_viewport.rs` — one subsurface per view, each glued to its pane,
 plus a shared opaque backdrop below both. A watchdog flips the UI to an error overlay if the
 engine dies.
 
