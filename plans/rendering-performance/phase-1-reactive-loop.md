@@ -1,8 +1,27 @@
 # Reactive loop: real pacer, dirty/needs-redraw seam, named override stack
 
-**Status:** NOT STARTED
+**Status:** COMPLETED
 **Scope:** Editor (the wired FPS cap also benefits Game)
 **Depends on:** — (nothing)
+
+> **Done.** `saffron-app` gained a `RedrawController` (continuous flag + one-shot dirty + keep-warm
+> window, default continuous so layer-less apps and the test host are unchanged) on `App`, read each
+> iteration by `step_frame`; `pace_iteration` paces a rendered frame to `FrameHost::pace_target_fps`
+> (the renderer's `PerfConfig.target_fps`) and an idle iteration to an 8 ms poll. `SAFFRON_MAX_FPS`,
+> `max_fps_from_env`, `pace_loop`, and `LoopLimits.max_fps` are deleted, as is the editor's
+> `SAFFRON_MAX_FPS=500` launch arg. The control plane reports mutation: `ControlContext::poll`
+> returns `true` when a non-`is_read_only_command` (the get-/list- prefixes + the explicit
+> reconcile/stats query set) ran `ok`; the host's `on_update` sets `set_continuous` from
+> `render_activity_reasons` (play / smoothing / camera / animation) and `request_redraw` on a
+> mutation, with a startup seed in `on_attach` so the bootstrap scene paints + converges before
+> idling. Live-validated on llvmpipe: static scene → host CPU 0–2%, a mutating command → ~1471%
+> burst then keep-warm then idle, read-only `render-stats` polling → stays at 0%.
+>
+> **Deferred to Phase 5 (observability):** the e2e idle/re-arm assertion needs a control-plane
+> readout of the redraw state, which Phase 5 builds; the controller logic is covered by the
+> `redraw_controller_renders_while_active_then_idles_past_keep_warm` unit test here. The override
+> stack is the simple flag form for now; Phase 5 adds the named push/pop reasons surfaced over the
+> CLI (the `set_reasons` plumbing is already in place).
 
 ## Goal
 
