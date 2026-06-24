@@ -3,7 +3,7 @@
 //! `register_*_commands` joins this table to handler fns by name to dispatch, and the
 //! OpenRPC/manifest emitters read the same slice to emit `methods`.
 //!
-//! [`COMMANDS`] holds exactly the **155 typed commands** in the frozen wire order (the committed
+//! [`COMMANDS`] holds exactly the **160 typed commands** in the frozen wire order (the committed
 //! `schemas/control/command-manifest.generated.json` order, `ping` first, `quit` last) — the order
 //! is load-bearing: it is the manifest's `commands` order and the OpenRPC `methods` order, so the
 //! emitters reproduce the committed artifacts byte-for-byte. The lone untyped reflective builtin
@@ -32,7 +32,7 @@ pub struct CommandSpec {
     pub result: &'static str,
 }
 
-/// The 155 typed commands in frozen wire order (`help` excluded — see module docs).
+/// The 160 typed commands in frozen wire order (`help` excluded — see module docs).
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "ping",
@@ -455,6 +455,24 @@ pub static COMMANDS: &[CommandSpec] = &[
         result: "FootIkResult",
     },
     CommandSpec {
+        name: "set-morph-weights",
+        summary: "set a morph mesh's blend-shape weights (canonical 0..1)",
+        params: "SetMorphWeightsParams",
+        result: "MorphWeightsResult",
+    },
+    CommandSpec {
+        name: "get-morph-weights",
+        summary: "a morph mesh's live blend-shape weights + target names",
+        params: "GetMorphWeightsParams",
+        result: "MorphWeightsResult",
+    },
+    CommandSpec {
+        name: "list-clip-bindings",
+        summary: "a clip's channels resolved against a live entity forest",
+        params: "ListClipBindingsParams",
+        result: "ClipBindingsResult",
+    },
+    CommandSpec {
         name: "get-script-status",
         summary: "play state, live script instances, error high-water",
         params: "EmptyParams",
@@ -672,8 +690,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "import-model",
-        summary: "import-model {path}",
-        params: "PathParams",
+        summary: "import-model {path} — optional store attribution",
+        params: "ImportModelParams",
         result: "ImportModelResult",
     },
     CommandSpec {
@@ -690,8 +708,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "import-texture",
-        summary: "import-texture {path}",
-        params: "PathParams",
+        summary: "import-texture {path} [colorspace]",
+        params: "ImportTextureParams",
         result: "ImportTextureResult",
     },
     CommandSpec {
@@ -929,6 +947,18 @@ pub static COMMANDS: &[CommandSpec] = &[
         result: "ProjectInfoDto",
     },
     CommandSpec {
+        name: "get-stores",
+        summary: "get-stores — enabled asset-store connectors for the project",
+        params: "EmptyParams",
+        result: "ProjectStoresDto",
+    },
+    CommandSpec {
+        name: "set-stores",
+        summary: "set-stores {enabled} — set the project's enabled asset-store connectors",
+        params: "ProjectStoresDto",
+        result: "ProjectStoresDto",
+    },
+    CommandSpec {
         name: "screenshot",
         summary: "capture screenshot",
         params: "ScreenshotParams",
@@ -1068,6 +1098,8 @@ pub static COMMAND_FIXTURES: &[(&str, &str)] = &[
     ("probe-asset", "mesh-asset"),
     ("assign-asset", "cube-mesh-asset"),
     ("save-project", "empty"),
+    ("get-stores", "empty"),
+    ("set-stores", "stores-polyhaven"),
     ("load-project", "project-name"),
     ("get-thumbnail", "mesh-asset"),
     ("view-asset", "mesh-asset-view"),
@@ -1116,6 +1148,18 @@ pub static COMMAND_SKIPS: &[(&str, &str)] = &[
     (
         "set-kinematic-bones",
         "needs an imported rig — covered in make e2e",
+    ),
+    (
+        "set-morph-weights",
+        "needs an imported morph mesh — covered in make e2e",
+    ),
+    (
+        "get-morph-weights",
+        "needs an imported morph mesh — covered in make e2e",
+    ),
+    (
+        "list-clip-bindings",
+        "needs an imported clip + entity forest — covered in make e2e",
     ),
     (
         "move-character",
@@ -1361,7 +1405,10 @@ pub static DTO_TYPE_NAMES: &[&str] = &[
     "ProjectInfoDto",
     "NewProjectParams",
     "PathParams",
+    "ProjectStoresDto",
     "OptionalPathParams",
+    "AssetAttributionDto",
+    "ImportModelParams",
     "ImportModelResult",
     "InstantiateModelParams",
     "AssetPlacementParams",
@@ -1369,6 +1416,7 @@ pub static DTO_TYPE_NAMES: &[&str] = &[
     "AssetPlacementResult",
     "ExtractSubAssetParams",
     "ClearExtractionParams",
+    "ImportTextureParams",
     "ImportTextureResult",
     "AssetEntryDto",
     "AssetList",
@@ -1486,6 +1534,12 @@ pub static DTO_TYPE_NAMES: &[&str] = &[
     "SetFootIkParams",
     "GetFootIkParams",
     "FootIkResult",
+    "AnimationChannelDto",
+    "SetMorphWeightsParams",
+    "GetMorphWeightsParams",
+    "MorphWeightsResult",
+    "ListClipBindingsParams",
+    "ClipBindingsResult",
     "WorldTransformResult",
     "StepParams",
     "DeselectResult",
@@ -1537,7 +1591,7 @@ mod tests {
     fn table_holds_154_typed_commands_in_frozen_order() {
         assert_eq!(
             COMMANDS.len(),
-            155,
+            160,
             "command table count drifted from the catalog"
         );
         assert_eq!(
@@ -1581,10 +1635,10 @@ mod tests {
         let animation = animation_domain();
         let physics = physics_domain();
 
-        // The five domains partition the 155 typed commands: render 28 (the render file's 29
+        // The five domains partition the 160 typed commands: render 28 (the render file's 29
         // includes the untyped `help`, dropped here), scene 48 (the 47 in `register_scene_commands`
         // plus `get-script-schema`, which the host registers separately but the catalog groups with
-        // the script commands), asset 54, animation 13, physics 12 = 155.
+        // the script commands), asset 56, animation 16, physics 12 = 160.
         let domains = [render, scene, asset, animation, physics];
         for c in COMMANDS {
             let hits = domains.iter().filter(|d| d.contains(&c.name)).count();
@@ -1596,8 +1650,8 @@ mod tests {
         }
         let total: usize = domains.iter().map(|d| d.len()).sum();
         assert_eq!(
-            total, 155,
-            "the five domains must partition the 155 typed commands"
+            total, 160,
+            "the five domains must partition the 160 typed commands"
         );
 
         // Catalog endpoints per registration domain.
@@ -1608,7 +1662,7 @@ mod tests {
         assert_eq!(*asset.first().unwrap(), "get-project");
         assert_eq!(*asset.last().unwrap(), "quit");
         assert_eq!(*animation.first().unwrap(), "get-animation-state");
-        assert_eq!(*animation.last().unwrap(), "set-foot-ik");
+        assert_eq!(*animation.last().unwrap(), "list-clip-bindings");
         assert_eq!(*physics.first().unwrap(), "physics-state");
         assert_eq!(*physics.last().unwrap(), "get-ragdoll");
     }
@@ -1636,7 +1690,7 @@ mod tests {
         for (n, _) in COMMAND_SKIPS {
             assert!(names.contains(n), "skip names unknown command `{n}`");
         }
-        assert_eq!(COMMAND_FIXTURES.len() + COMMAND_SKIPS.len(), 155);
+        assert_eq!(COMMAND_FIXTURES.len() + COMMAND_SKIPS.len(), 160);
     }
 
     /// Every command's `params`/`result` type name resolves to a DTO the crate defines — the join
@@ -1794,6 +1848,8 @@ mod tests {
             "save-scene",
             "load-scene",
             "save-project",
+            "get-stores",
+            "set-stores",
             "load-project",
             "reload-project",
             "screenshot",
@@ -1820,6 +1876,9 @@ mod tests {
             "pick-skeleton-joint",
             "get-foot-ik",
             "set-foot-ik",
+            "set-morph-weights",
+            "get-morph-weights",
+            "list-clip-bindings",
         ]
     }
 

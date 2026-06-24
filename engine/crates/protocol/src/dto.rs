@@ -1215,12 +1215,52 @@ pub struct PathParams {
     pub path: String,
 }
 
+/// The per-project asset-store enablement block: which connectors the project has
+/// enabled. Non-secret only — credentials live in the OS keyring, never here.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct ProjectStoresDto {
+    /// Enabled connector ids (e.g. `["polyhaven", "poly-pizza"]`).
+    pub enabled: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct OptionalPathParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+}
+
+/// Where a store-imported asset came from and under what license, recorded on the
+/// catalog entry so attribution travels with the asset (CC-BY / Sketchfab require it).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct AssetAttributionDto {
+    /// Canonical license id (`cc0`, `cc-by`, `cc-by-sa`, …).
+    pub license_id: String,
+    /// Whether the license requires visible attribution.
+    pub requires_attribution: bool,
+    /// Canonical license url.
+    pub license_url: String,
+    /// The asset author / creator.
+    pub author: String,
+    /// The asset's page on the source service.
+    pub source_url: String,
+    /// The connector the asset came from (`polyhaven`, `sketchfab`, …).
+    pub store_id: String,
+}
+
+/// Parameters for `import-model`: a local file path plus optional store attribution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ImportModelParams {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<AssetAttributionDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1306,6 +1346,18 @@ pub struct ClearExtractionParams {
     pub sub_asset: Uuid,
 }
 
+/// Parameters for `import-texture`: a file path plus an optional colorspace hint
+/// (`srgb` | `linear` | `hdr` | `auto`). `auto`/absent keeps the file-extension heuristic;
+/// `linear` is for data maps (normal/roughness/metallic/AO) so they don't upload as sRGB.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ImportTextureParams {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colorspace: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -1330,6 +1382,9 @@ pub struct AssetEntryDto {
     pub duration: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rigged: Option<bool>,
+    /// Store source/license, present for assets imported from a connector.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<AssetAttributionDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1630,6 +1685,9 @@ pub struct MaterialAssignResult {
 pub struct MaterialImportParams {
     pub path: String,
     pub name: String,
+    /// Optional store attribution, recorded on the imported material's catalog entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<AssetAttributionDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -2199,6 +2257,33 @@ pub struct PlayStateResult {
     pub preview_asset: Uuid,
 }
 
+/// One animation channel (track) of a clip, carrying enough to draw a real per-channel
+/// keyframe strip. The editor draws one strip per channel keyed on `times`, independent of
+/// `width`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AnimationChannelDto {
+    /// `"node-translation" | "node-rotation" | "node-scale" | "morph-weights" | "bone"` — a
+    /// plain wire string; serde/ts-rs handle it natively, no enum DTO row.
+    pub kind: String,
+    /// The display label: the resolved entity name for a node/bone binding (the raw glTF node
+    /// name when the binding is unresolved — which doubles as the broken-binding signal), and
+    /// the raw glTF target name for a morph-weights channel.
+    pub label: String,
+    /// The raw glTF binding key (node name, or morph target name) — durable, what the runtime
+    /// binds on. Distinct from `label` so the editor can show the friendly name yet key on it.
+    pub target_name: String,
+    /// The keyframe sample times in seconds, ascending — the strip's tick positions.
+    pub times: Vec<f32>,
+    /// Value components per keyframe, so `values.len() == times.len() * width`: `3` for
+    /// translation/scale, `4` for a rotation quaternion, `morph_count` for a morph channel.
+    pub width: i32,
+    /// The per-keyframe values, row-major `times.len() * width`. Translation/scale rows are
+    /// `xyz`, rotation rows are quaternion `xyzw`, morph rows are the N weights.
+    pub values: Vec<f32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -2206,7 +2291,8 @@ pub struct AnimationClipDto {
     pub id: Uuid,
     pub name: String,
     pub duration: f32,
-    pub tracks: i32,
+    /// One entry per track in the clip — the editor renders a keyframe strip per channel.
+    pub channels: Vec<AnimationChannelDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -2357,6 +2443,10 @@ pub struct AnimationStateResult {
     pub wrap: String,
     pub speed: f32,
     pub animation_version: i32,
+    /// The target's live morph weights (canonical 0..1) — always present, empty when the
+    /// target has no morph mesh. The runtime override if a preview is live, else the durable
+    /// component's rest weights.
+    pub morph_weights: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -2509,6 +2599,49 @@ pub struct FootIkResult {
     pub enabled: bool,
     pub ground_height: f32,
     pub chains: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetMorphWeightsParams {
+    pub entity: EntitySelector,
+    /// The morph-target weights (canonical 0..1); the length must equal the target's morph
+    /// count.
+    pub weights: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GetMorphWeightsParams {
+    pub entity: EntitySelector,
+}
+
+/// The live morph weights + the durable target names, shared by `set-`/`get-morph-weights`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MorphWeightsResult {
+    pub weights: Vec<f32>,
+    pub names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ListClipBindingsParams {
+    pub entity: EntitySelector,
+    pub clip: AssetSelector,
+}
+
+/// A clip's channels resolved against a live entity forest — an unresolved channel surfaces
+/// as a broken binding via its `label`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ClipBindingsResult {
+    pub channels: Vec<AnimationChannelDto>,
 }
 
 /// An entity's composed world-space transform (the cached WorldTransformComponent), so a

@@ -137,7 +137,10 @@ pub fn ts_decls() -> Vec<(&'static str, String)> {
         decl_entry!(ProjectInfoDto),
         decl_entry!(NewProjectParams),
         decl_entry!(PathParams),
+        decl_entry!(ProjectStoresDto),
         decl_entry!(OptionalPathParams),
+        decl_entry!(AssetAttributionDto),
+        decl_entry!(ImportModelParams),
         decl_entry!(ImportModelResult),
         decl_entry!(InstantiateModelParams),
         decl_entry!(AssetPlacementPhaseDto),
@@ -146,6 +149,7 @@ pub fn ts_decls() -> Vec<(&'static str, String)> {
         decl_entry!(AssetPlacementResult),
         decl_entry!(ExtractSubAssetParams),
         decl_entry!(ClearExtractionParams),
+        decl_entry!(ImportTextureParams),
         decl_entry!(ImportTextureResult),
         decl_entry!(AssetEntryDto),
         decl_entry!(AssetList),
@@ -235,6 +239,7 @@ pub fn ts_decls() -> Vec<(&'static str, String)> {
         decl_entry!(SetAtmosphereParams),
         decl_entry!(SelectionResult),
         decl_entry!(PlayStateResult),
+        decl_entry!(AnimationChannelDto),
         decl_entry!(AnimationClipDto),
         decl_entry!(BoneDto),
         decl_entry!(AssetCapabilitiesDto),
@@ -263,6 +268,11 @@ pub fn ts_decls() -> Vec<(&'static str, String)> {
         decl_entry!(SetFootIkParams),
         decl_entry!(GetFootIkParams),
         decl_entry!(FootIkResult),
+        decl_entry!(SetMorphWeightsParams),
+        decl_entry!(GetMorphWeightsParams),
+        decl_entry!(MorphWeightsResult),
+        decl_entry!(ListClipBindingsParams),
+        decl_entry!(ClipBindingsResult),
         decl_entry!(WorldTransformResult),
         decl_entry!(StepParams),
         decl_entry!(DeselectResult),
@@ -393,7 +403,10 @@ pub fn struct_fragments() -> Vec<(&'static str, Value)> {
         frag_entry!(ProjectInfoDto),
         frag_entry!(NewProjectParams),
         frag_entry!(PathParams),
+        frag_entry!(ProjectStoresDto),
         frag_entry!(OptionalPathParams),
+        frag_entry!(AssetAttributionDto),
+        frag_entry!(ImportModelParams),
         frag_entry!(ImportModelResult),
         frag_entry!(InstantiateModelParams),
         frag_entry!(AssetPlacementParams),
@@ -401,6 +414,7 @@ pub fn struct_fragments() -> Vec<(&'static str, Value)> {
         frag_entry!(AssetPlacementResult),
         frag_entry!(ExtractSubAssetParams),
         frag_entry!(ClearExtractionParams),
+        frag_entry!(ImportTextureParams),
         frag_entry!(ImportTextureResult),
         frag_entry!(AssetEntryDto),
         frag_entry!(AssetList),
@@ -490,6 +504,7 @@ pub fn struct_fragments() -> Vec<(&'static str, Value)> {
         frag_entry!(SetAtmosphereParams),
         frag_entry!(SelectionResult),
         frag_entry!(PlayStateResult),
+        frag_entry!(AnimationChannelDto),
         frag_entry!(AnimationClipDto),
         frag_entry!(BoneDto),
         frag_entry!(AssetCapabilitiesDto),
@@ -518,6 +533,11 @@ pub fn struct_fragments() -> Vec<(&'static str, Value)> {
         frag_entry!(SetFootIkParams),
         frag_entry!(GetFootIkParams),
         frag_entry!(FootIkResult),
+        frag_entry!(SetMorphWeightsParams),
+        frag_entry!(GetMorphWeightsParams),
+        frag_entry!(MorphWeightsResult),
+        frag_entry!(ListClipBindingsParams),
+        frag_entry!(ClipBindingsResult),
         frag_entry!(WorldTransformResult),
         frag_entry!(StepParams),
         frag_entry!(DeselectResult),
@@ -551,15 +571,15 @@ mod tests {
 
     #[test]
     fn ts_decls_cover_the_full_dto_universe() {
-        // 238 structs + 18 enums + `Uuid` = 257, the inventory count.
-        assert_eq!(ts_decls().len(), 257);
+        // 248 structs + 18 enums + `Uuid` = 267, the inventory count.
+        assert_eq!(ts_decls().len(), 267);
     }
 
     #[test]
     fn struct_fragments_cover_every_openrpc_struct() {
-        // The 238 struct fragments the OpenRPC `components.schemas` block needs (the three
+        // The 248 struct fragments the OpenRPC `components.schemas` block needs (the three
         // wire-helper object fragments are hand-emitted by the xtask, not here).
-        assert_eq!(struct_fragments().len(), 238);
+        assert_eq!(struct_fragments().len(), 248);
     }
 
     #[test]
