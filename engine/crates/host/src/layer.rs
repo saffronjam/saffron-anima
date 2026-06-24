@@ -29,7 +29,7 @@ use crate::control_renderer::HostControlRenderer;
 use saffron_core::TimeSpan;
 use saffron_protocol::{GetScriptSchemaParams, GetScriptSchemaResult, ScriptFieldDto};
 use saffron_rendering::{GpuQueue, Renderer, Uploader};
-use saffron_scene::{CameraView, Entity, Mesh, Scene};
+use saffron_scene::{AnimationPlayer, CameraView, Entity, Mesh, Scene};
 use saffron_sceneedit::{PlayState, SceneEditContext, update_scene_edit_camera};
 use saffron_signal::SubscriptionId;
 use saffron_window::Window;
@@ -381,15 +381,61 @@ impl HostLayer {
         ParentWatch::Alive
     }
 
+    /// The named reasons the viewport must keep rendering continuously this frame — state that
+    /// evolves on its own without a fresh command. Empty means a static scene the reactive loop may
+    /// idle (after the keep-warm window). Interaction (camera/gizmo drag) streams control commands,
+    /// so it is covered by the per-command redraw request, not listed here.
+    fn render_activity_reasons(&mut self) -> Vec<&'static str> {
+        let mut reasons = Vec::new();
+        // Physics + scripts advance every frame while Playing (Paused / Edit do not).
+        if self.editor.play_state == PlayState::Playing {
+            reasons.push("play");
+        }
+        // Smoothed edits (`set-material` / `set-transform smooth:1`) converge over frames.
+        if !self.editor.material_smoothing.is_empty() || !self.editor.transform_smoothing.is_empty()
+        {
+            reasons.push("smoothing");
+        }
+        // The fly-cam look smoothing eases out over a few frames after the last input.
+        if self.editor.camera.controlling || self.editor.camera.look_pending != Vec2::ZERO {
+            reasons.push("camera");
+        }
+        // A clip actively advancing (any rig in Play, or the preview-selected rig in Edit) changes
+        // the image even with no new command.
+        if self.any_animation_active() {
+            reasons.push("animation");
+        }
+        reasons
+    }
+
+    /// Whether any [`AnimationPlayer`] is advancing this frame: any playing rig while Playing, or a
+    /// playing preview-in-edit rig while editing. A Paused player advances nothing (a step command
+    /// is itself a mutation), so it does not hold continuous render.
+    fn any_animation_active(&mut self) -> bool {
+        let playing_mode = self.editor.play_state == PlayState::Playing;
+        let editing = self.editor.play_state == PlayState::Edit;
+        let scene = self.editor.active_scene();
+        let mut active = false;
+        scene.for_each::<&AnimationPlayer, _>(|_, player| {
+            if player.playing && (playing_mode || (editing && player.preview_in_edit)) {
+                active = true;
+            }
+        });
+        active
+    }
+
     /// Builds the `EngineContext` borrow from the host's own fields and drains the control
     /// socket once. The borrow struct is assembled here and never stored; `physics` crosses as
     /// the live play world or `None`.
-    fn poll_control(&mut self, window: &mut Window, renderer: &mut Renderer) {
+    ///
+    /// Returns `true` when a mutating command ran this drain (the reactive-redraw signal); a drain
+    /// skipped for a missing uploader reports `false`.
+    fn poll_control(&mut self, window: &mut Window, renderer: &mut Renderer) -> bool {
         // The control plane's GPU-upload seam needs the host-owned one-off uploader; build
         // it before assembling the borrow (the asset commands resolve/upload through it).
         self.ensure_uploader(renderer);
         let Some(uploader) = self.uploader.as_ref() else {
-            return; // No uploader (device create failed): the control drain is skipped.
+            return false; // No uploader (device create failed): the control drain is skipped.
         };
         let mut control_renderer = HostControlRenderer::new(renderer, uploader);
         // Lend the live play world into the `EngineContext::physics` borrow: a `RefMut` on the
@@ -404,7 +450,7 @@ impl HostLayer {
             &mut self.editor,
             &mut self.assets,
             physics.as_mut(),
-        );
+        )
     }
 
     /// Reconciles the play world + script VM against the editor's play state on the Edit↔Playing
@@ -758,6 +804,10 @@ impl Layer for HostLayer {
             self.start_thumbnail_worker(renderer);
         }
         self.auto_select_first_mesh();
+        // The bootstrap scene loads here, not via a control command, so it raises no mutation
+        // signal — seed one redraw so the initial scene paints (and the temporal effects converge
+        // over the keep-warm window) before the reactive loop idles a static viewport.
+        app.redraw.request_redraw();
     }
 
     fn on_update(&mut self, app: &mut App, dt: TimeSpan) {
@@ -767,13 +817,14 @@ impl Layer for HostLayer {
         // this frame takes effect this frame. It needs the renderer + a window; with no
         // renderer attached (the test host) it is skipped and the session spine still runs.
         // `frame_host` and `window` are distinct `App` fields, so they borrow disjointly.
+        let mut mutated = false;
         if let Some(renderer) = app.frame_host.renderer_mut() {
             // Headless editor mode has no window; the control plane still takes a `Window`
             // facade, so a standalone headless window stands in (its size is unused in publish
             // mode and its signals are inert without an event loop).
             let mut headless = Window::headless();
             let window = app.window.as_mut().unwrap_or(&mut headless);
-            self.poll_control(window, renderer);
+            mutated = self.poll_control(window, renderer);
             // Insert any thumbnails the worker finished this interval into the GPU caches.
             self.assets.drain_thumbnail_completions();
         }
@@ -788,6 +839,35 @@ impl Layer for HostLayer {
             let (w, h) = (renderer.viewport_width(), renderer.viewport_height());
             let cam = self.editor.camera.view();
             self.editor.step_native_gizmo_drag(&cam, w, h, dt.seconds);
+        }
+
+        // Drive the reactive render loop: hold continuous render while some state evolves on its own
+        // (a play sim, an edit smoothing, the fly-cam easing, a clip advancing), request one frame
+        // when a mutating command landed, and otherwise let the loop idle the GPU on a static scene.
+        // Read the renderer's temporal-active + power-state up front (one borrow), then drive the
+        // controller and push the observability snapshot back (a second borrow; `frame_host` and
+        // `redraw` are distinct `App` fields).
+        let reasons = self.render_activity_reasons();
+        let (temporal_active, suppress) =
+            app.frame_host.renderer_mut().map_or((false, false), |r| {
+                (
+                    r.aa_mode() == "taa" || r.ssgi_enabled(),
+                    r.power_state().suppresses_render(),
+                )
+            });
+        app.redraw.set_continuous(!reasons.is_empty());
+        app.redraw.set_reasons(reasons.clone());
+        app.redraw.set_temporal_active(temporal_active);
+        app.redraw.set_suppressed(suppress);
+        if mutated {
+            app.redraw.request_redraw();
+        }
+        // Mirror the verdict into the renderer so `render-stats` reports idle / converged / reasons.
+        let idle = app.redraw.is_idle();
+        let converged = app.redraw.converged();
+        let reason_strings: Vec<String> = reasons.iter().map(|r| (*r).to_owned()).collect();
+        if let Some(renderer) = app.frame_host.renderer_mut() {
+            renderer.set_reactive_state(idle, converged, reason_strings);
         }
     }
 
