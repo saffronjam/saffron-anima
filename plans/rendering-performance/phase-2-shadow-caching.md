@@ -1,8 +1,32 @@
 # Shadow caching: per-light dirty-keyed cube/CSM, static/dynamic caster split
 
-**Status:** NOT STARTED
+**Status:** CORE COMPLETE (point-shadow cube cache); static/dynamic split deferred
 **Scope:** Both (pure waste removed from editor *and* exported game)
 **Depends on:** Phase 1 (the scene change-generation counter is the caster-moved signal)
+
+> **Done — the measured win (point-shadow cube cache).** `render_scene` computes a camera-independent
+> `point_shadow_content_key` (FNV over the light pos + far plane and every caster's world matrix +
+> mesh id), threaded through `set_point_shadow` into `Lighting::point_shadow_key`. The renderer
+> (`renderer.rs`) tracks `last_point_shadow_key` + `last_point_shadow_cube` and requests the
+> `point-shadow` pipeline only when the key *or* the cube image handle changed — otherwise the 6-face
+> pass is skipped and the persistent cube (held `SHADER_READ_ONLY`) is sampled as-is. So orbiting over
+> a static light + casters costs ~0 (vs the measured 0.55 ms/frame); moving the light, a caster
+> (animation/gizmo/physics), or adding/removing a mesh re-renders; a viewport resize (new cube handle)
+> re-renders to seed the fresh cube. Unit-tested by
+> `point_shadow_key_is_camera_independent_and_caster_sensitive`; build + clippy green; docs updated
+> ([point-light-cube-shadows](../../docs/content/explanations/shadows-and-culling/point-light-cube-shadows.md)).
+>
+> **Deferred (documented), with rationale:**
+> - **Directional CSM / contact-shadow caching** — *not applicable.* Cascaded directional shadows
+>   re-fit to the camera frustum every frame (camera-*dependent*), and contact shadows are
+>   screen-space; neither can reuse a cube across camera motion. The Phase-1 full-static idle is what
+>   spares them, so a dirty-key cache buys nothing. (Spot-light shadows *are* camera-independent and
+>   could take the exact same cache; low frequency, left as a trivial follow-on.)
+> - **Static/dynamic caster split + `Mobility` component (#10)** and **partial cube-face update (#12)**
+>   — genuinely large follow-ons (a new ECS component, two-layer shadow rendering + `min()` sampling;
+>   per-face usage tagging). They optimize the *moving-character-over-static-environment* case the
+>   point-shadow cache does not (a moving caster invalidates the whole cube). Deferred as their own
+>   work; the point-shadow cache covers the common static-light/static-caster case today.
 
 ## Goal
 
