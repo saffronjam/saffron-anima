@@ -1189,7 +1189,7 @@ mod tests {
                 material_slot: 0,
             }],
         };
-        let mesh = uploader.upload_mesh(&mesh, &[]).expect("upload");
+        let mesh = uploader.upload_mesh(&mesh, &[], None).expect("upload");
         let item = DrawItem::new(
             Arc::clone(&mesh),
             Mat4::IDENTITY,

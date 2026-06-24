@@ -1289,7 +1289,7 @@ fn make_preview_sphere(device: &Device) -> Result<Arc<GpuMesh>> {
         material_slot: 0,
     });
     let uploader = Uploader::new(device, &GpuQueue::new(device.graphics_queue))?;
-    uploader.upload_mesh(&mesh, &[])
+    uploader.upload_mesh(&mesh, &[], None)
 }
 
 /// Loads a thumbnail/preview SPIR-V module, resolving `shaders/<x>.spv` against the
@@ -1811,7 +1811,10 @@ mod tests {
             return;
         };
         let before = validation_issue_count();
-        let mesh = fx.uploader.upload_mesh(&cube(), &[]).expect("upload cube");
+        let mesh = fx
+            .uploader
+            .upload_mesh(&cube(), &[], None)
+            .expect("upload cube");
 
         let png = fx
             .thumb
