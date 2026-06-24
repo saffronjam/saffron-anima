@@ -1,6 +1,11 @@
 # Thumbnail forest rendering
 
-**Status:** NOT STARTED
+**Status:** COMPLETED — done without the trait-signature churn the doc anticipated:
+`ThumbnailContent::Model` now carries one `ModelMeshChunk { bytes, transform }` per mesh-bearing node
+(driven off the Mesh sub-assets, transforms from the node forest), and the worker **merges** them into
+one CPU mesh (`merge_model_meshes`, baking each node's world transform + normal matrix, rebasing
+submesh indices) before the existing single-mesh render path — so framing covers the whole forest with
+no renderer change. Empty chunks skip; material slots stay container-wide. Thumbnail tests green.
 **Depends on:** phase-1-scene-substrate
 
 ## Goal

@@ -1,6 +1,11 @@
 # Framing + editor latent fixes
 
-**Status:** NOT STARTED
+**Status:** COMPLETED — `focus` frames via `model_render_aabb` (extent-aware distance, falls back to
+the entity translation when no mesh); `foot_ik_entity` and `set-kinematic-bones` reject a rig-less
+target via `model_rig_entity` (kinematic-bones also now binds the actual `SkinnedMesh` entity, not
+`animatable_descendant`); the editor closes the asset-editor tab keyed by both the asset id and its
+container id (`AssetsPanel.confirmDeleteAssets`). Engine builds + project clippy green; editor `tsc`
+clean. The `foot_ik_round_trips_on_plain_entity` test was rewritten to the new reject-rig-less contract.
 **Depends on:** phase-1-scene-substrate
 
 ## Goal

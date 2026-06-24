@@ -1,6 +1,11 @@
 # Forest-aware resolution substrate
 
-**Status:** NOT STARTED
+**Status:** COMPLETED — `model_mesh_entities`/`model_has_renderable`/`model_rig_entity`/
+`model_morph_entity` added to `saffron-scene` (`hierarchy.rs`); the forest bounds union landed in
+`saffron-assets` as `model_render_aabb` + `scene_render_aabb` (it needs the asset server for mesh
+boxes, so it lives there rather than in `saffron-scene` — the one deviation from this doc), and
+`scene_render_bounds` now delegates to it. Unit test `model_resolvers_cover_every_spawn_shape` covers
+S1–S5.
 **Depends on:** — (nothing)
 
 ## Goal

@@ -1,6 +1,14 @@
 # Shape-coverage tests, fixtures, docs
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (with the e2e run deferred to real hardware). Fixture
+`tests/e2e/fixtures/multi-node.gltf` (+ `gen_multi_node.py`) is the static two-mesh-node S2 shape;
+engine unit tests cover the shape matrix (scene resolvers S1–S5, rig overlay, thumbnail merge, collider
+fit, foot-IK rig guard); docs updated at `scene-and-ecs/scene-hierarchy.md` ("Resolving a model's draw
+set" + code-table rows). The e2e driver `tests/e2e/forest-display.test.ts` is authored but the
+headless-weston + llvmpipe harness cannot complete a run in this sandbox — every suite fails the same
+way (confirmed against the unrelated `control.test.ts`: 2 pass / 10 fail, socket ENOENT), so it is
+left for a real-hardware/CI run. The host boots clean (`SAFFRON_EXIT_AFTER_FRAMES=3`, exit 0) with
+these changes. `just check`'s clippy/build legs pass; its e2e leg shares the sandbox limitation above.
 **Depends on:** phases 1–6
 
 ## Goal

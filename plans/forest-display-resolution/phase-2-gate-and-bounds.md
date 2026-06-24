@@ -1,6 +1,9 @@
 # Open/preview gate + preview bounds cutover
 
-**Status:** NOT STARTED
+**Status:** COMPLETED — the `enter_asset_preview` gate now uses `model_has_renderable(root)` (covers
+both the S2 fallback and the S4/S5 player short-circuit); the rigged/bone block resolves
+`model_rig_entity`; `compute_preview_bounds` unions the forest via `model_render_aabb`, fixing the
+S2 origin-sphere collapse and the floor/framing. Builds clean; project clippy green.
 **Depends on:** phase-1-scene-substrate
 
 ## Goal

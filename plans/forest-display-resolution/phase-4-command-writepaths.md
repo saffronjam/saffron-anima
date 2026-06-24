@@ -1,6 +1,10 @@
 # Command/script write-path resolution
 
-**Status:** NOT STARTED
+**Status:** COMPLETED — `material-assign` applies to every `model_mesh_entities` target;
+`fit_collider_to_mesh` unions the forest's meshes in the scale-free body frame (reduces exactly to
+the prior single-mesh result, verified by the green physics suite); both morph sites (`morph_entity`,
+`bridge.rs::set_morph_weights`) resolve `model_morph_entity`. Cracks #5/#6 re-confirmed in code before
+editing (material lands on the container; collider fit reads off the bare container). Builds clean.
 **Depends on:** phase-1-scene-substrate
 
 ## Goal

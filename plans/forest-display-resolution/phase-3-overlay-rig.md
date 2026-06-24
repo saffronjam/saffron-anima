@@ -1,6 +1,10 @@
 # Skeleton/bone overlay rig resolution
 
-**Status:** NOT STARTED
+**Status:** COMPLETED — `build_skeleton_overlay` resolves `model_rig_entity(target)` instead of
+gating on `SkinnedMesh` on the container; positive test
+`skeleton_overlay_draws_for_a_rig_on_a_child_of_the_selected_container` added and the negative test
+updated. The redraw prerequisite is done: `pick` reclassified as mutating in `is_read_only_command`
+(it sets selection); `pick-skeleton-joint` left read-only (verified it only projects, no mutation).
 **Depends on:** phase-1-scene-substrate
 
 ## Goal
@@ -43,6 +47,17 @@ let Some(rig) = scene.model_rig_entity(target) else { return; };
 `None` and the overlay correctly draws nothing — that case is *not* a regression, an unrigged model has no
 skeleton. Make sure any subsequent reads in the function (`bone_handles`, joint transforms,
 `skeleton_overlay` config) use `rig`.
+
+## Prerequisite — reactive redraw on selection (from `rendering-performance`)
+
+The native overlay only rebuilds on a **rendered** frame. Under the reactive loop, viewport selection
+via `pick` (`commands_scene.rs:757`) mutates selection but is allow-listed **read-only**
+(`registry.rs:578`), so clicking a rig requests no redraw and the overlay won't appear until another
+trigger. Before/with this phase, reclassify `pick` / `pick-skeleton-joint` as mutating (or make
+`selection_version` a redraw reason in `host/src/layer.rs:render_activity_reasons`). This also fixes the
+existing gizmo overlay not repainting on viewport-click select. Coordinate with the
+`rendering-performance` owner — it is their surface. See the README "Interaction with
+rendering-performance" section.
 
 ## Verify
 

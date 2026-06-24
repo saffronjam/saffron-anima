@@ -292,9 +292,9 @@ mod tests {
     use super::*;
 
     /// A deforming batch (skin or morph) with both deformed buffers present binds the current
-    /// + prev deformed streams to motion bindings 0/1; a static batch — or a deforming batch
-    /// missing a deformed buffer — binds the static stream to both. A morph-only batch
-    /// (`deformed == true`) takes the deforming arm exactly like a skinned batch.
+    /// and previous deformed streams to motion bindings 0/1; a static batch — or a deforming
+    /// batch missing a deformed buffer — binds the static stream to both. A morph-only batch
+    /// with `deformed == true` takes the deforming arm exactly like a skinned batch.
     #[test]
     fn select_motion_streams_keys_on_the_deform_flag() {
         use ash::vk::Handle;

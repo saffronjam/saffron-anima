@@ -1,6 +1,18 @@
 # Forest-aware display resolution
 
-**Status:** NOT STARTED
+**Status:** COMPLETED (Phases 1–7). Engine builds; `cargo clippy --workspace -- -D warnings`
+(the project gate) is green; unit tests cover the scene resolvers (S1–S5), the rig overlay, the
+thumbnail merge, the collider fit, and the foot-IK rig guard. Docs updated
+(`scene-and-ecs/scene-hierarchy.md`). A static multi-mesh-node e2e fixture (`tests/e2e/fixtures/
+multi-node.gltf` + `gen_multi_node.py`) and driver (`tests/e2e/forest-display.test.ts`) are authored
+but **unverified in this sandbox** — the headless-weston + llvmpipe e2e harness fails to complete for
+*every* suite here (confirmed against the pre-existing `control.test.ts`), the same limitation the
+sibling plans noted; the host itself boots clean with these changes. Two out-of-scope notes carried
+forward: (1) a pre-existing `asset_commands_register_in_manifest_order` control-test failure from the
+connectors/protocol work (commands `export-app`/`get-stores`/`set-stores` vs `view-asset`/`quit` — no
+forest-display command touches it); (2) an incidental 2-line doc-comment reword in
+`rendering/src/aa.rs` (a clippy-version `doc_lazy_continuation` drift in committed better-animations
+code) to keep `--all-targets` clippy moving — unrelated to this plan.
 
 ## Why
 
@@ -71,6 +83,42 @@ here; they were not run through the audit's adversarial verifier, so Phase 4 re-
 edit lands. Crack **2**'s S2 facet is shadowed by **1** today (the gate rejects before bounds runs), so
 **it must be fixed in the same change as the gate** or it becomes the next blocker the instant the gate
 opens.
+
+## Interaction with `rendering-performance` (reactive render loop)
+
+The `rendering-performance` plan landed a **reactive redraw loop**: a frame renders only when a
+**mutating** control command runs (`ControlContext::poll` returns `mutated`, gated by
+`is_read_only_command` in `engine/crates/control/src/registry.rs:559`) or a continuous reason holds
+(`render_activity_reasons` in `host/src/layer.rs:388` — play / smoothing / camera / animation).
+Otherwise the host re-presents the last shared-memory frame and idles the GPU.
+
+This work is **file-disjoint** from that plan — the only shared file is
+`engine/crates/assets/src/render_scene.rs`, where `rendering-performance` added
+`point_shadow_content_key` (which iterates *every* mesh entity via `scene.for_each::<&Mesh>` — the same
+forest-wide pattern this plan adopts) and did **not** touch `gather_static_draw_list` /
+`gather_skinned_draw_list`. (Note: that addition shifted line numbers in this plan's `render_scene.rs`
+citations by ~40; resolve by symbol, not line.)
+
+But there is **one behavioural dependency** every phase must respect: *a display fix only shows if the
+frame that would show it actually renders.* Audited per surface:
+
+- ✅ `enter-asset-preview`, `set-asset-preview-options`, `material-assign`, `focus` are all
+  **non-read-only** → they request a redraw, so phases 2/4/6 repaint correctly.
+- ✅ Morph drive: in Play the `"play"` continuous reason holds; in Edit the Inspector uses the mutating
+  `set-morph-weights`. Both redraw.
+- ⚠️ **Phase 3 (skeleton/bone overlay) has a real dependency.** The native overlay is rebuilt only on a
+  rendered frame, and **viewport selection goes through `pick`** (`commands_scene.rs:757`), which calls
+  `set_selection` **but is allow-listed read-only** (`registry.rs:578`) → it requests **no redraw**. The
+  editor's `runPick` (`editor/src/panels/ViewportPanel.tsx:120`) sends only `pick`, no follow-up
+  `select`. So selecting a rig by clicking the viewport will *not* repaint the overlay under the idle
+  loop, even after phase 3 makes it draw. Hierarchy-tree selection uses the mutating `select` command
+  and *does* redraw — that asymmetry indicates `pick` / `pick-skeleton-joint` being classified
+  read-only is a **latent bug in `rendering-performance`** (selection is rendered state), not just a
+  concern for this plan. **Phase 3 prerequisite:** reclassify `pick`/`pick-skeleton-joint` as mutating
+  (or have selection-version drive a redraw reason). Confirm with the `rendering-performance` owner since
+  it lives in their surface; it also already affects the existing gizmo overlay on viewport-click.
+
+No merge conflicts, no contradictory designs — only the phase-3 redraw prerequisite above.
 
 ## Approach
 
