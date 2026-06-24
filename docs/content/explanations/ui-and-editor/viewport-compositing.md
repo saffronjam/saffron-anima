@@ -127,8 +127,10 @@ seamed, or absent — none of them fails with an error.
   even `presented` only certifies the surface was in an on-screen repaint, so the eyeball
   test on fast motion stays part of verification.
 
-Because the engine never presents, nothing throttles its loop; the editor caps it via
-`SAFFRON_MAX_FPS` (default 500) so slots are not rewritten mid-read at thousands of fps.
+Because the engine never presents, no swapchain vsync throttles its loop. Instead the host paces
+itself reactively (see [the main loop](../app-lifecycle-and-window/main-loop-and-run/)): it renders
+at the perf-config `target_fps` while the scene is active and idles the GPU on a static viewport,
+so slots are neither rewritten at thousands of fps nor refreshed when nothing changed.
 
 ## Two views, two surfaces
 
