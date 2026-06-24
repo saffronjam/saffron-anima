@@ -12,6 +12,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, RunEvent, State};
 
+mod connectors;
 mod wayland_viewport;
 
 /// The NVIDIA Vulkan ICD the toolbox lacks but the host provides; also the marker that
@@ -135,7 +136,9 @@ fn serve_trace_conn(mut stream: TcpStream, trace: &Mutex<Option<Vec<u8>>>) -> st
     const CORS: &str = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, HEAD, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nAccess-Control-Allow-Private-Network: true\r\nAccess-Control-Max-Age: 86400\r\n";
 
     if method.eq_ignore_ascii_case("OPTIONS") {
-        let resp = format!("HTTP/1.1 204 No Content\r\n{CORS}Content-Length: 0\r\nConnection: close\r\n\r\n");
+        let resp = format!(
+            "HTTP/1.1 204 No Content\r\n{CORS}Content-Length: 0\r\nConnection: close\r\n\r\n"
+        );
         stream.write_all(resp.as_bytes())?;
         return stream.flush();
     }
@@ -143,8 +146,9 @@ fn serve_trace_conn(mut stream: TcpStream, trace: &Mutex<Option<Vec<u8>>>) -> st
     // Serve bytes only on the trace path; every other path (notably Perfetto's `/status` probe on
     // :9001) gets a 404 so it doesn't mistake this for a live trace_processor RPC server.
     if path != TRACE_PATH {
-        let resp =
-            format!("HTTP/1.1 404 Not Found\r\n{CORS}Content-Length: 0\r\nConnection: close\r\n\r\n");
+        let resp = format!(
+            "HTTP/1.1 404 Not Found\r\n{CORS}Content-Length: 0\r\nConnection: close\r\n\r\n"
+        );
         stream.write_all(resp.as_bytes())?;
         return stream.flush();
     }
@@ -162,8 +166,9 @@ fn serve_trace_conn(mut stream: TcpStream, trace: &Mutex<Option<Vec<u8>>>) -> st
             }
         }
         None => {
-            let resp =
-                format!("HTTP/1.1 404 Not Found\r\n{CORS}Content-Length: 0\r\nConnection: close\r\n\r\n");
+            let resp = format!(
+                "HTTP/1.1 404 Not Found\r\n{CORS}Content-Length: 0\r\nConnection: close\r\n\r\n"
+            );
             stream.write_all(resp.as_bytes())?;
         }
     }
@@ -273,7 +278,9 @@ fn control_request_with_params(
     params: Value,
 ) -> Result<Value, String> {
     // The guarded data is () (it carries no invariant), so recover a poisoned lock rather than fail.
-    let _guard = CONTROL_IO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = CONTROL_IO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut stream = UnixStream::connect(socket_path)
         .map_err(|err| format!("control socket unavailable: {err}"))?;
     stream
@@ -324,7 +331,10 @@ fn spawn_engine(socket_path: &str) -> Result<Child, String> {
         // subsurface presenter instead of presenting to its (hidden) swapchain. One segment
         // per view so each pane's subsurface has a ring even while parked.
         .env("SAFFRON_VIEWPORT_SHM_SCENE", viewport_shm_name("scene"))
-        .env("SAFFRON_VIEWPORT_SHM_ASSET", viewport_shm_name("assetPreview"));
+        .env(
+            "SAFFRON_VIEWPORT_SHM_ASSET",
+            viewport_shm_name("assetPreview"),
+        );
     // Unthrottled headless publish renders thousands of fps for nothing; cap well above
     // any display rate. An explicit SAFFRON_MAX_FPS in the environment wins.
     if std::env::var_os("SAFFRON_MAX_FPS").is_none() {
@@ -379,7 +389,265 @@ async fn control(
     cmd: String,
     params: Option<Value>,
 ) -> Result<Value, String> {
-    control_request_with_params(&state.socket_path, &cmd, params.unwrap_or_else(|| json!({})))
+    control_request_with_params(
+        &state.socket_path,
+        &cmd,
+        params.unwrap_or_else(|| json!({})),
+    )
+}
+
+/// The connectors enabled for the project, for the Store UI.
+#[tauri::command]
+fn store_list_connectors(
+    connectors: State<'_, connectors::ConnectorRuntime>,
+) -> Vec<connectors::ConnectorInfo> {
+    connectors.infos()
+}
+
+/// Starts (or replaces) a search session for a committed query; returns its id.
+#[tauri::command]
+fn store_search_session(
+    connectors: State<'_, connectors::ConnectorRuntime>,
+    query: connectors::SearchQuery,
+) -> String {
+    connectors.start_session(query)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreSearchMore {
+    results: Vec<connectors::StoreResult>,
+    exhausted: bool,
+}
+
+/// The virtual-scroll driver: the next round-robin batch plus whether all sources are
+/// exhausted.
+#[tauri::command]
+async fn store_search_more(
+    connectors: State<'_, connectors::ConnectorRuntime>,
+    session: String,
+    count: usize,
+) -> Result<StoreSearchMore, String> {
+    let handle = connectors
+        .session(&session)
+        .ok_or_else(|| "search session expired".to_string())?;
+    let mut guard = handle.lock().await;
+    let results = guard.next_batch(count).await;
+    Ok(StoreSearchMore {
+        results,
+        exhausted: guard.all_exhausted(),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportedAsset {
+    id: String,
+    name: String,
+}
+
+/// Downloads a store result to a local path and imports it through the host control
+/// plane, recording the asset's license/author/source as attribution.
+#[tauri::command]
+async fn store_import(
+    state: State<'_, EditorState>,
+    connectors: State<'_, connectors::ConnectorRuntime>,
+    result: connectors::StoreResult,
+    resolution: Option<String>,
+    on_progress: tauri::ipc::Channel<f64>,
+) -> Result<ImportedAsset, String> {
+    use connectors::StoreKind;
+    let connector = connectors
+        .connector(&result.store.id)
+        .ok_or_else(|| format!("unknown connector '{}'", result.store.id))?;
+    // The chosen resolution rides on the descriptor; the connector selects the variant.
+    let mut descriptor = result.import_descriptor.clone();
+    descriptor.resolution = resolution;
+    // Forward download progress over the channel, throttled to whole-percent changes so a
+    // fast download doesn't flood the webview (the UI animates smoothly between values).
+    let last_pct = std::sync::atomic::AtomicU32::new(u32::MAX);
+    let report = move |f: f64| {
+        let pct = (f.clamp(0.0, 1.0) * 100.0).round() as u32;
+        if pct != last_pct.swap(pct, std::sync::atomic::Ordering::Relaxed) {
+            let _ = on_progress.send(f);
+        }
+    };
+    let path = connector
+        .download(&descriptor, &report)
+        .await
+        .map_err(|err| err.to_string())?;
+    let path = path.to_string_lossy().to_string();
+    let attribution = json!({
+        "licenseId": result.license.id,
+        "requiresAttribution": result.license.requires_attribution,
+        "licenseUrl": result.license.url,
+        "author": result.author,
+        "sourceUrl": result.source_url,
+        "storeId": result.store.id,
+    });
+    // The kind selects the host importer: model → .smodel, material/texture → .smat,
+    // hdri → a texture the scene can use as its environment.
+    let (cmd, params) = match result.kind {
+        StoreKind::Model => (
+            "import-model",
+            json!({ "path": path, "attribution": attribution }),
+        ),
+        StoreKind::Material | StoreKind::Texture => (
+            "material-import",
+            json!({ "path": path, "name": result.name, "attribution": attribution }),
+        ),
+        StoreKind::Hdri => (
+            "import-texture",
+            json!({ "path": path, "colorspace": "hdr" }),
+        ),
+    };
+    let reply = control_request_with_params(&state.socket_path, cmd, params)?;
+    Ok(ImportedAsset {
+        id: reply
+            .get("id")
+            .or_else(|| reply.get("texture"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        name: reply
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| result.name.clone()),
+    })
+}
+
+/// The individually-selectable parts of a store result (for the Import dropdown).
+#[tauri::command]
+async fn store_asset_parts(
+    connectors: State<'_, connectors::ConnectorRuntime>,
+    result: connectors::StoreResult,
+) -> Result<Vec<connectors::AssetPart>, String> {
+    let connector = connectors
+        .connector(&result.store.id)
+        .ok_or_else(|| format!("unknown connector '{}'", result.store.id))?;
+    connector
+        .parts(&result)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// The asset's preview images (for the gallery nav + the expand modal).
+#[tauri::command]
+async fn store_asset_gallery(
+    connectors: State<'_, connectors::ConnectorRuntime>,
+    result: connectors::StoreResult,
+) -> Result<Vec<connectors::GalleryImage>, String> {
+    let connector = connectors
+        .connector(&result.store.id)
+        .ok_or_else(|| format!("unknown connector '{}'", result.store.id))?;
+    connector
+        .gallery(&result)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// The import colorspace for a map role: color/albedo is sRGB, every data map is linear.
+fn colorspace_for_role(role: Option<&str>) -> &'static str {
+    match role {
+        Some("color") | Some("diffuse") | Some("albedo") => "srgb",
+        Some(_) => "linear",
+        None => "auto",
+    }
+}
+
+/// Downloads and imports a single part: a map → a colorspace-correct texture; a whole
+/// model/material → the same path as `store_import`.
+#[tauri::command]
+async fn store_import_part(
+    state: State<'_, EditorState>,
+    connectors: State<'_, connectors::ConnectorRuntime>,
+    result: connectors::StoreResult,
+    part: connectors::AssetPart,
+    resolution: Option<String>,
+) -> Result<ImportedAsset, String> {
+    use connectors::StoreKind;
+    let connector = connectors
+        .connector(&result.store.id)
+        .ok_or_else(|| format!("unknown connector '{}'", result.store.id))?;
+    let path = connector
+        .download_part(&part, resolution.as_deref())
+        .await
+        .map_err(|err| err.to_string())?;
+    let path = path.to_string_lossy().to_string();
+    let attribution = json!({
+        "licenseId": result.license.id,
+        "requiresAttribution": result.license.requires_attribution,
+        "licenseUrl": result.license.url,
+        "author": result.author,
+        "sourceUrl": result.source_url,
+        "storeId": result.store.id,
+    });
+    let (cmd, params) = match part.import_kind {
+        StoreKind::Texture | StoreKind::Hdri => (
+            "import-texture",
+            json!({ "path": path, "colorspace": colorspace_for_role(part.role.as_deref()) }),
+        ),
+        StoreKind::Model => (
+            "import-model",
+            json!({ "path": path, "attribution": attribution }),
+        ),
+        StoreKind::Material => (
+            "material-import",
+            json!({ "path": path, "name": part.label, "attribution": attribution }),
+        ),
+    };
+    let reply = control_request_with_params(&state.socket_path, cmd, params)?;
+    Ok(ImportedAsset {
+        id: reply
+            .get("id")
+            .or_else(|| reply.get("texture"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        name: part.label,
+    })
+}
+
+/// Stores a connector's secret (API key / token) in the OS keyring. The value never
+/// flows back to the webview.
+#[tauri::command]
+fn connector_set_secret(connector_id: String, secret: String) -> Result<(), String> {
+    connectors::Credentials::global()
+        .set_secret(&connector_id, &secret)
+        .map_err(|err| err.to_string())
+}
+
+/// Removes a connector's stored secret.
+#[tauri::command]
+fn connector_clear_secret(connector_id: String) -> Result<(), String> {
+    connectors::Credentials::global()
+        .delete_secret(&connector_id)
+        .map_err(|err| err.to_string())
+}
+
+/// Whether a connector has a stored secret (the boolean only — never the value).
+#[tauri::command]
+fn connector_secret_status(connector_id: String) -> bool {
+    connectors::Credentials::global().has_secret(&connector_id)
+}
+
+/// Runs an `oauth_loopback` connector's login: opens the system browser to the provider's
+/// authorize page, captures the implicit-flow token on a one-shot loopback listener, and
+/// stores it in the keyring. Blocks on a worker thread so the UI stays responsive.
+#[tauri::command]
+async fn connector_login(
+    connectors: State<'_, connectors::ConnectorRuntime>,
+    connector_id: String,
+) -> Result<(), String> {
+    let config = connectors
+        .oauth_config(&connector_id)
+        .ok_or_else(|| format!("connector '{connector_id}' has no OAuth login"))?;
+    tauri::async_runtime::spawn_blocking(move || connectors::run_loopback_login(&config))
+        .await
+        .map_err(|err| err.to_string())?
+        .map(|_| ())
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -495,7 +763,9 @@ fn app_data_info() -> Result<AppDataInfo, String> {
 fn list_recent_projects() -> Result<RecentProjects, String> {
     ensure_app_dirs()?;
     let mut recents = read_recent_projects_file();
-    recents.projects.retain(|project| PathBuf::from(&project.path).exists());
+    recents
+        .projects
+        .retain(|project| PathBuf::from(&project.path).exists());
     recents.projects.truncate(12);
     write_recent_projects_file(&recents)?;
     Ok(recents)
@@ -516,7 +786,9 @@ fn save_editor_settings(settings: EditorSettings) -> Result<(), String> {
 fn remember_recent_project(project: RecentProject) -> Result<RecentProjects, String> {
     ensure_app_dirs()?;
     let mut recents = read_recent_projects_file();
-    recents.projects.retain(|recent| recent.path != project.path);
+    recents
+        .projects
+        .retain(|recent| recent.path != project.path);
     recents.projects.insert(0, project);
     recents.projects.truncate(12);
     write_recent_projects_file(&recents)?;
@@ -548,13 +820,21 @@ fn open_in_vscode(path: String) -> Result<(), String> {
     // root); `code` spawns with this process's cwd, so make the path absolute.
     let absolute = {
         let p = PathBuf::from(&path);
-        if p.is_absolute() { p } else { repo_root().join(p) }
+        if p.is_absolute() {
+            p
+        } else {
+            repo_root().join(p)
+        }
     };
     let candidates: &[&[&str]] = &[&["flatpak-spawn", "--host", "code"], &["code"]];
     let mut last_err = String::from("vs code not found");
     for argv in candidates {
         let (program, pre) = argv.split_first().expect("candidate is non-empty");
-        match std::process::Command::new(program).args(pre).arg(&absolute).spawn() {
+        match std::process::Command::new(program)
+            .args(pre)
+            .arg(&absolute)
+            .spawn()
+        {
             Ok(_) => return Ok(()),
             Err(err) => last_err = format!("{program}: {err}"),
         }
@@ -569,6 +849,12 @@ fn open_in_vscode(path: String) -> Result<(), String> {
 // succeed on the first that spawns.
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
+    open_url_in_browser(&url)
+}
+
+/// Opens a URL in the OS default browser, trying the handlers that exist in this
+/// environment in turn. Shared by the `open_external` command and the OAuth loopback flow.
+pub(crate) fn open_url_in_browser(url: &str) -> Result<(), String> {
     let candidates: &[&[&str]] = &[
         &["flatpak-spawn", "--host", "xdg-open"],
         &["xdg-open"],
@@ -579,7 +865,11 @@ fn open_external(url: String) -> Result<(), String> {
     let mut last_err = String::from("no opener found");
     for argv in candidates {
         let (program, pre) = argv.split_first().expect("candidate is non-empty");
-        match std::process::Command::new(program).args(pre).arg(&url).spawn() {
+        match std::process::Command::new(program)
+            .args(pre)
+            .arg(url)
+            .spawn()
+        {
             Ok(_) => return Ok(()),
             Err(err) => last_err = format!("{program}: {err}"),
         }
@@ -656,7 +946,9 @@ fn install_stderr_noise_filter() {
             }
             let text = String::from_utf8_lossy(&line);
             let trimmed = text.trim();
-            let noise = STDERR_NOISE.iter().any(|prefix| trimmed.starts_with(prefix))
+            let noise = STDERR_NOISE
+                .iter()
+                .any(|prefix| trimmed.starts_with(prefix))
                 || (dropped_previous && trimmed.is_empty());
             if noise {
                 dropped_previous = true;
@@ -727,6 +1019,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(EditorState::default())
+        .manage(connectors::ConnectorRuntime::new())
         .invoke_handler(tauri::generate_handler![
             control,
             start_engine,
@@ -742,7 +1035,18 @@ pub fn run() {
             write_file,
             open_external,
             open_in_vscode,
-            serve_trace
+            serve_trace,
+            store_list_connectors,
+            store_search_session,
+            store_search_more,
+            store_import,
+            store_asset_parts,
+            store_asset_gallery,
+            store_import_part,
+            connector_set_secret,
+            connector_clear_secret,
+            connector_secret_status,
+            connector_login
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
