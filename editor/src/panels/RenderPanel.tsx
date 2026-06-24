@@ -8,7 +8,7 @@
 /// that rewrites the full bag. A write optimistically folds the new value in (and the
 /// echoed result) so the control reflects the change at once; the reconcile poll re-reads
 /// the full bag right after.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { client } from "../control/client";
 import { useEditorStore } from "../state/store";
@@ -38,6 +38,43 @@ const AA_MODES: { value: AaMode; label: string }[] = [
   { value: "msaa8", label: "MSAA 8x" },
 ];
 
+/// The render-quality tier — one knob for the SSGI / GTAO / contact-shadow stack. Higher tiers
+/// spend more GPU; the editor can run a cheaper tier than the shipped game.
+const QUALITY_TIERS: { value: string; label: string }[] = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "ultra", label: "Ultra" },
+];
+
+/// The frame-rate cap that paces the render loop. `default` tracks the display refresh (the
+/// vsync-locked rAF cadence); the rest are fixed Hz. The value is the store's `targetFpsMode`.
+const TARGET_FPS_OPTIONS: { value: string; label: string }[] = [
+  { value: "default", label: "Default (vsync)" },
+  { value: "30", label: "30 Hz" },
+  { value: "60", label: "60 Hz" },
+  { value: "120", label: "120 Hz" },
+  { value: "144", label: "144 Hz" },
+  { value: "240", label: "240 Hz" },
+];
+
+/// The HDR→display tonemap operator.
+const TONEMAP_OPTIONS: { value: string; label: string }[] = [
+  { value: "aces", label: "ACES" },
+  { value: "agx", label: "AgX" },
+  { value: "pbr-neutral", label: "PBR Neutral" },
+  { value: "reinhard", label: "Reinhard" },
+];
+
+/// Resolves the target-fps mode to a concrete Hz: a fixed mode is itself; `default` rounds the
+/// presenter's reported display refresh, falling back to the engine's current target until known.
+function resolveTargetFps(mode: "default" | number, refreshHz: number, current: number): number {
+  if (typeof mode === "number") {
+    return mode;
+  }
+  return refreshHz > 1 ? Math.round(refreshHz) : Math.round(current);
+}
+
 /// The boolean feature toggles (label + the stat field + its setter). RT-gated rows
 /// carry `rtGated` so the panel disables them when the device lacks support.
 const TOGGLES: {
@@ -50,12 +87,16 @@ const TOGGLES: {
   { label: "Depth Pre-pass", field: "depthPrepass", set: (on) => client.setDepthPrepass(on) },
   { label: "Shadows", field: "shadows", set: (on) => client.setShadows(on) },
   { label: "IBL", field: "ibl", set: (on) => client.setIbl(on) },
-  { label: "SSAO", field: "ssao", set: (on) => client.setSsao(on) },
-  { label: "Contact Shadows", field: "contactShadows", set: (on) => client.setContactShadows(on) },
-  { label: "SSGI", field: "ssgi", set: (on) => client.setSsgi(on) },
   { label: "DDGI", field: "ddgi", set: (on) => client.setGi(on ? "ddgi" : "off") },
   { label: "RT Shadows", field: "rtShadows", set: (on) => client.setRtShadows(on), rtGated: true },
   { label: "ReSTIR", field: "restir", set: (on) => client.setRestir(on), rtGated: true },
+  { label: "SSR", field: "ssr", set: (on) => client.setSsr(on) },
+  {
+    label: "RT Reflections",
+    field: "rtReflections",
+    set: (on) => client.setRtReflections(on),
+    rtGated: true,
+  },
 ];
 
 /// Debug-visualization overlays (set-debug-overlays). Persisted with the project but not undoable —
@@ -110,6 +151,13 @@ export function RenderPanel() {
   const setDragActive = useEditorStore((s) => s.setDragActive);
   const debugOverlays = useEditorStore((s) => s.debugOverlays);
   const setDebugOverlays = useEditorStore((s) => s.setDebugOverlays);
+  const targetFpsMode = useEditorStore((s) => s.targetFpsMode);
+  const setTargetFpsMode = useEditorStore((s) => s.setTargetFpsMode);
+  const setPerfConfig = useEditorStore((s) => s.setPerfConfig);
+  const perfTargetFps = useEditorStore((s) => s.perfConfig?.targetFps ?? null);
+  // The true display refresh from the Wayland presenter (the webview's rAF is 60-pinned, useless
+  // here). `0` until the first presented frame reports it, so we poll until it settles.
+  const [displayRefreshHz, setDisplayRefreshHz] = useState(0);
   const cfg = useEditorStore(
     useShallow((s) => {
       const r = s.renderStats;
@@ -121,12 +169,13 @@ export function RenderPanel() {
         depthPrepass: r?.depthPrepass ?? false,
         shadows: r?.shadows ?? false,
         ibl: r?.ibl ?? false,
-        ssao: r?.ssao ?? false,
-        contactShadows: r?.contactShadows ?? false,
-        ssgi: r?.ssgi ?? false,
+        quality: r?.quality ?? "high",
+        tonemap: r?.tonemap ?? "aces",
         ddgi: r?.ddgi ?? false,
         rtShadows: r?.rtShadows ?? false,
         restir: r?.restir ?? false,
+        ssr: r?.ssr ?? false,
+        rtReflections: r?.rtReflections ?? false,
       };
     }),
   );
@@ -150,6 +199,46 @@ export function RenderPanel() {
         });
     }
   }, [ready, debugOverlays, setDebugOverlays]);
+
+  // Poll the presenter for the true display refresh. It's 0 until the first presented frame reports
+  // it, so poll until it settles (then stop), and re-poll on (re)ready.
+  useEffect(() => {
+    if (!ready || displayRefreshHz > 1) {
+      return;
+    }
+    let cancelled = false;
+    const tick = (): void => {
+      void client
+        .viewportRefreshHz()
+        .then((hz) => {
+          if (!cancelled && hz > 1) {
+            setDisplayRefreshHz(hz);
+          }
+        })
+        .catch(() => {});
+    };
+    tick();
+    const id = window.setInterval(tick, 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [ready, displayRefreshHz]);
+
+  // Keep the engine's target_fps in sync with the selected mode. `Default` follows the display
+  // refresh, so this re-pushes when the measured refresh settles or the mode changes.
+  useEffect(() => {
+    if (!ready || perfTargetFps === null) {
+      return;
+    }
+    const want = resolveTargetFps(targetFpsMode, displayRefreshHz, perfTargetFps);
+    if (want >= 1 && Math.round(perfTargetFps) !== want) {
+      void client
+        .setPerfConfig({ targetFps: want })
+        .then((config) => setPerfConfig(config))
+        .catch((err: unknown) => notifyError(errorText(err)));
+    }
+  }, [ready, targetFpsMode, displayRefreshHz, perfTargetFps, setPerfConfig]);
 
   const onDebugToggle = (field: (typeof DEBUG_OVERLAYS)[number]["field"], next: boolean): void => {
     const previous = useEditorStore.getState().debugOverlays;
@@ -190,6 +279,47 @@ export function RenderPanel() {
     void client
       .setAa(mode)
       .then((res) => optimistic({ aa: res.aa }))
+      .catch((err: unknown) => notifyError(errorText(err)));
+  };
+
+  const onQuality = (tier: string): void => {
+    const prior = useEditorStore.getState().renderStats?.quality ?? "high";
+    optimistic({ quality: tier });
+    if (prior !== tier) {
+      recordRender(
+        "Render quality",
+        () => client.setRenderQuality(prior),
+        () => client.setRenderQuality(tier),
+      );
+    }
+    void client
+      .setRenderQuality(tier)
+      .then((res) =>
+        // Fold the resolved per-effect flags back so the Stats panel reflects the tier at once
+        // (`ssao` is the render-stats name for GTAO).
+        optimistic({
+          quality: res.tier,
+          ssgi: res.ssgi,
+          ssao: res.gtao,
+          contactShadows: res.contactShadows,
+        }),
+      )
+      .catch((err: unknown) => notifyError(errorText(err)));
+  };
+
+  const onTonemap = (mode: string): void => {
+    const prior = useEditorStore.getState().renderStats?.tonemap ?? "aces";
+    optimistic({ tonemap: mode });
+    if (prior !== mode) {
+      recordRender(
+        "Tonemap",
+        () => client.setTonemap(prior as "aces"),
+        () => client.setTonemap(mode as "aces"),
+      );
+    }
+    void client
+      .setTonemap(mode as "aces")
+      .then((res) => optimistic({ tonemap: res.mode }))
       .catch((err: unknown) => notifyError(errorText(err)));
   };
 
@@ -289,6 +419,64 @@ export function RenderPanel() {
                 {AA_MODES.map((m) => (
                   <SelectItem key={m.value} value={m.value} className="text-[11px]">
                     {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-[1fr_auto] items-center gap-1.5">
+            <Label className="truncate text-[11px] font-normal text-muted-foreground">
+              Quality
+            </Label>
+            <Select value={cfg.quality} disabled={!ready} onValueChange={(v) => onQuality(v)}>
+              <SelectTrigger size="sm" className="h-7 w-[112px] font-mono text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {QUALITY_TIERS.map((q) => (
+                  <SelectItem key={q.value} value={q.value} className="text-[11px]">
+                    {q.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-[1fr_auto] items-center gap-1.5">
+            <Label className="truncate text-[11px] font-normal text-muted-foreground">
+              Tonemap
+            </Label>
+            <Select value={cfg.tonemap} disabled={!ready} onValueChange={(v) => onTonemap(v)}>
+              <SelectTrigger size="sm" className="h-7 w-[112px] font-mono text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TONEMAP_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value} className="text-[11px]">
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-[1fr_auto] items-center gap-1.5">
+            <Label className="truncate text-[11px] font-normal text-muted-foreground">
+              Target FPS
+            </Label>
+            <Select
+              value={typeof targetFpsMode === "number" ? String(targetFpsMode) : "default"}
+              disabled={!ready}
+              onValueChange={(v) => setTargetFpsMode(v === "default" ? "default" : Number(v))}
+            >
+              <SelectTrigger size="sm" className="h-7 w-[112px] font-mono text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TARGET_FPS_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value} className="text-[11px]">
+                    {o.label}
                   </SelectItem>
                 ))}
               </SelectContent>
