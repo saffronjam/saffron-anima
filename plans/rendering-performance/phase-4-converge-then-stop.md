@@ -1,8 +1,34 @@
 # Converge-then-stop temporal GI
 
-**Status:** NOT STARTED
+**Status:** CORE COMPLETE (loop-side convergence); per-pixel disocclusion + DDGI budget deferred
 **Scope:** Editor-mostly (needs a static view); the probe-budget machinery is Both
 **Depends on:** Phase 1 (shared invalidation signal), Phase 3 (tier params)
+
+> **Done — converge-then-stop at the loop level.** The `RedrawController` (Phase 1) now renders a
+> **convergence window** after activity, not just a wall-clock keep-warm: the host reports whether a
+> temporal effect is accumulating (`set_temporal_active` = TAA on or SSGI on), and while it is the
+> loop keeps rendering for `CONVERGE_FRAMES` (24) frames after the last invalidation so the TAA/SSGI
+> history settles to its final image before the viewport idles **on the converged frame** (never a
+> noisy mid-accumulation one). The reset is the *same* Phase-1 invalidation (camera/scene/command),
+> so there is one signal, not two (the locked decision). A `converged()` accessor is exported for the
+> Phase-5 stats readout. With no temporal effect on, convergence is immediate (the keep-warm alone
+> applies). Unit-tested (`temporal_convergence_renders_a_frame_window_past_keep_warm`); build + clippy
+> clean; docs (the [main-loop reactive-pacing](../../docs/content/explanations/app-lifecycle-and-window/main-loop-and-run.md)
+> section) updated.
+>
+> **Why this is the right core:** because Phase 1 stops rendering entirely once converged, the SSGI/GI
+> passes already *stop issuing work* on a static scene at the frame level — the "stop tracing" goal is
+> met by the loop, no per-pixel shader gate needed. What remains is intra-frame optimization for the
+> *moving* case:
+>
+> **Deferred (documented), with rationale:**
+> - **Per-pixel disocclusion reset via motion vectors** — re-trace only newly-revealed pixels when the
+>   camera nudges, instead of the whole frame. A deep SSGI-shader change (confidence buffer + motion-
+>   vector reprojection); reduces cost *during motion*, which the loop-level convergence does not. The
+>   larger sub-step, like Phase 2's static/dynamic split and Phase 3's half-res.
+> - **DDGI / voxel-GI per-frame probe budget (#13)** — spread probe updates across frames. DDGI is off
+>   by default (`ddgi: false`), so this is low-priority; deferred with the disocclusion work (shares
+>   the convergence machinery).
 
 ## Goal
 
