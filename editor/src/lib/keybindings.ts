@@ -4,21 +4,23 @@
 /// settings.json stores just the changed commands, VS Code-style); handlers call
 /// `matchesBinding(event, id, overrides)` instead of comparing key literals.
 ///
-/// Two command kinds:
+/// Three command kinds:
 /// - "press": one-shot commands matched on a normalized key-string built from
 ///   `event.key` plus modifier prefixes in fixed order ("w", "shift+f", "escape").
 ///   Matching is exact-modifier: a binding of "f" does not fire on Ctrl+F, so
 ///   menu/OS chords pass through untouched unless explicitly bound.
 /// - "hold": held-state fly-camera keys matched on the physical `event.code`
 ///   ("KeyW", "Space", "ShiftLeft"), no modifier combos.
-
-export type CommandKind = "press" | "hold";
+/// - "mouse": a mouse-button command, bound to a `mouse:<name>` token (the side buttons
+///   and middle button). Rebindable only to another mouse button, never a key, so its
+///   capture and matching never overlap the key value-space.
+export type CommandKind = "press" | "hold" | "mouse";
 
 /// Conflict scope: bindings only collide within one scope. Global press commands
 /// share one window listener; fly keys share the viewport fly listener; the
 /// hierarchy/assets deletes are focus-scoped to their own panels, so the same key
-/// in both is fine.
-export type CommandScope = "global" | "hierarchy" | "assets" | "fly";
+/// in both is fine; tab mouse commands share the mouse dispatcher.
+export type CommandScope = "global" | "hierarchy" | "assets" | "fly" | "tabs";
 
 export type CommandId =
   | "gizmo.translate"
@@ -28,6 +30,9 @@ export type CommandId =
   | "selection.deselect"
   | "edit.undo"
   | "edit.redo"
+  | "tab.navBack"
+  | "tab.navForward"
+  | "tab.close"
   | "hierarchy.delete"
   | "assets.delete"
   | "camera.flyForward"
@@ -106,6 +111,30 @@ export const COMMANDS: readonly CommandDef[] = [
     scope: "global",
   },
   {
+    id: "tab.navBack",
+    label: "Navigate back",
+    category: "Tabs",
+    kind: "mouse",
+    default: "mouse:back",
+    scope: "tabs",
+  },
+  {
+    id: "tab.navForward",
+    label: "Navigate forward",
+    category: "Tabs",
+    kind: "mouse",
+    default: "mouse:forward",
+    scope: "tabs",
+  },
+  {
+    id: "tab.close",
+    label: "Close hovered tab",
+    category: "Tabs",
+    kind: "mouse",
+    default: "mouse:middle",
+    scope: "tabs",
+  },
+  {
     id: "hierarchy.delete",
     label: "Delete entity",
     category: "Hierarchy",
@@ -178,6 +207,34 @@ export const COMMANDS_BY_ID: Record<CommandId, CommandDef> = Object.fromEntries(
 /// True when `value` names a registered command (filters stale settings.json keys).
 export function isCommandId(value: string): value is CommandId {
   return value in COMMANDS_BY_ID;
+}
+
+/// The mouse buttons that can be bound, by token. `back`/`forward` are the side buttons
+/// (GDK 8/9, intercepted natively since WebKitGTK eats them); `middle` is the wheel click.
+export type MouseButtonName = "middle" | "back" | "forward";
+
+const MOUSE_LABELS: Record<string, string> = {
+  "mouse:middle": "Middle button",
+  "mouse:back": "Back button",
+  "mouse:forward": "Forward button",
+};
+
+/// The binding token for a mouse button.
+export function mouseToken(name: MouseButtonName): string {
+  return `mouse:${name}`;
+}
+
+/// The mouse command (if any) whose effective binding equals `token`, in registry order.
+export function mouseCommandFor(
+  token: string,
+  overrides: Record<string, string>,
+): CommandId | null {
+  for (const def of COMMANDS) {
+    if (def.kind === "mouse" && bindingFor(def.id, overrides) === token) {
+      return def.id;
+    }
+  }
+  return null;
 }
 
 interface KeyEventLike {
@@ -274,8 +331,12 @@ function formatCode(code: string): string {
 }
 
 /// Human-readable form of a binding value for chips and tooltips:
-/// "shift+f" → "Shift+F", "escape" → "Esc", "KeyW" (hold) → "W".
+/// "shift+f" → "Shift+F", "escape" → "Esc", "KeyW" (hold) → "W",
+/// "mouse:back" → "Back button".
 export function formatBinding(def: CommandDef, value: string): string {
+  if (def.kind === "mouse") {
+    return MOUSE_LABELS[value] ?? value;
+  }
   if (def.kind === "hold") {
     return formatCode(value);
   }

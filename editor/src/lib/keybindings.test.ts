@@ -8,6 +8,8 @@ import {
   formatBinding,
   isCommandId,
   matchesBinding,
+  mouseCommandFor,
+  mouseToken,
   normalizePressEvent,
 } from "./keybindings";
 
@@ -159,6 +161,40 @@ describe("formatBinding", () => {
 
   test("press: 'ctrl+shift+z' becomes 'Ctrl+Shift+Z'", () => {
     expect(formatBinding(COMMANDS_BY_ID["edit.redo"], "ctrl+shift+z")).toBe("Ctrl+Shift+Z");
+  });
+});
+
+describe("mouse bindings", () => {
+  test("mouseToken builds the namespaced value", () => {
+    expect(mouseToken("back")).toBe("mouse:back");
+    expect(mouseToken("middle")).toBe("mouse:middle");
+  });
+
+  test("mouseCommandFor resolves the default-bound command", () => {
+    expect(mouseCommandFor("mouse:back", {})).toBe("tab.navBack");
+    expect(mouseCommandFor("mouse:forward", {})).toBe("tab.navForward");
+    expect(mouseCommandFor("mouse:middle", {})).toBe("tab.close");
+  });
+
+  test("mouseCommandFor honors an override and returns null when unbound", () => {
+    // Rebinding tab.navBack to the middle button makes it answer that token...
+    const overrides = { "tab.navBack": "mouse:middle" };
+    expect(mouseCommandFor("mouse:middle", overrides)).toBe("tab.navBack");
+    // ...and nothing answers the back button anymore.
+    expect(mouseCommandFor("mouse:back", overrides)).toBeNull();
+    expect(mouseCommandFor("mouse:left", {})).toBeNull();
+  });
+
+  test("formatBinding labels a mouse token", () => {
+    expect(formatBinding(COMMANDS_BY_ID["tab.navBack"], "mouse:back")).toBe("Back button");
+    expect(formatBinding(COMMANDS_BY_ID["tab.close"], "mouse:middle")).toBe("Middle button");
+  });
+
+  test("mouse commands only conflict within the tabs scope", () => {
+    // Rebinding tab.close to the back button collides with tab.navBack (both 'tabs' scope).
+    expect(findConflict("tab.close", "mouse:back", {})).toBe("tab.navBack");
+    // A key default in another scope is never flagged against a mouse token.
+    expect(findConflict("tab.navBack", "mouse:back", {})).toBeNull();
   });
 });
 
