@@ -58,6 +58,7 @@ function Entity:move_character(velocity, jump) end ---@param velocity sa.Vec3 @p
 function Entity:apply_impulse(impulse) end ---@param impulse sa.Vec3
 function Entity:add_force(force) end ---@param force sa.Vec3
 function Entity:set_velocity(velocity) end ---@param velocity sa.Vec3
+function Entity:set_morph_weights(weights) end ---@param weights number[]
 function Entity:get_velocity() end ---@return sa.Vec3
 function Entity:enable_ragdoll() end ---@return boolean
 function Entity:disable_ragdoll() end

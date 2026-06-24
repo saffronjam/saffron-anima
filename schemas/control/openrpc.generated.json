@@ -1266,6 +1266,60 @@
       }
     },
     {
+      "name": "set-morph-weights",
+      "summary": "set a morph mesh's blend-shape weights (canonical 0..1)",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetMorphWeightsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MorphWeightsResult"
+        }
+      }
+    },
+    {
+      "name": "get-morph-weights",
+      "summary": "a morph mesh's live blend-shape weights + target names",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/GetMorphWeightsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MorphWeightsResult"
+        }
+      }
+    },
+    {
+      "name": "list-clip-bindings",
+      "summary": "a clip's channels resolved against a live entity forest",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ListClipBindingsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ClipBindingsResult"
+        }
+      }
+    },
+    {
       "name": "get-script-status",
       "summary": "play state, live script instances, error high-water",
       "params": [
@@ -1915,12 +1969,12 @@
     },
     {
       "name": "import-model",
-      "summary": "import-model {path}",
+      "summary": "import-model {path} — optional store attribution",
       "params": [
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/PathParams"
+            "$ref": "#/components/schemas/ImportModelParams"
           }
         }
       ],
@@ -1969,12 +2023,12 @@
     },
     {
       "name": "import-texture",
-      "summary": "import-texture {path}",
+      "summary": "import-texture {path} [colorspace]",
       "params": [
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/PathParams"
+            "$ref": "#/components/schemas/ImportTextureParams"
           }
         }
       ],
@@ -2688,6 +2742,42 @@
       }
     },
     {
+      "name": "get-stores",
+      "summary": "get-stores — enabled asset-store connectors for the project",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/EmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ProjectStoresDto"
+        }
+      }
+    },
+    {
+      "name": "set-stores",
+      "summary": "set-stores {enabled} — set the project's enabled asset-store connectors",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ProjectStoresDto"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ProjectStoresDto"
+        }
+      }
+    },
+    {
       "name": "screenshot",
       "summary": "capture screenshot",
       "params": [
@@ -2951,6 +3041,44 @@
           "durationMs"
         ]
       },
+      "AnimationChannelDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "targetName": {
+            "type": "string"
+          },
+          "times": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "width": {
+            "type": "integer"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "targetName",
+          "times",
+          "width",
+          "values"
+        ]
+      },
       "AnimationClipDto": {
         "type": "object",
         "additionalProperties": false,
@@ -2964,15 +3092,18 @@
           "duration": {
             "type": "number"
           },
-          "tracks": {
-            "type": "integer"
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnimationChannelDto"
+            }
           }
         },
         "required": [
           "id",
           "name",
           "duration",
-          "tracks"
+          "channels"
         ]
       },
       "AnimationStateParams": {
@@ -3021,6 +3152,12 @@
           },
           "animationVersion": {
             "type": "integer"
+          },
+          "morphWeights": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
           }
         },
         "required": [
@@ -3031,7 +3168,8 @@
           "playing",
           "wrap",
           "speed",
-          "animationVersion"
+          "animationVersion",
+          "morphWeights"
         ]
       },
       "AppManifest": {
@@ -3095,6 +3233,37 @@
         "required": [
           "velocity"
         ]
+      },
+      "AssetAttributionDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "licenseId": {
+            "type": "string",
+            "default": ""
+          },
+          "requiresAttribution": {
+            "type": "boolean",
+            "default": false
+          },
+          "licenseUrl": {
+            "type": "string",
+            "default": ""
+          },
+          "author": {
+            "type": "string",
+            "default": ""
+          },
+          "sourceUrl": {
+            "type": "string",
+            "default": ""
+          },
+          "storeId": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
       },
       "AssetCapabilitiesDto": {
         "type": "object",
@@ -3163,6 +3332,9 @@
           },
           "rigged": {
             "type": "boolean"
+          },
+          "attribution": {
+            "$ref": "#/components/schemas/AssetAttributionDto"
           }
         },
         "required": [
@@ -3833,6 +4005,21 @@
         "required": [
           "asset",
           "subAsset"
+        ]
+      },
+      "ClipBindingsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnimationChannelDto"
+            }
+          }
+        },
+        "required": [
+          "channels"
         ]
       },
       "ComponentList": {
@@ -4744,6 +4931,16 @@
           "entity"
         ]
       },
+      "GetMorphWeightsParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {}
+        },
+        "required": [
+          "entity"
+        ]
+      },
       "GetRagdollParams": {
         "type": "object",
         "additionalProperties": false,
@@ -4857,6 +5054,21 @@
           "preserveChildren"
         ]
       },
+      "ImportModelParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "attribution": {
+            "$ref": "#/components/schemas/AssetAttributionDto"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
       "ImportModelResult": {
         "type": "object",
         "additionalProperties": false,
@@ -4875,6 +5087,21 @@
           "id",
           "name",
           "type"
+        ]
+      },
+      "ImportTextureParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "colorspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
         ]
       },
       "ImportTextureResult": {
@@ -4956,6 +5183,18 @@
           "entity",
           "enabled",
           "boneCount"
+        ]
+      },
+      "ListClipBindingsParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {},
+          "clip": {}
+        },
+        "required": [
+          "entity",
+          "clip"
         ]
       },
       "ListClipsParams": {
@@ -5247,6 +5486,9 @@
           },
           "name": {
             "type": "string"
+          },
+          "attribution": {
+            "$ref": "#/components/schemas/AssetAttributionDto"
           }
         },
         "required": [
@@ -5531,6 +5773,28 @@
           "name",
           "type",
           "bytes"
+        ]
+      },
+      "MorphWeightsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "weights": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "weights",
+          "names"
         ]
       },
       "MoveAssetParams": {
@@ -6227,6 +6491,20 @@
           "name",
           "displayName"
         ]
+      },
+      "ProjectStoresDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        },
+        "required": []
       },
       "QuitResult": {
         "type": "object",
@@ -7542,6 +7820,23 @@
         },
         "required": [
           "entity"
+        ]
+      },
+      "SetMorphWeightsParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity": {},
+          "weights": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "entity",
+          "weights"
         ]
       },
       "SetParentParams": {

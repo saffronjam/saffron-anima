@@ -492,6 +492,27 @@
       "fixture": "foot-ik-on"
     },
     {
+      "name": "set-morph-weights",
+      "params": "SetMorphWeightsParams",
+      "result": "MorphWeightsResult",
+      "status": "typed",
+      "skip": "needs an imported morph mesh — covered in make e2e"
+    },
+    {
+      "name": "get-morph-weights",
+      "params": "GetMorphWeightsParams",
+      "result": "MorphWeightsResult",
+      "status": "typed",
+      "skip": "needs an imported morph mesh — covered in make e2e"
+    },
+    {
+      "name": "list-clip-bindings",
+      "params": "ListClipBindingsParams",
+      "result": "ClipBindingsResult",
+      "status": "typed",
+      "skip": "needs an imported clip + entity forest — covered in make e2e"
+    },
+    {
       "name": "get-script-status",
       "params": "EmptyParams",
       "result": "ScriptStatusResult",
@@ -745,7 +766,7 @@
     },
     {
       "name": "import-model",
-      "params": "PathParams",
+      "params": "ImportModelParams",
       "result": "ImportModelResult",
       "status": "typed",
       "skip": "requires an external model fixture path"
@@ -766,7 +787,7 @@
     },
     {
       "name": "import-texture",
-      "params": "PathParams",
+      "params": "ImportTextureParams",
       "result": "ImportTextureResult",
       "status": "typed",
       "skip": "requires an external texture fixture path"
@@ -1043,6 +1064,20 @@
       "result": "ProjectInfoDto",
       "status": "typed",
       "skip": "reloads and replaces the active project's scene and catalog"
+    },
+    {
+      "name": "get-stores",
+      "params": "EmptyParams",
+      "result": "ProjectStoresDto",
+      "status": "typed",
+      "fixture": "empty"
+    },
+    {
+      "name": "set-stores",
+      "params": "ProjectStoresDto",
+      "result": "ProjectStoresDto",
+      "status": "typed",
+      "fixture": "stores-polyhaven"
     },
     {
       "name": "screenshot",
