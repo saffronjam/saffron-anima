@@ -31,16 +31,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-
-const TARGET_FPS = [30, 60, 90, 120, 144];
 
 function Stat({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -137,7 +128,6 @@ export function RenderStatsPanel() {
   const metricsRangeSec = useEditorStore((s) => s.metricsRangeSec);
   const metricsBucketMs = useEditorStore((s) => s.metricsBucketMs);
   const setRenderStats = useEditorStore((s) => s.setRenderStats);
-  const setPerfConfig = useEditorStore((s) => s.setPerfConfig);
   const [error, setError] = useState<string | null>(null);
 
   // The volatile engine/UI readouts (render-stats, poll rate, UI frame rate) are sampled from
@@ -184,14 +174,6 @@ export function RenderStatsPanel() {
     void client
       .setProfilerMode(mode)
       .then((res) => optimistic({ profilerMode: res.mode }))
-      .catch((err: unknown) => setError(errorText(err)));
-  };
-
-  const onTargetFps = (fps: number): void => {
-    setError(null);
-    void client
-      .setPerfConfig({ targetFps: fps })
-      .then((config) => setPerfConfig(config))
       .catch((err: unknown) => setError(errorText(err)));
   };
 
@@ -244,26 +226,15 @@ export function RenderStatsPanel() {
               </Tooltip>
               <Switch checked={profilerOn} disabled={!ready} onCheckedChange={onProfiler} />
             </div>
+            {/* The frame-budget target (which also paces the render loop) lives in the Render tab,
+                since it is render config, not telemetry. The bar below grades against it. */}
             <div className="grid grid-cols-[1fr_auto] items-center gap-1.5">
               <Label className="truncate text-[11px] font-normal text-muted-foreground">
                 Target FPS
               </Label>
-              <Select
-                value={perfConfig ? String(perfConfig.targetFps) : ""}
-                disabled={!ready || !perfConfig}
-                onValueChange={(v) => onTargetFps(Number(v))}
-              >
-                <SelectTrigger size="sm" className="h-7 w-[112px] font-mono text-[11px]">
-                  <SelectValue placeholder="—" />
-                </SelectTrigger>
-                <SelectContent>
-                  {TARGET_FPS.map((fps) => (
-                    <SelectItem key={fps} value={String(fps)} className="text-[11px]">
-                      {fps} Hz
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {perfConfig ? `${Math.round(perfConfig.targetFps)} Hz` : "—"}
+              </span>
             </div>
           </section>
 
