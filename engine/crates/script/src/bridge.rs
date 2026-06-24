@@ -83,6 +83,10 @@ pub trait ScriptHostBridge {
     /// Set the absolute linear velocity of `entity`'s Dynamic body.
     fn set_velocity(&self, entity: Uuid, velocity: Vec3);
 
+    /// Set the morph-target weights of `entity`'s morph mesh (canonical 0..1). A length
+    /// mismatch or a non-morph entity is a no-op on the host side.
+    fn set_morph_weights(&self, entity: Uuid, weights: &[f32]);
+
     /// The current linear velocity of `entity`'s Dynamic body, or zero when there is
     /// none.
     fn get_velocity(&self, entity: Uuid) -> Vec3;
@@ -124,6 +128,8 @@ impl ScriptHostBridge for NoopBridge {
     fn add_force(&self, _entity: Uuid, _force: Vec3) {}
 
     fn set_velocity(&self, _entity: Uuid, _velocity: Vec3) {}
+
+    fn set_morph_weights(&self, _entity: Uuid, _weights: &[f32]) {}
 
     fn get_velocity(&self, _entity: Uuid) -> Vec3 {
         Vec3::ZERO

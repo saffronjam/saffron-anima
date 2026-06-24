@@ -345,6 +345,10 @@ pub const BINDINGS: &[Binding] = &[
         "Set the absolute linear velocity of this entity's Dynamic rigidbody."
     ),
     binding!(
+        "set_morph_weights", Some("Entity"), BindingKind::Method, [("weights": "number[]")], None,
+        "Set this entity's morph-target (blend-shape) weights (canonical 0..1)."
+    ),
+    binding!(
         "get_velocity",
         Some("Entity"),
         BindingKind::Method,
@@ -915,6 +919,7 @@ mod tests {
             "apply_impulse",
             "add_force",
             "set_velocity",
+            "set_morph_weights",
             "get_velocity",
             "enable_ragdoll",
             "disable_ragdoll",

@@ -531,6 +531,13 @@ impl EntityHandle {
         session::with_bridge(|bridge| bridge.set_velocity(uuid, velocity.0));
     }
 
+    /// Set this entity's morph-target (blend-shape) weights (canonical 0..1). A length
+    /// mismatch or a non-morph entity is a no-op on the host side.
+    pub fn set_morph_weights(self, weights: Vec<f32>) {
+        let uuid = self.body_uuid();
+        session::with_bridge(|bridge| bridge.set_morph_weights(uuid, &weights));
+    }
+
     /// The current linear velocity of this entity's Dynamic rigidbody, or `vec3{0}` when
     /// there is none / no bridge is lent.
     #[must_use]
@@ -696,6 +703,10 @@ impl UserData for EntityHandle {
         });
         methods.add_method("set_velocity", |_, this, velocity: SaVec3| {
             this.set_velocity(velocity);
+            Ok(())
+        });
+        methods.add_method("set_morph_weights", |_, this, weights: Vec<f32>| {
+            this.set_morph_weights(weights);
             Ok(())
         });
         methods.add_method("get_velocity", |_, this, ()| Ok(this.get_velocity()));

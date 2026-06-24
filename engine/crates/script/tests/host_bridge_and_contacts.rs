@@ -54,6 +54,7 @@ enum Call {
     ApplyImpulse(Uuid, Vec3),
     AddForce(Uuid, Vec3),
     SetVelocity(Uuid, Vec3),
+    SetMorphWeights(Uuid, Vec<f32>),
     GetVelocity(Uuid),
     SetRagdollEnabled(Uuid, bool),
     SetRagdollBlend(Uuid, bool, f32),
@@ -122,6 +123,9 @@ impl ScriptHostBridge for RecordingBridge {
     }
     fn set_velocity(&self, entity: Uuid, velocity: Vec3) {
         self.record(Call::SetVelocity(entity, velocity));
+    }
+    fn set_morph_weights(&self, entity: Uuid, weights: &[f32]) {
+        self.record(Call::SetMorphWeights(entity, weights.to_vec()));
     }
     fn get_velocity(&self, entity: Uuid) -> Vec3 {
         self.record(Call::GetVelocity(entity));
