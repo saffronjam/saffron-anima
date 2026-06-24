@@ -20,15 +20,14 @@ afterAll(async () => {
   await engine?.shutdown();
 });
 
-// Plain on/off toggles whose state render-stats echoes back under `field`.
+// Plain on/off toggles whose state render-stats echoes back under `field`. The SSGI / GTAO /
+// contact-shadow effects are no longer per-effect toggles — they are driven by the render-quality
+// tier (see the `set-render-quality` test below).
 const BOOLEAN_TOGGLES = [
-  { cmd: "set-ssao", field: "ssao" },
   { cmd: "set-shadows", field: "shadows" },
   { cmd: "set-ibl", field: "ibl" },
   { cmd: "set-clustered", field: "clustered" },
   { cmd: "set-depth-prepass", field: "depthPrepass" },
-  { cmd: "set-contact-shadows", field: "contactShadows" },
-  { cmd: "set-ssgi", field: "ssgi" },
 ];
 
 for (const { cmd, field } of BOOLEAN_TOGGLES) {
@@ -39,6 +38,22 @@ for (const { cmd, field } of BOOLEAN_TOGGLES) {
     expect((await stats())[field]).toBe(false);
   });
 }
+
+test("set-render-quality drives the SSGI/GTAO/contact stack via render-stats", async () => {
+  await engine.call("set-render-quality", { args: ["low"] });
+  let s = await stats();
+  expect(s.quality).toBe("low");
+  expect(s.ssgi).toBe(false);
+  expect(s.ssao).toBe(false);
+  expect(s.contactShadows).toBe(false);
+
+  await engine.call("set-render-quality", { args: ["ultra"] });
+  s = await stats();
+  expect(s.quality).toBe("ultra");
+  expect(s.ssgi).toBe(true);
+  expect(s.ssao).toBe(true);
+  expect(s.contactShadows).toBe(true);
+});
 
 test("set-gi ddgi|off round-trips through render-stats.ddgi", async () => {
   await engine.call("set-gi", { args: ["ddgi"] });
