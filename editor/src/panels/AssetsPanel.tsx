@@ -665,7 +665,12 @@ export function AssetsPanel() {
               await client.deleteAsset(asset.id);
               deletedIds.add(asset.id);
               closeViewTab(`imageViewer:${asset.id}`);
+              // The asset-editor tab is keyed by the owning model container (a sub-asset opens
+              // its container's editor), so close both the asset's own key and its container's.
               closeViewTab(`assetEditor:${asset.id}`);
+              if (asset.container && asset.container !== "0") {
+                closeViewTab(`assetEditor:${asset.container}`);
+              }
             } catch (err) {
               notify(`Could not delete ${asset.name}: ${errorText(err)}`);
             }

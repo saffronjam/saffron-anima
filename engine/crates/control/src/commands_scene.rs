@@ -15,7 +15,7 @@
 //! render domain (`commands_render.rs`), and `quit` / `create-script` /
 //! `get-script-schema` in the asset domain / host. This file holds the remaining 42.
 
-use saffron_assets::{engine_asset_path, pick_entity};
+use saffron_assets::{engine_asset_path, model_render_aabb, pick_entity};
 use saffron_geometry::glam::{Mat4, Vec2, Vec3 as GlamVec3, Vec4 as GlamVec4};
 use saffron_protocol::{
     AddComponentResult, AddEntityParams, AddEntityPreset, ComponentList, ComponentParams,
@@ -865,9 +865,29 @@ pub fn register_scene_commands(reg: &mut CommandRegistry) {
             {
                 return Err(Error::command("entity has no Transform"));
             }
-            let target = ctx.scene_edit.active_scene().world_translation(entity);
+            let fovy = ctx.scene_edit.camera.fov.to_radians();
             let forward = ctx.scene_edit.camera.forward();
-            ctx.scene_edit.camera.position = target - forward * 5.0;
+            // Frame the whole model: union the forest's mesh AABB and pull the camera back to
+            // fit it, rather than aiming at the container pivot at a fixed distance (which
+            // mis-frames large or off-pivot models).
+            let scene = ctx.scene_edit.active_scene();
+            let assets = &mut *ctx.assets;
+            let mut bounds = None;
+            ctx.renderer.with_gpu_uploader(&mut |gpu| {
+                bounds = model_render_aabb(gpu, scene, assets, entity);
+            });
+            let (target, distance) = match bounds {
+                Some((lo, hi)) => {
+                    let center = (lo + hi) * 0.5;
+                    let radius = (hi - lo).length() * 0.5;
+                    (center, (radius / (fovy * 0.5).tan() * 1.3).max(0.5))
+                }
+                None => (
+                    ctx.scene_edit.active_scene().world_translation(entity),
+                    5.0,
+                ),
+            };
+            ctx.scene_edit.camera.position = target - forward * distance;
             let scene = ctx.scene_edit.active_scene();
             Ok(entity_ref_dto(scene, entity))
         },
