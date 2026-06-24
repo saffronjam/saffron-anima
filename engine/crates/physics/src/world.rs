@@ -1081,41 +1081,75 @@ pub fn fit_collider_to_mesh(scene: &mut Scene, entity: Entity, cook: &mut MeshCo
     if !scene.has_component::<Collider>(entity) {
         return false;
     }
-    // The mesh id is the entity's static or skinned mesh; absent either, there is nothing to fit.
-    let mesh_id = scene
-        .with_component::<MeshComponent, _>(entity, |m| m.mesh)
-        .ok()
-        .or_else(|| {
-            scene
-                .with_component::<SkinnedMesh, _>(entity, |s| s.mesh)
-                .ok()
-        })
-        .unwrap_or(Uuid(0));
-    if mesh_id.0 == 0 {
+    // The mesh-bearing entities to size against: the collider entity itself when it carries a
+    // mesh, else its forest — the meshes of a multi-node model ride child nodes under the
+    // container the collider sits on, so probing only `entity` finds nothing.
+    let mesh_entities: Vec<Entity> =
+        if scene.has_component::<MeshComponent>(entity) || scene.has_component::<SkinnedMesh>(entity)
+        {
+            vec![entity]
+        } else {
+            scene.model_mesh_entities(entity)
+        };
+    if mesh_entities.is_empty() {
         return false; // no mesh to size against — keep the collider's defaults
     }
-    let Ok(mesh) = cook(mesh_id) else {
+
+    // The Jolt body is built scale-free (world translation + rotation only). Union every mesh's
+    // AABB in world space, then express it in the body's local frame `inv(T·R)`; for a single
+    // mesh on the collider entity this reduces to the mesh-local box scaled by the entity's world
+    // scale (since `inv(T·R) · (T·R·S) = S`), matching the prior single-mesh fit exactly.
+    let body = scene.world_matrix(entity);
+    let (_, body_rot, body_pos) = body.to_scale_rotation_translation();
+    let to_body = Mat4::from_rotation_translation(body_rot, body_pos).inverse();
+    let mut lo = Vec3::splat(f32::MAX);
+    let mut hi = Vec3::splat(f32::MIN);
+    let mut source_mesh = Uuid(0);
+    let mut found = false;
+    for mesh_entity in mesh_entities {
+        let mesh_id = scene
+            .with_component::<MeshComponent, _>(mesh_entity, |m| m.mesh)
+            .ok()
+            .or_else(|| {
+                scene
+                    .with_component::<SkinnedMesh, _>(mesh_entity, |s| s.mesh)
+                    .ok()
+            })
+            .unwrap_or(Uuid(0));
+        if mesh_id.0 == 0 {
+            continue;
+        }
+        let Ok(mesh) = cook(mesh_id) else {
+            continue;
+        };
+        let Some((mlo, mhi)) = mesh_aabb(&mesh) else {
+            continue;
+        };
+        if source_mesh.0 == 0 {
+            source_mesh = mesh_id;
+        }
+        let to_local = to_body * scene.world_matrix(mesh_entity);
+        for i in 0..8 {
+            let corner = Vec3::new(
+                if i & 1 == 0 { mlo.x } else { mhi.x },
+                if i & 2 == 0 { mlo.y } else { mhi.y },
+                if i & 4 == 0 { mlo.z } else { mhi.z },
+            );
+            let p = to_local.transform_point3(corner);
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        found = true;
+    }
+    if !found {
         return false;
-    };
-    let Some((lo, hi)) = mesh_aabb(&mesh) else {
-        return false;
-    };
+    }
     if (hi - lo).cmple(Vec3::ZERO).all() {
         return false; // a single degenerate point — nothing to size against (a planar mesh is fine)
     }
 
-    // The Jolt body is built scale-free (world translation + rotation only), so the entity's WORLD
-    // scale must bake into the fitted extents + offset for the collider to match the scaled visual
-    // mesh. Per-axis world scale = the length of each world-matrix basis column (exact for a TRS
-    // transform). Mesh-local AABB, then scaled into the body-local (unscaled) frame.
-    let world = scene.world_matrix(entity);
-    let world_scale = Vec3::new(
-        world.x_axis.truncate().length(),
-        world.y_axis.truncate().length(),
-        world.z_axis.truncate().length(),
-    );
-    let half = (hi - lo) * 0.5 * world_scale;
-    let offset = (lo + hi) * 0.5 * world_scale;
+    let half = (hi - lo) * 0.5;
+    let offset = (lo + hi) * 0.5;
     let half_extents = match scene.with_component::<Collider, _>(entity, |c| c.shape) {
         Ok(Shape::Box | Shape::ConvexHull | Shape::Mesh) => {
             // Hull/mesh fit a fallback box into half_extents; the cook uses the actual geometry.
@@ -1136,7 +1170,7 @@ pub fn fit_collider_to_mesh(scene: &mut Scene, entity: Entity, cook: &mut MeshCo
     scene
         .with_component_mut::<Collider, _>(entity, |c| {
             c.offset = offset;
-            c.source_mesh = mesh_id; // cook source for hull/mesh; analytic shapes ignore it
+            c.source_mesh = source_mesh; // cook source for hull/mesh; analytic shapes ignore it
             c.half_extents = half_extents;
         })
         .is_ok()

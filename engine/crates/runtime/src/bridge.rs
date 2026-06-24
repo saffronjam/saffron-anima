@@ -129,13 +129,9 @@ impl ScriptHostBridge for RuntimeScriptBridge {
         if !scene.valid(e) {
             return;
         }
-        // The morph mesh is the entity itself or its animatable descendant (the spawn
-        // collapses a morph mesh onto the rig/container descendant).
-        let target = if scene.has_component::<MorphComponent>(e) {
-            e
-        } else {
-            scene.animatable_descendant(e)
-        };
+        // The morph mesh is the entity itself or the morph-bearing entity in its forest (a
+        // script targets the model's container while the morph mesh rides a child node).
+        let target = scene.model_morph_entity(e).unwrap_or(e);
         // A non-morph entity or a length mismatch is a silent no-op (the bridge contract).
         let Ok(count) = scene.with_component::<MorphComponent, _>(target, |c| c.weights.len())
         else {

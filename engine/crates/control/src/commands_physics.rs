@@ -209,9 +209,12 @@ pub fn register_physics_commands(reg: &mut CommandRegistry) {
         |ctx, params| {
             let entity = resolve_entity(ctx, &params.entity)?;
             let scene = ctx.scene_edit.active_scene();
-            // The editor selects a model by its container root; the rig lives on a
-            // descendant — resolve to it so the kinematic bones bind the right entity.
-            let rig = scene.animatable_descendant(entity);
+            // The editor selects a model by its container root; the rig (the SkinnedMesh entity)
+            // lives on a descendant. Resolve to it so the kinematic bones bind the actual rig,
+            // and reject a model with no rig rather than attaching to a bare container.
+            let Some(rig) = scene.model_rig_entity(entity) else {
+                return Err(Error::command("entity has no rig for kinematic bones"));
+            };
             if !scene.has_component::<KinematicBones>(rig) {
                 let _ = scene.add_component(rig, KinematicBones::default());
             }

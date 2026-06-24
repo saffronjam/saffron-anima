@@ -223,16 +223,14 @@ fn morph_weights_of(scene: &saffron_scene::Scene, target: Entity) -> (Vec<f32>, 
     (weights, names)
 }
 
-/// The mesh-bearing morph descendant of `entity`: the entity itself if it carries a
-/// [`MorphComponent`], else its [`Scene::animatable_descendant`] (the spawn collapses a morph
-/// mesh onto the rig/container descendant the transport commands already target).
+/// The morph-bearing entity of `entity`'s model: the entity itself if it carries a
+/// [`MorphComponent`], else the first such entity in its forest ([`Scene::model_morph_entity`]) —
+/// the morph mesh rides a child node while the selection resolves to the container. Falls back
+/// to `entity` when none, so a non-morph target degrades to the caller's no-op.
 fn morph_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entity> {
     let entity = resolve_entity(ctx, selector)?;
     let scene = ctx.scene_edit.active_scene();
-    if scene.has_component::<MorphComponent>(entity) {
-        return Ok(entity);
-    }
-    Ok(scene.animatable_descendant(entity))
+    Ok(scene.model_morph_entity(entity).unwrap_or(entity))
 }
 
 /// Reads a rig's player and returns its [`AnimationStateResult`].
@@ -271,6 +269,11 @@ fn debug_overlays_state(opts: &DebugOverlayOptions) -> DebugOverlaysResult {
 fn foot_ik_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entity> {
     let entity = resolve_entity(ctx, selector)?;
     let scene = ctx.scene_edit.active_scene();
+    // Foot IK needs a skeleton; reject a model with no rig in its forest rather than attaching a
+    // FootIk to a bare container that the runtime would never read.
+    if scene.model_rig_entity(entity).is_none() {
+        return Err(Error::command("entity has no rig to attach foot IK to"));
+    }
     let target = scene.model_player(entity);
     if !scene.has_component::<FootIk>(target) {
         let _ = scene.add_component(target, FootIk::default());
@@ -740,15 +743,29 @@ mod tests {
         });
     }
 
-    /// `set-foot-ik`/`get-foot-ik` on a non-rig entity attach a default `FootIk` and return
-    /// a typed result (no crash), and the enable flag round-trips.
+    /// `set-foot-ik` rejects a rig-less entity (foot IK needs a skeleton) and round-trips its
+    /// enable flag on a rigged entity.
     #[test]
-    fn foot_ik_round_trips_on_plain_entity() {
+    fn foot_ik_requires_a_rig_and_round_trips() {
         let reg = registry();
         let mut renderer = StubRenderer::default();
         with_stub(&mut renderer, |ctx| {
-            let entity = ctx.scene_edit.active_scene().create_entity("rig");
-            let uuid = entity_uuid(ctx.scene_edit.active_scene(), entity).to_string();
+            // A rig-less entity is rejected — no skeleton to attach foot IK to.
+            let plain = ctx.scene_edit.active_scene().create_entity("plain");
+            let plain_uuid = entity_uuid(ctx.scene_edit.active_scene(), plain).to_string();
+            let rejected = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "set-foot-ik", "params": { "entity": plain_uuid, "enabled": true } }),
+            );
+            assert_eq!(rejected["ok"], json!(false));
+
+            // A rigged entity (a SkinnedMesh in its forest) round-trips.
+            let rig = ctx.scene_edit.active_scene().create_entity("rig");
+            let _ = ctx
+                .scene_edit
+                .active_scene()
+                .add_component(rig, saffron_scene::SkinnedMesh::default());
+            let uuid = entity_uuid(ctx.scene_edit.active_scene(), rig).to_string();
 
             let set = reg.dispatch(
                 ctx,
