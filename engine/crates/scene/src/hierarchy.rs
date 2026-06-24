@@ -15,8 +15,8 @@ use glam::{Mat3, Mat4, Quat, Vec3};
 use saffron_core::Uuid;
 
 use crate::component::{
-    AnimationPlayer, Camera, IdComponent, ModelInstance, PoseOverride, Relationship, SkinnedMesh,
-    Transform, WorldTransform,
+    AnimationPlayer, Camera, IdComponent, Mesh, ModelInstance, MorphComponent, PoseOverride,
+    Relationship, SkinnedMesh, Transform, WorldTransform,
 };
 use crate::error::{Error, Result};
 use crate::scene::{Entity, Scene};
@@ -557,6 +557,82 @@ impl Scene {
         }
         entity
     }
+
+    /// Every entity in `root`'s subtree (inclusive) carrying a renderable mesh — a [`Mesh`]
+    /// or [`SkinnedMesh`]. This is the model's actual draw set, independent of which node the
+    /// importer placed the geometry on: a single-identity model resolves to one entity, while
+    /// a multi-node forest resolves to every mesh-bearing child. Walks the children caches, so
+    /// call after [`Scene::relink_hierarchy`].
+    #[must_use]
+    pub fn model_mesh_entities(&self, root: Entity) -> Vec<Entity> {
+        let mut out = Vec::new();
+        self.collect_mesh_entities(root, &mut out);
+        out
+    }
+
+    fn collect_mesh_entities(&self, entity: Entity, out: &mut Vec<Entity>) {
+        if !self.valid(entity) {
+            return;
+        }
+        if self.has_component::<Mesh>(entity) || self.has_component::<SkinnedMesh>(entity) {
+            out.push(entity);
+        }
+        for child in self.children_of(entity) {
+            self.collect_mesh_entities(child, out);
+        }
+    }
+
+    /// Whether `root`'s subtree contains any renderable mesh. The renderability predicate the
+    /// asset-preview gate keys off: true for a multi-node forest whose meshes ride child
+    /// nodes, not only for a model whose root entity carries the mesh itself.
+    #[must_use]
+    pub fn model_has_renderable(&self, root: Entity) -> bool {
+        self.find_subtree(root, &|s, e| {
+            s.has_component::<Mesh>(e) || s.has_component::<SkinnedMesh>(e)
+        })
+        .is_some()
+    }
+
+    /// The rig carrier of a model: the first subtree entity (pre-order) with a [`SkinnedMesh`],
+    /// or `None` for an unrigged model.
+    ///
+    /// Distinct from [`Scene::animatable_descendant`], which resolves the *animation authority*
+    /// (a [`SkinnedMesh`] **or** [`AnimationPlayer`]); the skeleton overlay and rig tooling need
+    /// the skinned-mesh entity specifically, which on an animated forest is a child of the
+    /// container that carries the player.
+    #[must_use]
+    pub fn model_rig_entity(&self, root: Entity) -> Option<Entity> {
+        self.find_subtree(root, &|s, e| s.has_component::<SkinnedMesh>(e))
+    }
+
+    /// The morph carrier of a model: the first subtree entity with a [`MorphComponent`], or
+    /// `None`. The write target for morph-weight commands when a forest's morph mesh rides a
+    /// child node while the selection resolves to the container.
+    #[must_use]
+    pub fn model_morph_entity(&self, root: Entity) -> Option<Entity> {
+        self.find_subtree(root, &|s, e| s.has_component::<MorphComponent>(e))
+    }
+
+    fn children_of(&self, entity: Entity) -> Vec<Entity> {
+        self.with_component::<Relationship, _>(entity, |rel| rel.children.clone())
+            .unwrap_or_default()
+    }
+
+    /// Pre-order search for the first subtree entity (inclusive of `entity`) satisfying `pred`.
+    fn find_subtree(&self, entity: Entity, pred: &dyn Fn(&Self, Entity) -> bool) -> Option<Entity> {
+        if !self.valid(entity) {
+            return None;
+        }
+        if pred(self, entity) {
+            return Some(entity);
+        }
+        for child in self.children_of(entity) {
+            if let Some(found) = self.find_subtree(child, pred) {
+                return Some(found);
+            }
+        }
+        None
+    }
 }
 
 /// An un-flipped perspective projection for the resolved camera (GL clip convention).
@@ -574,6 +650,85 @@ pub fn camera_projection(camera: &CameraView, aspect: f32) -> Mat4 {
 mod tests {
     use super::*;
     use crate::component::SkinnedMesh;
+
+    /// The forest-aware model resolvers across the five spawn shapes: a single-mesh root, a
+    /// static multi-node forest (meshes on children, no player), a rigged forest (SkinnedMesh
+    /// on a child), an animated forest (AnimationPlayer on the container, mesh on a child), and
+    /// a morph child. These back the asset-preview gate, the bounds, and the overlay; the bug
+    /// they fix is resolving a single entity and assuming it carries the mesh.
+    #[test]
+    fn model_resolvers_cover_every_spawn_shape() {
+        // S1: a single entity that carries the mesh directly (the collapsed single-identity root).
+        let mut scene = Scene::new();
+        let single = scene.create_entity("Single");
+        scene.add_component(single, Mesh { mesh: Uuid(11) }).unwrap();
+        assert_eq!(scene.model_mesh_entities(single), vec![single]);
+        assert!(scene.model_has_renderable(single));
+        assert_eq!(scene.model_rig_entity(single), None);
+
+        // S2: a static multi-node forest — the container holds nothing; two child nodes hold
+        // the meshes. The single-entity probe on the container is exactly what used to reject it.
+        let mut scene = Scene::new();
+        let container = scene.create_entity("Forest");
+        let door_a = scene.create_entity("DoorA");
+        let door_b = scene.create_entity("DoorB");
+        scene.add_component(door_a, Mesh { mesh: Uuid(21) }).unwrap();
+        scene.add_component(door_b, Mesh { mesh: Uuid(22) }).unwrap();
+        scene.set_parent(door_a, Some(container), false).unwrap();
+        scene.set_parent(door_b, Some(container), false).unwrap();
+        assert!(!scene.has_component::<Mesh>(container));
+        assert!(scene.model_has_renderable(container));
+        let meshes = scene.model_mesh_entities(container);
+        assert_eq!(meshes.len(), 2, "both child meshes resolve, not the container");
+        assert!(meshes.contains(&door_a) && meshes.contains(&door_b));
+        assert_eq!(scene.model_rig_entity(container), None);
+
+        // S3: a rigged forest — SkinnedMesh on a child mesh entity, container bare.
+        let mut scene = Scene::new();
+        let container = scene.create_entity("Rig");
+        let mesh_entity = scene.create_entity("RigMesh");
+        scene
+            .add_component(
+                mesh_entity,
+                SkinnedMesh {
+                    mesh: Uuid(31),
+                    ..SkinnedMesh::default()
+                },
+            )
+            .unwrap();
+        scene.set_parent(mesh_entity, Some(container), false).unwrap();
+        assert_eq!(scene.model_rig_entity(container), Some(mesh_entity));
+        assert!(scene.model_has_renderable(container));
+        assert_eq!(scene.model_mesh_entities(container), vec![mesh_entity]);
+
+        // S4: an animated forest — the container carries the AnimationPlayer (so a player-first
+        // resolver short-circuits there), but the mesh rides a child.
+        let mut scene = Scene::new();
+        let container = scene.create_entity("Animated");
+        let child = scene.create_entity("AnimMesh");
+        scene
+            .add_component(container, AnimationPlayer::default())
+            .unwrap();
+        scene.add_component(child, Mesh { mesh: Uuid(41) }).unwrap();
+        scene.set_parent(child, Some(container), false).unwrap();
+        assert!(
+            scene.model_has_renderable(container),
+            "renderable even though the player-bearing container holds no mesh"
+        );
+        assert_eq!(scene.model_mesh_entities(container), vec![child]);
+
+        // S5: a morph child resolves through the container.
+        let mut scene = Scene::new();
+        let container = scene.create_entity("Morph");
+        let child = scene.create_entity("MorphMesh");
+        scene.add_component(child, Mesh { mesh: Uuid(51) }).unwrap();
+        scene
+            .add_component(child, MorphComponent::default())
+            .unwrap();
+        scene.set_parent(child, Some(container), false).unwrap();
+        assert_eq!(scene.model_morph_entity(container), Some(child));
+        assert!(scene.model_has_renderable(container));
+    }
 
     /// A `1e-4` matrix tolerance, applied element-wise (column-major).
     fn near_equal(a: Mat4, b: Mat4) -> bool {
