@@ -75,6 +75,48 @@ pub struct Mesh {
     pub submeshes: Vec<Submesh>,
 }
 
+/// One sparse per-vertex morph contribution: the position+normal delta applied at full
+/// weight.
+///
+/// Exactly 28 bytes (`4 + 12 + 12`, no trailing pad): the leading `u32` keeps the two
+/// 12-byte `Vec3`s 4-byte aligned, and the struct's own alignment is 4. The on-disk
+/// `.smesh` morph stride and the GPU morph-delta stride. No tangent delta is stored — the
+/// engine [`Vertex`] has no tangent stream, so the deform shader re-derives the tangent by
+/// Gram-Schmidt against the morphed normal.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct MorphDelta {
+    /// Index into the base vertex stream this delta applies to.
+    pub vertex_index: u32,
+    /// Position delta at weight 1.0.
+    pub d_position: Vec3,
+    /// Normal delta at weight 1.0.
+    pub d_normal: Vec3,
+}
+
+const _: () = assert!(
+    size_of::<MorphDelta>() == 28,
+    "MorphDelta must be exactly 28 bytes"
+);
+
+/// One named morph target: its sparse deltas and its authored (rest) weight.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MorphTarget {
+    /// The target name (glTF `mesh.extras.targetNames`, else synthesized `morph_{k}`).
+    pub name: String,
+    /// The authored rest weight (the mesh-level default for this target).
+    pub rest_weight: f32,
+    /// The sparse per-vertex deltas (only moved vertices).
+    pub deltas: Vec<MorphDelta>,
+}
+
+/// All morph targets of one mesh, in channel order.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MorphData {
+    /// The morph targets, in glTF channel order (the weight-vector order).
+    pub targets: Vec<MorphTarget>,
+}
+
 /// A world-space ray for picking and spatial queries.
 ///
 /// `dir` is assumed unit-length; the caller normalizes before constructing.
@@ -104,20 +146,22 @@ pub struct MeshCounts {
     pub index_count: u32,
 }
 
-/// The channel an [`AnimTrack`] targets on its joint.
+/// The channel an [`AnimTrack`] targets.
 ///
 /// `#[repr(u8)]`: the discriminants are the pinned on-disk byte values
-/// (`Translation = 0`, `Rotation = 1`, `Scale = 2`).
+/// (`Translation = 0`, `Rotation = 1`, `Scale = 2`, `Weights = 3`).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AnimPath {
-    /// The joint's translation.
+    /// The target's translation.
     #[default]
     Translation = 0,
-    /// The joint's rotation.
+    /// The target's rotation.
     Rotation = 1,
-    /// The joint's scale.
+    /// The target's scale.
     Scale = 2,
+    /// Morph-target weights (N per keyframe; the count is the track's `morph_count`).
+    Weights = 3,
 }
 
 impl AnimPath {
@@ -131,6 +175,37 @@ impl AnimPath {
             0 => Ok(Self::Translation),
             1 => Ok(Self::Rotation),
             2 => Ok(Self::Scale),
+            3 => Ok(Self::Weights),
+            _ => Err(Error::BadLayout),
+        }
+    }
+}
+
+/// What kind of thing an [`AnimTrack`] drives.
+///
+/// `#[repr(u8)]`: the discriminants are the pinned on-disk byte values
+/// (`Bone = 0`, `Node = 1`). A morph-weight track is `Node` + [`AnimPath::Weights`];
+/// there is no separate morph-weight target arm.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnimTarget {
+    /// A skinned-mesh bone, resolved to a bone index by name at import.
+    #[default]
+    Bone = 0,
+    /// A plain scene-graph node, bound by durable name at runtime.
+    Node = 1,
+}
+
+impl AnimTarget {
+    /// Maps an on-disk discriminant byte back to the enum.
+    ///
+    /// An out-of-range byte is rejected with [`Error::BadLayout`] rather than
+    /// transmuted, so a malformed `.sanim` track record can never produce UB
+    /// (the crate's `#![deny(unsafe_code)]` holds).
+    pub fn from_u8(byte: u8) -> Result<Self> {
+        match byte {
+            0 => Ok(Self::Bone),
+            1 => Ok(Self::Node),
             _ => Err(Error::BadLayout),
         }
     }
@@ -168,37 +243,44 @@ impl AnimInterp {
     }
 }
 
-/// One animated joint channel: a sampled curve targeting a joint's translation,
-/// rotation, or scale.
+/// One animated channel: a sampled curve targeting a bone's, a node's, or a node's
+/// morph weights.
 ///
-/// A faithful, lossless mirror of a glTF animation channel + sampler, bound to a
-/// joint by a stable index plus the durable node name.
+/// A faithful, lossless mirror of a glTF animation channel + sampler, bound to its
+/// target by a stable bone index (`Bone`) or the durable node name (`Node`/weights).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AnimTrack {
-    /// Stable index into the skinned mesh's bones (resolved at import by name);
-    /// `-1` until resolved.
-    pub joint: i32,
+    /// What kind of thing this track drives.
+    pub target: AnimTarget,
+    /// Stable index into the skinned mesh's bones for a `Bone` target (resolved at
+    /// import by name); `-1` for `Node`/`Weights` targets, which bind by name.
+    pub index: i32,
     /// The glTF node name — the durable binding key that survives reorder/reimport.
-    pub joint_name: String,
+    pub target_name: String,
     /// The targeted channel.
     pub path: AnimPath,
     /// The sampler's interpolation.
     pub interp: AnimInterp,
+    /// Weights-per-keyframe for an [`AnimPath::Weights`] track (the morph-target
+    /// count); `0` for T/R/S tracks.
+    pub morph_count: u32,
     /// `sampler.input` — strictly increasing keyframe times, in seconds.
     pub times: Vec<f32>,
     /// `sampler.output`, flat: a `Vec3` per key for T/S, a quaternion `xyzw` per key
-    /// for R; `CubicSpline` stores 3x (in-tangent, value, out-tangent) per key.
+    /// for R, `morph_count` floats per key for Weights; `CubicSpline` stores 3x
+    /// (in-tangent, value, out-tangent) per key.
     pub values: Vec<f32>,
 }
 
-/// A named animation clip: a bundle of joint tracks with a total duration.
+/// A named animation clip: a bundle of heterogeneous tracks (bone, node, and
+/// morph-weight) with a total duration.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AnimClip {
     /// The clip name.
     pub name: String,
     /// Total duration in seconds (the max track end time).
     pub duration: f32,
-    /// The joint tracks that make up the clip.
+    /// The tracks that make up the clip.
     pub tracks: Vec<AnimTrack>,
 }
 
@@ -218,6 +300,9 @@ pub struct ImportedNode {
     pub rotation: Quat,
     /// Local scale.
     pub scale: Vec3,
+    /// The node-local merged mesh for the primitives under this glTF node, if any.
+    /// This is the single mesh-ownership shape — there is no top-level model mesh.
+    pub mesh: Option<Mesh>,
 }
 
 impl Default for ImportedNode {
@@ -228,6 +313,7 @@ impl Default for ImportedNode {
             translation: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             scale: Vec3::ONE,
+            mesh: None,
         }
     }
 }
@@ -309,30 +395,55 @@ impl Default for ImportedMaterial {
 /// The skin payload of a skinned model.
 ///
 /// Carried as one `Option<SkinPayload>` on [`ImportedModel`]: present means skinned,
-/// and the four skin-only fields travel together, so no presence flag can disagree.
+/// and the skin-only fields travel together, so no presence flag can disagree. The
+/// node forest and clips are not here — they are top-level on [`ImportedModel`],
+/// decoded for skinned and unskinned alike.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SkinPayload {
-    /// Per-vertex skin influences, parallel to [`Mesh::vertices`].
+    /// Per-vertex skin influences, parallel to the skinned node's [`Mesh::vertices`].
     pub stream: Vec<VertexSkin>,
-    /// The source node forest.
-    pub nodes: Vec<ImportedNode>,
-    /// The skin descriptor; `desc.joints` indexes into [`SkinPayload::nodes`] in
+    /// The skin descriptor; `desc.joints` indexes into [`ImportedModel::nodes`] in
     /// glTF joint order — the single source of `jointMatrices` order.
     pub desc: ImportedSkin,
-    /// The skeletal clips decoded from the glTF animations.
-    pub animations: Vec<AnimClip>,
 }
 
 /// The in-memory import graph a source model (`.gltf`/`.glb`/`.obj`) translates into.
+///
+/// Mesh ownership is uniform: every mesh lives node-local on an [`ImportedNode`] in
+/// [`ImportedModel::nodes`]. There is no top-level mesh — OBJ and single-skinned-mesh
+/// imports route their geometry through a node too.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImportedModel {
-    /// The merged CPU mesh.
-    pub mesh: Mesh,
+    /// The imported node forest; mesh-bearing nodes carry a node-local `mesh`.
+    pub nodes: Vec<ImportedNode>,
     /// The material table; each [`Submesh::material_slot`] indexes it. Always at
     /// least one entry (a default material when the source declares none).
     pub materials: Vec<ImportedMaterial>,
+    /// The clips decoded from the glTF animations — heterogeneous bone, node, and
+    /// morph-weight tracks side by side.
+    pub animations: Vec<AnimClip>,
     /// The skin payload (glTF only); `None` for an unskinned model.
     pub skin: Option<SkinPayload>,
+    /// The morph targets (sparse deltas + names + rest weights); `None` when the model
+    /// has no blend shapes. Mesh-global: the target names ride the mesh-level
+    /// `extras.targetNames` and the weight vector is shared across the mesh's primitives.
+    pub morph: Option<MorphData>,
+}
+
+impl ImportedModel {
+    /// The model's primary mesh: the skinned mesh node's mesh when rigged, else the first
+    /// mesh-bearing node's mesh. `None` if the model carries no geometry. Used by the
+    /// single-mesh upload paths (preview/gizmo models) that predate the node forest.
+    #[must_use]
+    pub fn primary_mesh(&self) -> Option<&Mesh> {
+        if let Some(skin) = &self.skin {
+            let node = self.nodes.get(skin.desc.mesh_node.max(0) as usize);
+            if let Some(mesh) = node.and_then(|n| n.mesh.as_ref()) {
+                return Some(mesh);
+            }
+        }
+        self.nodes.iter().find_map(|n| n.mesh.as_ref())
+    }
 }
 
 /// Decoded RGBA8 pixels, tightly packed (`width * height * 4` bytes).

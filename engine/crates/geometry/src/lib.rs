@@ -45,9 +45,9 @@ pub use sanim::{
     save_animation_to_buffer,
 };
 pub use smesh::{
-    MESH_FORMAT_VERSION, MESH_FORMAT_VERSION_SKINNED, load_mesh, load_mesh_from_bytes,
-    load_mesh_skin, load_mesh_skin_from_bytes, mesh_counts_from_bytes, mesh_file_counts,
-    save_mesh_skinned, save_mesh_skinned_to_buffer, save_mesh_to_buffer,
+    MESH_FORMAT_VERSION, load_mesh, load_mesh_from_bytes, load_mesh_morph_from_bytes,
+    load_mesh_skin, load_mesh_skin_from_bytes, mesh_counts_from_bytes, mesh_file_counts, save_mesh,
+    save_mesh_to_buffer,
 };
 pub use smodel::{
     CONTAINER_FORMAT_VERSION, ChunkKind, ContainerChunk, ContainerReader, METADATA_SCHEMA_VERSION,
@@ -56,9 +56,10 @@ pub use smodel::{
 pub use sub_id::sub_id_for;
 pub use translate::translate_model;
 pub use types::{
-    AnimClip, AnimInterp, AnimPath, AnimTrack, DecodedImage, DecodedImageFloat, ImportedMaterial,
-    ImportedModel, ImportedNode, ImportedSkin, MaterialMapRole, Mesh, MeshCounts, Ray, SkinPayload,
-    Submesh, TextureSource, Vertex, VertexSkin,
+    AnimClip, AnimInterp, AnimPath, AnimTarget, AnimTrack, DecodedImage, DecodedImageFloat,
+    ImportedMaterial, ImportedModel, ImportedNode, ImportedSkin, MaterialMapRole, Mesh, MeshCounts,
+    MorphData, MorphDelta, MorphTarget, Ray, SkinPayload, Submesh, TextureSource, Vertex,
+    VertexSkin,
 };
 
 // Re-export glam so downstream crates share this crate's pinned math vocabulary
@@ -164,9 +165,17 @@ mod tests {
         assert_eq!(AnimPath::Translation as u8, 0);
         assert_eq!(AnimPath::Rotation as u8, 1);
         assert_eq!(AnimPath::Scale as u8, 2);
+        assert_eq!(AnimPath::Weights as u8, 3);
         assert_eq!(AnimInterp::Step as u8, 0);
         assert_eq!(AnimInterp::Linear as u8, 1);
         assert_eq!(AnimInterp::CubicSpline as u8, 2);
+        assert_eq!(AnimTarget::Bone as u8, 0);
+        assert_eq!(AnimTarget::Node as u8, 1);
+        // The discriminant round-trips through `from_u8`; out-of-range is rejected.
+        assert_eq!(AnimPath::from_u8(3).unwrap(), AnimPath::Weights);
+        assert_eq!(AnimTarget::from_u8(1).unwrap(), AnimTarget::Node);
+        assert!(AnimPath::from_u8(4).is_err());
+        assert!(AnimTarget::from_u8(2).is_err());
     }
 
     #[test]
