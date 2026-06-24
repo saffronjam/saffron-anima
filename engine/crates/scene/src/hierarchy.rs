@@ -524,6 +524,17 @@ impl Scene {
         None
     }
 
+    /// The model's single animation authority for any entity in its forest: resolve up to
+    /// the [`ModelInstance`] root, then down to its [`SkinnedMesh`]/[`AnimationPlayer`]
+    /// entity. So a selected leaf (e.g. a `Morph` mesh child) resolves to the *same* player
+    /// the container holds — never a sibling/leaf that would spawn a rival player. An entity
+    /// with no `ModelInstance` ancestor resolves through itself (identical to the bare
+    /// down-walk).
+    #[must_use]
+    pub fn model_player(&self, entity: Entity) -> Entity {
+        self.animatable_descendant(self.model_root_of(entity))
+    }
+
     /// The model instance's root: the nearest ancestor (including `entity`) carrying a
     /// [`ModelInstance`], or `entity` if none.
     ///
@@ -857,6 +868,61 @@ mod tests {
         // A leaf with no rig descendant resolves to itself.
         let lone = scene.create_entity("Lone");
         assert_eq!(scene.animatable_descendant(lone), lone);
+    }
+
+    /// `model_player` resolves any entity in a model's forest to its single animation
+    /// authority (up to the `ModelInstance` root, then down to the player) — so selecting a
+    /// leaf never points at a player-less sibling that would spawn a rival player.
+    #[test]
+    fn model_player_resolves_a_leaf_up_to_the_container_player() {
+        use crate::component::{AnimationPlayer, ModelInstance};
+
+        // Container holds ModelInstance + the AnimationPlayer; a child mesh leaf holds no
+        // player (the node-forest morph shape).
+        let mut scene = Scene::new();
+        let container = scene.create_entity("Container");
+        scene
+            .add_component(container, ModelInstance { model_id: Uuid(7) })
+            .unwrap();
+        scene
+            .add_component(container, AnimationPlayer::default())
+            .unwrap();
+        let leaf = scene.create_entity("Main");
+        scene.set_parent(leaf, Some(container), false).unwrap();
+
+        // From the leaf, resolve up-then-down to the container's player (not the leaf).
+        assert_eq!(
+            scene.model_player(leaf),
+            container,
+            "a leaf resolves to the model's single player on the container"
+        );
+        // From the container itself, the same authority.
+        assert_eq!(scene.model_player(container), container);
+
+        // A rig whose player lives on a descendant of the ModelInstance root: model_player
+        // walks up to the root then down to the player entity.
+        let mut rigged = Scene::new();
+        let root = rigged.create_entity("Root");
+        rigged
+            .add_component(root, ModelInstance { model_id: Uuid(8) })
+            .unwrap();
+        let mesh = rigged.create_entity("Mesh");
+        rigged
+            .add_component(mesh, AnimationPlayer::default())
+            .unwrap();
+        rigged.set_parent(mesh, Some(root), false).unwrap();
+        let inner = rigged.create_entity("Inner");
+        rigged.set_parent(inner, Some(mesh), false).unwrap();
+        assert_eq!(
+            rigged.model_player(inner),
+            mesh,
+            "an inner pick resolves to the rig's player entity"
+        );
+
+        // An entity with no ModelInstance ancestor resolves through itself (bare down-walk).
+        let mut bare = Scene::new();
+        let solo = bare.create_entity("Solo");
+        assert_eq!(bare.model_player(solo), solo);
     }
 
     /// `relink_hierarchy` sanitizes a hand-edited dangling parent uuid to root.

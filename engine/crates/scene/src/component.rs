@@ -164,20 +164,26 @@ pub enum Transition {
 
 /// Drives a skinned rig from an animation clip.
 ///
-/// Dumb data — the evaluator and serde live elsewhere. `preview_in_edit`, `ping_forward`
-/// and the transition trio (`prev_clip`/`transition`/`transition_duration`) are runtime
-/// state, serialized at rest values.
+/// Dumb data — the evaluator and serde live elsewhere. `autoplay` is the only authored
+/// playback intent that persists; `time`, `playing`, `preview_in_edit`, `ping_forward` and
+/// the transition trio (`prev_clip`/`transition`/`transition_duration`) are pure runtime
+/// state (not serialized). Entering Play resets every player to `time = 0`,
+/// `playing = autoplay`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnimationPlayer {
     /// The animation catalog entry to play.
     pub clip: Uuid,
-    /// Playhead, seconds.
+    /// The deliberate authored auto-play flag: scene Play starts this clip iff set (the
+    /// editor Timeline play/pause is a transient preview and never sets this).
+    pub autoplay: bool,
+    /// Playhead, seconds (runtime — not serialized).
     pub time: f32,
     /// Playback speed multiplier.
     pub speed: f32,
     /// How the clip wraps at its end.
     pub wrap: Wrap,
-    /// Whether time advances (the game loop in Play / the timeline in Edit).
+    /// Whether time advances (runtime — not serialized; the game loop in Play / the timeline
+    /// preview in Edit).
     pub playing: bool,
     /// Runtime: is this entity previewed in Edit? (serialize as false).
     pub preview_in_edit: bool,
@@ -199,6 +205,7 @@ impl Default for AnimationPlayer {
     fn default() -> Self {
         Self {
             clip: Uuid(0),
+            autoplay: false,
             time: 0.0,
             speed: 1.0,
             wrap: Wrap::Loop,
@@ -238,6 +245,32 @@ impl Default for PoseOverride {
             scale: Vec3::ONE,
         }
     }
+}
+
+/// The per-entity morph (blend-shape) weight vector and the target names that label it.
+///
+/// Durable and import-managed: seeded at spawn from the mesh's authored rest weights, it
+/// round-trips through the registry as `"Morph"`. The weight-vector length must equal the
+/// mesh's morph-target count, so the editor treats it as non-addable / non-removable.
+/// `weights` are canonical `0..1`. The animation evaluator does not write here — it writes
+/// the runtime-only [`MorphWeightOverride`], so a stopped morph reverts to these weights.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MorphComponent {
+    /// One weight per morph target (canonical `0..1`).
+    pub weights: Vec<f32>,
+    /// One name per morph target, parallel to `weights` (the editor's slider labels).
+    pub names: Vec<String>,
+}
+
+/// The animated morph weights the evaluator writes each frame.
+///
+/// Runtime-only (never serialized, never registered — the twin of [`PoseOverride`]); the
+/// GPU morph deform reads it, and it is removed when the rig stops animating so the mesh
+/// reverts to the durable [`MorphComponent::weights`]. Weights are canonical `0..1`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MorphWeightOverride {
+    /// One animated weight per morph target (canonical `0..1`).
+    pub weights: Vec<f32>,
 }
 
 /// One leg/arm chain for kinematic foot IK.
@@ -909,6 +942,7 @@ mod tests {
         let a = AnimationPlayer::default();
         assert_eq!(a.speed, 1.0);
         assert_eq!(a.wrap, Wrap::Loop);
+        assert!(!a.autoplay, "autoplay is opt-in (off by default)");
         assert!(!a.playing);
         assert!(!a.preview_in_edit);
         assert!(a.ping_forward);

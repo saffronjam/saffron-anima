@@ -27,13 +27,14 @@ pub use component::{
     AnimationPlayer, Bone, BonePhysics, BonePhysicsComponent, Camera, CharacterController,
     Collider, ComponentOrder, DirectionalLight, FootChain, FootIk, IdComponent, Joint,
     KinematicBones, Material, MaterialAsset, MaterialSet, MaterialSlot, Mesh, ModelInstance,
-    Motion, Name, PhysicsMaterial, PointLight, PoseOverride, ReflectionProbe, Relationship,
-    Rigidbody, Script, ScriptSlot, Shape, SkinnedMesh, SpotLight, Transform, Transition,
-    WorldTransform, Wrap,
+    MorphComponent, MorphWeightOverride, Motion, Name, PhysicsMaterial, PointLight, PoseOverride,
+    ReflectionProbe, Relationship, Rigidbody, Script, ScriptSlot, Shape, SkinnedMesh, SpotLight,
+    Transform, Transition, WorldTransform, Wrap,
 };
 pub use document::SCENE_VERSION;
 pub use environment::{
-    AssetCatalog, AssetEntry, AssetType, AtmosphereSettings, Colorspace, SceneEnvironment, SkyMode,
+    AssetCatalog, AssetEntry, AssetType, AtmosphereSettings, Attribution, Colorspace,
+    SceneEnvironment, SkyMode,
 };
 pub use error::{Error, Result};
 pub use hierarchy::{

@@ -37,9 +37,9 @@ use saffron_json::{json_bool_or, json_f32_or, json_string_or, json_u64_or, uuid_
 use crate::component::{
     AnimationPlayer, Bone, BonePhysics, BonePhysicsComponent, Camera, CharacterController,
     Collider, DirectionalLight, FootChain, FootIk, Joint, KinematicBones, Material, MaterialAsset,
-    MaterialSet, MaterialSlot, Mesh, ModelInstance, Motion, Name, PhysicsMaterial, PointLight,
-    ReflectionProbe, Relationship, Rigidbody, Script, ScriptSlot, Shape, SkinnedMesh, SpotLight,
-    Transform, Transition, Wrap,
+    MaterialSet, MaterialSlot, Mesh, ModelInstance, MorphComponent, Motion, Name, PhysicsMaterial,
+    PointLight, ReflectionProbe, Relationship, Rigidbody, Script, ScriptSlot, Shape, SkinnedMesh,
+    SpotLight, Transform, Transition, Wrap,
 };
 use crate::environment::{AtmosphereSettings, SceneEnvironment, SkyMode};
 use crate::error::Result;
@@ -420,12 +420,13 @@ fn transition_name(transition: Transition) -> &'static str {
 
 impl SceneSerialize for AnimationPlayer {
     fn to_json(&self) -> Value {
+        // `time` / `playing` are runtime-only (the editor Timeline preview drives them); only
+        // the authored `autoplay` intent persists. Entering Play resets time/playing.
         object([
             ("clip", uuid_to_json(self.clip.value())),
-            ("time", f32_value(self.time)),
+            ("autoplay", Value::Bool(self.autoplay)),
             ("speed", f32_value(self.speed)),
             ("wrap", Value::String(wrap_name(self.wrap).to_string())),
-            ("playing", Value::Bool(self.playing)),
             (
                 "transitionMode",
                 Value::String(transition_name(self.transition_mode).to_string()),
@@ -436,14 +437,13 @@ impl SceneSerialize for AnimationPlayer {
 
     fn load_json(&mut self, value: &Value) -> Result<()> {
         self.clip = Uuid(json_u64_or(value, "clip", 0));
-        self.time = json_f32_or(value, "time", 0.0);
+        self.autoplay = json_bool_or(value, "autoplay", false);
         self.speed = json_f32_or(value, "speed", 1.0);
         self.wrap = match json_string_or(value, "wrap", "loop".to_string()).as_str() {
             "once" => Wrap::Once,
             "pingpong" => Wrap::PingPong,
             _ => Wrap::Loop,
         };
-        self.playing = json_bool_or(value, "playing", false);
         self.transition_mode =
             match json_string_or(value, "transitionMode", "inertialize".to_string()).as_str() {
                 "crossfade" => Transition::CrossFade,
@@ -603,6 +603,37 @@ impl SceneSerialize for SkinnedMesh {
         }
         // `bone_handles` is a resolved cache — the relink rebuilds it.
         self.bone_handles.clear();
+        Ok(())
+    }
+}
+
+impl SceneSerialize for MorphComponent {
+    fn to_json(&self) -> Value {
+        let weights: Vec<Value> = self.weights.iter().map(|&w| f32_value(w)).collect();
+        let names: Vec<Value> = self
+            .names
+            .iter()
+            .map(|n| Value::String(n.clone()))
+            .collect();
+        object([
+            ("weights", Value::Array(weights)),
+            ("names", Value::Array(names)),
+        ])
+    }
+
+    fn load_json(&mut self, value: &Value) -> Result<()> {
+        self.weights.clear();
+        if let Some(Value::Array(ws)) = field(value, "weights") {
+            for w in ws {
+                self.weights.push(w.as_f64().unwrap_or(0.0) as f32);
+            }
+        }
+        self.names.clear();
+        if let Some(Value::Array(ns)) = field(value, "names") {
+            for n in ns {
+                self.names.push(n.as_str().unwrap_or_default().to_owned());
+            }
+        }
         Ok(())
     }
 }

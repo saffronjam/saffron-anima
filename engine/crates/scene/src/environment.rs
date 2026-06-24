@@ -162,6 +162,27 @@ pub enum Colorspace {
     Hdr,
 }
 
+/// Where an imported asset came from and under what license.
+///
+/// Captured at import for assets pulled from an online store connector so the
+/// attribution travels with the asset (CC-BY / Sketchfab require it). Absent for
+/// hand-imported local assets.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Attribution {
+    /// Canonical license id (`cc0`, `cc-by`, `cc-by-sa`, …).
+    pub license_id: String,
+    /// Whether the license requires visible attribution (CC-BY / Sketchfab).
+    pub requires_attribution: bool,
+    /// Canonical license url.
+    pub license_url: String,
+    /// The asset author / creator.
+    pub author: String,
+    /// The asset's page on the source service.
+    pub source_url: String,
+    /// The connector id the asset came from (`polyhaven`, `sketchfab`, …).
+    pub store_id: String,
+}
+
 /// A catalog entry for one project asset.
 ///
 /// Carries a human name (UTF-8, renameable) and the relative path to the baked
@@ -195,6 +216,8 @@ pub struct AssetEntry {
     pub chunk: i32,
     /// Texture: how its bytes are interpreted on upload.
     pub colorspace: Colorspace,
+    /// Source/license, set when the asset was imported from an online store.
+    pub attribution: Option<Attribution>,
 }
 
 impl Default for AssetEntry {
@@ -213,6 +236,7 @@ impl Default for AssetEntry {
             container: Uuid(0),
             chunk: -1,
             colorspace: Colorspace::Auto,
+            attribution: None,
         }
     }
 }
@@ -250,6 +274,18 @@ impl AssetCatalog {
         }
         self.by_id.insert(entry.id.value(), self.entries.len());
         self.entries.push(entry);
+    }
+
+    /// Records source/license attribution on the entry for `id`, returning whether it
+    /// existed.
+    pub fn set_attribution(&mut self, id: Uuid, attribution: Attribution) -> bool {
+        match self.by_id.get(&id.value()) {
+            Some(&i) => {
+                self.entries[i].attribution = Some(attribution);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Renames the entry for `id`, returning whether it existed.

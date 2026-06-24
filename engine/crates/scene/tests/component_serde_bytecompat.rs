@@ -72,8 +72,8 @@ const EXPECT_MATERIALASSET: &str = r#"{"material":"4242"}"#;
 const EXPECT_MODELINSTANCE: &str = r#"{"modelId":"9999"}"#;
 const EXPECT_RELATIONSHIP: &str = r#"{"parent":"7"}"#;
 const EXPECT_BONE: &str = r#"{}"#;
-const EXPECT_ANIM_DEFAULT: &str = r#"{"clip":"0","loopBlend":0.0,"playing":false,"speed":1.0,"time":0.0,"transitionMode":"inertialize","wrap":"loop"}"#;
-const EXPECT_ANIM_VALUES: &str = r#"{"clip":"555","loopBlend":0.5,"playing":true,"speed":2.0,"time":1.25,"transitionMode":"crossfade","wrap":"once"}"#;
+const EXPECT_ANIM_DEFAULT: &str = r#"{"autoplay":false,"clip":"0","loopBlend":0.0,"speed":1.0,"transitionMode":"inertialize","wrap":"loop"}"#;
+const EXPECT_ANIM_VALUES: &str = r#"{"autoplay":true,"clip":"555","loopBlend":0.5,"speed":2.0,"transitionMode":"crossfade","wrap":"once"}"#;
 const EXPECT_DIRLIGHT_DEFAULT: &str = r#"{"ambient":0.15000000596046448,"color":{"x":1.0,"y":1.0,"z":1.0},"direction":{"x":-0.5,"y":-1.0,"z":-0.30000001192092896},"intensity":1.0}"#;
 const EXPECT_POINTLIGHT_DEFAULT: &str =
     r#"{"color":{"x":1.0,"y":1.0,"z":1.0},"intensity":5.0,"range":10.0}"#;
@@ -205,12 +205,12 @@ fn animation_player_matches_cpp() {
         serialize_via_registry("AnimationPlayer", AnimationPlayer::default()),
         EXPECT_ANIM_DEFAULT
     );
+    // `time` / `playing` are runtime-only (not serialized); `autoplay` is the persisted intent.
     let a = AnimationPlayer {
         clip: Uuid(555),
-        time: 1.25,
+        autoplay: true,
         speed: 2.0,
         wrap: Wrap::Once,
-        playing: true,
         transition_mode: Transition::CrossFade,
         loop_blend: 0.5,
         ..AnimationPlayer::default()
