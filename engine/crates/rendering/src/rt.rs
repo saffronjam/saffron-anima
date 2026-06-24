@@ -87,6 +87,9 @@ pub struct Rt {
     supported: bool,
     /// Runtime toggle: trace inline ray-query shadows. Only meaningful when `supported`.
     use_rt_shadows: bool,
+    /// Runtime toggle: trace inline ray-query reflections (the mesh fragment traces the TLAS
+    /// and reprojects the hit into `prev_color`). Only meaningful when `supported`.
+    use_rt_reflections: bool,
     /// The acceleration-structure dispatch, cloned from the device (present iff `supported`).
     dispatch: Option<accel::Device>,
     /// Set 6 (mesh pipeline): one fragment-stage TLAS binding — a handle *borrowed* from
@@ -129,6 +132,7 @@ impl Rt {
             resources,
             supported: device.rt_supported(),
             use_rt_shadows: false,
+            use_rt_reflections: false,
             dispatch: device.accel_dispatch().cloned(),
             mesh_layout: vk::DescriptorSetLayout::null(),
             frames: (0..MAX_FRAMES_IN_FLIGHT)
@@ -175,6 +179,22 @@ impl Rt {
     /// Sets the ray-query-shadows toggle (clamped off on a non-RT device).
     pub fn set_rt_shadows(&mut self, enabled: bool) {
         self.use_rt_shadows = enabled && self.supported;
+    }
+
+    /// Whether inline ray-query reflections should run this frame: the toggle is on, RT is
+    /// supported, and a TLAS was built.
+    pub fn reflections_enabled(&self) -> bool {
+        self.use_rt_reflections && self.supported && self.tlas_ready
+    }
+
+    /// Whether the runtime ray-query-reflections toggle is on (independent of `tlas_ready`).
+    pub fn use_rt_reflections(&self) -> bool {
+        self.use_rt_reflections
+    }
+
+    /// Sets the ray-query-reflections toggle (clamped off on a non-RT device).
+    pub fn set_rt_reflections(&mut self, enabled: bool) {
+        self.use_rt_reflections = enabled && self.supported;
     }
 
     /// The built per-mesh BLAS count (rt-stats).
@@ -228,7 +248,7 @@ impl Rt {
     pub fn set_rt_scene(&mut self, models: Vec<Mat4>, meshes: Vec<Arc<GpuMesh>>) {
         self.scene.models = models;
         self.scene.meshes = meshes;
-        self.build_pending = self.supported && self.use_rt_shadows;
+        self.build_pending = self.supported && (self.use_rt_shadows || self.use_rt_reflections);
     }
 
     /// Whether this frame has any RT instances (static or deforming) to build a TLAS over.

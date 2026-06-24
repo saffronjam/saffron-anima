@@ -79,22 +79,65 @@ impl OverlayVertex {
     }
 }
 
-/// The tonemap compute push: the linear exposure multiplier. One `f32` — `exp2` of the
-/// EV stop — matching `tonemap.slang`'s `Push`.
+/// The tonemap compute push: the linear exposure multiplier + the operator mode, matching
+/// `tonemap.slang`'s `Push`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TonemapPush {
     /// The linear exposure multiplier (`exp2(exposure_ev)`).
     pub exposure: f32,
+    /// The tonemap operator ([`TonemapMode`] as `u32`).
+    pub mode: u32,
 }
 
-const _: () = assert!(size_of::<TonemapPush>() == 4);
+const _: () = assert!(size_of::<TonemapPush>() == 8);
 
 impl TonemapPush {
-    /// The tonemap push for `exposure_ev` stops: `exposure = exp2(exposure_ev)`.
-    pub fn from_ev(exposure_ev: f32) -> Self {
+    /// The tonemap push for `exposure_ev` stops + operator `mode`.
+    pub fn new(exposure_ev: f32, mode: TonemapMode) -> Self {
         Self {
             exposure: exposure_ev.exp2(),
+            mode: mode as u32,
+        }
+    }
+}
+
+/// The selectable tonemap operator. Wire-encoded by the kebab-case name pair below.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[repr(u32)]
+pub enum TonemapMode {
+    /// Simple Reinhard (flat; for A/B).
+    Reinhard = 0,
+    /// ACES filmic (Narkowicz) — the engine default.
+    #[default]
+    Aces = 1,
+    /// AgX (graceful highlight compression, hue-preserving).
+    Agx = 2,
+    /// Khronos PBR Neutral (material-color-preserving; good for thumbnails).
+    PbrNeutral = 3,
+}
+
+impl TonemapMode {
+    /// The wire / CLI name.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TonemapMode::Reinhard => "reinhard",
+            TonemapMode::Aces => "aces",
+            TonemapMode::Agx => "agx",
+            TonemapMode::PbrNeutral => "pbr-neutral",
+        }
+    }
+
+    /// Parses a tonemap-operator name, `None` on an unknown value.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<TonemapMode> {
+        match name {
+            "reinhard" => Some(TonemapMode::Reinhard),
+            "aces" => Some(TonemapMode::Aces),
+            "agx" => Some(TonemapMode::Agx),
+            "pbr-neutral" => Some(TonemapMode::PbrNeutral),
+            _ => None,
         }
     }
 }
@@ -337,11 +380,13 @@ mod tests {
     /// any host.
     #[test]
     fn tonemap_push_is_exp2_of_the_ev() {
-        assert!((TonemapPush::from_ev(0.0).exposure - 1.0).abs() < 1e-6);
-        assert!((TonemapPush::from_ev(1.0).exposure - 2.0).abs() < 1e-6);
-        assert!((TonemapPush::from_ev(-1.0).exposure - 0.5).abs() < 1e-6);
-        assert!((TonemapPush::from_ev(2.0).exposure - 4.0).abs() < 1e-6);
-        assert_eq!(size_of::<TonemapPush>(), 4);
+        let m = TonemapMode::Aces;
+        assert!((TonemapPush::new(0.0, m).exposure - 1.0).abs() < 1e-6);
+        assert!((TonemapPush::new(1.0, m).exposure - 2.0).abs() < 1e-6);
+        assert!((TonemapPush::new(-1.0, m).exposure - 0.5).abs() < 1e-6);
+        assert!((TonemapPush::new(2.0, m).exposure - 4.0).abs() < 1e-6);
+        assert_eq!(TonemapPush::new(0.0, TonemapMode::Agx).mode, 2);
+        assert_eq!(size_of::<TonemapPush>(), 8);
     }
 
     /// `GridPush::new` records `view_proj` and its mathematical inverse — round-tripping

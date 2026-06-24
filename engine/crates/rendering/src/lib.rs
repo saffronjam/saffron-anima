@@ -16,6 +16,7 @@
 #![allow(unsafe_code)]
 
 mod aa;
+mod budget;
 mod ddgi;
 mod descriptors;
 mod device;
@@ -30,6 +31,8 @@ mod overlay;
 mod pipelines;
 mod present;
 mod profiler;
+mod quality;
+mod reactive;
 mod render_graph;
 mod render_settings;
 mod renderer;
@@ -85,7 +88,8 @@ pub use lighting::{
     cull_clusters_cpu, point_shadow_face_matrices,
 };
 pub use overlay::{
-    GridPush, OverlayDraw, OverlayState, OverlayVertex, TonemapPush, record_grid, record_overlay,
+    GridPush, OverlayDraw, OverlayState, OverlayVertex, TonemapMode, TonemapPush, record_grid,
+    record_overlay,
 };
 pub use pipelines::{DEPTH_FORMAT, OFFSCREEN_COLOR_FORMAT, Pipelines, PsoKey};
 pub use profiler::{
@@ -95,6 +99,8 @@ pub use profiler::{
     ProfileLane, ProfileSpan, ProfilerMode, RgTimestamps, ScopeRecord, cpu_now_ns,
     pipeline_stats_flags,
 };
+pub use quality::{QualityTier, RenderQuality};
+pub use reactive::{PowerState, ReactiveState};
 pub use render_graph::{
     ProfileRecorders, RenderGraph, RgAccess, RgAttachment, RgPass, RgPassKind, RgResource, RgUsage,
 };

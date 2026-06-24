@@ -56,13 +56,16 @@ pub trait SceneRenderer: GpuUploader {
 
     /// Arms the spot shadow pass.
     fn set_spot_shadow(&mut self, light_view_proj: Mat4, light_index: u32, casting: bool);
-    /// Arms the point shadow pass.
+    /// Arms the point shadow pass. `content_key` hashes the light + every caster's world
+    /// transform (camera-independent), so the renderer re-renders the 6-face cube only when it
+    /// changes — a moving camera over a static light + casters reuses the cached cube.
     fn set_point_shadow(
         &mut self,
         light_pos: Vec3,
         far_plane: f32,
         light_index: u32,
         casting: bool,
+        content_key: u64,
     );
     /// Arms the directional shadow pass.
     fn set_directional_shadow(&mut self, light_view_proj: Mat4, casting: bool);
@@ -214,9 +217,10 @@ impl SceneRenderer for RendererScene<'_> {
         far_plane: f32,
         light_index: u32,
         casting: bool,
+        content_key: u64,
     ) {
         self.renderer
-            .set_point_shadow(light_pos, far_plane, light_index, casting);
+            .set_point_shadow(light_pos, far_plane, light_index, casting, content_key);
     }
 
     fn set_directional_shadow(&mut self, light_view_proj: Mat4, casting: bool) {
@@ -419,6 +423,39 @@ pub fn render_scene<R: SceneRenderer>(
     render_scene_with_transient(renderer, scene, assets, camera, options, None);
 }
 
+/// A camera-independent hash of the inputs the point-shadow cube depends on: the light position +
+/// far plane and every mesh entity's world matrix + mesh asset id.
+///
+/// The renderer re-renders the 6-face cube only when this changes, so panning the camera over a
+/// static light + static casters reuses the cached cube; any caster (or the light) moving, or a
+/// mesh added/removed/reassigned, invalidates it. (A glTF reimport that swaps a mesh's geometry
+/// under the same asset id is the one case this misses — the cube refreshes on the next transform
+/// change; reimport is rare and already idles the GPU + rebuilds caches.)
+fn point_shadow_content_key(scene: &mut Scene, light_pos: Vec3, far_plane: f32) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET;
+    let mut fold = |bytes: &[u8]| {
+        for &b in bytes {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+    };
+    for component in light_pos.to_array() {
+        fold(&component.to_le_bytes());
+    }
+    fold(&far_plane.to_le_bytes());
+    let mut casters: Vec<(Entity, u64)> = Vec::new();
+    scene.for_each::<&MeshComponent, _>(|entity, mesh| casters.push((entity, mesh.mesh.0)));
+    for (entity, mesh_id) in casters {
+        for component in scene.world_matrix(entity).to_cols_array() {
+            fold(&component.to_le_bytes());
+        }
+        fold(&mesh_id.to_le_bytes());
+    }
+    hash
+}
+
 /// Renders the authored scene plus an optional transient scene into one frame draw list.
 pub fn render_scene_with_transient<R: SceneRenderer>(
     renderer: &mut R,
@@ -456,11 +493,14 @@ pub fn render_scene_with_transient<R: SceneRenderer>(
         spot_shadow.map_or(0, |s| s.light_index),
         spot_shadow.is_some(),
     );
+    let point_shadow_pos = point_shadow.map_or(Vec3::ZERO, |p| p.pos);
+    let point_shadow_far = point_shadow.map_or(1.0, |p| p.far);
     renderer.set_point_shadow(
-        point_shadow.map_or(Vec3::ZERO, |p| p.pos),
-        point_shadow.map_or(1.0, |p| p.far),
+        point_shadow_pos,
+        point_shadow_far,
         point_shadow.map_or(0, |p| p.light_index),
         point_shadow.is_some(),
+        point_shadow_content_key(scene, point_shadow_pos, point_shadow_far),
     );
 
     // The camera world position is the inverse-view translation; the BRDF needs it as the
@@ -1258,7 +1298,14 @@ mod tests {
                 casting,
             });
         }
-        fn set_point_shadow(&mut self, _pos: Vec3, far: f32, light_index: u32, casting: bool) {
+        fn set_point_shadow(
+            &mut self,
+            _pos: Vec3,
+            far: f32,
+            light_index: u32,
+            casting: bool,
+            _content_key: u64,
+        ) {
             self.calls.borrow_mut().push(Call::PointShadow {
                 index: light_index,
                 casting,
@@ -1590,6 +1637,53 @@ mod tests {
             chunk: -1,
             ..AssetEntry::default()
         });
+    }
+
+    #[test]
+    fn point_shadow_key_is_camera_independent_and_caster_sensitive() {
+        // The cache key drives the point-shadow cube reuse: it must be stable for a static scene
+        // (no camera term exists to perturb it) yet change when the light or a caster moves.
+        let mut scene = Scene::new();
+        let e = scene.create_entity("Mesh");
+        scene
+            .with_component_mut::<Transform, _>(e, |t| t.translation = Vec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        scene
+            .add_component(
+                e,
+                MeshComponent {
+                    mesh: saffron_core::Uuid(7000),
+                },
+            )
+            .unwrap();
+        scene.update_world_transforms();
+
+        let light = Vec3::new(0.0, 5.0, 0.0);
+        let k1 = point_shadow_content_key(&mut scene, light, 50.0);
+        assert_eq!(
+            k1,
+            point_shadow_content_key(&mut scene, light, 50.0),
+            "key is stable for a static scene (camera-independent)"
+        );
+        assert_ne!(
+            k1,
+            point_shadow_content_key(&mut scene, Vec3::new(0.1, 5.0, 0.0), 50.0),
+            "a light move invalidates the cube"
+        );
+        assert_ne!(
+            k1,
+            point_shadow_content_key(&mut scene, light, 60.0),
+            "a far-plane change invalidates the cube"
+        );
+        scene
+            .with_component_mut::<Transform, _>(e, |t| t.translation = Vec3::new(2.0, 0.0, 0.0))
+            .unwrap();
+        scene.update_world_transforms();
+        assert_ne!(
+            k1,
+            point_shadow_content_key(&mut scene, light, 50.0),
+            "a caster move invalidates the cube"
+        );
     }
 
     #[test]

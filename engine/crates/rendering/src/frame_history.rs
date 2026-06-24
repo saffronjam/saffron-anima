@@ -84,6 +84,10 @@ pub struct PerfConfig {
     pub vram_warn_frac: f32,
     /// `vram_crit_frac` = critical (≥ 100% = over).
     pub vram_crit_frac: f32,
+    /// Auto-quality: when set, the frame-budget controller steps the render-quality tier down under
+    /// sustained over-budget frames (and back up when there is headroom) to hold the budget. Off by
+    /// default — the tier is then whatever the user / project set.
+    pub auto_quality: bool,
 }
 
 impl Default for PerfConfig {
@@ -96,6 +100,7 @@ impl Default for PerfConfig {
             frozen_ms: 250.0,
             vram_warn_frac: 0.8,
             vram_crit_frac: 0.95,
+            auto_quality: false,
         }
     }
 }
@@ -122,6 +127,7 @@ impl PerfConfig {
             frozen_ms: self.frozen_ms.max(0.0),
             vram_warn_frac,
             vram_crit_frac: self.vram_crit_frac.clamp(vram_warn_frac, 1.0),
+            auto_quality: self.auto_quality,
         }
     }
 }
@@ -851,6 +857,7 @@ mod tests {
             frozen_ms: -1.0,
             vram_warn_frac: 0.9,
             vram_crit_frac: 0.2,
+            auto_quality: true,
         }
         .clamped();
         assert_eq!(c.target_fps, 1.0);

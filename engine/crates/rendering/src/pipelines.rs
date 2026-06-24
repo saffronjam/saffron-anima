@@ -45,6 +45,7 @@ enum ScreenCompute {
     Ssgi,
     SsgiBlur,
     SsgiAccum,
+    Ssr,
     CopyColor,
     DdgiVoxelize,
     DdgiTrace,
@@ -124,6 +125,7 @@ pub struct Pipelines {
     ssgi: Option<Arc<Pipeline>>,
     ssgi_blur: Option<Arc<Pipeline>>,
     ssgi_accum: Option<Arc<Pipeline>>,
+    ssr: Option<Arc<Pipeline>>,
     copy_color: Option<Arc<Pipeline>>,
 
     /// The five DDGI compute PSOs (voxelize / trace / blend-irradiance / blend-distance /
@@ -149,7 +151,7 @@ pub struct Pipelines {
     /// The FXAA edge-blur compute PSO (fxaa set layout, no push), built lazily.
     fxaa: Option<Arc<Pipeline>>,
 
-    /// The mandatory tonemap compute PSO (tonemap set layout, a 4-byte exposure push),
+    /// The mandatory tonemap compute PSO (tonemap set layout, an 8-byte exposure+mode push),
     /// built lazily.
     tonemap: Option<Arc<Pipeline>>,
     /// The tonemap compute set layout (one storage image) the tonemap PSO binds (set 0).
@@ -225,6 +227,7 @@ impl Pipelines {
             ssgi: None,
             ssgi_blur: None,
             ssgi_accum: None,
+            ssr: None,
             copy_color: None,
             ddgi_voxelize: None,
             ddgi_trace: None,
@@ -502,6 +505,12 @@ impl Pipelines {
         )
     }
 
+    /// The screen-space reflection trace compute PSO (compute3 layout, a 144-byte push,
+    /// same shape as the SSGI trace).
+    pub fn request_ssr(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
+        self.request_screen_compute(ScreenCompute::Ssr, "shaders/ssr.spv", layout, 144)
+    }
+
     /// The SSGI prev-color history-copy compute PSO (compute2 layout, no push).
     pub fn request_copy_color(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
         self.request_screen_compute(
@@ -677,14 +686,14 @@ impl Pipelines {
         }
     }
 
-    /// The mandatory tonemap compute PSO (tonemap set layout, a 4-byte exposure push),
+    /// The mandatory tonemap compute PSO (tonemap set layout, an 8-byte exposure+mode push),
     /// built and cached on first request. Returns `None`
     /// only on a build failure (logged) — the tonemap is otherwise always present.
     pub fn request_tonemap(&mut self) -> Option<Arc<Pipeline>> {
         if let Some(pipeline) = &self.tonemap {
             return Some(Arc::clone(pipeline));
         }
-        match self.build_compute("shaders/tonemap.spv", self.tonemap_set_layout, 4) {
+        match self.build_compute("shaders/tonemap.spv", self.tonemap_set_layout, 8) {
             Ok(pipeline) => {
                 let pipeline = Arc::new(pipeline);
                 self.tonemap = Some(Arc::clone(&pipeline));
@@ -846,6 +855,7 @@ impl Pipelines {
             ScreenCompute::Ssgi => self.ssgi.as_ref(),
             ScreenCompute::SsgiBlur => self.ssgi_blur.as_ref(),
             ScreenCompute::SsgiAccum => self.ssgi_accum.as_ref(),
+            ScreenCompute::Ssr => self.ssr.as_ref(),
             ScreenCompute::CopyColor => self.copy_color.as_ref(),
             ScreenCompute::DdgiVoxelize => self.ddgi_voxelize.as_ref(),
             ScreenCompute::DdgiTrace => self.ddgi_trace.as_ref(),
@@ -866,6 +876,7 @@ impl Pipelines {
             ScreenCompute::Ssgi => &mut self.ssgi,
             ScreenCompute::SsgiBlur => &mut self.ssgi_blur,
             ScreenCompute::SsgiAccum => &mut self.ssgi_accum,
+            ScreenCompute::Ssr => &mut self.ssr,
             ScreenCompute::CopyColor => &mut self.copy_color,
             ScreenCompute::DdgiVoxelize => &mut self.ddgi_voxelize,
             ScreenCompute::DdgiTrace => &mut self.ddgi_trace,

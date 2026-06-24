@@ -79,6 +79,9 @@ pub struct ViewTarget {
     pub contact_map: Option<Image>,
     /// The raw one-bounce SSGI trace output (rgba16f).
     pub ssgi_map: Option<Image>,
+    /// The screen-space reflection trace output (rgba16f): rgb = reflected radiance,
+    /// a = hit confidence. The mesh blends it over the prefiltered-env specular.
+    pub ssr_map: Option<Image>,
     /// `ssgi_map` after the bilateral blur — what the scene reads (rgba16f).
     pub ssgi_denoised: Option<Image>,
     /// `ssgi_denoised` after temporal accumulation (rgba16f). Sampled once motion is on.
@@ -125,6 +128,8 @@ pub struct ViewTarget {
     pub contact_set: vk::DescriptorSet,
     /// ssgi: g_normal + prev_color + ssgi_map (compute3).
     pub ssgi_set: vk::DescriptorSet,
+    /// ssr: g_normal + prev_color + ssr_map (compute3).
+    pub ssr_set: vk::DescriptorSet,
     /// ssgi_blur: ssgi_map + g_normal + ssgi_denoised (compute3).
     pub ssgi_blur_set: vk::DescriptorSet,
     /// copy_color: offscreen + prev_color (compute2).
@@ -215,6 +220,7 @@ impl ViewTarget {
             ao_map: None,
             contact_map: None,
             ssgi_map: None,
+            ssr_map: None,
             ssgi_denoised: None,
             ssgi_resolved: None,
             prev_color: None,
@@ -233,6 +239,7 @@ impl ViewTarget {
             ao_blur_set: vk::DescriptorSet::null(),
             contact_set: vk::DescriptorSet::null(),
             ssgi_set: vk::DescriptorSet::null(),
+            ssr_set: vk::DescriptorSet::null(),
             ssgi_blur_set: vk::DescriptorSet::null(),
             copy_color_set: vk::DescriptorSet::null(),
             motion_vis_set: vk::DescriptorSet::null(),
@@ -328,6 +335,7 @@ impl ViewTarget {
         self.ao_blur_set = descriptors.allocate_set(ssao.compute3_layout())?;
         self.contact_set = descriptors.allocate_set(ssao.compute2_layout())?;
         self.ssgi_set = descriptors.allocate_set(ssao.compute3_layout())?;
+        self.ssr_set = descriptors.allocate_set(ssao.compute3_layout())?;
         self.ssgi_blur_set = descriptors.allocate_set(ssao.compute3_layout())?;
         self.copy_color_set = descriptors.allocate_set(ssao.compute2_layout())?;
         self.motion_vis_set = descriptors.allocate_set(ssao.compute2_layout())?;
@@ -408,6 +416,10 @@ impl ViewTarget {
             resources,
             &ImageDesc::color_2d(extent, G_NORMAL_FORMAT, storage_sampled),
         )?;
+        let ssr_map = Image::new(
+            resources,
+            &ImageDesc::color_2d(extent, G_NORMAL_FORMAT, storage_sampled),
+        )?;
         let ssgi_denoised = Image::new(
             resources,
             &ImageDesc::color_2d(extent, G_NORMAL_FORMAT, storage_sampled),
@@ -431,6 +443,7 @@ impl ViewTarget {
         let mut ao_map = ao_map;
         let mut contact_map = contact_map;
         let mut ssgi_map = ssgi_map;
+        let mut ssr_map = ssr_map;
         let mut ssgi_denoised = ssgi_denoised;
         let mut ssgi_resolved = ssgi_resolved;
 
@@ -441,10 +454,11 @@ impl ViewTarget {
         // storage-only scratch (ao_raw, ssgi_map written first by their producing pass)
         // stay UNDEFINED until the graph transitions them — except ssgi_map, also read
         // as a sampler by ssgi_blur, so it is seeded too.
-        let read_only: [&Image; 8] = [
+        let read_only: [&Image; 9] = [
             &ao_map,
             &contact_map,
             &ssgi_map,
+            &ssr_map,
             &ssgi_denoised,
             &ssgi_resolved,
             &prev_color,
@@ -456,6 +470,7 @@ impl ViewTarget {
             &mut ao_map,
             &mut contact_map,
             &mut ssgi_map,
+            &mut ssr_map,
             &mut ssgi_denoised,
             &mut ssgi_resolved,
             &mut prev_color,
@@ -471,6 +486,7 @@ impl ViewTarget {
         self.ao_map = Some(ao_map);
         self.contact_map = Some(contact_map);
         self.ssgi_map = Some(ssgi_map);
+        self.ssr_map = Some(ssr_map);
         self.ssgi_denoised = Some(ssgi_denoised);
         self.ssgi_resolved = Some(ssgi_resolved);
         self.prev_color = Some(prev_color);
@@ -737,6 +753,7 @@ impl ViewTarget {
         let ao_map = self.view_of(&self.ao_map);
         let contact_map = self.view_of(&self.contact_map);
         let ssgi_map = self.view_of(&self.ssgi_map);
+        let ssr_map = self.view_of(&self.ssr_map);
         let ssgi_denoised = self.view_of(&self.ssgi_denoised);
         let ssgi_resolved = self.view_of(&self.ssgi_resolved);
         let prev_color = self.view_of(&self.prev_color);
@@ -761,6 +778,10 @@ impl ViewTarget {
             Binding::sampled(self.ssgi_set, 0, nearest, g_normal),
             Binding::sampled(self.ssgi_set, 1, linear, prev_color),
             Binding::storage(self.ssgi_set, 2, ssgi_map),
+            // ssr: g_normal + prev_color -> ssr_map
+            Binding::sampled(self.ssr_set, 0, nearest, g_normal),
+            Binding::sampled(self.ssr_set, 1, linear, prev_color),
+            Binding::storage(self.ssr_set, 2, ssr_map),
             // ssgi_blur: ssgi_map + g_normal -> ssgi_denoised
             Binding::sampled(self.ssgi_blur_set, 0, nearest, ssgi_map),
             Binding::sampled(self.ssgi_blur_set, 1, nearest, g_normal),
@@ -773,6 +794,8 @@ impl ViewTarget {
             Binding::sampled(self.mesh_set, 0, linear, ao_map),
             Binding::sampled(self.mesh_set, 1, linear, contact_map),
             Binding::sampled(self.mesh_set, 2, linear, ssgi_denoised),
+            Binding::sampled(self.mesh_set, 3, linear, ssr_map),
+            Binding::sampled(self.mesh_set, 4, linear, prev_color),
             // The mandatory tonemap set: binding 0 = the offscreen color as a storage
             // image (GENERAL).
             Binding::storage(self.tonemap_set, 0, offscreen),

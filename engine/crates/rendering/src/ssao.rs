@@ -119,6 +119,8 @@ pub struct Ssao {
     pub use_contact: bool,
     /// Screen-space one-bounce GI toggle.
     pub use_ssgi: bool,
+    /// Screen-space reflections toggle (opt-in; off by default).
+    pub use_ssr: bool,
     /// Sets/views valid — built after the per-view targets exist.
     pub ready: bool,
 
@@ -130,7 +132,17 @@ pub struct Ssao {
     radius: f32,
     strength: f32,
     ssgi_intensity: f32,
+    /// SSGI ray-march step count, driven by the render-quality tier (the `ssgi.slang` push
+    /// `params.z`). A runtime push-constant, so the tier dials it with no shader recompile.
+    ssgi_steps: f32,
+    /// Contact-shadow ray-march step count, driven by the render-quality tier (the `contact.slang`
+    /// push `params.y`).
+    contact_steps: f32,
     ssgi_frame: u32,
+    /// SSR ray-march step count (the `ssr.slang` push `params.z`); more steps = a longer,
+    /// finer mirror march.
+    ssr_steps: f32,
+    ssr_frame: u32,
 
     /// Nearest, clamp sampler reading the G-buffer.
     nearest_sampler: vk::Sampler,
@@ -179,6 +191,7 @@ impl Ssao {
             use_ssao: true,
             use_contact: true,
             use_ssgi: true,
+            use_ssr: false,
             ready: false,
             view: Mat4::IDENTITY,
             view_proj: Mat4::IDENTITY,
@@ -188,7 +201,12 @@ impl Ssao {
             radius: 1.0,
             strength: 3.0,
             ssgi_intensity: 1.0,
+            // Defaults match the historical `High` tier (8 SSGI steps, 12 contact steps).
+            ssgi_steps: 8.0,
+            contact_steps: 12.0,
             ssgi_frame: 0,
+            ssr_steps: 24.0,
+            ssr_frame: 0,
             nearest_sampler,
             compute2_layout,
             compute3_layout,
@@ -252,15 +270,25 @@ impl Ssao {
         }
     }
 
-    /// The contact-shadow push (projection + invProjection + view-space light dir +
-    /// the hard-coded ray-march params: 0.2 length, 12 steps, 0.1 thickness).
+    /// The contact-shadow push (projection + invProjection + view-space light dir + the ray-march
+    /// params: 0.2 length, tier-driven step count, 0.1 thickness).
     pub fn contact_push(&self) -> ContactPush {
         ContactPush {
             projection: self.projection,
             inv_projection: self.inv_projection,
             light_dir_view: self.sun_dir_view.extend(0.0),
-            params: Vec4::new(0.2, 12.0, 0.1, 0.0),
+            params: Vec4::new(0.2, self.contact_steps, 0.1, 0.0),
         }
+    }
+
+    /// Applies a resolved render-quality tier: the enable flags + the SSGI / contact step counts
+    /// (runtime push-constants). GTAO has no step-count push, so the tier only gates it on/off.
+    pub fn apply_quality(&mut self, quality: &crate::RenderQuality) {
+        self.use_ssgi = quality.ssgi_enabled;
+        self.use_ssao = quality.gtao_enabled;
+        self.use_contact = quality.contact_enabled;
+        self.ssgi_steps = quality.ssgi_steps;
+        self.contact_steps = quality.contact_steps;
     }
 
     /// Bumps the monotonic SSGI frame index (rotating the trace hash so the denoiser
@@ -274,8 +302,25 @@ impl Ssao {
             params: Vec4::new(
                 self.radius * 2.0,
                 self.ssgi_intensity,
-                8.0,
+                self.ssgi_steps,
                 self.ssgi_frame as f32,
+            ),
+        }
+    }
+
+    /// Bumps the monotonic SSR frame index (jittering the march so TAA averages the
+    /// stair-stepping) and returns this frame's SSR trace push. The march runs far enough
+    /// to cross the scene (a wide multiple of the AO radius) at full intensity.
+    pub fn next_ssr_push(&mut self) -> SsgiPush {
+        self.ssr_frame = self.ssr_frame.wrapping_add(1);
+        SsgiPush {
+            projection: self.projection,
+            inv_projection: self.inv_projection,
+            params: Vec4::new(
+                self.radius * 40.0,
+                1.0,
+                self.ssr_steps,
+                self.ssr_frame as f32,
             ),
         }
     }
@@ -320,8 +365,9 @@ pub(crate) fn wants_gbuffer_prepass(
     use_ssao: bool,
     use_contact: bool,
     use_ssgi: bool,
+    use_ssr: bool,
 ) -> bool {
-    gbuf_ready && (use_ssao || use_contact || use_ssgi)
+    gbuf_ready && (use_ssao || use_contact || use_ssgi || use_ssr)
 }
 
 /// A compute set layout with `sampler_count` leading combined-image-sampler bindings
@@ -396,14 +442,15 @@ mod tests {
     #[test]
     fn gbuffer_prepass_runs_only_when_an_effect_needs_it() {
         // Not ready → never, whatever the toggles.
-        assert!(!wants_gbuffer_prepass(false, true, true, true));
+        assert!(!wants_gbuffer_prepass(false, true, true, true, true));
         // Ready but all effects off → no prepass.
-        assert!(!wants_gbuffer_prepass(true, false, false, false));
+        assert!(!wants_gbuffer_prepass(true, false, false, false, false));
         // Ready + any single effect on → the prepass runs.
-        assert!(wants_gbuffer_prepass(true, true, false, false));
-        assert!(wants_gbuffer_prepass(true, false, true, false));
-        assert!(wants_gbuffer_prepass(true, false, false, true));
-        assert!(wants_gbuffer_prepass(true, true, true, true));
+        assert!(wants_gbuffer_prepass(true, true, false, false, false));
+        assert!(wants_gbuffer_prepass(true, false, true, false, false));
+        assert!(wants_gbuffer_prepass(true, false, false, true, false));
+        assert!(wants_gbuffer_prepass(true, false, false, false, true));
+        assert!(wants_gbuffer_prepass(true, true, true, true, true));
     }
 
     /// `next_ssgi_push` advances the monotonic frame index every call (decorrelating

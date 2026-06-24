@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use ash::vk;
 use saffron_geometry::glam::Mat4;
 
+use crate::budget::BudgetController;
 use crate::ddgi::{DDGI_PROBE_TOTAL, DDGI_RAYS_PER_PROBE, DDGI_VOXEL_RES};
 use crate::descriptors::Descriptors;
 use crate::device::SurfaceSource;
@@ -22,13 +23,17 @@ use crate::ibl::{
 };
 use crate::instancing::Instancing;
 use crate::lighting::{ClusterCamera, Lighting, SceneLighting, point_shadow_face_matrices};
-use crate::overlay::{GridPush, OverlayDraw, OverlayState, OverlayVertex, TonemapPush};
+use crate::overlay::{
+    GridPush, OverlayDraw, OverlayState, OverlayVertex, TonemapMode, TonemapPush,
+};
 use crate::pipelines::Pipelines;
 use crate::present::PresentSync;
 use crate::profiler::{
     CaptureMode, CaptureRecorder, CaptureState, CpuProfiler, GpuProfiler, PassTiming,
     ProfileCapture, ProfilerMode, cpu_now_ns,
 };
+use crate::quality::RenderQuality;
+use crate::reactive::{PowerState, ReactiveState};
 use crate::render_graph::{RenderGraph, RgAttachment, RgPass, RgResource, RgUsage};
 use crate::resources::BindlessFreeList;
 use crate::scene_pass::{
@@ -231,6 +236,8 @@ struct FramePipelines {
     ssgi: Option<Arc<crate::Pipeline>>,
     ssgi_blur: Option<Arc<crate::Pipeline>>,
     ssgi_accum: Option<Arc<crate::Pipeline>>,
+    /// The SSR trace PSO, resolved when SSR runs this frame.
+    ssr: Option<Arc<crate::Pipeline>>,
     copy_color: Option<Arc<crate::Pipeline>>,
     /// The five DDGI compute PSOs, resolved together when DDGI runs this frame (all five
     /// present or the chain is skipped — the gate ANDs all five). `None`
@@ -244,6 +251,8 @@ struct FramePipelines {
     /// bump needs `&mut self.ssao`, so it happens at resolve time, not in the `&self`
     /// graph build).
     ssgi_push: crate::SsgiPush,
+    /// This frame's SSR trace push (frame index bumped at resolve time, like `ssgi_push`).
+    ssr_push: crate::SsgiPush,
     /// The motion-vector prepass PSO, resolved when TAA or SSGI runs this frame (both
     /// reproject through the motion target).
     motion: Option<Arc<crate::Pipeline>>,
@@ -328,6 +337,9 @@ struct ScreenSpaceResult {
     ssgi_history_slots: Option<TaaHistorySlots>,
     /// The ssgi_resolved image's external-layout slot when the accumulation ran.
     ssgi_resolved_slot: Option<usize>,
+    /// The ssr_map image's external-layout slot when the SSR trace ran, so its resolved
+    /// exit layout (ShaderReadOnly after the scene's SampledRead) carries to next frame.
+    ssr_map_slot: Option<usize>,
 }
 
 /// The SSGI prev-color history copy: it reads the scene's linear-HDR color and writes
@@ -447,6 +459,30 @@ pub struct Renderer {
     submissions: Vec<RenderFn>,
     scene_draw_list: SceneDrawList,
     stats: RenderStats,
+
+    /// The point-shadow cube cache: the content key + cube image handle of the last cube actually
+    /// rendered. The cube persists in `SHADER_READ_ONLY` between frames, so when the key and the
+    /// image both match, the `point-shadow` pass is skipped and the cached cube is sampled — a
+    /// static light + casters cost nothing while the camera moves. A target recreation mints a new
+    /// image handle, which forces a re-render (the new cube is `UNDEFINED`).
+    last_point_shadow_key: Option<u64>,
+    last_point_shadow_cube: vk::Image,
+
+    /// The active render-quality tier + resolved screen-space GI parameters (applied to
+    /// [`Ssao`]). Reported in `render-stats` and saved with the project.
+    render_quality: RenderQuality,
+
+    /// The frame-budget controller that auto-steps `render_quality` to hold the budget when
+    /// `PerfConfig::auto_quality` is on (off by default — then it never runs).
+    budget_controller: BudgetController,
+
+    /// The active tonemap operator (default ACES), applied in the tonemap pass + reported in stats.
+    tonemap_mode: TonemapMode,
+
+    /// The reactive-loop observability mirror: the host pushes the idle/converged/reasons snapshot
+    /// each frame (the verdict lives above this crate), and the editor sets the power state; both
+    /// surface in `render-stats`, and the host reads the power state back to suppress a hidden view.
+    reactive: ReactiveState,
 
     /// The directional shadow map's layout carried across frames: the graph seeds the
     /// entry layout from it and writes back the
@@ -772,6 +808,12 @@ impl Renderer {
             overlay,
             submissions: Vec::new(),
             scene_draw_list: SceneDrawList::default(),
+            last_point_shadow_key: None,
+            last_point_shadow_cube: vk::Image::null(),
+            render_quality: RenderQuality::default(),
+            budget_controller: BudgetController::new(),
+            tonemap_mode: TonemapMode::default(),
+            reactive: ReactiveState::default(),
             stats: RenderStats::default(),
             // The shadow maps are init-transitioned to ShaderReadOnly by `Targets::new`,
             // so the first frame's graph import seeds that layout (the depth-write pass
@@ -978,32 +1020,74 @@ impl Renderer {
         self.reflection.use_probes = enabled;
     }
 
-    /// Toggles GTAO ambient occlusion.
-    pub fn set_ssao(&mut self, enabled: bool) {
-        self.ssao.use_ssao = enabled;
+    /// Applies a render-quality tier: the scalable screen-space GI stack's enable flags + SSGI /
+    /// contact step counts. This is the single knob for SSGI / GTAO / contact shadows — the old
+    /// per-effect toggles are gone.
+    pub fn set_render_quality(&mut self, quality: RenderQuality) {
+        self.render_quality = quality;
+        self.ssao.apply_quality(&quality);
     }
 
-    /// Whether GTAO is on and its sets/targets are built.
+    /// The current render-quality tier + resolved parameters.
+    pub fn render_quality(&self) -> RenderQuality {
+        self.render_quality
+    }
+
+    /// The active tonemap operator.
+    pub fn tonemap_mode(&self) -> TonemapMode {
+        self.tonemap_mode
+    }
+
+    /// Selects the tonemap operator (applied in the tonemap pass next frame).
+    pub fn set_tonemap_mode(&mut self, mode: TonemapMode) {
+        self.tonemap_mode = mode;
+    }
+
+    /// Pushes the per-frame reactive-loop snapshot (idle / converged / active reasons) the host
+    /// derives from the run loop's `RedrawController`, for `render-stats` to report.
+    pub fn set_reactive_state(&mut self, idle: bool, converged: bool, reasons: Vec<String>) {
+        self.reactive.idle = idle;
+        self.reactive.converged = converged;
+        self.reactive.reasons = reasons;
+    }
+
+    /// Whether the reactive loop is idling (not rendering) per the last host snapshot.
+    pub fn reactive_idle(&self) -> bool {
+        self.reactive.idle
+    }
+
+    /// Whether the temporal effects have converged per the last host snapshot.
+    pub fn reactive_converged(&self) -> bool {
+        self.reactive.converged
+    }
+
+    /// The reasons continuous render is currently held per the last host snapshot.
+    pub fn reactive_reasons(&self) -> &[String] {
+        &self.reactive.reasons
+    }
+
+    /// The editor viewport power state (focused / unfocused / occluded), set by the editor's
+    /// window-visibility signal; the host reads it each frame to suppress a hidden viewport.
+    pub fn power_state(&self) -> PowerState {
+        self.reactive.power_state
+    }
+
+    /// Sets the editor viewport power state.
+    pub fn set_power_state(&mut self, state: PowerState) {
+        self.reactive.power_state = state;
+    }
+
+    /// Whether GTAO is on (per the active tier) and its sets/targets are built.
     pub fn ssao_enabled(&self) -> bool {
         self.ssao.use_ssao && self.ssao.ready
     }
 
-    /// Toggles screen-space directional contact shadows.
-    pub fn set_contact_shadows(&mut self, enabled: bool) {
-        self.ssao.use_contact = enabled;
-    }
-
-    /// Whether contact shadows are on and ready.
+    /// Whether contact shadows are on (per the active tier) and ready.
     pub fn contact_shadows_enabled(&self) -> bool {
         self.ssao.use_contact && self.ssao.ready
     }
 
-    /// Toggles screen-space one-bounce GI.
-    pub fn set_ssgi(&mut self, enabled: bool) {
-        self.ssao.use_ssgi = enabled;
-    }
-
-    /// Whether SSGI is on and ready.
+    /// Whether SSGI is on (per the active tier) and ready.
     pub fn ssgi_enabled(&self) -> bool {
         self.ssao.use_ssgi && self.ssao.ready
     }
@@ -1090,8 +1174,31 @@ impl Renderer {
             ddgi_extent,
             self.ddgi.probe_count_ubo(),
         );
+        // Fold the SSR flag (extra_flags.x) so the mesh blends the SSR map only when the
+        // trace actually ran this frame.
+        self.lighting
+            .set_frame_ssr(self.ssao.use_ssr && self.ssao.ready);
+        // Fold the RT-reflection flag (extra_flags.y) + the previous frame's view-proj for
+        // reprojecting an RT hit into prev_color. RT reflections need prev_color (the
+        // screen-space chain) + a valid prev view-proj; the set-6 TLAS is always a valid
+        // (possibly empty) AS, and enabling the toggle arms the per-frame TLAS build, so the
+        // trace is gated on the toggle rather than this-frame readiness (which lags a frame).
+        let view = &self.views[self.active_view.index()];
+        let rt_refl = self.rt.use_rt_reflections() && self.ssao.ready && view.prev_view_proj_valid;
+        let prev_vp = view.prev_view_proj;
+        self.lighting.set_frame_rt_reflections(rt_refl, prev_vp);
         self.lighting
             .set_scene_lighting(&self.descriptors, frame, scene)
+    }
+
+    /// Whether screen-space reflections are enabled.
+    pub fn ssr_enabled(&self) -> bool {
+        self.ssao.use_ssr
+    }
+
+    /// Toggles screen-space reflections (opt-in; off by default).
+    pub fn set_ssr(&mut self, enabled: bool) {
+        self.ssao.use_ssr = enabled;
     }
 
     /// Writes the current frame's cluster-cull params from the camera + viewport, arming
@@ -1116,16 +1223,19 @@ impl Renderer {
             .set_spot_shadow(light_view_proj, light_index, casting);
     }
 
-    /// Arms the point shadow pass with the light's world position + far plane + its index.
+    /// Arms the point shadow pass with the light's world position + far plane + its index, plus a
+    /// camera-independent `content_key` (light + caster transforms) the renderer uses to reuse the
+    /// cached cube when only the camera moved.
     pub fn set_point_shadow(
         &mut self,
         light_pos: saffron_geometry::glam::Vec3,
         far_plane: f32,
         light_index: u32,
         casting: bool,
+        content_key: u64,
     ) {
         self.lighting
-            .set_point_shadow(light_pos, far_plane, light_index, casting);
+            .set_point_shadow(light_pos, far_plane, light_index, casting, content_key);
     }
 
     /// Whether the device supports hardware ray tracing (acceleration-structure +
@@ -1143,6 +1253,17 @@ impl Renderer {
     /// Whether ray-query shadows ran this frame (toggle on, RT supported, TLAS built).
     pub fn rt_shadows_enabled(&self) -> bool {
         self.rt.shadows_enabled()
+    }
+
+    /// Toggles inline ray-query reflections (clamped off on a non-RT device). When off, the
+    /// mesh fragment keeps the SSR / prefiltered-env reflection path.
+    pub fn set_rt_reflections(&mut self, enabled: bool) {
+        self.rt.set_rt_reflections(enabled);
+    }
+
+    /// Whether the ray-query-reflections toggle is on (independent of TLAS readiness).
+    pub fn rt_reflections_enabled(&self) -> bool {
+        self.rt.use_rt_reflections()
     }
 
     /// The built per-mesh BLAS count (rt-stats).
@@ -2257,6 +2378,19 @@ impl Renderer {
         };
         self.alarms
             .tick(&self.frame_history, &self.perf_config, &inputs);
+
+        // Auto-quality: when enabled, step the render-quality tier to hold the frame budget. The
+        // frame work time (busy + GPU-fence wait, before the loop's pacing sleep) is the signal.
+        // Off by default, so the controller never runs and the tier stays user-/project-set.
+        if self.perf_config.auto_quality
+            && let Some(tier) = self.budget_controller.update(
+                frame_time_ms,
+                self.perf_config.budget_ms(),
+                self.render_quality.tier,
+            )
+        {
+            self.set_render_quality(tier.resolve());
+        }
     }
 
     /// The current GPU profiler mode.
@@ -2450,9 +2584,10 @@ impl Renderer {
             view_proj,
             wireframe: self.wireframe,
             default_texture_index: crate::DEFAULT_WHITE_SLOT,
-            // Track skinned RT instances when an RT consumer is armed (ray-query shadows on,
-            // on an RT device) — they feed the per-frame refit BLAS the `tlas-build` reads.
-            rt_skinned: self.rt.use_rt_shadows(),
+            // Track skinned RT instances when an RT consumer is armed (ray-query shadows or
+            // reflections on, on an RT device) — they feed the per-frame refit BLAS the
+            // `tlas-build` reads.
+            rt_skinned: self.rt.use_rt_shadows() || self.rt.use_rt_reflections(),
         };
         let (list, stats) = self.instancing.submit_draw_list(
             &self.descriptors,
@@ -2639,8 +2774,20 @@ impl Renderer {
             } else {
                 None
             };
+        // Point-shadow cube cache: re-render only when the light or a caster moved (`content_key`)
+        // or the cube image was recreated. A static light + casters reuse the cached cube while the
+        // camera moves, so the ~0.55 ms 6-face render is skipped. The cube persists in
+        // `SHADER_READ_ONLY` between frames, so a skipped frame samples the cached shadow.
         let point_shadow_pipeline = if self.lighting.point_shadow_pending() {
-            self.pipelines.request_point_shadow()
+            let key = self.lighting.point_shadow_key();
+            let cube = self.targets.point_shadow.image();
+            if self.last_point_shadow_key == Some(key) && self.last_point_shadow_cube == cube {
+                None
+            } else {
+                self.last_point_shadow_key = Some(key);
+                self.last_point_shadow_cube = cube;
+                self.pipelines.request_point_shadow()
+            }
         } else {
             None
         };
@@ -2654,6 +2801,10 @@ impl Renderer {
         let want_ssao = gbuf_ready && self.ssao.use_ssao;
         let want_contact = gbuf_ready && self.ssao.use_contact;
         let want_ssgi = gbuf_ready && self.ssao.use_ssgi;
+        let want_ssr = gbuf_ready && self.ssao.use_ssr;
+        // RT reflections gather from prev_color (the screen-space chain's history copy), so
+        // they force the chain on + the prev-color copy even with no other screen effect.
+        let want_rt_reflections = gbuf_ready && self.rt.use_rt_reflections();
         // ReSTIR needs the thin G-buffer (it reconstructs world pos/normal from it), so it
         // forces the prepass on even with no screen-space effect, then ANDs G-buffer
         // readiness into the ReSTIR enable.
@@ -2662,15 +2813,17 @@ impl Renderer {
             && self.views[self.active_view.index()].restir.ready()
             && gbuf_ready;
         let want_screen = want_restir
+            || want_rt_reflections
             || crate::ssao::wants_gbuffer_prepass(
                 gbuf_ready,
                 self.ssao.use_ssao,
                 self.ssao.use_contact,
                 self.ssao.use_ssgi,
+                self.ssao.use_ssr,
             );
         let compute2 = self.ssao.compute2_layout();
         let compute3 = self.ssao.compute3_layout();
-        let (gbuffer, gtao, ao_blur, contact, ssgi, ssgi_blur, copy_color) = if want_screen {
+        let (gbuffer, gtao, ao_blur, contact, ssgi, ssgi_blur, ssr, copy_color) = if want_screen {
             let gbuffer = self.pipelines.request_gbuffer();
             let (gtao, ao_blur) = if want_ssao {
                 (
@@ -2685,22 +2838,36 @@ impl Renderer {
             } else {
                 None
             };
-            let (ssgi, ssgi_blur, copy_color) = if want_ssgi {
+            let (ssgi, ssgi_blur) = if want_ssgi {
                 (
                     self.pipelines.request_ssgi(compute3),
                     self.pipelines.request_ssgi_blur(compute3),
-                    self.pipelines.request_copy_color(compute2),
                 )
             } else {
-                (None, None, None)
+                (None, None)
             };
-            (gbuffer, gtao, ao_blur, contact, ssgi, ssgi_blur, copy_color)
+            let ssr = if want_ssr {
+                self.pipelines.request_ssr(compute3)
+            } else {
+                None
+            };
+            // SSGI, SSR, and RT reflections all gather from the previous frame's color, so
+            // the prev-color copy runs when any is on.
+            let copy_color = if want_ssgi || want_ssr || want_rt_reflections {
+                self.pipelines.request_copy_color(compute2)
+            } else {
+                None
+            };
+            (
+                gbuffer, gtao, ao_blur, contact, ssgi, ssgi_blur, ssr, copy_color,
+            )
         } else {
-            (None, None, None, None, None, None, None)
+            (None, None, None, None, None, None, None, None)
         };
-        // Bump the monotonic SSGI frame index (decorrelating the trace noise) here, where
-        // `&mut self.ssao` is live; the `&self` graph build reads the snapshot below.
+        // Bump the monotonic SSGI/SSR frame indices (decorrelating the trace noise) here,
+        // where `&mut self.ssao` is live; the `&self` graph build reads the snapshot below.
         let ssgi_push = self.ssao.next_ssgi_push();
+        let ssr_push = self.ssao.next_ssr_push();
 
         // DDGI: the five compute PSOs, resolved together (the `doDdgi` gate requires all
         // five — a partial set skips the whole chain). Each takes `&mut self.pipelines`
@@ -2856,10 +3023,12 @@ impl Renderer {
             ssgi,
             ssgi_blur,
             ssgi_accum,
+            ssr,
             copy_color,
             ddgi,
             restir,
             ssgi_push,
+            ssr_push,
             motion,
             taa,
             fxaa,
@@ -3771,6 +3940,9 @@ impl Renderer {
         {
             resolved.layout = graph.external_layout(slot);
         }
+        if let (Some(slot), Some(ssr_map)) = (screen.ssr_map_slot, view.ssr_map.as_mut()) {
+            ssr_map.layout = graph.external_layout(slot);
+        }
 
         // TAA and/or SSGI accumulation consumed this frame's history parity; mark it valid
         // and flip the shared ping-pong index once so next frame reprojects through the
@@ -4349,18 +4521,27 @@ impl Renderer {
             result.scene_sampled.push(contact_map);
         }
 
-        // One-bounce SSGI: g_normal + prevColor → ssgi_map → ssgi_denoised. prevColor is
-        // imported once here (read now, written by the copy-color pass after the scene);
-        // it rests ShaderReadOnly between frames, so the import seeds that and does NOT
-        // write the layout back (the graph internally pings General for the copy write).
-        if let (Some(ssgi), Some(ssgi_blur)) = (&pipelines.ssgi, &pipelines.ssgi_blur) {
-            let prev_color = graph.import_image(
+        // SSGI, SSR, and RT reflections all gather from the previous frame's color (the
+        // first two in compute, RT reflections via the mesh's set-4 binding 4). Import
+        // prevColor once here (read now, written by the copy-color pass after the scene); it
+        // rests ShaderReadOnly between frames, so the import seeds that and does NOT write the
+        // layout back (the graph internally pings General for the copy write).
+        let rt_refl = self.rt.use_rt_reflections() && view.prev_view_proj_valid;
+        let prev_color = if pipelines.ssgi.is_some() || pipelines.ssr.is_some() || rt_refl {
+            Some(graph.import_image(
                 view.prev_color.as_ref().expect("prev_color built").handle(),
                 view.prev_color.as_ref().expect("prev_color built").view(),
                 vk::ImageAspectFlags::COLOR,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 None,
-            );
+            ))
+        } else {
+            None
+        };
+
+        // One-bounce SSGI: g_normal + prevColor → ssgi_map → ssgi_denoised.
+        if let (Some(ssgi), Some(ssgi_blur)) = (&pipelines.ssgi, &pipelines.ssgi_blur) {
+            let prev_color = prev_color.expect("prev_color imported when SSGI on");
             let ssgi_slot =
                 graph.alloc_external_layout(view.ssgi_map.as_ref().expect("ssgi_map built").layout);
             let ssgi_map = graph.import_image(
@@ -4490,18 +4671,59 @@ impl Renderer {
                 // No motion this frame: the scene samples the spatially denoised map.
                 result.scene_sampled.push(ssgi_denoised);
             }
+        }
 
-            // The prev-color history copy runs AFTER the scene (it reads the scene's
-            // linear-HDR color); hand the caller the info to schedule it.
-            if let Some(copy) = &pipelines.copy_color {
-                result.history_copy = Some(HistoryCopy {
-                    prev_color,
-                    pipeline: Arc::clone(copy),
-                    set: view.copy_color_set,
-                    groups_x: groups(extent.width),
-                    groups_y: groups(extent.height),
-                });
+        // Screen-space reflections: g_normal + prevColor → ssr_map. The mesh blends ssr_map
+        // over the prefiltered-env specular, weighted by hit confidence × (1 - roughness),
+        // so only smooth surfaces use it. No separate denoise — TAA cleans the march jitter.
+        if let Some(ssr) = &pipelines.ssr {
+            let prev_color = prev_color.expect("prev_color imported when SSR on");
+            let ssr_slot =
+                graph.alloc_external_layout(view.ssr_map.as_ref().expect("ssr_map built").layout);
+            let ssr_map = graph.import_image(
+                view.ssr_map.as_ref().expect("ssr_map built").handle(),
+                view.ssr_map.as_ref().expect("ssr_map built").view(),
+                vk::ImageAspectFlags::COLOR,
+                view.ssr_map.as_ref().expect("ssr_map built").layout,
+                Some(ssr_slot),
+            );
+            self.add_compute_pass(
+                graph,
+                "ssr",
+                ssr,
+                view.ssr_set,
+                &[
+                    (g_normal, RgUsage::SampledReadCompute),
+                    (prev_color, RgUsage::SampledReadCompute),
+                    (ssr_map, RgUsage::StorageImageRwCompute),
+                ],
+                Some(bytemuck::bytes_of(&pipelines.ssr_push).to_vec()),
+                groups(extent.width),
+                groups(extent.height),
+            );
+            result.scene_sampled.push(ssr_map);
+            result.ssr_map_slot = Some(ssr_slot);
+        }
+
+        // RT reflections sample prev_color directly in the mesh fragment (set-4 binding 4),
+        // so the scene pass must SampledRead it (transition to ShaderReadOnly before the draw).
+        if rt_refl {
+            if let Some(pc) = prev_color {
+                result.scene_sampled.push(pc);
             }
+        }
+
+        // The prev-color history copy runs AFTER the scene (it reads the scene's linear-HDR
+        // color) for whichever of SSGI / SSR / RT reflections is on; hand the caller the info
+        // to schedule it.
+        if let (Some(copy), Some(prev_color)) = (&pipelines.copy_color, prev_color) {
+            result.history_copy = Some(HistoryCopy {
+                prev_color,
+                pipeline: Arc::clone(copy),
+                set: view.copy_color_set,
+                groups_x: groups(extent.width),
+                groups_y: groups(extent.height),
+            });
         }
 
         result
@@ -4707,7 +4929,7 @@ impl Renderer {
         };
         let view = &self.views[self.active_view.index()];
         let extent = view.extent();
-        let push = TonemapPush::from_ev(self.exposure_ev);
+        let push = TonemapPush::new(self.exposure_ev, self.tonemap_mode);
         let groups = |n: u32| n.div_ceil(8);
         self.add_compute_pass(
             graph,
@@ -6321,7 +6543,9 @@ mod tests {
             quad(-1.0, 1.0),
         ];
 
-        let exposure = TonemapPush::from_ev(0.0); // 1× — Reinhard(1.0)=0.5, ^(1/2.2)≈0.73
+        // Thumbnails use PBR-Neutral so a material's color (a gold sphere) stays accurate in the
+        // asset preview rather than getting the viewport's filmic look.
+        let exposure = TonemapPush::new(0.0, crate::overlay::TonemapMode::PbrNeutral);
 
         // Render the chain twice; the only difference is the present-only flag, which does
         // not touch this path — the two readbacks must be byte-identical.

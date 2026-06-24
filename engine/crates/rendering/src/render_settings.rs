@@ -8,7 +8,7 @@
 
 use serde_json::{Value, json};
 
-use crate::Renderer;
+use crate::{QualityTier, Renderer, TonemapMode};
 
 /// The render-panel state, gathered from the renderer's getters or parsed from a saved
 /// `renderSettings` block. A field of `None` in a parse means "absent → keep current".
@@ -26,12 +26,11 @@ pub struct RenderSettings {
     pub shadows: Option<bool>,
     /// Image-based lighting on.
     pub ibl: Option<bool>,
-    /// Ground-truth ambient occlusion on.
-    pub ssao: Option<bool>,
-    /// Contact (screen-space) shadows on.
-    pub contact_shadows: Option<bool>,
-    /// Screen-space GI on.
-    pub ssgi: Option<bool>,
+    /// The render-quality tier name (`"low"`/`"medium"`/`"high"`/`"ultra"`/`"custom"`) — the single
+    /// knob for the SSGI / GTAO / contact-shadow stack, replacing the old per-effect bools.
+    pub quality: Option<String>,
+    /// The tonemap operator name (`"reinhard"`/`"aces"`/`"agx"`/`"pbr-neutral"`).
+    pub tonemap: Option<String>,
     /// Dynamic diffuse GI on.
     pub ddgi: Option<bool>,
     /// Ray-traced shadows on (applied only on RT hardware).
@@ -51,9 +50,8 @@ fn settings_to_json(s: &RenderSettings) -> Value {
         "depthPrepass": s.depth_prepass,
         "shadows": s.shadows,
         "ibl": s.ibl,
-        "ssao": s.ssao,
-        "contactShadows": s.contact_shadows,
-        "ssgi": s.ssgi,
+        "quality": s.quality,
+        "tonemap": s.tonemap,
         "ddgi": s.ddgi,
         "rtShadows": s.rt_shadows,
         "restir": s.restir,
@@ -78,9 +76,14 @@ fn parse_render_settings(settings: &Value) -> RenderSettings {
     patch.depth_prepass = b("depthPrepass");
     patch.shadows = b("shadows");
     patch.ibl = b("ibl");
-    patch.ssao = b("ssao");
-    patch.contact_shadows = b("contactShadows");
-    patch.ssgi = b("ssgi");
+    patch.quality = obj
+        .get("quality")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    patch.tonemap = obj
+        .get("tonemap")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     patch.ddgi = b("ddgi");
     patch.rt_shadows = b("rtShadows");
     patch.restir = b("restir");
@@ -98,9 +101,8 @@ impl Renderer {
             depth_prepass: Some(self.depth_prepass_enabled()),
             shadows: Some(self.shadows_enabled()),
             ibl: Some(self.ibl_enabled()),
-            ssao: Some(self.ssao_enabled()),
-            contact_shadows: Some(self.contact_shadows_enabled()),
-            ssgi: Some(self.ssgi_enabled()),
+            quality: Some(self.render_quality().tier.as_str().to_owned()),
+            tonemap: Some(self.tonemap_mode().as_str().to_owned()),
             ddgi: Some(self.ddgi_enabled()),
             rt_shadows: Some(self.rt_shadows_enabled()),
             restir: Some(self.restir_enabled()),
@@ -133,14 +135,15 @@ impl Renderer {
         if let Some(v) = patch.ibl {
             self.set_ibl(v);
         }
-        if let Some(v) = patch.ssao {
-            self.set_ssao(v);
+        if let Some(name) = &patch.quality
+            && let Some(tier) = QualityTier::from_name(name)
+        {
+            self.set_render_quality(tier.resolve());
         }
-        if let Some(v) = patch.contact_shadows {
-            self.set_contact_shadows(v);
-        }
-        if let Some(v) = patch.ssgi {
-            self.set_ssgi(v);
+        if let Some(name) = &patch.tonemap
+            && let Some(mode) = TonemapMode::from_name(name)
+        {
+            self.set_tonemap_mode(mode);
         }
         if let Some(v) = patch.ddgi {
             self.set_ddgi(v);
@@ -173,9 +176,8 @@ mod tests {
             depth_prepass: Some(false),
             shadows: Some(true),
             ibl: Some(true),
-            ssao: Some(false),
-            contact_shadows: Some(true),
-            ssgi: Some(false),
+            quality: Some("medium".to_owned()),
+            tonemap: Some("aces".to_owned()),
             ddgi: Some(true),
             rt_shadows: Some(false),
             restir: Some(false),
@@ -189,9 +191,8 @@ mod tests {
             "depthPrepass",
             "shadows",
             "ibl",
-            "ssao",
-            "contactShadows",
-            "ssgi",
+            "quality",
+            "tonemap",
             "ddgi",
             "rtShadows",
             "restir",
@@ -216,9 +217,8 @@ mod tests {
             "depthPrepass": true,
             "shadows": false,
             "ibl": false,
-            "ssao": true,
-            "contactShadows": true,
-            "ssgi": true,
+            "quality": "ultra",
+            "tonemap": "agx",
             "ddgi": true,
             "rtShadows": true,
             "restir": false,
@@ -231,9 +231,8 @@ mod tests {
         assert_eq!(patch.depth_prepass, Some(true));
         assert_eq!(patch.shadows, Some(false));
         assert_eq!(patch.ibl, Some(false));
-        assert_eq!(patch.ssao, Some(true));
-        assert_eq!(patch.contact_shadows, Some(true));
-        assert_eq!(patch.ssgi, Some(true));
+        assert_eq!(patch.quality.as_deref(), Some("ultra"));
+        assert_eq!(patch.tonemap.as_deref(), Some("agx"));
         assert_eq!(patch.ddgi, Some(true));
         assert_eq!(patch.rt_shadows, Some(true));
         assert_eq!(patch.restir, Some(false));
@@ -246,9 +245,9 @@ mod tests {
     /// all-`None` patch (a no-op); a wrong-typed field is ignored field-by-field.
     #[test]
     fn missing_and_malformed_fields_parse_to_none() {
-        // A block touching only `ssao` leaves every other field `None`.
-        let patch = parse_render_settings(&json!({ "ssao": true }));
-        assert_eq!(patch.ssao, Some(true), "ssao parsed");
+        // A block touching only `quality` leaves every other field `None`.
+        let patch = parse_render_settings(&json!({ "quality": "low" }));
+        assert_eq!(patch.quality.as_deref(), Some("low"), "quality parsed");
         assert_eq!(patch.shadows, None, "absent → keep current");
         assert_eq!(patch.aa, None);
 

@@ -67,6 +67,8 @@ struct LightGlobals
     float4 ddgiVolumeExtent;     // xyz = DDGI probe volume world size
     uint4 ddgiProbeCount;        // xyz = probes per axis, w = irradiance tile interior
     float4 ambientColor;         // rgb = scene-environment ambient (non-IBL fallback)
+    uint4 extraFlags;            // x = screen-space reflections, y = ray-traced reflections
+    float4x4 prevViewProj;       // previous frame world->clip, reprojecting an RT hit into prev_color
 };
 [[vk::binding(0, 1)]] ConstantBuffer<LightGlobals> globals;
 
@@ -172,6 +174,14 @@ public struct MaterialParams
 [[vk::binding(2, 3)]] Sampler2D brdfLut;
 static const float IblPrefilterMaxMip = 4.0;  // == IblPrefilterMips - 1 (renderer_detail.cppm)
 
+// Perceptual roughness → prefiltered-cube mip (Filament `perceptualRoughnessToLod`). The `x*(2-x)`
+// curve matches the GGX lobe size per mip better than a linear `roughness*maxMip`, so near-mirror
+// surfaces stay on the sharp low mips and don't snap to a blurry level.
+float prefilterLod(float roughness)
+{
+    return IblPrefilterMaxMip * roughness * (2.0 - roughness);
+}
+
 // Set 4: screen-space maps, all sampled by screen UV. AO (factor, 1 = open) modulates the
 // indirect/ambient term (counts.w); contact shadows (factor, 1 = lit) darken the
 // directional direct term (screenFlags.x); SSGI (rgba16f radiance) adds one-bounce indirect
@@ -179,6 +189,11 @@ static const float IblPrefilterMaxMip = 4.0;  // == IblPrefilterMips - 1 (render
 [[vk::binding(0, 4)]] Sampler2D aoMap;
 [[vk::binding(1, 4)]] Sampler2D contactMap;
 [[vk::binding(2, 4)]] Sampler2D ssgiMap;
+// Screen-space reflection map (rgb = reflected radiance, a = hit confidence), blended over
+// the prefiltered-env specular when extraFlags.x != 0.
+[[vk::binding(3, 4)]] Sampler2D ssrMap;
+// Previous frame's lit color, sampled by reprojecting an RT reflection hit (extraFlags.y).
+[[vk::binding(4, 4)]] Sampler2D prevColorMesh;
 
 // Set 5: DDGI probe atlases (octahedral irradiance + distance moments), sampled for
 // multi-bounce indirect when screenFlags.z != 0.
@@ -238,6 +253,21 @@ float rayQueryShadow(float3 worldPos, float3 toLight, float maxDist)
     q.TraceRayInline(rtScene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, ray);
     q.Proceed();
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
+}
+
+// Trace a reflection ray for the closest opaque hit; returns the hit distance (> 0) or -1 on
+// a miss. Used by RT reflections (extraFlags.y) to find the reflected surface even off-screen.
+float rayQueryReflection(float3 worldPos, float3 dir, float maxDist)
+{
+    RayDesc ray;
+    ray.Origin = worldPos + dir * 0.02;  // bias off the surface to avoid self-hit
+    ray.Direction = dir;
+    ray.TMin = 0.0;
+    ray.TMax = maxDist;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(rtScene, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, ray);
+    while (q.Proceed()) {}  // opaque triangle candidates auto-commit; loop finds the closest
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? q.CommittedRayT() : -1.0;
 }
 
 float2 ddgiOctEncode(float3 d)
@@ -399,6 +429,11 @@ float3 brdf(float3 n, float3 v, float3 l, float3 albedo, float metallic, float r
     float D = distributionGGX(ndoth, a);
     float Vis = visibilitySmithGGX(ndotv, ndotl, a);
     float3 spec = D * Vis * F;
+    // Multi-scatter energy compensation (matches the IBL specular path): scale single-scatter GGX
+    // back toward unity using the single-scatter directional albedo Ess = ab.x + ab.y (≈1 at low
+    // roughness, so no boost on smooth metals; < 1 at high roughness).
+    float2 lutAb = brdfLut.SampleLevel(float2(ndotv, roughness), 0.0).rg;
+    spec *= 1.0 + F0 * (1.0 / max(lutAb.x + lutAb.y, 1e-3) - 1.0);
     float3 kd = (1.0 - F) * (1.0 - metallic);
     float3 diff = kd * albedo / PI;
     return (diff + spec) * radiance * ndotl;
@@ -643,7 +678,7 @@ public float4 evalLighting(VertexOutput input, SurfaceData surf)
         float3 kd = (1.0 - F) * (1.0 - metallic);
         float3 irradiance = irradianceMap.SampleLevel(n, 0.0).rgb;
         float3 R = reflect(-v, n);
-        float3 prefiltered = prefilteredMap.SampleLevel(R, roughness * IblPrefilterMaxMip).rgb;
+        float3 prefiltered = prefilteredMap.SampleLevel(R, prefilterLod(roughness)).rgb;
 
         // Reflection probes: find the nearest covering probe and blend its prefiltered specular +
         // irradiance over the global IBL by an edge-soft weight (1 at center, 0 at the boundary).
@@ -666,7 +701,7 @@ public float4 evalLighting(VertexOutput input, SurfaceData surf)
             float radius = pm.originRadius.w;
             float3 Rp = R;
             if (pm.flags.y != 0) { Rp = boxProject(input.worldPos, R, origin, pm.extentIntensity.xyz); }
-            float3 probeSpec = probeCubes[best].SampleLevel(Rp, roughness * IblPrefilterMaxMip).rgb;
+            float3 probeSpec = probeCubes[best].SampleLevel(Rp, prefilterLod(roughness)).rgb;
             float3 probeIrr = probeIrradiance[best].SampleLevel(n, 0.0).rgb;
             // Edge-soft weight: full inside ~60% of the radius, ramping to 0 at the boundary.
             float w = saturate(1.0 - (bestDist / radius - 0.6) / 0.4) * pm.extentIntensity.w;
@@ -674,21 +709,79 @@ public float4 evalLighting(VertexOutput input, SurfaceData surf)
             irradiance = lerp(irradiance, probeIrr, w);
         }
 
+        // Screen-space reflections replace the prefiltered-env radiance where they hit, so
+        // a smooth metal mirrors the actual neighbouring geometry (the cube only holds the
+        // environment). Weighted by hit confidence × a smoothness gate (full at roughness 0,
+        // zero past ~0.4) so rough surfaces keep the cube fallback. Applied at the radiance
+        // level so the BRDF + multi-scatter + horizon + specular-AO below treat it uniformly.
+        if (globals.extraFlags.x != 0)
+        {
+            float4 ssr = ssrMap.SampleLevel(screenUv, 0.0);
+            float gate = saturate(1.0 - roughness * 2.0);
+            prefiltered = lerp(prefiltered, ssr.rgb, ssr.a * gate);
+        }
+
+        // Ray-traced reflections: trace the reflection ray against the TLAS (finds geometry
+        // off-screen, where SSR fails) and reproject the world-space hit through last frame's
+        // view-proj into prev_color for its reflected radiance. Gated to smooth surfaces; an
+        // off-screen reprojection or a missed ray falls back to the (SSR-or-env) radiance.
+        if (globals.extraFlags.y != 0)
+        {
+            float gate = saturate(1.0 - roughness * 2.0);
+            if (gate > 0.0)
+            {
+                float t = rayQueryReflection(input.worldPos, R, 100.0);
+                if (t > 0.0)
+                {
+                    float3 hitPos = input.worldPos + R * t;
+                    float4 hclip = mul(globals.prevViewProj, float4(hitPos, 1.0));
+                    if (hclip.w > 0.0)
+                    {
+                        float2 huv = (hclip.xy / hclip.w) * 0.5 + 0.5;
+                        if (all(huv >= float2(0.0)) && all(huv <= float2(1.0)))
+                        {
+                            float3 rtRefl = prevColorMesh.SampleLevel(huv, 0.0).rgb;
+                            prefiltered = lerp(prefiltered, rtRefl, gate);
+                        }
+                    }
+                }
+            }
+        }
+
         float3 diffuseIBL = kd * irradiance * albedo;
         float2 ab = brdfLut.SampleLevel(float2(ndotv, roughness), 0.0).rg;
         float3 specularIBL = prefiltered * (F0 * ab.x + ab.y);
+        // Multi-scatter energy compensation (Fdez-Aguera / Filament 4.7.2): single-scatter GGX
+        // loses energy as roughness rises (a rough metal darkens up to ~60% at roughness 1). `Ess`
+        // is the single-scatter directional albedo (the white-F0 reflectance = ab.x + ab.y), which is
+        // ~1 at low roughness (→ no boost on smooth mirrors) and < 1 at high roughness (→ scaled back
+        // toward unity). Using ab.y alone would explode as ab.y→0 on smooth metals — the bug that
+        // blew them out.
+        float Ess = ab.x + ab.y;
+        float3 energyComp = 1.0 + F0 * (1.0 / max(Ess, 1e-3) - 1.0);
+        specularIBL *= energyComp;
+        // Horizon occlusion: a reflection ray pointing below the geometric surface can't see the
+        // environment, so fade it out — otherwise a curved/normal-mapped metal leaks reflections
+        // from under itself at grazing angles. Uses the GEOMETRIC vertex normal, not the shading n.
+        float horizon = min(1.0 + dot(R, normalize(input.worldNormal)), 1.0);
+        specularIBL *= horizon * horizon;
+        // Occlusion split: diffuse takes the full AO; specular takes a roughness-aware specular-AO
+        // (Lagarde) that approaches 1 on smooth metals, so a chrome sphere keeps its reflection in
+        // AO creases instead of being wrongly dimmed by the diffuse AO.
+        float ao = surf.occlusion;  // material occlusion (1.0 = none)
+        if (globals.counts.w != 0)
+        {
+            ao *= aoMap.SampleLevel(screenUv, 0.0).r;  // screen-space AO
+        }
+        float specAO = saturate(pow(ndotv + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao);
+        specularIBL *= specAO;
         reflectionSpec = specularIBL;
-        ambient = diffuseIBL + specularIBL;
+        ambient = diffuseIBL * ao + specularIBL;
     }
     else
     {
-        ambient = albedo * (1.0 - metallic) * globals.ambientColor.rgb;
-    }
-    ambient *= surf.occlusion;  // material occlusion (1.0 = none)
-    // Screen-space AO darkens only the indirect (ambient) term, sampled at this pixel.
-    if (globals.counts.w != 0)
-    {
-        ambient *= aoMap.SampleLevel(screenUv, 0.0).r;
+        float ao = globals.counts.w != 0 ? aoMap.SampleLevel(screenUv, 0.0).r : 1.0;
+        ambient = albedo * (1.0 - metallic) * globals.ambientColor.rgb * surf.occlusion * ao;
     }
     // SSGI adds one-bounce indirect: the gathered radiance acts as extra incoming light on
     // the diffuse albedo (modulated by AO so occluded creases don't over-bounce).

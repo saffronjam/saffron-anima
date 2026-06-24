@@ -104,11 +104,16 @@ pub struct LightUbo {
     pub ddgi_probe_count: UVec4,
     /// `rgb` scene-environment ambient (the non-IBL fallback), `a` reflection-probe count.
     pub ambient_color: Vec4,
+    /// `x` screen-space-reflection flag, `y` ray-traced-reflection flag; `zw` reserved.
+    pub extra_flags: UVec4,
+    /// Previous frame's view-proj (world → clip), reprojecting an RT reflection hit into
+    /// `prev_color` for its reflected radiance.
+    pub prev_view_proj: Mat4,
 }
 
 const _: () = assert!(
-    size_of::<LightUbo>() == 320,
-    "LightUbo must match the std140 shader layout (4 mat4-or-vec4 sets: 5 vec4 + 2 mat4 + 7 vec4)"
+    size_of::<LightUbo>() == 400,
+    "LightUbo must match the std140 shader layout (5 vec4 + 2 mat4 + 8 vec4 + 1 mat4)"
 );
 
 impl Default for LightUbo {
@@ -128,6 +133,8 @@ impl Default for LightUbo {
             ddgi_volume_extent: Vec4::ZERO,
             ddgi_probe_count: UVec4::ZERO,
             ambient_color: Vec4::ZERO,
+            extra_flags: UVec4::ZERO,
+            prev_view_proj: Mat4::IDENTITY,
         }
     }
 }
@@ -249,6 +256,9 @@ pub struct Lighting {
     frame_probe_count: u32,
     frame_ibl_flag: bool,
     frame_ddgi_flag: bool,
+    frame_ssr_flag: bool,
+    frame_rt_reflections_flag: bool,
+    frame_prev_view_proj: Mat4,
     frame_ddgi_volume_min: Vec4,
     frame_ddgi_volume_extent: Vec4,
     frame_ddgi_probe_count: UVec4,
@@ -263,6 +273,10 @@ pub struct Lighting {
     point_shadow_pos: Vec3,
     point_shadow_far: f32,
     point_shadow_light_index: u32,
+    /// Camera-independent hash of the cube's inputs (light + caster transforms), set each frame by
+    /// `set_point_shadow`. The renderer compares it against the last rendered key (and the cube
+    /// image handle) to skip re-rendering a static light's cube while only the camera moves.
+    point_shadow_key: u64,
 
     /// The debug view-mode channel the mesh fragment outputs instead of full shading
     /// (`0` lit/wireframe, `1` albedo, … `5` emissive), folded into the light UBO's
@@ -293,6 +307,9 @@ impl Lighting {
             frame_probe_count: 0,
             frame_ibl_flag: false,
             frame_ddgi_flag: false,
+            frame_ssr_flag: false,
+            frame_rt_reflections_flag: false,
+            frame_prev_view_proj: Mat4::IDENTITY,
             frame_ddgi_volume_min: Vec4::ZERO,
             frame_ddgi_volume_extent: Vec4::ZERO,
             frame_ddgi_probe_count: UVec4::ZERO,
@@ -306,6 +323,7 @@ impl Lighting {
             point_shadow_pos: Vec3::ZERO,
             point_shadow_far: 1.0,
             point_shadow_light_index: 0,
+            point_shadow_key: 0,
             debug_channel: 0,
         })
     }
@@ -377,6 +395,12 @@ impl Lighting {
     /// Whether a shadow-casting point light is present this frame (arms `point-shadow`).
     pub fn point_shadow_pending(&self) -> bool {
         self.point_shadow_pending
+    }
+
+    /// The camera-independent hash of the point-shadow cube's inputs (light + caster transforms);
+    /// the renderer caches the cube against it.
+    pub fn point_shadow_key(&self) -> u64 {
+        self.point_shadow_key
     }
 
     /// The shadowed point light's world position.
@@ -458,6 +482,13 @@ impl Lighting {
             ddgi_volume_extent: self.frame_ddgi_volume_extent,
             ddgi_probe_count: self.frame_ddgi_probe_count,
             ambient_color: scene.ambient.extend(f32::from_bits(self.frame_probe_count)),
+            extra_flags: UVec4::new(
+                u32::from(self.frame_ssr_flag),
+                u32::from(self.frame_rt_reflections_flag),
+                0,
+                0,
+            ),
+            prev_view_proj: self.frame_prev_view_proj,
         };
         let dst = self.frames[frame]
             .light_ubo
@@ -493,6 +524,21 @@ impl Lighting {
         self.frame_ddgi_volume_min = volume_min.extend(0.0);
         self.frame_ddgi_volume_extent = volume_extent.extend(0.0);
         self.frame_ddgi_probe_count = probe_count;
+    }
+
+    /// Folds this frame's SSR flag (`extra_flags.x`) into the next
+    /// [`Lighting::set_scene_lighting`] write, so the mesh fragment blends the SSR map only
+    /// when the trace ran this frame.
+    pub fn set_frame_ssr(&mut self, ssr_enabled: bool) {
+        self.frame_ssr_flag = ssr_enabled;
+    }
+
+    /// Folds this frame's RT-reflection flag (`extra_flags.y`) + the previous frame's
+    /// view-proj (for reprojecting an RT hit into `prev_color`) into the next
+    /// [`Lighting::set_scene_lighting`] write.
+    pub fn set_frame_rt_reflections(&mut self, enabled: bool, prev_view_proj: Mat4) {
+        self.frame_rt_reflections_flag = enabled;
+        self.frame_prev_view_proj = prev_view_proj;
     }
 
     /// Writes the current frame's cluster params from the camera + viewport, and arms
@@ -546,11 +592,13 @@ impl Lighting {
         far_plane: f32,
         light_index: u32,
         casting: bool,
+        content_key: u64,
     ) {
         self.point_shadow_pos = light_pos;
         self.point_shadow_far = far_plane;
         self.point_shadow_light_index = light_index;
         self.point_shadow_pending = casting && self.use_shadows;
+        self.point_shadow_key = content_key;
     }
 
     /// Ensures the frame's punctual-light SSBO holds at least `count` [`GpuLight`]
@@ -901,7 +949,7 @@ mod tests {
     /// fragment reads — the contract the shaded path reads by raw bytes.
     #[test]
     fn light_ubo_byte_layout_matches_std140() {
-        assert_eq!(size_of::<LightUbo>(), 320);
+        assert_eq!(size_of::<LightUbo>(), 400);
         assert_eq!(align_of::<LightUbo>(), 16);
         assert_eq!(offset_of!(LightUbo, direction_ambient), 0);
         assert_eq!(offset_of!(LightUbo, color_intensity), 16);
@@ -917,6 +965,8 @@ mod tests {
         assert_eq!(offset_of!(LightUbo, ddgi_volume_extent), 272);
         assert_eq!(offset_of!(LightUbo, ddgi_probe_count), 288);
         assert_eq!(offset_of!(LightUbo, ambient_color), 304);
+        assert_eq!(offset_of!(LightUbo, extra_flags), 320);
+        assert_eq!(offset_of!(LightUbo, prev_view_proj), 336);
     }
 
     /// `ClusterParams` is exactly 192 bytes with each field at the std140 offset both

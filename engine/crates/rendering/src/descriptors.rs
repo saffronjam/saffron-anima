@@ -766,14 +766,16 @@ fn create_ibl_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
     )
 }
 
-/// Set 4 (mesh pipeline): the AO + contact + SSGI sampler set — three fragment-stage
-/// combined-image-samplers.
+/// Set 4 (mesh pipeline): the AO + contact + SSGI + SSR + prev-color sampler set — five
+/// fragment-stage combined-image-samplers (prev-color feeds the RT-reflection reprojection).
 fn create_ssao_mesh_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
     let sampler = vk::DescriptorType::COMBINED_IMAGE_SAMPLER;
     let bindings = [
         light_binding(0, sampler),
         light_binding(1, sampler),
         light_binding(2, sampler),
+        light_binding(3, sampler),
+        light_binding(4, sampler),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     // SAFETY: the ash seam.
