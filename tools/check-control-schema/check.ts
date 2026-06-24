@@ -328,6 +328,8 @@ async function paramsForFixture(
       return { show: true, axes: true, jointSize: 5 };
     case "debug-overlays-bounds":
       return { bounds: true };
+    case "stores-polyhaven":
+      return { enabled: ["polyhaven"] };
     case "foot-ik-on":
       return { entity: state.cubeId, enabled: true, groundHeight: 0 };
     case "step-one":

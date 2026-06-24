@@ -95,6 +95,10 @@ default:
 help:
     @just --list
 
+# count tracked Rust and TypeScript source lines (host cloc; no toolbox)
+count-code:
+    cloc --vcs=git --include-lang=Rust,TypeScript "{{repo}}"
+
 # init the theme submodule and serve the docs site (host hugo + git)
 run-docs:
     git -C "{{repo}}" submodule update --init --depth 1 docs/themes/hugo-book
