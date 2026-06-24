@@ -237,6 +237,10 @@ export interface EditorState {
   scriptLogsOverflowed: boolean;
   /// Viewport debug-overlay toggles (set-debug-overlays); filled by the render-panel-gated poll.
   debugOverlays: DebugOverlaysResult | null;
+  /// The editor's target-fps selection: `"default"` tracks the display refresh (the vsync-locked
+  /// rAF cadence), or a fixed Hz. Drives the engine's `target_fps` (which paces the render loop).
+  /// UI-only state — the resolved Hz lives in `perfConfig.targetFps`.
+  targetFpsMode: "default" | number;
   /// Performance-telemetry slices, filled by the gated metrics poll only while the
   /// Stats tab is open (history/passes) or always (alarms, for the badge).
   perfConfig: PerfConfigDto | null;
@@ -459,6 +463,7 @@ export interface EditorState {
   clearScriptLogs(): void;
   setDebugOverlays(debugOverlays: DebugOverlaysResult | null): void;
   setPerfConfig(perfConfig: PerfConfigDto | null): void;
+  setTargetFpsMode(mode: "default" | number): void;
   setFrameHistory(frameHistory: FrameHistoryDto | null): void;
   setPassTimings(passTimings: RenderPassTimingsDto | null): void;
   setActiveAlarms(activeAlarms: ActiveAlarmDto[]): void;
@@ -567,6 +572,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   scriptLogsOverflowed: false,
   debugOverlays: null,
   perfConfig: null,
+  targetFpsMode: "default",
   frameHistory: null,
   passTimings: null,
   activeAlarms: [],
@@ -1117,6 +1123,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   clearScriptLogs: () => set({ scriptLogs: [], scriptLogsOverflowed: false }),
   setPerfConfig: (perfConfig) => set({ perfConfig }),
+  setTargetFpsMode: (targetFpsMode) => set({ targetFpsMode }),
   setFrameHistory: (frameHistory) => set({ frameHistory }),
   setPassTimings: (passTimings) => set({ passTimings }),
   setActiveAlarms: (activeAlarms) => set({ activeAlarms }),
