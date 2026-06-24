@@ -8,7 +8,7 @@ use std::ffi::{CString, c_void};
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -109,11 +109,21 @@ impl ViewportShared {
 #[derive(Default)]
 pub struct Viewports {
     views: [Arc<ViewportShared>; 2],
+    /// The presented output's refresh rate in millihertz (e.g. 144000 = 144 Hz), written by the
+    /// presenter from `wp_presentation` feedback — the **true** monitor refresh of the surface the
+    /// viewport composites on, which the WebKitGTK webview's 60 Hz-pinned `requestAnimationFrame`
+    /// cannot observe. `0` until the first presented frame reports it.
+    refresh_mhz: Arc<AtomicU32>,
 }
 
 impl Viewports {
     pub fn view(&self, view: View) -> &Arc<ViewportShared> {
         &self.views[view.index()]
+    }
+
+    /// The presented output's refresh in millihertz (`0` if not yet known).
+    pub fn refresh_mhz(&self) -> u32 {
+        self.refresh_mhz.load(Ordering::Relaxed)
     }
 }
 
@@ -176,6 +186,9 @@ struct State {
     // Per-view frame-callback pending flags, indexed by View. A surface's frame callback
     // clears its own slot, so the two panes pace independently on the compositor's refresh.
     frame_pending: [bool; 2],
+    // Shared with `Viewports`: the presenter publishes the output refresh (mHz) here from
+    // presentation feedback, so a Tauri command can report the true monitor refresh.
+    refresh_out: Arc<AtomicU32>,
 }
 
 impl Dispatch<WlRegistry, ()> for State {
@@ -285,6 +298,12 @@ impl Dispatch<WpPresentationFeedback, ()> for State {
                 if let WEnum::Value(kind) = flags {
                     stats.flags |= kind.bits();
                 }
+                // Publish the output refresh (ns/vblank → mHz) for the Default-fps mode: Hz =
+                // 1e9 / refresh_ns, so mHz = 1e12 / refresh_ns. `refresh == 0` means unknown.
+                if refresh > 0 {
+                    let mhz = (1_000_000_000_000u64 / u64::from(refresh)) as u32;
+                    state.refresh_out.store(mhz, Ordering::Relaxed);
+                }
             }
             wp_presentation_feedback::Event::Discarded => state.stats.discarded += 1,
             _ => {}
@@ -312,6 +331,7 @@ pub fn install(
 ) -> Result<(), String> {
     let scene_shared = Arc::clone(viewports.view(View::Scene));
     let asset_shared = Arc::clone(viewports.view(View::AssetPreview));
+    let refresh_out = Arc::clone(&viewports.refresh_mhz);
     let is_wayland = gdk::Display::default()
         .map(|display| display.type_().name().starts_with("GdkWayland"))
         .unwrap_or(false);
@@ -437,6 +457,7 @@ pub fn install(
         let asset_shm = asset_shm.clone();
         let scene_shared = Arc::clone(&scene_shared);
         let asset_shared = Arc::clone(&asset_shared);
+        let refresh_out = Arc::clone(&refresh_out);
         let display_addr = display_ptr as usize;
         let surface_addr = surface_ptr as usize;
         thread::spawn(move || {
@@ -444,7 +465,7 @@ pub fn install(
                 (View::Scene, scene_shm, scene_shared),
                 (View::AssetPreview, asset_shm, asset_shared),
             ];
-            if let Err(err) = run(display_addr, surface_addr, views) {
+            if let Err(err) = run(display_addr, surface_addr, views, refresh_out) {
                 tracing::warn!(target: "viewport", "wayland presenter failed: {err}");
             }
         });
@@ -503,6 +524,7 @@ fn run(
     display_addr: usize,
     parent_addr: usize,
     views: [(View, String, Arc<ViewportShared>); 2],
+    refresh_out: Arc<AtomicU32>,
 ) -> Result<(), String> {
     let stats_enabled = std::env::var_os("SAFFRON_VIEWPORT_STATS").is_some();
     let backend = unsafe { Backend::from_foreign_display(display_addr as *mut _) };
@@ -512,6 +534,7 @@ fn run(
 
     let registry = conn.display().get_registry(&qh, ());
     let mut state = State::default();
+    state.refresh_out = refresh_out;
     queue
         .roundtrip(&mut state)
         .map_err(|err| format!("registry roundtrip: {err}"))?;

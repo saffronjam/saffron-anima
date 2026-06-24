@@ -335,11 +335,8 @@ fn spawn_engine(socket_path: &str) -> Result<Child, String> {
             "SAFFRON_VIEWPORT_SHM_ASSET",
             viewport_shm_name("assetPreview"),
         );
-    // Unthrottled headless publish renders thousands of fps for nothing; cap well above
-    // any display rate. An explicit SAFFRON_MAX_FPS in the environment wins.
-    if std::env::var_os("SAFFRON_MAX_FPS").is_none() {
-        command.env("SAFFRON_MAX_FPS", "500");
-    }
+    // The host paces itself: a reactive loop renders at the perf-config `target_fps` while the
+    // scene is active and idles the GPU on a static viewport, so there is no launch-time fps cap.
     // The toolbox ships only Mesa ICD manifests; point Vulkan at the host's NVIDIA ICD
     // so the engine renders on hardware instead of llvmpipe.
     if std::env::var_os("VK_ICD_FILENAMES").is_none() && std::path::Path::new(NVIDIA_ICD).exists() {
@@ -742,6 +739,14 @@ fn set_viewport_parked(
     Ok(())
 }
 
+/// The true monitor refresh (Hz) of the output the viewport composites on, from `wp_presentation`
+/// feedback — the editor's WebKitGTK `requestAnimationFrame` is pinned to ~60 Hz and cannot see it.
+/// `0.0` until the first presented frame reports it (the caller falls back to its current target).
+#[tauri::command]
+fn viewport_refresh_hz(state: State<'_, EditorState>) -> f64 {
+    f64::from(state.viewports.refresh_mhz()) / 1000.0
+}
+
 #[tauri::command]
 fn quit_engine(state: State<'_, EditorState>) -> Result<(), String> {
     teardown(&state);
@@ -1025,6 +1030,7 @@ pub fn run() {
             start_engine,
             set_viewport_bounds,
             set_viewport_parked,
+            viewport_refresh_hz,
             quit_engine,
             engine_alive,
             app_data_info,
