@@ -393,10 +393,25 @@ pub struct RenderStatsDto {
     pub ssao: bool,
     pub contact_shadows: bool,
     pub ssgi: bool,
+    /// The active render-quality tier (`low`/`medium`/`high`/`ultra`/`custom`) — the knob the
+    /// `ssao`/`contact_shadows`/`ssgi` flags above derive from.
+    pub quality: String,
+    /// The active tonemap operator (`reinhard`/`aces`/`agx`/`pbr-neutral`).
+    pub tonemap: String,
+    /// The reactive loop is idling (skipping renders) — a static, converged, or hidden viewport.
+    pub idle: bool,
+    /// The temporal effects (TAA / SSGI history) have converged to their final image.
+    pub converged: bool,
+    /// The reasons continuous render is currently held (empty when idle), for the stats readout.
+    pub redraw_reasons: Vec<String>,
+    /// The editor viewport power state (`focused`/`unfocused`/`occluded`).
+    pub power_state: String,
     pub ddgi: bool,
     pub rt_supported: bool,
     pub rt_shadows: bool,
     pub restir: bool,
+    pub ssr: bool,
+    pub rt_reflections: bool,
     pub blas_count: i32,
     pub pipelines: i32,
     pub bindless_textures: i32,
@@ -596,6 +611,8 @@ pub struct PerfConfigDto {
     pub frozen_ms: f32,
     pub vram_warn_frac: f32,
     pub vram_crit_frac: f32,
+    /// Auto-quality: the frame-budget controller steps the render-quality tier to hold the budget.
+    pub auto_quality: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -604,6 +621,8 @@ pub struct PerfConfigDto {
 pub struct SetPerfConfigParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_fps: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_quality: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub green_budget_frac: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1068,25 +1087,62 @@ pub struct SetIblResult {
     pub ibl: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+/// Params for `set-render-quality`: the tier name (`low`/`medium`/`high`/`ultra`/`custom`) — the
+/// single knob for the SSGI / GTAO / contact-shadow stack (replacing the per-effect toggles).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct SetSsaoResult {
-    pub ssao: bool,
+pub struct SetRenderQualityParams {
+    pub tier: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+/// Params for `set-tonemap`: the operator name (`reinhard`/`aces`/`agx`/`pbr-neutral`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct SetContactShadowsResult {
-    pub contact_shadows: bool,
+pub struct SetTonemapParams {
+    pub mode: String,
 }
 
+/// The applied tonemap operator, echoed by `set-tonemap`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct SetSsgiResult {
+pub struct TonemapResult {
+    pub mode: String,
+}
+
+/// Params for `set-viewport-power-state`: the editor's window visibility
+/// (`focused`/`unfocused`/`occluded`), so the host can suppress rendering a hidden viewport.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetViewportPowerStateParams {
+    pub state: String,
+}
+
+/// The applied viewport power state, echoed by `set-viewport-power-state`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ViewportPowerStateResult {
+    pub state: String,
+}
+
+/// The active render-quality tier + the resolved per-effect state, returned by both
+/// `set-render-quality` and `get-render-quality`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RenderQualityResult {
+    /// The active tier name.
+    pub tier: String,
+    /// Whether screen-space one-bounce GI is on at this tier.
     pub ssgi: bool,
+    /// Whether GTAO ambient occlusion is on at this tier.
+    pub gtao: bool,
+    /// Whether screen-space contact shadows are on at this tier.
+    pub contact_shadows: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1101,6 +1157,20 @@ pub struct SetRtShadowsResult {
 #[ts(export)]
 pub struct SetRestirResult {
     pub restir: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetSsrResult {
+    pub ssr: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SetRtReflectionsResult {
+    pub rt_reflections: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

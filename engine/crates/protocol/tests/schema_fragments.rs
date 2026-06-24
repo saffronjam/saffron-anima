@@ -127,9 +127,10 @@ fn every_dto_fragment_matches_committed_openrpc() {
     check!(ToggleParams, "ToggleParams");
     check!(SetClusteredResult, "SetClusteredResult");
     check!(SetIblResult, "SetIblResult");
-    check!(SetSsaoResult, "SetSsaoResult");
-    check!(SetContactShadowsResult, "SetContactShadowsResult");
-    check!(SetSsgiResult, "SetSsgiResult");
+    check!(SetRenderQualityParams, "SetRenderQualityParams");
+    check!(RenderQualityResult, "RenderQualityResult");
+    check!(SetTonemapParams, "SetTonemapParams");
+    check!(TonemapResult, "TonemapResult");
     check!(SetRtShadowsResult, "SetRtShadowsResult");
     check!(SetRestirResult, "SetRestirResult");
     check!(SetGiParams, "SetGiParams");
@@ -138,6 +139,8 @@ fn every_dto_fragment_matches_committed_openrpc() {
     check!(SetSkinningResult, "SetSkinningResult");
     check!(SetDepthPrepassResult, "SetDepthPrepassResult");
     check!(ViewportNativeInfoResult, "ViewportNativeInfoResult");
+    check!(SetViewportPowerStateParams, "SetViewportPowerStateParams");
+    check!(ViewportPowerStateResult, "ViewportPowerStateResult");
     check!(SetViewportSizeParams, "SetViewportSizeParams");
     check!(SetViewportSizeResult, "SetViewportSizeResult");
     check!(SetActiveViewParams, "SetActiveViewParams");

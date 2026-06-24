@@ -294,56 +294,56 @@
       }
     },
     {
-      "name": "set-ssao",
-      "summary": "toggle ambient occlusion",
+      "name": "set-render-quality",
+      "summary": "set the render-quality tier (low/medium/high/ultra) — the SSGI/GTAO/contact knob",
       "params": [
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/ToggleParams"
+            "$ref": "#/components/schemas/SetRenderQualityParams"
           }
         }
       ],
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/SetSsaoResult"
+          "$ref": "#/components/schemas/RenderQualityResult"
         }
       }
     },
     {
-      "name": "set-contact-shadows",
-      "summary": "toggle contact shadows",
+      "name": "get-render-quality",
+      "summary": "the active render-quality tier + resolved per-effect state",
       "params": [
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/ToggleParams"
+            "$ref": "#/components/schemas/EmptyParams"
           }
         }
       ],
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/SetContactShadowsResult"
+          "$ref": "#/components/schemas/RenderQualityResult"
         }
       }
     },
     {
-      "name": "set-ssgi",
-      "summary": "toggle SSGI",
+      "name": "set-tonemap",
+      "summary": "set the tonemap operator (reinhard/aces/agx/pbr-neutral)",
       "params": [
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/ToggleParams"
+            "$ref": "#/components/schemas/SetTonemapParams"
           }
         }
       ],
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/SetSsgiResult"
+          "$ref": "#/components/schemas/TonemapResult"
         }
       }
     },
@@ -380,6 +380,42 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SetRestirResult"
+        }
+      }
+    },
+    {
+      "name": "set-ssr",
+      "summary": "toggle screen-space reflections",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetSsrResult"
+        }
+      }
+    },
+    {
+      "name": "set-rt-reflections",
+      "summary": "toggle ray-traced reflections",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetRtReflectionsResult"
         }
       }
     },
@@ -470,6 +506,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/ViewportNativeInfoResult"
+        }
+      }
+    },
+    {
+      "name": "set-viewport-power-state",
+      "summary": "set the editor viewport visibility (focused/unfocused/occluded) for idle throttling",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetViewportPowerStateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ViewportPowerStateResult"
         }
       }
     },
@@ -5938,6 +5992,9 @@
           },
           "vramCritFrac": {
             "type": "number"
+          },
+          "autoQuality": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -5948,7 +6005,8 @@
           "amberMedianMul",
           "frozenMs",
           "vramWarnFrac",
-          "vramCritFrac"
+          "vramCritFrac",
+          "autoQuality"
         ]
       },
       "PhysicsBodiesResult": {
@@ -6766,6 +6824,30 @@
           "profilerMode"
         ]
       },
+      "RenderQualityResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tier": {
+            "type": "string"
+          },
+          "ssgi": {
+            "type": "boolean"
+          },
+          "gtao": {
+            "type": "boolean"
+          },
+          "contactShadows": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tier",
+          "ssgi",
+          "gtao",
+          "contactShadows"
+        ]
+      },
       "RenderStatsDto": {
         "type": "object",
         "additionalProperties": false,
@@ -6850,6 +6932,27 @@
           "ssgi": {
             "type": "boolean"
           },
+          "quality": {
+            "type": "string"
+          },
+          "tonemap": {
+            "type": "string"
+          },
+          "idle": {
+            "type": "boolean"
+          },
+          "converged": {
+            "type": "boolean"
+          },
+          "redrawReasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "powerState": {
+            "type": "string"
+          },
           "ddgi": {
             "type": "boolean"
           },
@@ -6860,6 +6963,12 @@
             "type": "boolean"
           },
           "restir": {
+            "type": "boolean"
+          },
+          "ssr": {
+            "type": "boolean"
+          },
+          "rtReflections": {
             "type": "boolean"
           },
           "blasCount": {
@@ -6940,10 +7049,18 @@
           "ssao",
           "contactShadows",
           "ssgi",
+          "quality",
+          "tonemap",
+          "idle",
+          "converged",
+          "redrawReasons",
+          "powerState",
           "ddgi",
           "rtSupported",
           "rtShadows",
           "restir",
+          "ssr",
+          "rtReflections",
           "blasCount",
           "pipelines",
           "bindlessTextures",
@@ -7546,18 +7663,6 @@
           "set"
         ]
       },
-      "SetContactShadowsResult": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "contactShadows": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "contactShadows"
-        ]
-      },
       "SetDepthPrepassResult": {
         "type": "object",
         "additionalProperties": false,
@@ -7875,6 +7980,9 @@
           "targetFps": {
             "type": "number"
           },
+          "autoQuality": {
+            "type": "boolean"
+          },
           "greenBudgetFrac": {
             "type": "number"
           },
@@ -7949,6 +8057,18 @@
           "entity"
         ]
       },
+      "SetRenderQualityParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tier": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
       "SetRestirResult": {
         "type": "object",
         "additionalProperties": false,
@@ -7959,6 +8079,18 @@
         },
         "required": [
           "restir"
+        ]
+      },
+      "SetRtReflectionsResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rtReflections": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rtReflections"
         ]
       },
       "SetRtShadowsResult": {
@@ -8068,28 +8200,28 @@
           "skinning"
         ]
       },
-      "SetSsaoResult": {
+      "SetSsrResult": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "ssao": {
+          "ssr": {
             "type": "boolean"
           }
         },
         "required": [
-          "ssao"
+          "ssr"
         ]
       },
-      "SetSsgiResult": {
+      "SetTonemapParams": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "ssgi": {
-            "type": "boolean"
+          "mode": {
+            "type": "string"
           }
         },
         "required": [
-          "ssgi"
+          "mode"
         ]
       },
       "SetTransformParams": {
@@ -8181,6 +8313,18 @@
         },
         "required": [
           "viewMode"
+        ]
+      },
+      "SetViewportPowerStateParams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
         ]
       },
       "SetViewportSizeParams": {
@@ -8364,6 +8508,18 @@
         },
         "required": []
       },
+      "TonemapResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
       "Vec3": {
         "type": "object",
         "additionalProperties": false,
@@ -8442,6 +8598,18 @@
           "width",
           "height",
           "message"
+        ]
+      },
+      "ViewportPowerStateResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
         ]
       },
       "WireUuid": {

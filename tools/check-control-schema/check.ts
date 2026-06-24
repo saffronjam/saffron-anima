@@ -240,6 +240,12 @@ async function paramsForFixture(
       return { mode: "fxaa" };
     case "view-mode-wireframe":
       return { mode: "wireframe" };
+    case "render-quality":
+      return { tier: "medium" };
+    case "tonemap":
+      return { mode: "agx" };
+    case "power-state-focused":
+      return { state: "focused" };
     case "toggle-on":
       return { enabled: true };
     case "toggle-off":

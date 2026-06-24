@@ -114,25 +114,25 @@
       "fixture": "toggle-on"
     },
     {
-      "name": "set-ssao",
-      "params": "ToggleParams",
-      "result": "SetSsaoResult",
+      "name": "set-render-quality",
+      "params": "SetRenderQualityParams",
+      "result": "RenderQualityResult",
       "status": "typed",
-      "fixture": "toggle-on"
+      "fixture": "render-quality"
     },
     {
-      "name": "set-contact-shadows",
-      "params": "ToggleParams",
-      "result": "SetContactShadowsResult",
+      "name": "get-render-quality",
+      "params": "EmptyParams",
+      "result": "RenderQualityResult",
       "status": "typed",
-      "fixture": "toggle-on"
+      "fixture": "empty"
     },
     {
-      "name": "set-ssgi",
-      "params": "ToggleParams",
-      "result": "SetSsgiResult",
+      "name": "set-tonemap",
+      "params": "SetTonemapParams",
+      "result": "TonemapResult",
       "status": "typed",
-      "fixture": "toggle-on"
+      "fixture": "tonemap"
     },
     {
       "name": "set-rt-shadows",
@@ -145,6 +145,20 @@
       "name": "set-restir",
       "params": "ToggleParams",
       "result": "SetRestirResult",
+      "status": "typed",
+      "fixture": "toggle-off"
+    },
+    {
+      "name": "set-ssr",
+      "params": "ToggleParams",
+      "result": "SetSsrResult",
+      "status": "typed",
+      "fixture": "toggle-off"
+    },
+    {
+      "name": "set-rt-reflections",
+      "params": "ToggleParams",
+      "result": "SetRtReflectionsResult",
       "status": "typed",
       "fixture": "toggle-off"
     },
@@ -182,6 +196,13 @@
       "result": "ViewportNativeInfoResult",
       "status": "typed",
       "fixture": "empty"
+    },
+    {
+      "name": "set-viewport-power-state",
+      "params": "SetViewportPowerStateParams",
+      "result": "ViewportPowerStateResult",
+      "status": "typed",
+      "fixture": "power-state-focused"
     },
     {
       "name": "set-viewport-size",
