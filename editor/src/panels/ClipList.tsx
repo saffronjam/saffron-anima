@@ -82,7 +82,7 @@ export function ClipList({ model, rootEntity }: ClipListProps) {
           <dl className="space-y-1">
             <DetailRow label="Name" value={focused.name} />
             <DetailRow label="Duration" value={formatSeconds(focused.duration)} />
-            <DetailRow label="Tracks" value={String(focused.tracks)} />
+            <DetailRow label="Channels" value={String(focused.channels.length)} />
             {wrap ? <DetailRow label="Wrap" value={wrap} /> : null}
           </dl>
         ) : model ? (

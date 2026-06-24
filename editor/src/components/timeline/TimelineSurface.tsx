@@ -97,11 +97,20 @@ export function TimelineSurface({ target }: { target: TimelineTarget }) {
       const trackList: TimelineTrack[] = rigged ? [{ id: "anim", accent: TRACK_ACCENT }] : [];
       const clips: TimelineClip[] = [];
       if (trackList.length > 0 && dur > 0) {
+        // The active clip's real per-channel keyframe strips (decision #19): match the playing
+        // clip by id, else the first listed clip, and carry each channel's keyframe times.
+        const activeId = st.animationState?.clip;
+        const activeClip = st.animationClips.find((c) => c.id === activeId) ?? st.animationClips[0];
+        const channels = (activeClip?.channels ?? []).map((ch) => ({
+          label: ch.label,
+          times: ch.times,
+        }));
         clips.push({
           trackId: "anim",
           label: st.animationState?.clipName || st.animationClips[0]?.name || "Clip",
           start: 0,
           duration: dur,
+          channels,
         });
       }
       const model: TimelineModel = {

@@ -10,13 +10,15 @@ import { TimelineTransport } from "../components/timeline/TimelineTransport";
 import { TimelineSurface } from "../components/timeline/TimelineSurface";
 import type { TimelineTarget } from "../components/timeline/shared";
 
-/// A rig is an entity that carries a SkinnedMesh or AnimationPlayer component. `listClips` returns the
-/// whole project catalog regardless of entity, so the clip list alone cannot gate the panel — without
-/// this an unrigged cube would show a phantom track. The inspect result's component map (filled by the
-/// reconcile poll on selection) is the reliable signal.
-function isRiggedEntity(components: Record<string, unknown> | undefined): boolean {
+/// An animatable entity carries an `AnimationPlayer`, a `SkinnedMesh`, or a `Morph` component — the
+/// three clip-driven sources (skeletal, node-TRS via the player, and blend-shape weights). `listClips`
+/// returns the whole project catalog regardless of entity, so the clip list alone cannot gate the panel
+/// — without this an unrigged cube would show a phantom track. The inspect result's component map
+/// (filled by the reconcile poll on selection) is the reliable signal.
+function isAnimatable(components: Record<string, unknown> | undefined): boolean {
   return (
-    components !== undefined && ("AnimationPlayer" in components || "SkinnedMesh" in components)
+    components !== undefined &&
+    ("AnimationPlayer" in components || "SkinnedMesh" in components || "Morph" in components)
   );
 }
 
@@ -32,7 +34,7 @@ export function TimelinePanel() {
     entityId: selectedId,
     state: animationState,
     clips: animationClips,
-    enabled: animationState !== null || isRiggedEntity(components),
+    enabled: animationState !== null || isAnimatable(components),
   };
 
   return (

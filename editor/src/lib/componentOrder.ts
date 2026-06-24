@@ -9,6 +9,7 @@ export const COMPONENT_ORDER = [
   "ModelInstance",
   "Mesh",
   "SkinnedMesh",
+  "Morph",
   "AnimationPlayer",
   "Camera",
   "MaterialAsset",

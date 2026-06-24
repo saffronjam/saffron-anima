@@ -201,6 +201,7 @@ export const FIELD_HINTS: Record<string, FieldHint> = {
   // enums; `loopBlend` is a 0..1 wrap-blend (only meaningful for Loop). `time` is left to the
   // numeric fallback (runtime playhead; scrubbing belongs to the Timeline transport).
   "AnimationPlayer.clip": { kind: "uuid", asset: "animation" },
+  "AnimationPlayer.autoplay": { kind: "bool" },
   "AnimationPlayer.speed": { kind: "number", min: 0, step: 0.05 },
   "AnimationPlayer.playing": { kind: "bool" },
   "AnimationPlayer.loopBlend": { kind: "slider", min: 0, max: 1, step: 0.01 },

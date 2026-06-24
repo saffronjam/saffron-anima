@@ -20,6 +20,7 @@ import { makeCoalescer, type Coalescer } from "../control/coalesce";
 import { errorText, notifyError } from "../lib/flash";
 import { renderField, resolveHint } from "../components/fieldRenderer";
 import { ScriptSlots } from "../components/ScriptSlots";
+import { SliderField } from "../components/SliderField";
 import { BoneMaskField } from "../components/BoneMaskField";
 import { FootChainsEditor, type FootChain } from "../components/FootChainsEditor";
 import { BonePhysicsEditor, type BonePhysicsEntry } from "../components/BonePhysicsEditor";
@@ -47,12 +48,24 @@ import {
 /// ModelInstance/SkinnedMesh are import-managed identity (set when a model/rig is
 /// instantiated, not addable by hand), so removing them would strand a rig with no way
 /// back. Everything else shows a Remove control.
-const NON_REMOVABLE = new Set<string>(["Name", "Transform", "ModelInstance", "SkinnedMesh"]);
+const NON_REMOVABLE = new Set<string>([
+  "Name",
+  "Transform",
+  "ModelInstance",
+  "SkinnedMesh",
+  "Morph",
+]);
 
 /// Components NOT offered in the Add Component menu. MaterialSet's slots come from a
 /// multi-material import (an empty one has nothing to edit); ModelInstance/SkinnedMesh
 /// are written by model/rig import, never created on a bare entity.
-const NON_ADDABLE = new Set<string>(["Name", "MaterialSet", "ModelInstance", "SkinnedMesh"]);
+const NON_ADDABLE = new Set<string>([
+  "Name",
+  "MaterialSet",
+  "ModelInstance",
+  "SkinnedMesh",
+  "Morph",
+]);
 
 /// The Add Component list, in known order, minus the non-addable set.
 const ADDABLE_COMPONENTS = COMPONENT_ORDER.filter((c) => !NON_ADDABLE.has(c));
@@ -112,6 +125,27 @@ export function InspectorPanel() {
   useEffect(() => {
     coalescers.current.clear();
   }, [selectionVersion, selectedId]);
+
+  // The morph-weight coalescer: one `set-morph-weights` per edit-burst (not per scrub tick).
+  // `send` reads the live selected id from the store, so the closure never targets a stale
+  // entity after a selection change.
+  const morphCoalescer = useRef<Coalescer<number[]> | null>(null);
+  const morphCoalescerFor = (): Coalescer<number[]> => {
+    if (!morphCoalescer.current) {
+      morphCoalescer.current = makeCoalescer<number[]>({
+        send: (weights) => {
+          const id = useEditorStore.getState().selectedId;
+          if (!id) {
+            return Promise.resolve();
+          }
+          return client
+            .setMorphWeights(id, weights)
+            .catch((err: unknown) => notifyError(errorText(err)));
+        },
+      });
+    }
+    return morphCoalescer.current;
+  };
 
   // Undo capture: the in-flight field/slot gesture's prior snapshot + target entity,
   // recorded as one undo entry at the gesture's end. Distinct refs so a field scrub and
@@ -723,6 +757,43 @@ export function InspectorPanel() {
           entityId={selectedId}
           scripts={(dto.scripts as ScriptSlot[] | undefined) ?? []}
         />
+      );
+    }
+    if (component === "Morph") {
+      // One 0..1 slider per blend-shape target, labelled by the durable target names.
+      // Weights are canonical 0..1 end-to-end (no /100). Each scrub coalesces into one
+      // `set-morph-weights` per edit-burst and gates the reconcile poll via `dragActive`.
+      const weights = Array.isArray(dto.weights) ? (dto.weights as number[]) : [];
+      const names = Array.isArray(dto.names) ? (dto.names as string[]) : [];
+      if (weights.length === 0) {
+        return <span className="text-[11px] text-muted-foreground">No morph targets.</span>;
+      }
+      const writeWeight = (k: number, v: number): void => {
+        const next = weights.slice();
+        next[k] = v;
+        applyOptimisticComponent("Morph", { ...dto, weights: next });
+        morphCoalescerFor().push(next);
+      };
+      return (
+        <>
+          {weights.map((weight, k) => (
+            <div key={k} className="grid grid-cols-[78px_1fr] items-center gap-1.5">
+              <Label className="truncate text-[11px] font-normal text-muted-foreground">
+                {names[k] ?? `Target ${k}`}
+              </Label>
+              <div className="min-w-0">
+                <SliderField
+                  value={weight}
+                  min={0}
+                  max={1}
+                  onChange={(v) => writeWeight(k, v)}
+                  onDragStart={() => setDragActive(true)}
+                  onDragEnd={() => setDragActive(false)}
+                />
+              </div>
+            </div>
+          ))}
+        </>
       );
     }
     if (component === "MaterialSet") {

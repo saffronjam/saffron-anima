@@ -27,12 +27,21 @@ export interface TimelineTrack {
   accent: string;
 }
 
-/// One clip bar on a track: a span [start, start+duration] in seconds with a label.
+/// One animation channel of a clip: a display label and its keyframe sample times (seconds,
+/// relative to the clip start) — the real per-channel keyframe data from `AnimationChannelDto`.
+export interface TimelineChannel {
+  label: string;
+  times: number[];
+}
+
+/// One clip bar on a track: a span [start, start+duration] in seconds with a label. `channels`
+/// carries the clip's per-channel keyframe strips, drawn as keyframe ticks under the bar.
 export interface TimelineClip {
   trackId: string;
   label: string;
   start: number;
   duration: number;
+  channels?: TimelineChannel[];
 }
 
 export interface TimelineModel {
@@ -262,6 +271,34 @@ export class TimelineCanvas {
         ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
         ctx.textBaseline = "middle";
         ctx.fillText(clip.label, left + 7, top + h / 2 + 0.5);
+        ctx.restore();
+      }
+
+      // Real per-channel keyframe ticks: a short vertical mark at every channel keyframe
+      // time, drawn along the bar's lower edge so the clip bar shows where keys actually
+      // sit (the per-channel keyframe data from `AnimationChannelDto.times`). Clipped to the
+      // bar so off-bar ticks never bleed.
+      if (clip.channels && clip.channels.length > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(left, top, w, h);
+        ctx.clip();
+        ctx.strokeStyle = withAlpha(accent, 0.85);
+        ctx.lineWidth = 1;
+        const tickTop = top + h - 5;
+        const tickBottom = top + h - 1;
+        ctx.beginPath();
+        for (const channel of clip.channels) {
+          for (const t of channel.times) {
+            const x = Math.round(this.secToX(clip.start + t)) + 0.5;
+            if (x < left || x > left + w) {
+              continue;
+            }
+            ctx.moveTo(x, tickTop);
+            ctx.lineTo(x, tickBottom);
+          }
+        }
+        ctx.stroke();
         ctx.restore();
       }
     }
