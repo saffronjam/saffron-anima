@@ -19,6 +19,7 @@ HDR scene to the range a display can show.
 | [gtao](gtao/) | horizon-based ambient occlusion, modulating only the indirect term | `gtao.slang`; `lighting.slang` · `aoMap` |
 | [contact-shadows](contact-shadows/) | screen-space ray march that darkens the directional direct term | `contact.slang`; `lighting.slang` · `contactMap`, `screenFlags.x` |
 | [ssgi](ssgi/) | one-bounce screen-space indirect radiance added to the ambient term | `ssgi.slang`; `lighting.slang` · `ssgiMap`, `screenFlags.y` |
+| [render-quality-tiers](render-quality-tiers/) | one tier knob (low/medium/high/ultra) driving the SSGI/GTAO/contact step counts + enable flags | `quality.rs` · `QualityTier`; `commands_render.rs` · `set-render-quality` |
 | [motion-vectors](motion-vectors/) | camera + object reprojection velocity for temporal reuse | `motion.slang`; `aa.rs` · `record_motion` |
 | [taa](taa/) | history reprojection + neighbourhood clamp + exponential blend | `taa.slang`; `aa.rs` · `TaaPush` |
 | [tonemap-and-exposure](tonemap-and-exposure/) | exposure, Reinhard, gamma 2.2, in-place on the HDR offscreen | `tonemap.slang`; `overlay.rs` · `TonemapPush` |
