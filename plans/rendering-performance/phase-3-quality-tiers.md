@@ -1,8 +1,37 @@
 # Quality tiers + half-resolution screen-space GI/AO
 
-**Status:** NOT STARTED
+**Status:** CORE COMPLETE (tier system end-to-end); half-res + SSGI ray-count deferred
 **Scope:** Both / Game-first (this *is* the graphics-settings menu; the editor just picks a cheap tier)
 **Depends on:** — (self-contained; Phase 4 consumes its params)
+
+> **Done — the tier system, end to end.** A `RenderQuality` struct + `QualityTier` enum
+> (`rendering/src/quality.rs`: `low`/`medium`/`high`/`ultra`/`custom`) resolves to per-effect
+> parameters the renderer applies via `Ssao::apply_quality` — the SSGI/contact step counts and the
+> SSGI/GTAO/contact enable flags, all runtime push-constants (no shader recompile). The five binary
+> GI toggle commands collapsed to **one knob**: `set-ssao`/`set-ssgi`/`set-contact-shadows` are
+> deleted and replaced by `set-render-quality` + `get-render-quality` (protocol DTOs
+> `SetRenderQualityParams`/`RenderQualityResult`, manifest regenerated, `sa` CLI auto-exposes them);
+> the tier is saved with the project (`renderSettings.quality`, replacing the three bools), reported
+> in `render-stats` (`quality` field), and the editor Render panel shows a Quality dropdown beside
+> anti-aliasing (replacing the three checkboxes). Live-validated: `set-render-quality low` → SSGI/GTAO/
+> contact all off in `render-stats`; `ultra` → all on; a bogus tier → typed error. `clustered`/`ibl`/
+> `ddgi`/RT toggles stay as their own switches (architectural, not quality dials). Engine `cargo
+> clippy --workspace` clean + unit tests (`quality.rs`, `render_quality_tier_applies_echoes_and_rejects_unknown`);
+> editor `bun run check` (tsc) clean + oxlint 0 errors; docs page
+> [render-quality-tiers](../../docs/content/explanations/screen-space-and-post/render-quality-tiers.md) added.
+> The editor UI typechecks/lints but is **unverified live** — needs a `just run` to confirm the
+> dropdown drives the viewport.
+>
+> **Deferred (documented), with rationale:**
+> - **Half-resolution SSGI + GTAO with bilateral upsample** — the biggest single GPU cut (~0.9 ms),
+>   but it needs half-res target allocation + an upsample shader pass (deep GPU/shader work, like
+>   Phase 2's static/dynamic split). The tier already dials SSGI *step count* (the cheap runtime win);
+>   half-res is the next, larger sub-step.
+> - **SSGI ray count as a tier param** — the ray count is a compile-time loop bound in `ssgi.slang`
+>   (not yet a push-constant), so dialing it needs a shader specialization-constant. Deferred with
+>   half-res (same shader pass).
+> - **Editor default tier** left at `high` (no surprise look change). Switching the editor viewport to
+>   a cheaper default is a one-line policy change once the look is confirmed acceptable live.
 
 ## Goal
 
