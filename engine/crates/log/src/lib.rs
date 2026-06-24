@@ -39,8 +39,14 @@ const SUBSYSTEM_WIDTH: usize = 10;
 
 static INIT: Once = Once::new();
 
+/// The default `EnvFilter` directive when `RUST_LOG` is unset: our crates at `debug`, but the
+/// chatty third-party HTTP/TLS stack (pulled in by the editor's connector `reqwest`) pinned to
+/// `warn` so it doesn't drown the engine's own lines.
+const DEFAULT_FILTER: &str =
+    "debug,hyper=warn,hyper_util=warn,reqwest=warn,rustls=warn,h2=warn,tower=warn";
+
 /// Installs the global `tracing` subscriber: an `EnvFilter` (honoring `RUST_LOG`, default
-/// `debug`) feeding the [`CompactFormatter`] to stdout.
+/// [`DEFAULT_FILTER`]) feeding the [`CompactFormatter`] to stdout.
 ///
 /// Idempotent and panic-free — a second call (a re-entered test, a second binary path)
 /// is a no-op rather than the panic a bare `init` would raise.
@@ -50,7 +56,8 @@ pub fn init_logging() {
             .with_writer(std::io::stdout)
             .event_format(CompactFormatter::new());
 
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"));
+        let filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
 
         // `try_init` (not `init`) so a subscriber already set elsewhere can't panic us.
         let _ = registry().with(filter).with(fmt_layer).try_init();
