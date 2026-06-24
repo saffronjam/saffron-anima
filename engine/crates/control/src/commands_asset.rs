@@ -19,13 +19,12 @@ use saffron_assets::{
     asset_bytes, asset_type_name, build_dependency_graph, clear_extraction, create_project_script,
     default_display_name, default_material_asset, delete_unused, extract_sub_asset,
     import_material_folder, load_catalog_material_asset, load_catalog_material_asset_raw,
-    load_material_asset, load_material_asset_raw, lower_graph_to_params, pick_scene_surface,
-    reimport_model, request_thumbnail, save_material_asset, update_material_asset,
-    valid_project_name, viewport_ray,
+    load_material_asset, load_material_asset_raw, lower_graph_to_params, model_render_aabb,
+    pick_scene_surface, reimport_model, request_thumbnail, save_material_asset, scene_render_aabb,
+    update_material_asset, valid_project_name, viewport_ray,
 };
 use saffron_core::Uuid;
 use saffron_geometry::glam::{Vec2, Vec3 as MathVec3};
-use saffron_geometry::world_aabb_from_corners as geom_world_aabb_from_corners;
 use saffron_protocol::{
     AnimationClipDto, AssetAttributionDto, AssetCapabilitiesDto, AssetEntryDto, AssetList,
     AssetMetadataDto, AssetMetadataParams, AssetModelResult, AssetPlacementParams,
@@ -329,52 +328,7 @@ fn scene_render_bounds(
     scene: &mut Scene,
     assets: &mut AssetServer,
 ) -> Option<(MathVec3, MathVec3)> {
-    scene.update_world_transforms();
-    let mut min = MathVec3::splat(f32::MAX);
-    let mut max = MathVec3::splat(f32::MIN);
-    let mut found = false;
-
-    let mut statics: Vec<(Entity, Mesh)> = Vec::new();
-    scene.for_each::<(&Transform, &Mesh), _>(|entity, (_, mesh)| {
-        statics.push((entity, *mesh));
-    });
-    for (entity, mesh) in statics {
-        let Some(mesh_ref) = assets.load_mesh_asset(gpu, mesh.mesh) else {
-            continue;
-        };
-        let model = scene.world_matrix(entity);
-        geom_world_aabb_from_corners(
-            &model,
-            mesh_ref.bounds_min,
-            mesh_ref.bounds_max,
-            &mut min,
-            &mut max,
-        );
-        found = true;
-    }
-
-    let mut skins: Vec<(Entity, SkinnedMesh)> = Vec::new();
-    scene.for_each::<(&Transform, &SkinnedMesh), _>(|entity, (_, skin)| {
-        skins.push((entity, skin.clone()));
-    });
-    for (_, skin) in skins {
-        let Some(mesh_ref) = assets.load_mesh_asset(gpu, skin.mesh) else {
-            continue;
-        };
-        let palette = scene.joint_matrices(&skin);
-        for joint in &palette {
-            geom_world_aabb_from_corners(
-                joint,
-                mesh_ref.bounds_min,
-                mesh_ref.bounds_max,
-                &mut min,
-                &mut max,
-            );
-            found = true;
-        }
-    }
-
-    found.then_some((min, max))
+    scene_render_aabb(gpu, scene, assets)
 }
 
 fn apply_transform(scene: &mut Scene, entity: Entity, transform: Transform) {
@@ -2011,11 +1965,22 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
                 resolve_asset(ctx, &params.material)?
             };
             let scene = ctx.scene_edit.active_scene();
-            if !scene.has_component::<MaterialAssetComponent>(entity) {
-                let _ = scene.add_component(entity, MaterialAssetComponent::default());
+            // Assign to every mesh-bearing entity in the model's forest — the renderer reads
+            // the material off the entity that carries the mesh, which on a multi-node model is
+            // a child of the resolved container, not the container itself. A leaf selection
+            // resolves to just itself; a non-mesh selection still takes the component directly.
+            let mut targets = scene.model_mesh_entities(entity);
+            if targets.is_empty() {
+                targets.push(entity);
             }
-            let _ = scene
-                .with_component_mut::<MaterialAssetComponent, _>(entity, |m| m.material = mat_id);
+            for target in targets {
+                if !scene.has_component::<MaterialAssetComponent>(target) {
+                    let _ = scene.add_component(target, MaterialAssetComponent::default());
+                }
+                let _ = scene.with_component_mut::<MaterialAssetComponent, _>(target, |m| {
+                    m.material = mat_id;
+                });
+            }
             ctx.scene_edit.scene_version += 1;
             Ok(MaterialAssignResult {
                 material: WireUuid(mat_id.value()),
@@ -2633,14 +2598,17 @@ fn enter_asset_preview(
         .instantiate_model(&mut preview, container_id, &meta.name)
         .map_err(|e| Error::command(e.to_string()))?;
 
-    let animatable = preview.animatable_descendant(root);
-    let rigged = preview.has_component::<SkinnedMesh>(animatable);
-    if !rigged && !preview.has_component::<Mesh>(animatable) {
+    // A model is renderable when any entity in its forest carries a mesh — the meshes of a
+    // multi-node forest ride child nodes, so probing only the resolved root rejects them.
+    if !preview.model_has_renderable(root) {
         return Err(Error::command(format!(
             "model '{}' has no renderable mesh — re-import the asset",
             meta.name
         )));
     }
+    let rig_entity = preview.model_rig_entity(root);
+    // The animation authority (SkinnedMesh- or AnimationPlayer-bearing entity) the clip drives.
+    let animatable = preview.animatable_descendant(root);
 
     // Open-from-clip: that clip becomes the active clip; the model opens paused at rest.
     if entry_type == AssetType::Animation && preview.has_component::<AnimationPlayer>(animatable) {
@@ -2658,9 +2626,9 @@ fn enter_asset_preview(
         .unwrap_or(0);
     let mut bone_by_node = Vec::new();
     let mut bones = Vec::new();
-    if rigged {
+    if let Some(rig_entity) = rig_entity {
         let bone_uuids = preview
-            .with_component::<SkinnedMesh, _>(animatable, |skin| skin.bones.clone())
+            .with_component::<SkinnedMesh, _>(rig_entity, |skin| skin.bones.clone())
             .unwrap_or_default();
         let joint_nodes: Vec<i32> = meta
             .skin
@@ -2793,6 +2761,8 @@ pub(crate) fn compute_preview_bounds(ctx: &mut EngineContext<'_>, root: Entity) 
         radius: 1.0,
         min_y: 0.0,
     };
+    // The whole forest's world AABB — every mesh-bearing node, skinned through the joint
+    // palette — not a single resolved entity's box.
     let preview = ctx
         .scene_edit
         .preview_scene
@@ -2801,35 +2771,18 @@ pub(crate) fn compute_preview_bounds(ctx: &mut EngineContext<'_>, root: Entity) 
     if !preview.valid(root) {
         return out;
     }
-    let mesh_entity = preview.animatable_descendant(root);
-    let mesh_id = preview
-        .with_component::<SkinnedMesh, _>(mesh_entity, |s| s.mesh)
-        .ok()
-        .or_else(|| {
-            preview
-                .with_component::<Mesh, _>(mesh_entity, |m| m.mesh)
-                .ok()
-        })
-        .unwrap_or(Uuid(0));
-    preview.update_world_transforms();
-    let world = preview.world_matrix(mesh_entity);
-    let mesh_world_translation = preview.world_translation(mesh_entity);
-
     let assets = &mut *ctx.assets;
-    let mut gpu_bounds = None;
-    if mesh_id.value() != 0 {
-        ctx.renderer.with_gpu_uploader(&mut |gpu| {
-            if let Some(mesh) = assets.load_mesh_asset(gpu, mesh_id) {
-                gpu_bounds = Some((mesh.bounds_min, mesh.bounds_max));
-            }
-        });
-    }
-    let Some((bmin, bmax)) = gpu_bounds else {
-        out.center = mesh_world_translation;
+    let mut bounds = None;
+    ctx.renderer.with_gpu_uploader(&mut |gpu| {
+        bounds = model_render_aabb(gpu, preview, assets, root);
+    });
+
+    let Some((lo, hi)) = bounds else {
+        // No resolvable mesh: fall back to the model root's position.
+        out.center = preview.world_translation(root);
         out.min_y = out.center.y - 1.0;
         return out;
     };
-    let (lo, hi) = world_aabb_from_corners(world, bmin, bmax);
     out.center = (lo + hi) * 0.5;
     out.radius = (hi - lo).length() * 0.5;
     out.min_y = lo.y;
@@ -2837,30 +2790,6 @@ pub(crate) fn compute_preview_bounds(ctx: &mut EngineContext<'_>, root: Entity) 
         out.radius = 1.0;
     }
     out
-}
-
-/// The world-space AABB of a local box transformed by `world`, expanded over its eight
-/// corners.
-fn world_aabb_from_corners(
-    world: saffron_geometry::glam::Mat4,
-    lo: saffron_geometry::glam::Vec3,
-    hi: saffron_geometry::glam::Vec3,
-) -> (saffron_geometry::glam::Vec3, saffron_geometry::glam::Vec3) {
-    use saffron_geometry::glam::{Vec3, Vec4};
-
-    let mut out_lo = Vec3::splat(f32::MAX);
-    let mut out_hi = Vec3::splat(f32::MIN);
-    for i in 0..8 {
-        let corner = Vec3::new(
-            if i & 1 == 0 { lo.x } else { hi.x },
-            if i & 2 == 0 { lo.y } else { hi.y },
-            if i & 4 == 0 { lo.z } else { hi.z },
-        );
-        let world_corner = (world * Vec4::new(corner.x, corner.y, corner.z, 1.0)).truncate();
-        out_lo = out_lo.min(world_corner);
-        out_hi = out_hi.max(world_corner);
-    }
-    (out_lo, out_hi)
 }
 
 /// A thin floor slab centered under the model's feet.
