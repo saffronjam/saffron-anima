@@ -94,7 +94,7 @@ pub struct ScriptLog {
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use saffron_core::Uuid;
-use saffron_scene::{CameraView, Entity, IdComponent, Scene};
+use saffron_scene::{AnimationPlayer, CameraView, Entity, IdComponent, Scene};
 
 use crate::context::SceneEditContext;
 use crate::error::{Error, Result};
@@ -156,6 +156,21 @@ impl SceneEditContext {
         let mut play = Scene::new();
         play.catalog = self.scene.catalog.clone();
         play.scene_from_json(&self.registry, &snapshot)?;
+
+        // Play starts from a clean playback state: the editor Timeline preview (scrubbed time
+        // / playing) is transient and must not leak in. Each player advances iff its authored
+        // `autoplay` is set, from t = 0, with all transition/preview runtime state cleared.
+        // The play scene is a throwaway duplicate (`stop_play` discards it), so this never
+        // touches the authored scene.
+        play.for_each::<&mut AnimationPlayer, _>(|_, p| {
+            p.time = 0.0;
+            p.playing = p.autoplay;
+            p.preview_in_edit = false;
+            p.ping_forward = true;
+            p.prev_clip = Uuid(0);
+            p.transition = 0.0;
+            p.transition_duration = 0.0;
+        });
 
         self.had_primary_camera = play.primary_camera().is_some();
         let selected_uuid = self.selected_uuid_in(&self.scene);
@@ -410,6 +425,62 @@ mod tests {
         let (mut ctx, _cube, _uuid, _count) = fixture();
         ctx.enter_play().unwrap();
         assert!(ctx.had_primary_camera, "the seeded camera reads as primary");
+    }
+
+    /// Entering Play resets each player to a clean state: the editor preview's scrubbed
+    /// `time` / `playing` never leak in — the play twin starts at `time = 0` and
+    /// `playing = autoplay`.
+    #[test]
+    fn enter_play_resets_player_time_and_plays_only_when_autoplay() {
+        // An entity whose player looks like a left-running editor preview (playing, scrubbed),
+        // with autoplay OFF: the play twin must be reset to stopped at time 0.
+        let mut ctx = SceneEditContext::new();
+        let e = ctx.scene.create_entity("Anim");
+        ctx.scene
+            .add_component(
+                e,
+                AnimationPlayer {
+                    playing: true,
+                    time: 5.0,
+                    autoplay: false,
+                    preview_in_edit: true,
+                    ..AnimationPlayer::default()
+                },
+            )
+            .unwrap();
+        let uuid = ctx.scene.component::<IdComponent>(e).unwrap().id.0;
+        ctx.enter_play().unwrap();
+        let play = ctx.play_scene.as_ref().expect("play scene");
+        let twin = play.find_entity_by_uuid(Uuid(uuid)).expect("twin");
+        let p = play.component::<AnimationPlayer>(twin).unwrap();
+        assert_eq!(p.time, 0.0, "the scrubbed playhead resets to 0");
+        assert!(
+            !p.playing,
+            "a preview-only player does not auto-play in Play"
+        );
+        assert!(!p.preview_in_edit, "preview flag is cleared for Play");
+
+        // With autoplay ON, the same reset leaves the player advancing from time 0.
+        let mut ctx2 = SceneEditContext::new();
+        let e2 = ctx2.scene.create_entity("Anim2");
+        ctx2.scene
+            .add_component(
+                e2,
+                AnimationPlayer {
+                    playing: false,
+                    time: 9.0,
+                    autoplay: true,
+                    ..AnimationPlayer::default()
+                },
+            )
+            .unwrap();
+        let uuid2 = ctx2.scene.component::<IdComponent>(e2).unwrap().id.0;
+        ctx2.enter_play().unwrap();
+        let play2 = ctx2.play_scene.as_ref().expect("play scene");
+        let twin2 = play2.find_entity_by_uuid(Uuid(uuid2)).expect("twin");
+        let p2 = play2.component::<AnimationPlayer>(twin2).unwrap();
+        assert_eq!(p2.time, 0.0, "play always starts at time 0");
+        assert!(p2.playing, "autoplay starts the clip in Play");
     }
 
     #[test]

@@ -96,6 +96,10 @@ pub struct SceneEditContext {
     pub skeleton_overlay: SkeletonOverlayOptions,
     /// The bounds / scene-AABB / light-volume viewport overlays.
     pub debug_overlays: DebugOverlayOptions,
+    /// The asset-store enablement block (enabled connector ids + non-secret config),
+    /// opaque JSON persisted in `project.json`; the editor owns its shape, credentials
+    /// never live here.
+    pub stores: serde_json::Value,
     /// Pending smoothed material edits, one entry per entity.
     pub material_smoothing: Vec<MaterialSmoothTarget>,
     /// Pending smoothed transform edits, one entry per entity.
@@ -181,6 +185,7 @@ impl Default for SceneEditContext {
             native_gizmo: NativeGizmoState::default(),
             skeleton_overlay: SkeletonOverlayOptions::default(),
             debug_overlays: DebugOverlayOptions::default(),
+            stores: serde_json::Value::Null,
             material_smoothing: Vec::new(),
             transform_smoothing: Vec::new(),
             fly_input: SceneEditCameraInput::default(),
