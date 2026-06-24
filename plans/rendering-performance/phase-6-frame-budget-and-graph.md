@@ -1,8 +1,32 @@
 # Frame-budget controllers + render-graph hygiene
 
-**Status:** NOT STARTED
+**Status:** CORE COMPLETE (auto-quality budget controller); dynamic-res + pass-culling + async-PSO deferred
 **Scope:** Both / Game (hitting frame budget on weak hardware ships in `saffron-player`)
 **Depends on:** Phase 3 (tier targets feed the auto-stepping variant)
+
+> **Done — the frame-budget controller (auto-quality tier stepping).** `rendering/src/budget.rs`'s
+> `BudgetController` turns the per-frame work-time measurement (busy + GPU-fence wait, the signal the
+> engine already records) into a tier step: a sustained over-budget run steps the tier down, a
+> sustained-headroom run steps up, a ≥2×-budget hitch panics down at once, with consecutive-frame
+> hysteresis + a post-switch cooldown so it never oscillates; it never auto-picks `Ultra` or drops
+> below `Low`. It runs in `Renderer::finalize_frame_telemetry` only when `PerfConfig::auto_quality`
+> is on (a `set-perf-config` field, off by default), and its only actuator is `set_render_quality`
+> (Phase 3) — no new render path. Unit-tested (5 cases in `budget.rs`); **live-validated**: with
+> `auto_quality=true` + a 4 ms budget on llvmpipe (work ≫ budget) the tier auto-stepped `high → low`.
+> Exposed over `sa set-perf-config --autoQuality true`. Build + clippy clean.
+>
+> **Deferred (documented), with rationale — these are the deep, visually-unverifiable parts:**
+> - **Dynamic *resolution* (scale the offscreen extent to the budget)** — the proper technique needs a
+>   fixed max target + a scaled render rect (not per-frame target realloc); deeper GPU work whose
+>   output I can't validate here. The tier-stepping controller is the safe budget-holding form; the
+>   resolution variant is a follow-on (the controller's policy generalizes to it).
+> - **Render-graph pass culling** — **not safe to do blind here.** The graph's outputs are consumed
+>   *externally* (the present blit + the shm readback sample the offscreen *outside* the graph), so
+>   backward-reachability within the graph would see them as unconsumed and cull live passes →
+>   broken render. It needs an explicit "output/never-cull" marking on every externally-consumed
+>   resource first; a real change requiring visual validation. Deferred rather than risk a regression.
+> - **Async PSO compilation** — threading the PSO cache off the present path risks races; a focused,
+>   separately-validated change. Deferred.
 
 ## Goal
 
