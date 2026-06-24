@@ -79,8 +79,8 @@ pub use project::{
 };
 pub use render_material::{ResolvedMaterials, build_submesh_material};
 pub use render_scene::{
-    RendererScene, SceneRenderer, SceneSurfaceHit, pick_entity, pick_scene_surface, render_scene,
-    render_scene_with_transient, viewport_ray,
+    RendererScene, SceneRenderer, SceneSurfaceHit, model_render_aabb, pick_entity,
+    pick_scene_surface, render_scene, render_scene_with_transient, scene_render_aabb, viewport_ray,
 };
 pub use scan::detect_material_role;
 pub use spawn::{ModelSpawnInput, imported_nodes_from_json, imported_skin_from_json, spawn_model};

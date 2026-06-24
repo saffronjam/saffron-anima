@@ -413,6 +413,82 @@ fn append_editor_camera_models<R: SceneRenderer>(
 /// `renderer.skinning_enabled()` — off, the frame is byte-identical to a build without the
 /// skinned path. The static RT instances (carrying `item.model`) split from the skinned ones
 /// (which ride the draw list with identity).
+/// The world-space AABB of a model: the union over every renderable mesh in `root`'s subtree
+/// ([`Scene::model_mesh_entities`]). Static meshes transform their rest box by the entity's
+/// world matrix; skinned meshes union the bind box through each joint matrix (matching what
+/// the screen shows — the skinned vertex follows the palette, not the mesh node's world
+/// transform). `None` when no mesh in the subtree resolves to a loaded asset.
+///
+/// This is the forest-wide counterpart to a single-entity bounds probe: a multi-node model
+/// frames around its whole assembled geometry, not one node.
+pub fn model_render_aabb(
+    gpu: &dyn GpuUploader,
+    scene: &mut Scene,
+    assets: &mut AssetServer,
+    root: Entity,
+) -> Option<(Vec3, Vec3)> {
+    let entities = scene.model_mesh_entities(root);
+    render_aabb_of(gpu, scene, assets, &entities)
+}
+
+/// The world-space AABB of every renderable mesh in the scene (the whole-scene union).
+pub fn scene_render_aabb(
+    gpu: &dyn GpuUploader,
+    scene: &mut Scene,
+    assets: &mut AssetServer,
+) -> Option<(Vec3, Vec3)> {
+    let mut entities: Vec<Entity> = Vec::new();
+    scene.for_each::<&MeshComponent, _>(|entity, _| entities.push(entity));
+    scene.for_each::<&SkinnedMesh, _>(|entity, _| entities.push(entity));
+    render_aabb_of(gpu, scene, assets, &entities)
+}
+
+/// The shared AABB union: folds each entity's mesh box into `(min, max)`, picking the skinned
+/// (joint-palette) or static (world-matrix) path per entity. The single implementation behind
+/// both [`model_render_aabb`] (a subtree) and [`scene_render_aabb`] (the whole scene).
+fn render_aabb_of(
+    gpu: &dyn GpuUploader,
+    scene: &mut Scene,
+    assets: &mut AssetServer,
+    entities: &[Entity],
+) -> Option<(Vec3, Vec3)> {
+    scene.update_world_transforms();
+    let mut min = Vec3::splat(f32::MAX);
+    let mut max = Vec3::splat(f32::MIN);
+    let mut found = false;
+    for &entity in entities {
+        if let Ok(skin) = scene.with_component::<SkinnedMesh, _>(entity, SkinnedMesh::clone) {
+            let Some(mesh_ref) = assets.load_mesh_asset(gpu, skin.mesh) else {
+                continue;
+            };
+            for joint in scene.joint_matrices(&skin) {
+                world_aabb_from_corners(
+                    &joint,
+                    mesh_ref.bounds_min,
+                    mesh_ref.bounds_max,
+                    &mut min,
+                    &mut max,
+                );
+                found = true;
+            }
+        } else if let Ok(mesh) = scene.component::<MeshComponent>(entity) {
+            let Some(mesh_ref) = assets.load_mesh_asset(gpu, mesh.mesh) else {
+                continue;
+            };
+            let model = scene.world_matrix(entity);
+            world_aabb_from_corners(
+                &model,
+                mesh_ref.bounds_min,
+                mesh_ref.bounds_max,
+                &mut min,
+                &mut max,
+            );
+            found = true;
+        }
+    }
+    found.then_some((min, max))
+}
+
 pub fn render_scene<R: SceneRenderer>(
     renderer: &mut R,
     scene: &mut Scene,
