@@ -574,8 +574,10 @@ pub fn is_read_only_command(name: &str) -> bool {
         // asset / material / model introspection
         | "model-info" | "asset-references" | "asset-usages" | "probe-asset"
         | "material-get" | "material-list" | "viewport-native-info" | "thumbnail-cache"
-        // spatial queries (cast a ray, read back a hit — no scene change)
-        | "raycast" | "shapecast" | "pick" | "pick-skeleton-joint"
+        // spatial queries (cast a ray, read back a hit — no scene change). `pick` is excluded:
+        // it sets the selection, which changes the rendered gizmo / skeleton overlay, so a
+        // viewport-click select must request a redraw under the reactive loop.
+        | "raycast" | "shapecast" | "pick-skeleton-joint"
     )
 }
 

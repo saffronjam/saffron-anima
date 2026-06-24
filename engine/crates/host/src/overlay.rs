@@ -506,11 +506,14 @@ fn build_skeleton_overlay(
     }
 
     let scene = editor.active_scene();
-    if !scene.valid(target) || !scene.has_component::<SkinnedMesh>(target) {
+    // The SkinnedMesh rides a child mesh entity, not the selected/preview container root, so
+    // resolve the rig within the model's forest. An unrigged model resolves to nothing (no
+    // skeleton to draw), which is correct.
+    let Some(rig) = scene.model_rig_entity(target) else {
         return;
-    }
+    };
     let bone_handles = scene
-        .with_component::<SkinnedMesh, _>(target, |skin| skin.bone_handles.clone())
+        .with_component::<SkinnedMesh, _>(rig, |skin| skin.bone_handles.clone())
         .unwrap_or_default();
 
     const BONE_COLOR: Vec4 = Vec4::new(0.55, 0.78, 1.0, 0.95);
@@ -1811,15 +1814,56 @@ mod tests {
         assert!(!ctx.skeleton_overlay.show);
         build_skeleton_overlay(&mut ctx, &cam, 1280, 720, &mut v);
         assert!(v.is_empty(), "skeleton overlay off → no geometry");
-        // On, but the selection has no SkinnedMesh → still nothing (self-gates).
+        // On, but the selection has no rig anywhere in its forest → still nothing.
         ctx.skeleton_overlay.show = true;
+        let unrigged = ctx.scene.create_entity("Unrigged");
+        ctx.set_selection(unrigged);
         let mut v2 = Vec::new();
         build_skeleton_overlay(&mut ctx, &cam, 1280, 720, &mut v2);
         assert!(
             v2.is_empty(),
-            "skeleton overlay self-gates when the selection has no SkinnedMesh"
+            "skeleton overlay draws nothing for a selection with no rig in its subtree"
         );
         // The play state never blocks the skeleton overlay (it draws in every state).
         assert_eq!(ctx.play_state, PlayState::Edit);
+    }
+
+    /// The rig the overlay must draw rides a child mesh entity, while the selection (and the
+    /// preview root) is the model's container — the shape every standard rig spawns as. The
+    /// overlay resolves the rig within the forest, so it emits geometry rather than blanking.
+    #[test]
+    fn skeleton_overlay_draws_for_a_rig_on_a_child_of_the_selected_container() {
+        let mut ctx = SceneEditContext::new();
+        let cam = test_camera(Vec3::new(3.0, 2.5, 6.0));
+        ctx.skeleton_overlay.show = true;
+
+        let container = ctx.scene.create_entity("Rig");
+        let mesh_entity = ctx.scene.create_entity("RigMesh");
+        let bone = ctx.scene.create_entity("Bone");
+        ctx.scene
+            .set_parent(mesh_entity, Some(container), false)
+            .unwrap();
+        ctx.scene.set_parent(bone, Some(mesh_entity), false).unwrap();
+        // Add the rig after the last reparent: `set_parent` relinks the hierarchy, which would
+        // rebuild `bone_handles` from `skin.bones`; seeding the cache directly keeps it.
+        ctx.scene
+            .add_component(
+                mesh_entity,
+                SkinnedMesh {
+                    mesh: saffron_core::Uuid(1),
+                    bone_handles: vec![bone],
+                    ..SkinnedMesh::default()
+                },
+            )
+            .unwrap();
+        ctx.scene.update_world_transforms();
+        ctx.set_selection(container);
+
+        let mut v = Vec::new();
+        build_skeleton_overlay(&mut ctx, &cam, 1280, 720, &mut v);
+        assert!(
+            !v.is_empty(),
+            "the overlay draws the rig that rides a child of the selected container"
+        );
     }
 }
