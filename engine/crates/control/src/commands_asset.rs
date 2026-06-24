@@ -27,15 +27,16 @@ use saffron_core::Uuid;
 use saffron_geometry::glam::{Vec2, Vec3 as MathVec3};
 use saffron_geometry::world_aabb_from_corners as geom_world_aabb_from_corners;
 use saffron_protocol::{
-    AnimationClipDto, AssetCapabilitiesDto, AssetEntryDto, AssetList, AssetMetadataDto,
-    AssetMetadataParams, AssetModelResult, AssetPlacementParams, AssetPlacementPhaseDto,
-    AssetPlacementResult, AssetRef, AssetReferencesParams, AssetReferencesResult, AssetSlotDto,
-    AssetTypeDto, AssetUsageDto, AssetUsagesParams, AssetUsagesResult, AssignAssetParams,
-    AssignAssetResult, BoneDto, CleanAssetsParams, CleanCandidateDto, CleanReport,
-    ClearExtractionParams, CreateAssetFolderParams, CreateScriptParams, CreateScriptResult,
-    DeleteAssetFolderParams, DeleteAssetParams, DeleteAssetResult, DeleteUnusedParams,
-    DeleteUnusedResult, EmptyParams, EntityRef, ExportAppParams, ExportAppResult,
-    ExtractSubAssetParams, GetAssetModelParams, ImportModelResult, ImportTextureResult,
+    AnimationClipDto, AssetAttributionDto, AssetCapabilitiesDto, AssetEntryDto, AssetList,
+    AssetMetadataDto, AssetMetadataParams, AssetModelResult, AssetPlacementParams,
+    AssetPlacementPhaseDto, AssetPlacementResult, AssetRef, AssetReferencesParams,
+    AssetReferencesResult, AssetSlotDto, AssetTypeDto, AssetUsageDto, AssetUsagesParams,
+    AssetUsagesResult, AssignAssetParams, AssignAssetResult, BoneDto, CleanAssetsParams,
+    CleanCandidateDto, CleanReport, ClearExtractionParams, CreateAssetFolderParams,
+    CreateScriptParams, CreateScriptResult, DeleteAssetFolderParams, DeleteAssetParams,
+    DeleteAssetResult, DeleteUnusedParams, DeleteUnusedResult, EmptyParams, EntityRef,
+    ExportAppParams, ExportAppResult, ExtractSubAssetParams, GetAssetModelParams,
+    ImportModelParams, ImportModelResult, ImportTextureParams, ImportTextureResult,
     InstantiateModelParams, MaterialAssignParams, MaterialAssignResult, MaterialCompileParams,
     MaterialCompileResult, MaterialCookResult, MaterialCreateInstanceParams, MaterialCreateParams,
     MaterialCreateResult, MaterialGetParams, MaterialGetResult, MaterialImportParams,
@@ -44,15 +45,17 @@ use saffron_protocol::{
     MaterialUpdateParams, MaterialUpdateResult, ModelInfoParams, ModelInfoResult, ModelSubAssetDto,
     MoveAssetParams, NewProjectParams, OptionalPathParams, PathParams, PathResult,
     PlacementTransformDto, PlayStateResult, PreviewRenderParams, PreviewRenderResult,
-    ProjectInfoDto, QuitResult, ReimportModelParams, ReimportModelResult, RenameAssetFolderParams,
-    RenameAssetParams, ScanAssetsResult, ScreenshotParams, ScreenshotResult, ScreenshotTargetDto,
-    SetActiveViewParams, SetActiveViewResult, ThumbnailCacheParams, ThumbnailCacheResult,
-    ThumbnailParams, ThumbnailResult, Uuid as WireUuid, Vec3, Vec4,
+    ProjectInfoDto, ProjectStoresDto, QuitResult, ReimportModelParams, ReimportModelResult,
+    RenameAssetFolderParams, RenameAssetParams, ScanAssetsResult, ScreenshotParams,
+    ScreenshotResult, ScreenshotTargetDto, SetActiveViewParams, SetActiveViewResult,
+    ThumbnailCacheParams, ThumbnailCacheResult, ThumbnailParams, ThumbnailResult, Uuid as WireUuid,
+    Vec3, Vec4,
 };
 use saffron_rendering::{PngTransfer, ViewId};
 use saffron_scene::{
-    AnimationPlayer, AssetEntry, AssetType, DirectionalLight, Entity, IdComponent, Material,
-    MaterialAsset as MaterialAssetComponent, Mesh, Name, Scene, SkinnedMesh, SkyMode, Transform,
+    AnimationPlayer, AssetEntry, AssetType, Attribution, Colorspace, DirectionalLight, Entity,
+    IdComponent, Material, MaterialAsset as MaterialAssetComponent, Mesh, Name, Scene, SkinnedMesh,
+    SkyMode, Transform,
 };
 use saffron_sceneedit::{PlacementPreview, PlayState, SceneEditCamera};
 use serde_json::{Value, json};
@@ -386,6 +389,33 @@ fn placement_transform_dto(transform: &Transform) -> PlacementTransformDto {
     }
 }
 
+/// Parses the opaque `stores` sidecar block into the wire DTO, defaulting when absent.
+fn stores_dto_from_value(value: &serde_json::Value) -> ProjectStoresDto {
+    serde_json::from_value(value.clone()).unwrap_or_default()
+}
+
+/// Maps an `import-texture` colorspace hint to a `Colorspace`; `auto`/absent → heuristic.
+fn colorspace_from_str(value: Option<&str>) -> Option<Colorspace> {
+    match value.map(|v| v.to_ascii_lowercase()).as_deref() {
+        Some("srgb") => Some(Colorspace::Srgb),
+        Some("linear") => Some(Colorspace::Linear),
+        Some("hdr") => Some(Colorspace::Hdr),
+        _ => None,
+    }
+}
+
+/// Converts a wire attribution DTO into the catalog's `Attribution`.
+fn attribution_from_dto(dto: AssetAttributionDto) -> Attribution {
+    Attribution {
+        license_id: dto.license_id,
+        requires_attribution: dto.requires_attribution,
+        license_url: dto.license_url,
+        author: dto.author,
+        source_url: dto.source_url,
+        store_id: dto.store_id,
+    }
+}
+
 /// Rebuilds the catalog's `by_id` index after an in-place `entries` mutation.
 fn rebuild_asset_index(catalog: &mut saffron_scene::AssetCatalog) {
     catalog.by_id.clear();
@@ -405,6 +435,19 @@ fn asset_dto(entry: &AssetEntry) -> AssetEntryDto {
         container: (entry.container.value() != 0).then(|| WireUuid(entry.container.value())),
         duration: (entry.asset_type == AssetType::Animation).then_some(entry.duration),
         rigged: entry.rigged.then_some(true),
+        attribution: entry.attribution.as_ref().map(attribution_to_dto),
+    }
+}
+
+/// Converts catalog `Attribution` into the wire DTO.
+fn attribution_to_dto(attribution: &Attribution) -> AssetAttributionDto {
+    AssetAttributionDto {
+        license_id: attribution.license_id.clone(),
+        requires_attribution: attribution.requires_attribution,
+        license_url: attribution.license_url.clone(),
+        author: attribution.author.clone(),
+        source_url: attribution.source_url.clone(),
+        store_id: attribution.store_id.clone(),
     }
 }
 
@@ -693,6 +736,7 @@ fn apply_loaded_project(
             &mut ctx.scene_edit.debug_overlays,
             &sidecar.debug_overlays,
         );
+        ctx.scene_edit.stores = sidecar.stores.clone();
     }
     ctx.scene_edit.scene_version += 1;
     ctx.scene_edit.script_input = saffron_scene::ScriptInputState::default();
@@ -857,7 +901,9 @@ fn find_runtime_lib(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
         .collect();
     dirs.extend(["/usr/lib64", "/usr/lib", "/lib64", "/lib"].map(PathBuf::from));
-    dirs.into_iter().map(|dir| dir.join(name)).find(|p| p.exists())
+    dirs.into_iter()
+        .map(|dir| dir.join(name))
+        .find(|p| p.exists())
 }
 
 /// Copies one file, creating the destination's parent directory first.
@@ -1066,16 +1112,33 @@ fn build_bone_tree(meta: &ContainerMetadata) -> Vec<BoneDto> {
     bones
 }
 
-/// The animation sub-asset clips a container carries (the `get-asset-model` clip walk).
-fn container_clips(meta: &ContainerMetadata) -> Vec<AnimationClipDto> {
-    meta.sub_assets
+/// The animation sub-asset clips a container carries (the `get-asset-model` clip walk), each
+/// with its real per-channel keyframe data loaded from the clip. No live forest here, so
+/// channel labels are the raw glTF target names.
+fn container_clips(
+    assets: &mut saffron_assets::AssetServer,
+    meta: &ContainerMetadata,
+) -> Vec<AnimationClipDto> {
+    let subs: Vec<(u64, String, f32)> = meta
+        .sub_assets
         .iter()
         .filter(|sub| sub.asset_type == AssetType::Animation)
-        .map(|sub| AnimationClipDto {
-            id: WireUuid(sub.sub_id.value()),
-            name: sub.name.clone(),
-            duration: sub.duration,
-            tracks: sub.tracks,
+        .map(|sub| (sub.sub_id.value(), sub.name.clone(), sub.duration))
+        .collect();
+    subs.into_iter()
+        .map(|(sub_id, name, duration)| {
+            let channels = assets
+                .load_anim_clip(saffron_core::Uuid(sub_id))
+                .map(|clip| {
+                    crate::commands_animation::channels_of(&clip, |track| track.target_name.clone())
+                })
+                .unwrap_or_default();
+            AnimationClipDto {
+                id: WireUuid(sub_id),
+                name,
+                duration,
+                channels,
+            }
         })
         .collect()
 }
@@ -1174,9 +1237,9 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
         },
     );
 
-    reg.register::<PathParams, ImportModelResult>(
+    reg.register::<ImportModelParams, ImportModelResult>(
         "import-model",
-        "import-model {path}",
+        "import-model {path} — optional store attribution",
         |ctx, params| {
             if params.path.is_empty() {
                 return Err(Error::command("missing 'path'"));
@@ -1189,6 +1252,11 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
                 .assets
                 .import_model(&params.path, saffron_assets::ImportOptions::default())
                 .map_err(|e| Error::command(e.to_string()))?;
+            if let Some(attribution) = params.attribution {
+                ctx.assets
+                    .catalog
+                    .set_attribution(bake.model_id, attribution_from_dto(attribution));
+            }
             let name = ctx
                 .assets
                 .catalog
@@ -1256,19 +1324,20 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
         },
     );
 
-    reg.register::<PathParams, ImportTextureResult>(
+    reg.register::<ImportTextureParams, ImportTextureResult>(
         "import-texture",
-        "import-texture {path}",
+        "import-texture {path} [colorspace]",
         |ctx, params| {
             if params.path.is_empty() {
                 return Err(Error::command("missing 'path'"));
             }
             require_project_loaded(ctx)?;
+            let colorspace = colorspace_from_str(params.colorspace.as_deref());
             let assets = &mut *ctx.assets;
             let path = params.path.clone();
             let mut result = None;
             ctx.renderer.with_gpu_uploader(&mut |gpu| {
-                result = Some(assets.import_texture(gpu, &path));
+                result = Some(assets.import_texture(gpu, &path, colorspace));
             });
             let id = result
                 .ok_or_else(|| Error::command("upload seam unavailable"))?
@@ -1482,7 +1551,7 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
             let node_count = meta.nodes.as_array().map_or(0, Vec::len);
             let has_rig = !meta.skin.is_null();
             let bones = if has_rig { build_bone_tree(&meta) } else { Vec::new() };
-            let clips = container_clips(&meta);
+            let clips = container_clips(ctx.assets, &meta);
             let mesh_count = meta
                 .sub_assets
                 .iter()
@@ -1968,6 +2037,11 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
             let imported = result
                 .ok_or_else(|| Error::command("upload seam unavailable"))?
                 .map_err(|e| Error::command(e.to_string()))?;
+            if let Some(attribution) = params.attribution {
+                ctx.assets
+                    .catalog
+                    .set_attribution(imported.material, attribution_from_dto(attribution));
+            }
             ctx.scene_edit.scene_version += 1;
             Ok(MaterialImportResultDto {
                 id: WireUuid(imported.material.value()),
@@ -2307,6 +2381,7 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
                 debug_overlays: saffron_sceneedit::debug_overlays_to_json(
                     &ctx.scene_edit.debug_overlays,
                 ),
+                stores: ctx.scene_edit.stores.clone(),
             };
             let host = RendererProjectHost {
                 renderer: ctx.renderer,
@@ -2360,6 +2435,23 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
             let path = ctx.scene_edit.project_path.clone();
             let project = load_project_into(ctx, &path)?;
             Ok(project_dto(&project))
+        },
+    );
+
+    reg.register::<EmptyParams, ProjectStoresDto>(
+        "get-stores",
+        "get-stores — the project's enabled asset-store connectors",
+        |ctx, _params| Ok(stores_dto_from_value(&ctx.scene_edit.stores)),
+    );
+
+    reg.register::<ProjectStoresDto, ProjectStoresDto>(
+        "set-stores",
+        "set-stores {enabled} — set the project's enabled asset-store connectors",
+        |ctx, params| {
+            require_project_loaded(ctx)?;
+            ctx.scene_edit.stores =
+                serde_json::to_value(&params).unwrap_or(serde_json::Value::Null);
+            Ok(params)
         },
     );
 
@@ -2489,6 +2581,7 @@ fn load_project_into(ctx: &mut EngineContext<'_>, path: &str) -> Result<ProjectI
         &mut ctx.scene_edit.debug_overlays,
         &sidecar.debug_overlays,
     );
+    ctx.scene_edit.stores = sidecar.stores.clone();
     ctx.scene_edit.scene_version += 1;
     ctx.scene_edit.script_input = saffron_scene::ScriptInputState::default();
     ctx.scene_edit.set_selection(Entity::NULL);

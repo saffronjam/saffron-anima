@@ -10,19 +10,27 @@
 //! preview-floor helpers from `commands_asset`.
 //!
 //! The handlers drive the per-rig [`AnimationPlayer`] and the overlay render state — a thin
-//! command surface over the animation-player runtime. The editor selects a model by its
-//! container root; the player / foot-IK / state live on the rig descendant, so every
-//! transport command resolves to [`Scene::animatable_descendant`] first.
+//! command surface over the animation-player runtime. A model's player / foot-IK / state may
+//! live on the container root or a rig descendant while the selection is any entity in the
+//! forest (e.g. a `Morph` mesh child), so every transport command resolves to the model's
+//! single authority via [`Scene::model_player`] first — never a leaf that would spawn a rival
+//! player.
 
+use saffron_geometry::{AnimClip, AnimPath, AnimTarget, AnimTrack};
 use saffron_protocol::{
-    AnimationClipDto, AnimationStateParams, AnimationStateResult, AssetPreviewOptionsResult,
-    DebugOverlaysParams, DebugOverlaysResult, EmptyParams, FootIkResult, GetFootIkParams,
-    ListClipsParams, ListClipsResult, PickSkeletonJointParams, PickSkeletonJointResult,
-    PlayAnimationParams, SeekAnimationParams, SetAnimationLoopParams, SetAnimationPlayingParams,
-    SetAssetPreviewOptionsParams, SetFootIkParams, SetSkeletonHighlightParams,
-    SetSkeletonOverlayParams, SkeletonOverlayResult, Uuid,
+    AnimationChannelDto, AnimationClipDto, AnimationStateParams, AnimationStateResult,
+    AssetPreviewOptionsResult, ClipBindingsResult, DebugOverlaysParams, DebugOverlaysResult,
+    EmptyParams, FootIkResult, GetFootIkParams, GetMorphWeightsParams, ListClipBindingsParams,
+    ListClipsParams, ListClipsResult, MorphWeightsResult, PickSkeletonJointParams,
+    PickSkeletonJointResult, PlayAnimationParams, SeekAnimationParams, SetAnimationLoopParams,
+    SetAnimationPlayingParams, SetAssetPreviewOptionsParams, SetFootIkParams,
+    SetMorphWeightsParams, SetSkeletonHighlightParams, SetSkeletonOverlayParams,
+    SkeletonOverlayResult, Uuid,
 };
-use saffron_scene::{AnimationPlayer, AssetType, Entity, FootIk, Wrap};
+use saffron_scene::{
+    AnimationPlayer, AssetType, Entity, FootIk, MorphComponent, MorphWeightOverride, Name,
+    Relationship, Wrap,
+};
 use saffron_sceneedit::{DebugOverlayOptions, SkeletonOverlayOptions, viewport_project};
 use serde_json::Value;
 
@@ -93,7 +101,10 @@ fn resolve_container(ctx: &EngineContext<'_>, selector: &Value) -> Result<saffro
 fn player_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entity> {
     let entity = resolve_entity(ctx, selector)?;
     let scene = ctx.scene_edit.active_scene();
-    let target = scene.animatable_descendant(entity);
+    // Resolve to the model's single animation authority (up to the model root, then down to
+    // its player), so selecting a leaf — e.g. a `Morph` mesh child whose player lives on the
+    // container — never forges a rival player on the leaf.
+    let target = scene.model_player(entity);
     if !scene.has_component::<AnimationPlayer>(target) {
         let _ = scene.add_component(target, AnimationPlayer::default());
     }
@@ -102,13 +113,19 @@ fn player_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entity
 
 /// The animation state reply for a rig's player: the clip + its catalog name/duration, the
 /// playhead, and the bumping `animation_version`.
-fn state_of(ctx: &EngineContext<'_>, player: &AnimationPlayer) -> AnimationStateResult {
+fn state_of(
+    ctx: &mut EngineContext<'_>,
+    target: Entity,
+    player: &AnimationPlayer,
+) -> AnimationStateResult {
     let (clip_name, duration) = ctx
         .assets
         .catalog
         .find(player.clip)
         .map(|entry| (entry.name.clone(), entry.duration))
         .unwrap_or_default();
+    let animation_version = i32::try_from(ctx.scene_edit.animation_version).unwrap_or(i32::MAX);
+    let (morph_weights, _) = morph_weights_of(ctx.scene_edit.active_scene(), target);
     AnimationStateResult {
         clip: Uuid(player.clip.0),
         clip_name,
@@ -117,8 +134,105 @@ fn state_of(ctx: &EngineContext<'_>, player: &AnimationPlayer) -> AnimationState
         playing: player.playing,
         wrap: wrap_name(player.wrap).to_owned(),
         speed: player.speed,
-        animation_version: i32::try_from(ctx.scene_edit.animation_version).unwrap_or(i32::MAX),
+        animation_version,
+        morph_weights,
     }
+}
+
+/// The wire `kind` string for a track: a morph-weights track keys on its path, every other
+/// track on its target then path.
+fn channel_kind(track: &AnimTrack) -> &'static str {
+    match track.path {
+        AnimPath::Weights => "morph-weights",
+        AnimPath::Translation | AnimPath::Rotation | AnimPath::Scale => match track.target {
+            AnimTarget::Bone => "bone",
+            AnimTarget::Node => match track.path {
+                AnimPath::Translation => "node-translation",
+                AnimPath::Rotation => "node-rotation",
+                AnimPath::Scale => "node-scale",
+                AnimPath::Weights => "morph-weights",
+            },
+        },
+    }
+}
+
+/// Value components per keyframe: `morph_count` for a weights channel, `4` for a rotation
+/// quaternion, `3` for translation/scale — so `values.len() == times.len() * width`.
+fn channel_width(track: &AnimTrack) -> i32 {
+    match track.path {
+        AnimPath::Weights => i32::try_from(track.morph_count).unwrap_or(i32::MAX),
+        AnimPath::Rotation => 4,
+        AnimPath::Translation | AnimPath::Scale => 3,
+    }
+}
+
+/// Maps a clip's tracks to wire channels, deriving each channel's display label through
+/// `label_of` (the raw `target_name` for `list-clips`; the live-forest resolution for
+/// `list-clip-bindings`).
+pub(crate) fn channels_of(
+    clip: &AnimClip,
+    label_of: impl Fn(&AnimTrack) -> String,
+) -> Vec<AnimationChannelDto> {
+    clip.tracks
+        .iter()
+        .map(|track| AnimationChannelDto {
+            kind: channel_kind(track).to_owned(),
+            label: label_of(track),
+            target_name: track.target_name.clone(),
+            times: track.times.clone(),
+            width: channel_width(track),
+            values: track.values.clone(),
+        })
+        .collect()
+}
+
+/// Finds a descendant of `root` (inclusive) whose `Name` matches `name`, first-match pre-order
+/// — the control-side twin of the runtime's scoped node-binding walk (decision #20), so a
+/// channel label resolves against the live forest without the global `find_entity_by_uuid`.
+fn find_named_in_forest(scene: &saffron_scene::Scene, root: Entity, name: &str) -> Option<Entity> {
+    if scene
+        .with_component::<Name, _>(root, |n| n.name == name)
+        .unwrap_or(false)
+    {
+        return Some(root);
+    }
+    let children = scene
+        .with_component::<Relationship, _>(root, |r| r.children.clone())
+        .unwrap_or_default();
+    for child in children {
+        if scene.valid(child)
+            && let Some(found) = find_named_in_forest(scene, child, name)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The live morph weights of `target` (the runtime [`MorphWeightOverride`] if a preview is
+/// live, else the durable [`MorphComponent`]) and the durable target names. Empty vectors when
+/// the entity carries no morph mesh.
+fn morph_weights_of(scene: &saffron_scene::Scene, target: Entity) -> (Vec<f32>, Vec<String>) {
+    let weights = scene
+        .with_component::<MorphWeightOverride, _>(target, |o| o.weights.clone())
+        .or_else(|_| scene.with_component::<MorphComponent, _>(target, |c| c.weights.clone()))
+        .unwrap_or_default();
+    let names = scene
+        .with_component::<MorphComponent, _>(target, |c| c.names.clone())
+        .unwrap_or_default();
+    (weights, names)
+}
+
+/// The mesh-bearing morph descendant of `entity`: the entity itself if it carries a
+/// [`MorphComponent`], else its [`Scene::animatable_descendant`] (the spawn collapses a morph
+/// mesh onto the rig/container descendant the transport commands already target).
+fn morph_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entity> {
+    let entity = resolve_entity(ctx, selector)?;
+    let scene = ctx.scene_edit.active_scene();
+    if scene.has_component::<MorphComponent>(entity) {
+        return Ok(entity);
+    }
+    Ok(scene.animatable_descendant(entity))
 }
 
 /// Reads a rig's player and returns its [`AnimationStateResult`].
@@ -128,7 +242,7 @@ fn state_for(ctx: &mut EngineContext<'_>, target: Entity) -> Result<AnimationSta
         .active_scene()
         .component::<AnimationPlayer>(target)
         .map_err(|_| Error::command("entity has no animation player"))?;
-    Ok(state_of(ctx, &player))
+    Ok(state_of(ctx, target, &player))
 }
 
 /// The skeleton-overlay reply built from the live options.
@@ -157,7 +271,7 @@ fn debug_overlays_state(opts: &DebugOverlayOptions) -> DebugOverlaysResult {
 fn foot_ik_entity(ctx: &mut EngineContext<'_>, selector: &Value) -> Result<Entity> {
     let entity = resolve_entity(ctx, selector)?;
     let scene = ctx.scene_edit.active_scene();
-    let target = scene.animatable_descendant(entity);
+    let target = scene.model_player(entity);
     if !scene.has_component::<FootIk>(target) {
         let _ = scene.add_component(target, FootIk::default());
     }
@@ -186,7 +300,7 @@ pub fn register_animation_commands(reg: &mut CommandRegistry) {
         "get-animation-state {entity} — the rig's playhead, clip, wrap, and speed",
         |ctx, params| {
             let entity = resolve_entity(ctx, &params.entity)?;
-            let target = ctx.scene_edit.active_scene().animatable_descendant(entity);
+            let target = ctx.scene_edit.active_scene().model_player(entity);
             state_for(ctx, target)
         },
     );
@@ -202,18 +316,32 @@ pub fn register_animation_commands(reg: &mut CommandRegistry) {
                     return Err(Error::command("asset is not part of a model container"));
                 }
             }
-            let clips = ctx
+            // Collect the catalog rows first (immutable borrow), then load each clip's full
+            // track data (mutable borrow) to build real per-channel keyframe strips. No live
+            // forest here, so labels are the raw glTF target names.
+            let rows: Vec<(saffron_core::Uuid, String, f32)> = ctx
                 .assets
                 .catalog
                 .entries
                 .iter()
                 .filter(|entry| entry.asset_type == AssetType::Animation)
                 .filter(|entry| container.0 == 0 || entry.container.0 == container.0)
-                .map(|entry| AnimationClipDto {
-                    id: Uuid(entry.id.0),
-                    name: entry.name.clone(),
-                    duration: entry.duration,
-                    tracks: entry.tracks,
+                .map(|entry| (entry.id, entry.name.clone(), entry.duration))
+                .collect();
+            let clips = rows
+                .into_iter()
+                .map(|(id, name, duration)| {
+                    let channels = ctx
+                        .assets
+                        .load_anim_clip(id)
+                        .map(|clip| channels_of(&clip, |track| track.target_name.clone()))
+                        .unwrap_or_default();
+                    AnimationClipDto {
+                        id: Uuid(id.0),
+                        name,
+                        duration,
+                        channels,
+                    }
                 })
                 .collect();
             Ok(ListClipsResult { clips })
@@ -506,6 +634,75 @@ pub fn register_animation_commands(reg: &mut CommandRegistry) {
             Ok(foot_ik_result(ctx.scene_edit.active_scene(), target))
         },
     );
+
+    reg.register::<SetMorphWeightsParams, MorphWeightsResult>(
+        "set-morph-weights",
+        "set-morph-weights {entity, weights} — set blend-shape weights (canonical 0..1)",
+        |ctx, params| {
+            let target = morph_entity(ctx, &params.entity)?;
+            let scene = ctx.scene_edit.active_scene();
+            let count = scene
+                .with_component::<MorphComponent, _>(target, |c| c.weights.len())
+                .map_err(|_| Error::command("entity has no morph mesh"))?;
+            if params.weights.len() != count {
+                return Err(Error::command(format!(
+                    "weights length {} does not match the {count} morph targets",
+                    params.weights.len()
+                )));
+            }
+            // A live preview owns a runtime `MorphWeightOverride`; update it so the change is
+            // visible at once. Otherwise edit the durable component (the saved rest weights).
+            if scene.has_component::<MorphWeightOverride>(target) {
+                let _ = scene.with_component_mut::<MorphWeightOverride, _>(target, |o| {
+                    o.weights = params.weights.clone();
+                });
+            } else {
+                let _ = scene.with_component_mut::<MorphComponent, _>(target, |c| {
+                    c.weights = params.weights.clone();
+                });
+            }
+            ctx.scene_edit.animation_version += 1;
+            let (weights, names) = morph_weights_of(ctx.scene_edit.active_scene(), target);
+            Ok(MorphWeightsResult { weights, names })
+        },
+    );
+
+    reg.register::<GetMorphWeightsParams, MorphWeightsResult>(
+        "get-morph-weights",
+        "get-morph-weights {entity} — live blend-shape weights + target names",
+        |ctx, params| {
+            let target = morph_entity(ctx, &params.entity)?;
+            let (weights, names) = morph_weights_of(ctx.scene_edit.active_scene(), target);
+            Ok(MorphWeightsResult { weights, names })
+        },
+    );
+
+    reg.register::<ListClipBindingsParams, ClipBindingsResult>(
+        "list-clip-bindings",
+        "list-clip-bindings {entity, clip} — a clip's channels resolved against the live forest",
+        |ctx, params| {
+            let entity = resolve_entity(ctx, &params.entity)?;
+            // The whole model forest is the binding-resolution scope (a leaf selection still
+            // resolves node names across the entire forest, not just its own subtree).
+            let root = ctx.scene_edit.active_scene().model_root_of(entity);
+            let clip_id = resolve_clip(ctx, &params.clip)?;
+            let clip = ctx
+                .assets
+                .load_anim_clip(clip_id)
+                .map_err(|_| Error::command("clip not found"))?;
+            let scene = ctx.scene_edit.active_scene();
+            // Node/bone labels resolve against the live forest (the resolved entity's current
+            // name; the raw glTF name on a miss — the broken-binding tell). Morph labels are
+            // the raw target name.
+            let channels = channels_of(&clip, |track| match track.path {
+                AnimPath::Weights => track.target_name.clone(),
+                _ => find_named_in_forest(scene, root, &track.target_name)
+                    .and_then(|e| scene.with_component::<Name, _>(e, |n| n.name.clone()).ok())
+                    .unwrap_or_else(|| track.target_name.clone()),
+            });
+            Ok(ClipBindingsResult { channels })
+        },
+    );
 }
 
 #[cfg(test)]
@@ -639,6 +836,58 @@ mod tests {
             assert_eq!(clips.len(), 1);
             assert_eq!(clips[0]["id"], json!("10"));
             assert_eq!(clips[0]["name"], json!("run"));
+        });
+    }
+
+    /// `set-morph-weights` writes a morph mesh's weights, `get-morph-weights` reads them back
+    /// (with the durable names), `get-animation-state` reports them, and a length mismatch is
+    /// an `Err`.
+    #[test]
+    fn morph_weight_commands_round_trip_and_reject_length_mismatch() {
+        use saffron_scene::{AnimationPlayer, MorphComponent};
+
+        let reg = registry();
+        let mut renderer = StubRenderer::default();
+        with_stub(&mut renderer, |ctx| {
+            let scene = ctx.scene_edit.active_scene();
+            let entity = scene.create_entity("face");
+            let _ = scene.add_component(
+                entity,
+                MorphComponent {
+                    weights: vec![0.0, 0.0],
+                    names: vec!["smile".to_owned(), "blink".to_owned()],
+                },
+            );
+            // A player so get-animation-state has something to report the weights against.
+            let _ = scene.add_component(entity, AnimationPlayer::default());
+            let uuid = entity_uuid(ctx.scene_edit.active_scene(), entity).to_string();
+
+            let set = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "set-morph-weights", "params": { "entity": uuid, "weights": [0.25, 0.75] } }),
+            );
+            assert_eq!(set["ok"], json!(true));
+            assert_eq!(set["result"]["weights"], json!([0.25, 0.75]));
+            assert_eq!(set["result"]["names"], json!(["smile", "blink"]));
+
+            let got = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "get-morph-weights", "params": { "entity": uuid } }),
+            );
+            assert_eq!(got["result"]["weights"], json!([0.25, 0.75]));
+
+            let state = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "get-animation-state", "params": { "entity": uuid } }),
+            );
+            assert_eq!(state["result"]["morphWeights"], json!([0.25, 0.75]));
+
+            // A wrong-length vector is rejected.
+            let bad = reg.dispatch(
+                ctx,
+                &json!({ "cmd": "set-morph-weights", "params": { "entity": uuid, "weights": [0.5] } }),
+            );
+            assert_eq!(bad["ok"], json!(false));
         });
     }
 }

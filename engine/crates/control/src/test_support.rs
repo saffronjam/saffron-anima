@@ -31,6 +31,7 @@ impl GpuUploader for StubGpu {
         &self,
         _mesh: &Mesh,
         _skin: &[VertexSkin],
+        _morph: Option<&saffron_geometry::MorphData>,
     ) -> saffron_rendering::Result<Arc<GpuMesh>> {
         unreachable!("an empty catalog never reaches the stub uploader")
     }
