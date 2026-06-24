@@ -15,7 +15,9 @@ A point light shines in every direction, so a single 2D depth map cannot cover i
 the full sphere, and a distance value is comparable across faces, which makes it the natural fit.
 
 > [!NOTE]
-> Only one point light is shadowed. Six scene re-draws per shadowed point light keep it that way for now.
+> Only one point light is shadowed. The six scene re-draws run only when the cube is *dirty* (see
+> [caching](#caching-the-cube)) — a static light over static casters reuses the cube even as the
+> camera moves.
 
 ## Distance, not depth
 
@@ -63,6 +65,27 @@ it is lit. The constant `bias` is `0.08` world units, not depth
 units — see [shadow bias](../shadow-bias/). As with the spot light, this applies only to the one
 shadowed point light, gated by `pointShadowMeta.x` (its index) and `.y` (enabled).
 
+## Caching the cube
+
+The cube is **camera-independent** — it stores light-to-occluder distance, which does not change when
+the camera moves — yet it was re-rendered every frame regardless. The renderer now caches it: each
+frame `render_scene` computes a `content_key`, an FNV hash of the light position + far plane and every
+caster's world matrix + mesh id (`point_shadow_content_key`). The renderer renders the six faces only
+when that key, or the cube image handle, differs from the last render; otherwise the `point-shadow`
+pass is skipped and the persistent cube (held in `SHADER_READ_ONLY` between frames) is sampled as-is.
+Panning or orbiting over a static light + static casters therefore costs nothing, while moving the
+light, moving a caster (an animation, a gizmo drag, physics), or adding/removing a mesh changes the
+key and re-renders. A target recreation (a viewport resize) mints a new cube image handle, which also
+forces a re-render so the fresh `UNDEFINED` cube is seeded.
+
+This pairs with the [reactive loop](../../app-lifecycle-and-window/main-loop-and-run/): a fully static
+viewport stops rendering entirely (so the cube isn't touched either), and the cache covers the case
+where *something else* moves the camera while the shadow inputs hold still.
+
+> The 2D directional/spot maps are **not** cached this way: cascaded directional shadows re-fit to the
+> camera frustum each frame, so they are camera-*dependent* — the reactive loop's full-static idle is
+> what spares them.
+
 ## Design and trade-offs
 
 A distance cube is direction-agnostic, which is why it fits point lights naturally. The comparison
@@ -80,6 +103,7 @@ stable for the modest scenes the engine targets.
 | Cube + face views + clear | `crates/rendering/src/scene_pass.rs` | `PointShadowTarget`, `record_point_shadow` (`far_plane * 2.0`) |
 | Cube format + size | `crates/rendering/src/lighting.rs` | `POINT_SHADOW_SIZE`, `POINT_SHADOW_COLOR_FORMAT` |
 | Add the compute-kind pass | `crates/rendering/src/renderer.rs` | `"point-shadow"` pass |
+| Cube cache (key + skip) | `crates/assets/src/render_scene.rs`, `crates/rendering/src/renderer.rs` | `point_shadow_content_key`, `last_point_shadow_key`/`last_point_shadow_cube` |
 | Sample + compare distance | `assets/shaders/lighting.slang` | `pointShadow` |
 
 ## Related
