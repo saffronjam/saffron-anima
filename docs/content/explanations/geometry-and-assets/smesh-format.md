@@ -23,8 +23,8 @@ the header records:
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 struct SMeshHeader {
     magic: [u8; 4],        // b"SMSH"
-    version: u32,          // 1 (unskinned) or 2 (skinned)
-    flags: u32,            // reserved (0)
+    version: u32,          // 3
+    flags: u32,            // MESH_FLAG_SKIN | MESH_FLAG_MORPH bits
     vertex_stride: u32,    // == size_of::<Vertex>() (32)
     vertex_count: u32,
     index_count: u32,
@@ -33,7 +33,7 @@ struct SMeshHeader {
     vertices_offset: u64,
     indices_offset: u64,
     submeshes_offset: u64,
-    reserved: [u32; 2],
+    morph_offset: u64,     // start of the morph section (0 when no MORPH flag)
 }
 const _: () = assert!(size_of::<SMeshHeader>() == 64, "SMeshHeader must be exactly 64 bytes");
 ```
@@ -41,11 +41,13 @@ const _: () = assert!(size_of::<SMeshHeader>() == 64, "SMeshHeader must be exact
 The arrays are written with `bytemuck::cast_slice`, no per-element serialization. `Vertex`
 and `Submesh` have [compile-time-pinned sizes](../mesh-and-vertex-layout/) (32 and 16 bytes),
 so the in-memory layout is the on-disk layout. The header records `vertex_stride` and
-`index_width` so the loader can reject a file written by an incompatible build. Two versions
-live in the format: `MESH_FORMAT_VERSION` = 1 (unskinned) and `MESH_FORMAT_VERSION_SKINNED`
-= 2 (the same header and first three sections plus a `VertexSkin` section). The encoder picks
-the version by whether the skin stream is non-empty; the loader accepts 1 and 2 and rejects
-any other.
+`index_width` so the loader can reject a file written by an incompatible build. There is **one**
+version — `MESH_FORMAT_VERSION` = 3 — and two `flags` bits select the optional sections: `MESH_FLAG_SKIN`
+appends a `VertexSkin` section, `MESH_FLAG_MORPH` appends a morph section (a `MorphSectionHeader`, then
+per-target `MorphTargetDesc` ranges, then the flat `MorphDelta` array) at `morph_offset`. The encoder
+sets each bit from whether the skin / morph stream is non-empty; the loader accepts version 3 and rejects
+any other. One write path — `save_mesh_to_buffer(mesh, skin, morph)` — covers every combination; there is
+no separate skinned encoder.
 
 ## Why a custom binary format
 
@@ -77,7 +79,7 @@ if header.vertices_offset != size_of::<SMeshHeader>() as u64
 ```
 
 The checks run in order: span at least header-sized (`Error::Truncated`), magic `SMSH`
-(`Error::BadMagic`), version 1 or 2, stride and index-width match, then the
+(`Error::BadMagic`), version 3, stride and index-width match, then the
 layout-consistency block. A malformed huge `vertex_count` would otherwise drive a giant
 allocation; rejecting the file as inconsistent or truncated first keeps a corrupt file from
 exhausting memory. The span length is the chunk length, not a file size, so an embedded
@@ -86,7 +88,8 @@ exhausting memory. The span length is the chunk length, not a file size, so an e
 ## Round-trip coverage
 
 The codec is covered by unit tests in `smesh.rs`: a baked mesh reads back with the same
-counts and the first vertex position byte-for-byte, a bad magic / bad version / truncated
+counts and the first vertex position byte-for-byte (with skin and morph round-tripping through
+`save_mesh_to_buffer` / `load_mesh_morph_from_bytes`), a bad magic / bad version / truncated
 span each return the expected `Err`, and the format strides stay pinned by the compile-time
 `size_of` asserts in `geometry/src/lib.rs`.
 
@@ -95,9 +98,10 @@ span each return the expected `Err`, and the format strides stay pinned by the c
 | What | File | Symbols |
 |---|---|---|
 | Header layout | `geometry/src/smesh.rs` | `SMeshHeader` |
-| Version constants | `geometry/src/smesh.rs` | `MESH_FORMAT_VERSION`, `MESH_FORMAT_VERSION_SKINNED` |
-| Write path | `geometry/src/smesh.rs` | `save_mesh_to_buffer`, `save_mesh_skinned`, `save_mesh_skinned_to_buffer` |
-| Defensive load | `geometry/src/smesh.rs` | `load_mesh`, `load_mesh_from_bytes`, `load_mesh_skin_from_bytes` |
+| Version + flags | `geometry/src/smesh.rs` | `MESH_FORMAT_VERSION`, `MESH_FLAG_SKIN`, `MESH_FLAG_MORPH` |
+| Morph section | `geometry/src/smesh.rs` | `MorphSectionHeader`, `MorphTargetDesc` |
+| Write path | `geometry/src/smesh.rs` | `save_mesh`, `save_mesh_to_buffer` |
+| Defensive load | `geometry/src/smesh.rs` | `load_mesh`, `load_mesh_from_bytes`, `load_mesh_skin_from_bytes`, `load_mesh_morph_from_bytes` |
 | Header-only counts | `geometry/src/smesh.rs` | `mesh_counts_from_bytes`, `mesh_file_counts` |
 
 > [!WARNING]

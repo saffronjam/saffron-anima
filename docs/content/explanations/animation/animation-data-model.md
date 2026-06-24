@@ -25,19 +25,25 @@ properties). Anima's `AnimTrack` is exactly one such channel:
 
 ```rust
 pub struct AnimTrack {
-    pub joint: i32,             // stable index into SkinnedMesh.bones; -1 until resolved
-    pub joint_name: String,     // the glTF node name — the durable binding key
-    pub path: AnimPath,         // Translation | Rotation | Scale
+    pub target: AnimTarget,     // Bone | Node — what the track drives
+    pub index: i32,             // stable bone index for a Bone track; -1 until resolved
+    pub target_name: String,    // the glTF node / morph target name — the durable binding key
+    pub path: AnimPath,         // Translation | Rotation | Scale | Weights
     pub interp: AnimInterp,     // Step | Linear | CubicSpline
+    pub morph_count: u32,       // weights per keyframe for a Weights track, else 0
     pub times: Vec<f32>,        // sampler input — strictly increasing, seconds
     pub values: Vec<f32>,       // sampler output — flat floats
 }
 ```
 
-A track binds to a joint by **stable index plus name**, never by a live ECS handle (handles are a
-post-load cache rebuilt by the hierarchy relink and are not stable across a reload). The index is
-what the sampler writes through; the name is the durable key the importer resolves the index from,
-so a clip survives a reimport and — later — retargeting onto a different rig.
+One generalized track model carries all three channel kinds. `target` selects a skinned-mesh joint or
+a plain scene-graph node; `path = Weights` (with `morph_count` weights per keyframe) is a morph-weight
+channel. A track binds by **stable index plus name** (a `Bone` track) or by **durable name** (a `Node`
+or morph track), never by a live ECS handle (handles are a post-load cache rebuilt by the hierarchy
+relink and are not stable across a reload). The name is the durable key the importer or runtime resolves
+from, so a clip survives a reimport and — later — retargeting. The
+[node-TRS]({{< relref "node-trs-animation" >}}) and [morph-target]({{< relref "morph-targets" >}}) pages
+cover the node and weight kinds; this page's sampler math is shared by all three.
 
 The `values` array is flat and its stride depends on the path and interpolation: a `Vec3` per key
 for translation and scale, a quaternion (`xyzw`) per key for rotation, and — for `CubicSpline` —

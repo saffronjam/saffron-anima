@@ -39,6 +39,7 @@ around this spine.
 | [Global illumination & ray tracing](global-illumination-and-raytracing/) | DDGI probes, voxel trace, BLAS/TLAS, ray-query shadows, ReSTIR |
 | [Anti-aliasing](anti-aliasing/) | MSAA, FXAA, mode switching |
 | [UI & editor](ui-and-editor/) | the Tauri/React editor, viewport compositing, gizmo, inspector, thumbnails |
+| [Asset store & connectors](asset-store-and-connectors/) | the editor Store tab, connectors to external asset services, download → import |
 | [Tooling & control](tooling-and-control/) | control plane and the `sa` CLI |
 | [Scripting](scripting/) | the embedded Lua 5.5 VM, sandboxing, script errors as values |
 | [Animation](animation/) | skeletal clips, the decomposed pose + blend layer, clip sampling |
