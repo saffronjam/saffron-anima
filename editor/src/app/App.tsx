@@ -176,6 +176,29 @@ export function App() {
     return stop;
   }, []);
 
+  // Report viewport visibility so the host idles a hidden/unfocused window (the engine suppresses
+  // rendering when occluded). Fire-and-forget on focus/blur + tab visibility; gated on readiness.
+  useEffect(() => {
+    if (phase !== "ready") {
+      return;
+    }
+    const send = (): void => {
+      const state = document.hidden ? "occluded" : document.hasFocus() ? "focused" : "unfocused";
+      void client.setViewportPowerState(state).catch(() => {
+        // Transient (engine briefly busy); the next focus/visibility event re-sends.
+      });
+    };
+    send();
+    window.addEventListener("focus", send);
+    window.addEventListener("blur", send);
+    document.addEventListener("visibilitychange", send);
+    return () => {
+      window.removeEventListener("focus", send);
+      window.removeEventListener("blur", send);
+      document.removeEventListener("visibilitychange", send);
+    };
+  }, [phase]);
+
   // Hydrate the keybinding overrides from appdata/settings.json once at startup
   // (editor-wide state, independent of the engine phase).
   useEffect(() => {
