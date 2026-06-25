@@ -8,5 +8,5 @@ skills/   project skills — procedures an agent loads on demand (one folder per
           SKILL.md + optional scripts/)
 ```
 
-Durable project knowledge stays in versioned repo files (`AGENTS.md`, `CONVENTIONS.md`,
-`plans/`, `docs/`); this folder is for the agent tooling that acts on it.
+Durable project knowledge stays in versioned repo files (`AGENTS.md`, `plans/`, `docs/`);
+this folder is for the agent tooling that acts on it.

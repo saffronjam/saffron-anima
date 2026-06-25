@@ -1,40 +1,19 @@
-# Saffron Anima task runner — the Rust front door.
-#
-# Drives the build/test/run flow through cargo, the xtask helper, and bun. The toolbox-bound
-# recipes AUTO-ENTER the `saffron-build` container when run from the host (so `just lint`
-# works the same from a host shell or inside the toolbox); recipes that don't need the
-# toolchain (help/run-docs) run on the host directly.
-#
-# Set `SAFFRON_NO_TOOLBOX=true` to skip that auto-enter and run a recipe directly on the host
-# (`SAFFRON_NO_TOOLBOX=true just <recipe>`) — this trusts the host to provide cargo plus the
-# Vulkan/SDL/Slang toolchain itself.
-#
-# Env vars are set INSIDE each recipe, never as a host-side prefix — a host-side
-# `ENV=… just …` would no-op across the `toolbox run` boundary. Each toolbox recipe is a
-# single bash script that re-execs `just` inside the container when /run/.toolboxenv is
-# absent (host invocation) and runs directly otherwise.
+# Saffron Anima task runner. Toolbox-bound recipes auto-enter the `saffron-build` container;
+# set SAFFRON_NO_TOOLBOX=true to run on the host. Set env vars inside recipes, never as a
+# host-side `ENV=… just …` prefix (it won't cross the toolbox boundary).
 
 set shell := ["bash", "-uc"]
 
-# Repo root (this justfile's dir) and the Cargo workspace under it.
 repo := justfile_directory()
 engine := repo / "engine"
 editor := repo / "editor"
 docs := repo / "docs"
 
-# The toolbox + host bun (added to PATH on re-entry).
 toolbox := "saffron-build"
 bun_bin := "/var/home/saffronjam/.bun/bin"
-
-# The present-only host binary produced by `cargo build` (saffron-host crate). The editor + e2e
-# spawn whatever SAFFRON_ANIMA_BIN resolves to; the recipes below point it here.
 engine_bin := engine / "target/debug/saffron-host"
 
-# Prelude prepended to every toolbox-bound recipe: if not already inside the toolbox,
-# re-exec the same recipe in the saffron-build container, then exit. Either way — re-exec
-# from the host, or already inside the toolbox — it puts host bun on PATH, so bun recipes
-# work both via `just <recipe>` on the host AND `toolbox run … bash -lc 'just <recipe>'`
-# (the latter enters the toolbox first, so the re-exec branch is skipped).
+# Re-exec the recipe inside the toolbox (unless already in it or SAFFRON_NO_TOOLBOX), then put bun on PATH.
 reenter := '''
     if [ ! -f /run/.toolboxenv ] && [ -z "${SAFFRON_NO_TOOLBOX:-}" ]; then
       command -v toolbox >/dev/null || { echo "toolbox not found — install it, or run inside the saffron-build container" >&2; exit 1; }
@@ -43,20 +22,13 @@ reenter := '''
     export PATH="''' + bun_bin + ''':$PATH"
 '''
 
-# Resolve the NVIDIA Vulkan ICD manifest (host copy under the toolbox, local on a bare host,
-# empty when neither exists). VK_ADD_DRIVER_FILES *adds* it to the loader search so llvmpipe
-# stays a fallback; device selection prefers the discrete GPU when it can present and falls
-# back to software (e.g. headless) when it can't.
+# Add the host's NVIDIA Vulkan ICD to the loader search (Mesa/llvmpipe stays the fallback).
 nvidia_icd := '''
     NVIDIA_ICD="$(ls /run/host/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json /usr/share/vulkan/icd.d/nvidia_icd.x86_64.json 2>/dev/null | head -n1 || true)"
     [ -n "$NVIDIA_ICD" ] && export VK_ADD_DRIVER_FILES="$NVIDIA_ICD"
 '''
 
-# Resolve a default content project for the editor-less `run-engine` so the viewport shows a
-# scene rather than an empty project. Points the engine at
-# the repo-root appdata (the editor's project store) and picks the most-recently-opened project
-# that has mesh entities; if none qualifies it leaves SAFFRON_PROJECT unset and the engine's own
-# resolution applies. A SAFFRON_PROJECT already in the environment always wins (manual override).
+# Pick a default content project (most-recent with meshes) for the editor-less run-engine; a preset SAFFRON_PROJECT wins.
 default_project := '''
     export SAFFRON_APPDATA_DIR="''' + repo + '''/appdata"
     if [ -z "${SAFFRON_PROJECT:-}" ]; then
@@ -69,13 +41,11 @@ def has_meshes(pj):
     except Exception: return False
     ents = doc.get("scene", {}).get("entities", [])
     return any("Mesh" in e.get("components", {}) for e in ents)
-# Prefer the most-recently-opened recent project that has meshes.
 recents = os.path.join(appdata, "recent-projects.json")
 ordered = []
 try:
     with open(recents) as f: ordered = [p.get("path") for p in json.load(f).get("projects", [])]
 except Exception: ordered = []
-# Then any remaining content project under userdata, newest first.
 extra = sorted(glob.glob(os.path.join(appdata, "userdata", "*", "project.json")),
                key=lambda p: os.path.getmtime(p), reverse=True)
 for path in [p for p in ordered if p] + extra:
@@ -91,15 +61,15 @@ PY
 default:
     @just --list
 
-# list the available recipes (host; no toolbox)
+# list the available recipes
 help:
     @just --list
 
-# count tracked Rust and TypeScript source lines (host cloc; no toolbox)
+# count tracked Rust and TypeScript source lines
 count-code:
     cloc --vcs=git --include-lang=Rust,TypeScript "{{repo}}"
 
-# init the theme submodule and serve the docs site (host hugo + git)
+# init the theme submodule and serve the docs site
 run-docs:
     git -C "{{repo}}" submodule update --init --depth 1 docs/themes/hugo-book
     cd "{{docs}}" && hugo server
@@ -110,9 +80,6 @@ fetch-deps:
     set -euo pipefail
     RECIPE=fetch-deps; {{reenter}}
     cd "{{engine}}"
-    # build.rs owns the pinned+checksummed fetch; touch it so cargo re-runs the script even when
-    # the crate is otherwise up to date (e.g. right after `just clean-deps`). On a fresh clone the
-    # script runs anyway; either way this populates vendor/ without compiling the rest.
     touch crates/physics-sys/build.rs
     cargo build -p saffron-physics-sys --quiet
 
@@ -186,7 +153,7 @@ run-debug:
     export SAFFRON_ANIMA_BIN="{{engine_bin}}"
     cd "{{editor}}" && bun run tauri dev
 
-# run the editor on the llvmpipe software GPU (control case; no NVIDIA ICD)
+# run the editor on the llvmpipe software GPU (no NVIDIA ICD)
 run-software:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -220,8 +187,7 @@ run-engine-software:
     {{default_project}}
     exec "{{engine_bin}}"
 
-# boot the host headless for a bounded number of frames (the native-viewport driver the editor
-# spawns: renders offscreen, no window or compositor needed)
+# boot the host headless for a bounded number of frames (renders offscreen, no compositor)
 run-engine-headless frames="5":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -232,7 +198,7 @@ run-engine-headless frames="5":
     export SAFFRON_EDITOR_NATIVE_VIEWPORT=1
     SAFFRON_EXIT_AFTER_FRAMES={{frames}} SAFFRON_CONTROL_SOCK="/tmp/sa-just-$$.sock" "{{engine_bin}}"
 
-# the host-runnable control CLI; `just sa ping`, `just sa help` (no engine dep)
+# the host-runnable control CLI; `just sa ping`, `just sa help`
 sa *args:
     #!/usr/bin/env bash
     set -euo pipefail

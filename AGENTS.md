@@ -70,13 +70,13 @@ render seam, a frame graph, a hecs scene, signal/slot events.
 
 The build toolchain is the project standard and lives in the **`saffron-build`** toolbox container,
 never on the host (assume the host has no Rust toolchain). The `just` recipes auto-enter the toolbox
-when run from a host shell, so `just build`/`just run`/`just check` behave the same inside or out; the
+when run from a host shell, so `just engine`/`just run`/`just check` behave the same inside or out; the
 home directory is shared, so files edited outside are seen inside. To use the host toolchain instead,
 set `SAFFRON_NO_TOOLBOX=true`.
 
 ```sh
-just build                       # cargo build --workspace, inside the toolbox
-cargo build --workspace          # the same, when already inside the toolbox
+just engine                      # cargo build --workspace + shaders, inside the toolbox
+cargo build --workspace          # the build alone, when already inside the toolbox
 cargo run -p xtask -- shaders    # compile engine/assets/shaders/*.slang → SPIR-V + copy assets
 ./engine/target/debug/saffron-host   # the present-only viewport host
 ```
@@ -139,7 +139,7 @@ session for the subsurface presenter.
   all defaulted); a layer is pushed onto the `App` and the loop dispatches each hook through it.
 - **Render seam:** `Renderer::submit(|cmd| { … })` records a closure into the current frame.
 - **Render graph:** each pass *declares* its resource usage (`ColorWrite`, `SampledRead`,
-  `StorageImageRWCompute`, …) + attachments; the graph derives every barrier and layout transition and
+  `StorageImageRwCompute`, …) + attachments; the graph derives every barrier and layout transition and
   records each pass body. No pass writes a barrier by hand; apps add passes via `on_render_graph`.
 - **Resources:** Vulkan via the `ash` bindings (`vk::*`) — every call returns a `Result`, checked on
   the spot. VMA via `vk-mem` for allocation. Data-plane resources are RAII wrappers held as `Arc<T>`,
@@ -152,11 +152,13 @@ session for the subsurface presenter.
 
 ## Crates (Cargo workspace under `engine/`)
 
-Members are `crates/*` plus `xtask`; every crate is named `saffron-<area>` (the host binary is
-`saffron-host`). The inter-crate DAG, leaves first:
+Members are `crates/*` plus `xtask`; every crate is named `saffron-<area>` (the two binaries are
+`saffron-host`, the present-only editor host, and `saffron-player`, the exported game). The inter-crate
+DAG, leaves first:
 
 ```
 saffron-core
+saffron-log
 saffron-signal      → saffron-core
 saffron-json        → saffron-core
 saffron-window      → {saffron-core, saffron-signal}
@@ -169,10 +171,12 @@ saffron-script      → {saffron-core, saffron-scene}                      Luau 
 saffron-rendering   → {saffron-core, saffron-window, saffron-geometry}   ash + vk-mem
 saffron-assets      → {saffron-core, saffron-json, saffron-geometry, saffron-rendering, saffron-scene}
 saffron-sceneedit   → {saffron-core, saffron-signal, saffron-scene, saffron-json}
+saffron-runtime     → {saffron-core, saffron-scene, saffron-assets, saffron-animation, saffron-script, saffron-physics}   shared play-mode sim spine
 saffron-protocol    → saffron-core                                       wire DTOs (serde + schemars + ts-rs)
 saffron-control     → {saffron-core, saffron-geometry, saffron-json, saffron-window, saffron-rendering, saffron-scene, saffron-sceneedit, saffron-assets, saffron-physics, saffron-protocol}
 saffron-app         → {saffron-core, saffron-window, saffron-rendering}
-saffron-host        → {saffron-app, saffron-control, saffron-sceneedit, saffron-scene, saffron-geometry, saffron-animation, saffron-physics, saffron-script, saffron-assets, saffron-signal, saffron-protocol, …}   (the saffron-host exe)
+saffron-host        → {saffron-core, saffron-log, saffron-app, saffron-window, saffron-rendering, saffron-sceneedit, saffron-runtime, saffron-control, saffron-scene, saffron-geometry, saffron-animation, saffron-physics, saffron-script, saffron-assets, saffron-signal, saffron-protocol}   (the present-only host exe)
+saffron-player      → {saffron-core, saffron-log, saffron-app, saffron-runtime, saffron-rendering, saffron-window, saffron-scene, saffron-assets, saffron-protocol}   (the exported-game exe)
 saffron-control-client → saffron-protocol                               unix-socket client (no engine dep)
 sa                  → {saffron-protocol, saffron-control-client}         the control CLI (clap)
 ```
@@ -267,7 +271,9 @@ a feature — follow and update a matching plan rather than starting cold.
 - **Built** (per-concept reference is `docs/`): the full forward+ PBR pipeline — clustered lighting, IBL,
   shadows (directional/spot/point/contact/ray-traced), DDGI + voxel GI + SSGI + ReSTIR, GTAO, TAA, motion
   vectors, tonemap, MSAA/FXAA; bindless + instanced rendering with an übershader/PSO cache; the render
-  graph; hecs scene + registry-driven JSON project format; glTF/OBJ import + asset catalog; a native
+  graph; hecs scene + registry-driven JSON project format with scene-graph parenting (a `Relationship`
+  component, parent-composed world transforms, and a `set-parent` reparent command); glTF/OBJ import +
+  asset catalog; a native
   material system (`.smat` PBR assets + params buffer, importer, instances/overrides, thumbnails) with a
   node-graph editor (React Flow model → Slang codegen for preview and scene entities); skeletal animation
   behind `saffron-animation` (glTF clip import, an animation-player runtime with transitions/blending, a
@@ -281,5 +287,4 @@ a feature — follow and update a matching plan rather than starting cold.
   controller; raycast/shapecast queries + a Luau `sa.raycast`; and a motor-driven ragdoll routed through
   the pose-buffer override/weight blend layer — passive, active, and partial, with import auto-fit).
 - **Not yet:** transient render-graph resources (graph-created images + aliasing) + async compute;
-  GPU-driven culling (MDI / mesh shaders); scene-graph parenting; undo/redo; hardware GPU in the
-  toolbox.
+  GPU-driven culling (MDI / mesh shaders); undo/redo; hardware GPU in the toolbox.

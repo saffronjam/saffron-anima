@@ -15,7 +15,7 @@ row in the same change.
 ```
 docs/content/
   _index.md        landing          overview.md   one-screen engine tour
-  explanations/    the bulk — 16 subsystem subfolders, each with a hub _index.md
+  explanations/    the bulk — 20 subsystem subfolders, each with a hub _index.md
   how-to/          task recipes     reference/    terse lookup tables
   tutorials/       guided walkthroughs
 ```
@@ -88,7 +88,7 @@ clarifies; ```mermaid for flow/structure; $$…$$ for math>
 ```sh
 cd docs && hugo --gc                       # must exit 0, no ERROR (hugo on PATH, ~/.local/bin)
 python3 <skill-dir>/scripts/check_links.py docs/public   # from repo root; expect "BROKEN LINKS: none"
-make run-docs                              # live preview at http://localhost:1313/saffron-engine/
+just run-docs                              # live preview at http://localhost:1313/saffron-anima/
 ```
 
 Hugo does NOT validate plain markdown links — the checker is the only gate against 404s. If the

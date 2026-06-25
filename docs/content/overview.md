@@ -47,7 +47,7 @@ engine's [resource ownership model](../explanations/core-and-conventions/).
 ## Render graph
 
 Each pass **declares** what it does with each resource (`ColorWrite`, `SampledRead`,
-`StorageImageRWCompute`, …) rather than writing barriers by hand. The graph turns those
+`StorageImageRwCompute`, …) rather than writing barriers by hand. The graph turns those
 declarations into the right image and memory barriers and layout transitions, then
 records each pass body inside its rendering scope.
 

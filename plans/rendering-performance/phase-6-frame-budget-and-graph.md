@@ -57,7 +57,7 @@ The offscreen extent lives in the rendering crate's target sizing
 ### Render-graph pass culling
 
 Anima's render graph already declares per-pass resource usage (`ColorWrite` / `SampledRead` /
-`StorageImageRWCompute`, …) and derives barriers, so the dependency information needed to cull is
+`StorageImageRwCompute`, …) and derives barriers, so the dependency information needed to cull is
 present. Add backward reachability from the present target and drop passes whose outputs are never
 consumed this frame, with a `NeverCull` opt-out pin for side-effecting passes (e.g. readbacks, BLAS
 builds). This lets tier-disabled GI/effect passes (Phase 3) fall out cleanly instead of guarding each

@@ -13,7 +13,7 @@
 
 ---
 
-A Cargo workspace (`engine/`) that builds its own present-only viewport host (`saffron-host`). The editor is a separate Tauri/React app that embeds that host as a native child window and drives it over a JSON-over-socket control plane.
+A Cargo workspace (`engine/`) that builds its own present-only viewport host (`saffron-host`). The editor is a separate Tauri/React app that presents the host's offscreen frames on a Wayland subsurface below its transparent webview and drives it over a JSON-over-socket control plane.
 
 ## Features
 
@@ -41,7 +41,6 @@ Other convenience recipes (`just --list` for the full set): `just run-engine` bo
 ## More
 
 - Concept-by-concept docs: [`docs/content/overview.md`](docs/content/overview.md) (Hugo site).
-- Toolchain, architecture, conventions: [`AGENTS.md`](AGENTS.md).
-- Code style: [`CONVENTIONS.md`](CONVENTIONS.md).
+- Toolchain, architecture, conventions, code style: [`AGENTS.md`](AGENTS.md).
 </content>
 </invoke>

@@ -12,7 +12,8 @@ app is the UI shell composited over the live viewport.
 src/
   app/         shell (App.tsx), docking layout, menu/topbar, lifecycle wiring
   panels/      Hierarchy, Inspector, Assets, Environment, Render(+Stats), Viewport, Topbar,
-               MaterialEditor + MaterialGraph, Profiler, Timeline (+ BottomDock/RightSidebar, tree helpers)
+               MaterialEditor + MaterialGraph, Profiler, Timeline, Physics, ScriptLogs (+ tree helpers);
+               the dock/tab layout lives in `components/dock/` + `state/dockLayout.ts`
   components/  shadcn/ui + field renderers (NumberDrag, ColorField, VectorEditor, …)
   control/     typed control client over the Tauri bridge (client.ts)
   state/       Zustand store + the reconcile poll (store.ts)
@@ -28,7 +29,7 @@ Stack (see `package.json`): React 19, Tauri 2, Zustand 5, Vite 7, Tailwind v4
 (`@tailwindcss/vite`), shadcn/ui (Radix), `react-resizable-panels` (docking), `@xyflow/react`
 (material node graph), `flame-chart-js` + `uplot` (profiler / frame-time stats), `react-colorful`,
 and `sonner` (toasts). Lint/format via **oxc** (`oxlint` + `oxfmt`, configs in
-`.oxlintrc.json` / `.oxfmtrc.json`) and prettier.
+`.oxlintrc.json` / `.oxfmtrc.json`).
 
 ## Workflow
 
@@ -108,16 +109,17 @@ user confirms it against real output — say "this should fix it, please verify 
   (save/load/import) and `toast.error/warning` directly only for the fingerprint-keyed alarm stream
   (`alarmToasts.ts`). The inline `useFlash()` banner is **only** for panel-anchored *status* (the
   project-menu / startup modal), never for a transient operation failure and never over the viewport.
-- **State sync is a focus-gated poll, not push.** `store.ts` reconciles at ~6 Hz, gated on
-  `document.hasFocus()` and `phase === 'ready'`, keyed on the engine's `sceneVersion` /
-  `selectionVersion` stamps. High-frequency edits (field scrubs, gizmo drags) use coalescers
+- **State sync is a focus-gated poll, not push.** `store.ts` runs a cheap state lane at ~20 Hz
+  (`FAST_RECONCILE_INTERVAL_MS = 50`), gated on `document.hasFocus()` and `phase === 'ready'`; heavier
+  scene/inspect refreshes fire only when the engine's `sceneVersion` / `selectionVersion` stamps change,
+  and metrics poll on their own ~10 Hz lane. High-frequency edits (field scrubs, gizmo drags) use coalescers
   and set `dragActive` to block the poll from clobbering optimistic local state.
 - **UI affordances come from shadcn/ui, not raw HTML.** Use the primitives in
   `src/components/ui/` instead of hand-rolling controls or falling back to native browser
   widgets. In particular, tooltips are `Tooltip`/`TooltipTrigger asChild`/`TooltipContent`
   (the `TooltipProvider` wraps the app in `App.tsx`) — never a `title=` attribute, which
-  the webview renders as an unstyled native tooltip. The only `title=` left in the tree is
-  the `DeleteConfirm` *prop* (a dialog heading). When the trigger is also another Radix
+  the webview renders as an unstyled native tooltip. The only `title=` left in the tree is the
+  `CloseAffordance` *prop* in `components/dock/TabStrip.tsx` (a tab close button). When the trigger is also another Radix
   trigger, chain the `asChild` slots down to the real element
   (`TooltipTrigger asChild > DropdownMenuTrigger asChild > Button`).
 - **A tooltip must add information.** Only tooltip an element whose meaning is not obvious
