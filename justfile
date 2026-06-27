@@ -3,6 +3,8 @@
 # host-side `ENV=… just …` prefix (it won't cross the toolbox boundary).
 
 set shell := ["bash", "-uc"]
+# Expose recipe args as $@/$1… so `{{reenter}}` can forward them across the toolbox re-exec.
+set positional-arguments
 
 repo := justfile_directory()
 engine := repo / "engine"
@@ -187,7 +189,7 @@ run-engine-software:
     {{default_project}}
     exec "{{engine_bin}}"
 
-# boot the host headless for a bounded number of frames (renders offscreen, no compositor)
+# boot the host headless on the GPU for a bounded number of frames (renders offscreen, no compositor)
 run-engine-headless frames="5":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -195,8 +197,41 @@ run-engine-headless frames="5":
     cd "{{engine}}"
     cargo build --bin saffron-host
     cargo run -p xtask -- shaders
+    {{nvidia_icd}}
     export SAFFRON_EDITOR_NATIVE_VIEWPORT=1
     SAFFRON_EXIT_AFTER_FRAMES={{frames}} SAFFRON_CONTROL_SOCK="/tmp/sa-just-$$.sock" "{{engine_bin}}"
+
+# screenshot the viewport + print per-pass GPU timings from a headless GPU boot (positional path arg)
+capture out="engine/target/capture.png":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    RECIPE=capture; {{reenter}}
+    cd "{{engine}}"
+    cargo build --bin saffron-host --bin sa
+    cargo run -p xtask -- shaders
+    {{nvidia_icd}}
+    {{default_project}}
+    export SAFFRON_EDITOR_NATIVE_VIEWPORT=1
+    sock="/tmp/sa-capture-$$.sock"; log="/tmp/sa-capture-$$.log"
+    export SAFFRON_CONTROL_SOCK="$sock"
+    case "{{out}}" in /*) out="{{out}}";; *) out="{{repo}}/{{out}}";; esac
+    mkdir -p "$(dirname "$out")"
+    "{{engine_bin}}" >"$log" 2>&1 &
+    host=$!
+    trap 'kill "$host" 2>/dev/null || true; rm -f "$sock"' EXIT
+    for _ in $(seq 1 80); do [ -S "$sock" ] && break; sleep 0.25; done
+    [ -S "$sock" ] || { echo "capture: host never opened $sock"; tail -20 "$log"; exit 1; }
+    SA="{{engine}}/target/debug/sa"
+    "$SA" screenshot --target viewport --path "$out" >/dev/null
+    # per-pass GPU timings: arm timestamps, then nudge the camera so the reactive loop renders a
+    # fresh burst in timestamps mode (a static scene idles and would otherwise report nothing).
+    "$SA" profiler.set-mode --mode timestamps >/dev/null
+    "$SA" set-camera --fov 44 >/dev/null; "$SA" set-camera --fov 45 >/dev/null
+    sleep 1
+    echo "--- pass timings ---"
+    "$SA" pass-timings
+    "$SA" quit >/dev/null 2>&1 || true
+    echo "capture: wrote $out"
 
 # the host-runnable control CLI; `just sa ping`, `just sa help`
 sa *args:
