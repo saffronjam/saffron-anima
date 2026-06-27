@@ -6,7 +6,7 @@ weight = 1
 # DDGI overview
 
 Dynamic Diffuse Global Illumination is a real-time technique that computes multi-bounce diffuse
-indirect light from a grid of irradiance probes re-traced every frame. Each probe gathers radiance
+indirect light from a grid of irradiance probes re-traced a slice at a time across frames. Each probe gathers radiance
 by tracing rays against a coarse voxel copy of the scene; a shaded surface then samples the nearest
 probes for its diffuse indirect term.
 
@@ -32,7 +32,12 @@ flowchart LR
 1. **Voxelize** rasterizes each draw's world-space AABB into a 32³ `rgba16f` 3D image — the
    geometry the rays march against ([voxel proxy](../voxel-scene-proxy/)).
 2. **Trace** marches 64 Fibonacci-sphere rays from each probe through the voxels, returning
-   radiance and hit distance per ray ([software trace](../software-ray-trace/)).
+   radiance and hit distance per ray ([software trace](../software-ray-trace/)). The trace is
+   **budgeted**: each frame re-rays only a rolling `DDGI_PROBE_BUDGET` slice (a quarter of the
+   volume), the offset advancing so the whole grid refreshes every four frames at a quarter of the
+   trace cost. Untraced probes keep their last rays, which the (full) blend re-applies — stable while
+   the volume is static, a few frames of latency under fast relight. Only the expensive trace is
+   budgeted; the cheap blend + border passes stay full-volume.
 3. **Blend irradiance** and **blend distance** integrate those rays into two octahedral atlases
    — directional irradiance and Chebyshev distance moments — with temporal hysteresis.
 4. **Border** copies each probe tile's octahedral gutter so bilinear sampling wraps correctly.

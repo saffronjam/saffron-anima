@@ -68,10 +68,12 @@ float3 sampleProbeIrradiance(uint3 p, float3 dir)
 [numthreads(64, 1, 1)]
 void computeMain(uint3 tid : SV_DispatchThreadID)
 {
-    uint probeIndex = tid.y;
     uint ray = tid.x;
     uint total = pc.probeCount.x * pc.probeCount.y * pc.probeCount.z;
-    if (probeIndex >= total || ray >= pc.probeCount.w)
+    // Round-robin probe budget: the dispatch covers only DDGI_PROBE_BUDGET probes, starting at the
+    // offset in skyColor.w and wrapping, so the whole volume refreshes over several frames.
+    uint probeIndex = (tid.y + uint(pc.skyColor.w)) % total;
+    if (ray >= pc.probeCount.w)
     {
         return;
     }

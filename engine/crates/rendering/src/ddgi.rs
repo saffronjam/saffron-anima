@@ -66,6 +66,13 @@ pub const DDGI_DIST_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
 /// The total probe count across the volume (one octahedral tile per probe).
 pub const DDGI_PROBE_TOTAL: u32 = DDGI_PROBES_X * DDGI_PROBES_Y * DDGI_PROBES_Z;
 
+/// Probes the trace re-rays per frame — a round-robin budget. Each frame traces a rolling window
+/// of this many probes (offset advancing by the budget), so the whole volume refreshes every
+/// `DDGI_PROBE_TOTAL / DDGI_PROBE_BUDGET` frames. Untraced probes keep their last rays, which the
+/// (full) blend re-applies — stable on a static volume, a few frames of latency under fast relight.
+/// The cheap blend + border passes stay full-volume; only the expensive ray trace is budgeted.
+pub const DDGI_PROBE_BUDGET: u32 = DDGI_PROBE_TOTAL / 4;
+
 /// The voxelize push: voxel resolution + box count + the world-space volume placement.
 /// 48 bytes, matching `ddgi_voxelize.slang`'s `Push`.
 #[repr(C)]
@@ -590,7 +597,11 @@ impl Ddgi {
             volume_extent: self.volume_extent.extend(0.0),
             sun_dir: self.sun_dir.extend(self.sun_intensity),
             sun_color: self.sun_color.extend(self.frame_index as f32),
-            sky_color: self.sky_color.extend(0.0),
+            // sky_color.w carries the round-robin probe offset for this frame: the trace dispatches
+            // DDGI_PROBE_BUDGET probes starting here (mod the total), cycling the whole volume.
+            sky_color: self.sky_color.extend(
+                (self.frame_index.wrapping_mul(DDGI_PROBE_BUDGET) % DDGI_PROBE_TOTAL) as f32,
+            ),
         }
     }
 
