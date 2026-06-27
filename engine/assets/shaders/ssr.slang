@@ -17,6 +17,7 @@ struct Push
     float4x4 projection;     // view -> clip
     float4x4 invProjection;  // clip -> view
     float4 params;           // x = max ray distance (view units), y = intensity, z = step count, w = frame index
+    float4 params2;          // unused here; keeps the shared SsgiPush layout (SSGI uses x = ray count)
 };
 [[vk::push_constant]] Push pc;
 

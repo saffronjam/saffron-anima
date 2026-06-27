@@ -63,9 +63,9 @@ pub struct ContactPush {
 
 const _: () = assert!(size_of::<ContactPush>() == 160);
 
-/// The SSGI trace push: projection + invProjection + a params vec4 (x = radius,
-/// y = intensity, z = step count, w = frame index). 144 bytes, matching
-/// `ssgi.slang`'s `Push`.
+/// The SSGI trace push: projection + invProjection + two params vec4s (x = radius,
+/// y = intensity, z = step count, w = frame index; then x = ray count). 160 bytes, matching
+/// `ssgi.slang`'s `Push`. Shared with the SSR pass, which ignores `params2`.
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SsgiPush {
@@ -75,9 +75,11 @@ pub struct SsgiPush {
     pub inv_projection: Mat4,
     /// x = gather radius (view units), y = intensity, z = step count, w = frame index.
     pub params: Vec4,
+    /// x = ray count (cosine-hemisphere samples per pixel); unused by the SSR pass.
+    pub params2: Vec4,
 }
 
-const _: () = assert!(size_of::<SsgiPush>() == 144);
+const _: () = assert!(size_of::<SsgiPush>() == 160);
 
 /// The SSGI temporal-accumulation push: a params vec4 (x = history weight, y = 1 if
 /// history is valid). 16 bytes, matching `ssgi_accum.slang`'s `Push`.
@@ -135,6 +137,9 @@ pub struct Ssao {
     /// SSGI ray-march step count, driven by the render-quality tier (the `ssgi.slang` push
     /// `params.z`). A runtime push-constant, so the tier dials it with no shader recompile.
     ssgi_steps: f32,
+    /// SSGI cosine-hemisphere ray count per pixel, driven by the render-quality tier (the
+    /// `ssgi.slang` push `params2.x`). A runtime push-constant, dialed with no shader recompile.
+    ssgi_rays: f32,
     /// Contact-shadow ray-march step count, driven by the render-quality tier (the `contact.slang`
     /// push `params.y`).
     contact_steps: f32,
@@ -201,8 +206,9 @@ impl Ssao {
             radius: 1.0,
             strength: 3.0,
             ssgi_intensity: 1.0,
-            // Defaults match the historical `High` tier (8 SSGI steps, 12 contact steps).
+            // Defaults match the historical `High` tier (8 SSGI steps, 4 rays, 12 contact steps).
             ssgi_steps: 8.0,
+            ssgi_rays: 4.0,
             contact_steps: 12.0,
             ssgi_frame: 0,
             ssr_steps: 24.0,
@@ -288,6 +294,7 @@ impl Ssao {
         self.use_ssao = quality.gtao_enabled;
         self.use_contact = quality.contact_enabled;
         self.ssgi_steps = quality.ssgi_steps;
+        self.ssgi_rays = quality.ssgi_rays;
         self.contact_steps = quality.contact_steps;
     }
 
@@ -305,6 +312,7 @@ impl Ssao {
                 self.ssgi_steps,
                 self.ssgi_frame as f32,
             ),
+            params2: Vec4::new(self.ssgi_rays, 0.0, 0.0, 0.0),
         }
     }
 
@@ -322,6 +330,7 @@ impl Ssao {
                 self.ssr_steps,
                 self.ssr_frame as f32,
             ),
+            params2: Vec4::ZERO,
         }
     }
 }
@@ -417,7 +426,7 @@ mod tests {
         assert_eq!(size_of::<GbufferPush>(), 128);
         assert_eq!(size_of::<GtaoPush>(), 80);
         assert_eq!(size_of::<ContactPush>(), 160);
-        assert_eq!(size_of::<SsgiPush>(), 144);
+        assert_eq!(size_of::<SsgiPush>(), 160);
         assert_eq!(size_of::<SsgiAccumPush>(), 16);
     }
 
@@ -499,6 +508,7 @@ mod tests {
                     8.0,
                     self.ssgi_frame as f32,
                 ),
+                params2: Vec4::new(4.0, 0.0, 0.0, 0.0),
             }
         }
     }

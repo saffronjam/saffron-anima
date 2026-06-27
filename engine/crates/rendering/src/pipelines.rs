@@ -487,7 +487,7 @@ impl Pipelines {
 
     /// The one-bounce SSGI trace compute PSO (compute3 layout, a 144-byte push).
     pub fn request_ssgi(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
-        self.request_screen_compute(ScreenCompute::Ssgi, "shaders/ssgi.spv", layout, 144)
+        self.request_screen_compute(ScreenCompute::Ssgi, "shaders/ssgi.spv", layout, 160)
     }
 
     /// The SSGI bilateral-blur compute PSO (compute3 layout, no push).
@@ -505,10 +505,10 @@ impl Pipelines {
         )
     }
 
-    /// The screen-space reflection trace compute PSO (compute3 layout, a 144-byte push,
-    /// same shape as the SSGI trace).
+    /// The screen-space reflection trace compute PSO (compute3 layout, a 160-byte push,
+    /// same shape as the SSGI trace; the shared `params2` slot is unused here).
     pub fn request_ssr(&mut self, layout: vk::DescriptorSetLayout) -> Option<Arc<Pipeline>> {
-        self.request_screen_compute(ScreenCompute::Ssr, "shaders/ssr.spv", layout, 144)
+        self.request_screen_compute(ScreenCompute::Ssr, "shaders/ssr.spv", layout, 160)
     }
 
     /// The SSGI prev-color history-copy compute PSO (compute2 layout, no push).

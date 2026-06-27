@@ -17,6 +17,7 @@ struct Push
     float4x4 projection;     // view -> clip
     float4x4 invProjection;  // clip -> view
     float4 params;           // x = radius (view units), y = intensity, z = step count, w = frame index
+    float4 params2;          // x = ray count (cosine-hemisphere samples per pixel)
 };
 [[vk::push_constant]] Push pc;
 
@@ -67,7 +68,7 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
     float ign = frac(52.9829189 * frac(0.06711056 * float(tid.x) + 0.00583715 * float(tid.y)));
     float rnd = frac(ign + pc.params.w * 0.6180339887);
 
-    const uint rayCount = 4;
+    uint rayCount = max(1u, uint(pc.params2.x));
     float3 indirect = float3(0.0);
     for (uint r = 0; r < rayCount; r = r + 1)
     {

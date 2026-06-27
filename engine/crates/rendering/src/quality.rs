@@ -70,6 +70,7 @@ impl QualityTier {
                 tier: self,
                 ssgi_enabled: false,
                 ssgi_steps: 4.0,
+                ssgi_rays: 4.0,
                 gtao_enabled: false,
                 contact_enabled: false,
                 contact_steps: 8.0,
@@ -78,6 +79,7 @@ impl QualityTier {
                 tier: self,
                 ssgi_enabled: true,
                 ssgi_steps: 4.0,
+                ssgi_rays: 3.0,
                 gtao_enabled: true,
                 contact_enabled: false,
                 contact_steps: 8.0,
@@ -86,6 +88,7 @@ impl QualityTier {
                 tier: self,
                 ssgi_enabled: true,
                 ssgi_steps: 8.0,
+                ssgi_rays: 4.0,
                 gtao_enabled: true,
                 contact_enabled: true,
                 contact_steps: 12.0,
@@ -94,6 +97,7 @@ impl QualityTier {
                 tier: self,
                 ssgi_enabled: true,
                 ssgi_steps: 12.0,
+                ssgi_rays: 6.0,
                 gtao_enabled: true,
                 contact_enabled: true,
                 contact_steps: 16.0,
@@ -114,6 +118,8 @@ pub struct RenderQuality {
     pub ssgi_enabled: bool,
     /// SSGI ray-march steps (the `ssgi.slang` push `params.z`).
     pub ssgi_steps: f32,
+    /// SSGI cosine-hemisphere rays per pixel (the `ssgi.slang` push `params2.x`).
+    pub ssgi_rays: f32,
     /// GTAO ambient occlusion on.
     pub gtao_enabled: bool,
     /// Screen-space contact shadows on.
@@ -159,6 +165,9 @@ mod tests {
         assert!(high.contact_enabled);
         assert!(ultra.ssgi_steps > high.ssgi_steps);
         assert!(high.ssgi_steps > medium.ssgi_steps);
+        // Ray count scales the same way: more cosine-hemisphere samples at the higher tiers.
+        assert!(ultra.ssgi_rays > high.ssgi_rays);
+        assert!(high.ssgi_rays >= medium.ssgi_rays);
     }
 
     #[test]
