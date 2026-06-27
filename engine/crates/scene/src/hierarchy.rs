@@ -661,7 +661,9 @@ mod tests {
         // S1: a single entity that carries the mesh directly (the collapsed single-identity root).
         let mut scene = Scene::new();
         let single = scene.create_entity("Single");
-        scene.add_component(single, Mesh { mesh: Uuid(11) }).unwrap();
+        scene
+            .add_component(single, Mesh { mesh: Uuid(11) })
+            .unwrap();
         assert_eq!(scene.model_mesh_entities(single), vec![single]);
         assert!(scene.model_has_renderable(single));
         assert_eq!(scene.model_rig_entity(single), None);
@@ -672,14 +674,22 @@ mod tests {
         let container = scene.create_entity("Forest");
         let door_a = scene.create_entity("DoorA");
         let door_b = scene.create_entity("DoorB");
-        scene.add_component(door_a, Mesh { mesh: Uuid(21) }).unwrap();
-        scene.add_component(door_b, Mesh { mesh: Uuid(22) }).unwrap();
+        scene
+            .add_component(door_a, Mesh { mesh: Uuid(21) })
+            .unwrap();
+        scene
+            .add_component(door_b, Mesh { mesh: Uuid(22) })
+            .unwrap();
         scene.set_parent(door_a, Some(container), false).unwrap();
         scene.set_parent(door_b, Some(container), false).unwrap();
         assert!(!scene.has_component::<Mesh>(container));
         assert!(scene.model_has_renderable(container));
         let meshes = scene.model_mesh_entities(container);
-        assert_eq!(meshes.len(), 2, "both child meshes resolve, not the container");
+        assert_eq!(
+            meshes.len(),
+            2,
+            "both child meshes resolve, not the container"
+        );
         assert!(meshes.contains(&door_a) && meshes.contains(&door_b));
         assert_eq!(scene.model_rig_entity(container), None);
 
@@ -696,7 +706,9 @@ mod tests {
                 },
             )
             .unwrap();
-        scene.set_parent(mesh_entity, Some(container), false).unwrap();
+        scene
+            .set_parent(mesh_entity, Some(container), false)
+            .unwrap();
         assert_eq!(scene.model_rig_entity(container), Some(mesh_entity));
         assert!(scene.model_has_renderable(container));
         assert_eq!(scene.model_mesh_entities(container), vec![mesh_entity]);

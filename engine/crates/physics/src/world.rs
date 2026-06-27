@@ -1084,13 +1084,13 @@ pub fn fit_collider_to_mesh(scene: &mut Scene, entity: Entity, cook: &mut MeshCo
     // The mesh-bearing entities to size against: the collider entity itself when it carries a
     // mesh, else its forest — the meshes of a multi-node model ride child nodes under the
     // container the collider sits on, so probing only `entity` finds nothing.
-    let mesh_entities: Vec<Entity> =
-        if scene.has_component::<MeshComponent>(entity) || scene.has_component::<SkinnedMesh>(entity)
-        {
-            vec![entity]
-        } else {
-            scene.model_mesh_entities(entity)
-        };
+    let mesh_entities: Vec<Entity> = if scene.has_component::<MeshComponent>(entity)
+        || scene.has_component::<SkinnedMesh>(entity)
+    {
+        vec![entity]
+    } else {
+        scene.model_mesh_entities(entity)
+    };
     if mesh_entities.is_empty() {
         return false; // no mesh to size against — keep the collider's defaults
     }

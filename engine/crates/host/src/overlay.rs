@@ -1843,7 +1843,9 @@ mod tests {
         ctx.scene
             .set_parent(mesh_entity, Some(container), false)
             .unwrap();
-        ctx.scene.set_parent(bone, Some(mesh_entity), false).unwrap();
+        ctx.scene
+            .set_parent(bone, Some(mesh_entity), false)
+            .unwrap();
         // Add the rig after the last reparent: `set_parent` relinks the hierarchy, which would
         // rebuild `bone_handles` from `skin.bones`; seeding the cache directly keeps it.
         ctx.scene

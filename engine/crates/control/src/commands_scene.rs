@@ -882,10 +882,7 @@ pub fn register_scene_commands(reg: &mut CommandRegistry) {
                     let radius = (hi - lo).length() * 0.5;
                     (center, (radius / (fovy * 0.5).tan() * 1.3).max(0.5))
                 }
-                None => (
-                    ctx.scene_edit.active_scene().world_translation(entity),
-                    5.0,
-                ),
+                None => (ctx.scene_edit.active_scene().world_translation(entity), 5.0),
             };
             ctx.scene_edit.camera.position = target - forward * distance;
             let scene = ctx.scene_edit.active_scene();
