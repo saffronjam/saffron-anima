@@ -30,9 +30,11 @@ float3 viewPosFromUv(float2 uv, float viewZ)
 [numthreads(8, 8, 1)]
 void computeMain(uint3 tid : SV_DispatchThreadID)
 {
+    // Bounds + uv come from the (possibly half-res) AO output, not the full-res G-buffer, so a
+    // half-res trace maps each output texel to the right full-res G-buffer sample.
     uint width;
     uint height;
-    gbuffer.GetDimensions(width, height);
+    aoOut.GetDimensions(width, height);
     if (tid.x >= width || tid.y >= height)
     {
         return;

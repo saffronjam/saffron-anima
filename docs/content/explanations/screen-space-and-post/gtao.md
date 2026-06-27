@@ -56,6 +56,11 @@ raw factor to an intermediate `ao_raw` target; a second compute pass (`ao-blur`)
 G-buffer normal and writes the final `ao_map` (sampled in the shader as `aoMap`). The blur is bilateral:
 it smooths across the noise but respects normal discontinuities, so AO does not bleed across edges.
 
+The trace runs at **half resolution** (`ao_raw` is half the viewport extent), and `ao-blur` doubles as
+the bilateral *upsample* back to the full-res `ao_map` — it bilinearly samples the half-res input
+through a linear sampler while the view-Z weights keep edges crisp. AO is a low-frequency signal, so
+the half-res trace (≈3× cheaper here) is visually free.
+
 ### Where the AO lands
 
 GTAO modulates only the indirect term. The mesh fragment shader computes the ambient contribution (flat

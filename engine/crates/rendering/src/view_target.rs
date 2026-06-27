@@ -163,6 +163,11 @@ pub struct ViewTarget {
     pub desired_width: u32,
     /// The render height the UI panel last requested for this view. See [`ViewTarget::desired_width`].
     pub desired_height: u32,
+    /// Dynamic-resolution factor in `(0, 1]`: the render targets are sized to
+    /// `round(desired * render_scale)` while the published frame stays at the desired
+    /// (native) size — the present blit upscales. `1.0` renders at native resolution. The
+    /// frame-budget controller lowers this to hold the budget on weak hardware.
+    pub render_scale: f32,
 
     /// Bumped whenever the targets are recreated (a resize).
     pub generation: u32,
@@ -251,6 +256,7 @@ impl ViewTarget {
             restir: RestirView::new(),
             desired_width: width,
             desired_height: height,
+            render_scale: 1.0,
             generation: 1,
             shm_capture: ShmCapture::default(),
         })
@@ -400,9 +406,17 @@ impl ViewTarget {
                 samples: vk::SampleCountFlags::TYPE_1,
             },
         )?;
+        // SSGI + GTAO trace into half-resolution targets (`ao_raw`, `ssgi_map`); the bilateral
+        // `ao-blur` / `ssgi-blur` passes upsample them back to full-res against the full-res
+        // G-buffer depth. Halving the ray-march raster is the bulk of the screen-space GI cost.
+        // Round up so an odd extent still covers every full-res pixel after the 2x upsample.
+        let half_extent = vk::Extent2D {
+            width: extent.width.div_ceil(2).max(1),
+            height: extent.height.div_ceil(2).max(1),
+        };
         let ao_raw = Image::new(
             resources,
-            &ImageDesc::color_2d(extent, AO_FORMAT, storage_sampled),
+            &ImageDesc::color_2d(half_extent, AO_FORMAT, storage_sampled),
         )?;
         let ao_map = Image::new(
             resources,
@@ -414,7 +428,7 @@ impl ViewTarget {
         )?;
         let ssgi_map = Image::new(
             resources,
-            &ImageDesc::color_2d(extent, G_NORMAL_FORMAT, storage_sampled),
+            &ImageDesc::color_2d(half_extent, G_NORMAL_FORMAT, storage_sampled),
         )?;
         let ssr_map = Image::new(
             resources,
@@ -767,8 +781,9 @@ impl ViewTarget {
             // gtao: g_normal -> ao_raw
             Binding::sampled(self.gtao_set, 0, nearest, g_normal),
             Binding::storage(self.gtao_set, 1, ao_raw),
-            // ao_blur: ao_raw + g_normal -> ao_map
-            Binding::sampled(self.ao_blur_set, 0, nearest, ao_raw),
+            // ao_blur: ao_raw + g_normal -> ao_map. ao_raw is half-res, so a LINEAR sampler
+            // bilinearly upsamples it; the depth-weighted taps then keep edges crisp.
+            Binding::sampled(self.ao_blur_set, 0, linear, ao_raw),
             Binding::sampled(self.ao_blur_set, 1, nearest, g_normal),
             Binding::storage(self.ao_blur_set, 2, ao_map),
             // contact: g_normal -> contact_map
@@ -782,8 +797,9 @@ impl ViewTarget {
             Binding::sampled(self.ssr_set, 0, nearest, g_normal),
             Binding::sampled(self.ssr_set, 1, linear, prev_color),
             Binding::storage(self.ssr_set, 2, ssr_map),
-            // ssgi_blur: ssgi_map + g_normal -> ssgi_denoised
-            Binding::sampled(self.ssgi_blur_set, 0, nearest, ssgi_map),
+            // ssgi_blur: ssgi_map + g_normal -> ssgi_denoised. ssgi_map is half-res, so a LINEAR
+            // sampler bilinearly upsamples it; the depth-weighted taps keep edges crisp.
+            Binding::sampled(self.ssgi_blur_set, 0, linear, ssgi_map),
             Binding::sampled(self.ssgi_blur_set, 1, nearest, g_normal),
             Binding::storage(self.ssgi_blur_set, 2, ssgi_denoised),
             // copy_color: offscreen -> prev_color
@@ -894,6 +910,27 @@ impl ViewTarget {
     /// The viewport extent of the targets.
     pub fn extent(&self) -> vk::Extent2D {
         self.offscreen.extent
+    }
+
+    /// The native (published) extent the frame is presented at — the last requested viewport
+    /// size, independent of [`ViewTarget::render_scale`]. The shm capture + the present blit's
+    /// destination use this; the render targets ([`ViewTarget::extent`]) may be smaller.
+    pub fn published_extent(&self) -> vk::Extent2D {
+        vk::Extent2D {
+            width: self.desired_width.max(1),
+            height: self.desired_height.max(1),
+        }
+    }
+
+    /// The render-target extent for the current desired size + [`ViewTarget::render_scale`]:
+    /// `round(desired * scale)`, clamped to at least 1px. This is what the offscreen + all
+    /// per-view render targets are sized to.
+    pub fn scaled_render_extent(&self) -> vk::Extent2D {
+        let scale = self.render_scale.clamp(0.1, 1.0);
+        vk::Extent2D {
+            width: ((self.desired_width as f32 * scale).round() as u32).max(1),
+            height: ((self.desired_height as f32 * scale).round() as u32).max(1),
+        }
     }
 }
 
