@@ -56,12 +56,22 @@ Four rays per pixel is far too few to converge a diffuse integral, so the raw ma
 clean it up, and both run whenever SSGI is enabled — independent of the final-image AA mode:
 
 - A **depth-aware spatial blur** (`ssgi-blur`, a 5×5 bilateral weighted by view-Z) smooths within the
-  frame without bleeding indirect light across depth edges.
+  frame without bleeding indirect light across depth edges. The trace runs at **half resolution**
+  (`ssgi_map` is half the viewport extent), and this same pass doubles as the bilateral *upsample*: it
+  writes the full-res `ssgi_denoised`, bilinearly samples the half-res input through a linear sampler,
+  and the view-Z weights keep the upsample crisp at edges. Halving the ray-march raster is the bulk of
+  the saving (the trace cost drops ~3× here), and indirect diffuse is low-frequency enough that the
+  upsample is visually lossless.
 - A **temporal accumulation** (`ssgi-accum`) reprojects the previous frame's resolved SSGI through the
   [motion vectors](../motion-vectors/), neighborhood-clamps the history to reject ghosting, and blends
   with an exponential moving average. This raises the effective sample count over many frames, so a
   matte surface converges to a smooth bounce instead of showing each frame's four sparse ray hits as
-  drifting streaks.
+  drifting streaks. A **per-pixel disocclusion reset** guards the reprojection: the blur stores each
+  pixel's view-Z in the SSGI alpha channel (the mesh samples only `.rgb`), and the accumulation
+  compares the reprojected history's stored view-Z against the current pixel's — when they diverge the
+  motion vector landed on a different surface (a newly revealed edge), so the history is dropped rather
+  than smeared across the seam. It is buffer-free: the depth ride-along reuses an otherwise-unused
+  channel, needing no extra target.
 
 SSGI owns this accumulation: its own ping-pong history pair and motion-vector dependency, so it
 converges in every AA mode — not only when [TAA](../taa/) is the display anti-aliasing. The mesh then

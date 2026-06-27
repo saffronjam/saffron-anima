@@ -40,5 +40,7 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
         }
     }
     float3 result = weight > 0.0 ? sum / weight : ssgiRaw.SampleLevel(uv, 0.0).rgb;
-    ssgiOut[tid.xy] = float4(result, 1.0);
+    // Carry this pixel's view-Z in the alpha channel (the mesh samples only .rgb). The temporal
+    // accumulation reads it back through the motion vector for a per-pixel disocclusion test.
+    ssgiOut[tid.xy] = float4(result, centerZ);
 }

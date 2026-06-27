@@ -34,7 +34,9 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
     float2 texel = 1.0 / float2(width, height);
     float2 uv = (float2(tid.xy) + 0.5) * texel;
 
-    float3 cur = current.SampleLevel(uv, 0.0).rgb;
+    float4 curSample = current.SampleLevel(uv, 0.0);
+    float3 cur = curSample.rgb;
+    float curZ = curSample.a; // this frame's view-Z, carried in alpha by ssgi-blur
 
     // 3x3 neighborhood min/max of the current frame — the AABB history is clamped to.
     float3 nmin = cur;
@@ -57,10 +59,20 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
     {
         weight = 0.0;
     }
-    float3 hist = history.SampleLevel(histUv, 0.0).rgb;
-    hist = clamp(hist, nmin, nmax);  // neighborhood clamp rejects ghosting
+    float4 hist4 = history.SampleLevel(histUv, 0.0);
+    // Per-pixel disocclusion: the reprojected history carries the view-Z it was written at; if that
+    // diverges from this pixel's view-Z the motion vector landed on a different surface (a newly
+    // revealed edge), so reset rather than smear the occluder's indirect light across the seam. The
+    // 3x3 neighborhood clamp below only bounds magnitude — this rejects the wrong surface outright.
+    float histZ = hist4.a;
+    if (weight > 0.0 && abs(curZ - histZ) > 0.1 * max(abs(curZ), 0.01))
+    {
+        weight = 0.0;
+    }
+    float3 hist = clamp(hist4.rgb, nmin, nmax); // neighborhood clamp rejects residual ghosting
 
     float3 result = lerp(cur, hist, weight);
-    outResolved[tid.xy] = float4(result, 1.0);
-    outHistory[tid.xy] = float4(result, 1.0);
+    // Propagate this frame's view-Z so next frame's reprojection can run the same test.
+    outResolved[tid.xy] = float4(result, curZ);
+    outHistory[tid.xy] = float4(result, curZ);
 }
