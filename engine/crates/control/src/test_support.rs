@@ -244,6 +244,10 @@ impl ControlRenderer for StubRenderer {
             false
         }
     }
+    fn render_scale(&self) -> f32 {
+        1.0
+    }
+    fn set_render_scale(&mut self, _scale: f32) {}
     fn tonemap_mode(&self) -> String {
         self.tonemap.clone()
     }

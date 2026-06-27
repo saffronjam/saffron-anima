@@ -285,6 +285,7 @@ export interface RenderStatsDto {
   ssao: boolean;
   contactShadows: boolean;
   ssgi: boolean;
+  renderScale: number;
   quality: string;
   tonemap: string;
   idle: boolean;
@@ -438,6 +439,7 @@ export interface PerfConfigDto {
 export interface SetPerfConfigParams {
   targetFps?: number;
   autoQuality?: boolean;
+  renderScale?: number;
   greenBudgetFrac?: number;
   greenMedianMul?: number;
   amberMedianMul?: number;

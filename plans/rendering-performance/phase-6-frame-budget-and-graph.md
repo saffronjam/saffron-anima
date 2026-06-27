@@ -1,6 +1,6 @@
 # Frame-budget controllers + render-graph hygiene
 
-**Status:** CORE COMPLETE (auto-quality budget controller); dynamic-res + pass-culling + async-PSO deferred
+**Status:** CORE COMPLETE (auto-quality budget controller + dynamic resolution); pass-culling + async-PSO deferred
 **Scope:** Both / Game (hitting frame budget on weak hardware ships in `saffron-player`)
 **Depends on:** Phase 3 (tier targets feed the auto-stepping variant)
 
@@ -15,18 +15,38 @@
 > `auto_quality=true` + a 4 ms budget on llvmpipe (work ≫ budget) the tier auto-stepped `high → low`.
 > Exposed over `sa set-perf-config --autoQuality true`. Build + clippy clean.
 >
-> **Deferred (documented), with rationale — these are the deep, visually-unverifiable parts:**
-> - **Dynamic *resolution* (scale the offscreen extent to the budget)** — the proper technique needs a
->   fixed max target + a scaled render rect (not per-frame target realloc); deeper GPU work whose
->   output I can't validate here. The tier-stepping controller is the safe budget-holding form; the
->   resolution variant is a follow-on (the controller's policy generalizes to it).
-> - **Render-graph pass culling** — **not safe to do blind here.** The graph's outputs are consumed
->   *externally* (the present blit + the shm readback sample the offscreen *outside* the graph), so
->   backward-reachability within the graph would see them as unconsumed and cull live passes →
->   broken render. It needs an explicit "output/never-cull" marking on every externally-consumed
->   resource first; a real change requiring visual validation. Deferred rather than risk a regression.
+> **Done — dynamic resolution.** A per-view `render_scale` (`(0, 1]`) sizes the render targets to
+> `round(desired * scale)` while the published frame stays native — the offscreen→shm and
+> offscreen→swapchain blits upscale (the windowed `record_present_blit` already took separate
+> src/dst extents; `record_shm_copy` now sizes its capture to the native `published_extent` and the
+> blit scales, filtered `LINEAR`). The render targets reallocate at a safe frame boundary
+> (`render_scene_offscreen`'s top), never mid-frame. The `BudgetController` generalized to a two-dial
+> ladder: it spends tier steps first (cheaper GI is less visible than fewer pixels) and only drops
+> resolution **below the `Low` floor**, restoring resolution before raising the tier on the way back
+> up — a controller `Scale` step is deferred to `pending_render_scale` (a resize can't run from the
+> post-submit telemetry hook). Manual override via `set-perf-config --renderScale`; reported in
+> `render-stats` (`renderScale`). Unit-tested (the below-floor scale steps in `budget.rs`) and
+> **GPU-validated headless on the RTX 3070 Ti**: at scale 0.5 the scene pass dropped 0.66→0.18 ms and
+> the whole frame 1.9→0.77 ms, the offscreen rendered 800×450 while the publish stayed 1600×900, the
+> image was correct, reverting to 1.0 was clean, and the log was validation-clean.
+>
+> **Deferred (documented), with rationale — the remaining deep parts:**
+> - **Render-graph pass culling** — **attempted and reverted; the deferral's original warning is
+>   confirmed.** The idea was to use the `external_layout` slot as the "this leaves the graph"
+>   never-cull root and backward-walk reachability. It was implemented, and a single full-frame GPU
+>   capture looked clean — but the `saffron-rendering` GPU validation tests caught it: **not every
+>   externally-consumed resource carries an `external_layout` slot.** Some targets are imported with
+>   `None` yet read *after* the graph (the offscreen sampled by `record_shm_copy`, depth in the
+>   prepass tests), so reachability from external-slotted resources alone wrongly culled their
+>   producers → missing layout transitions → validation errors. A *safe* cull needs an explicit
+>   per-resource "external output" marking at every `import_image` site that is consumed outside the
+>   graph (exactly what the original deferral said), and even then it culls **zero** today because the
+>   graph has no transient resources — every resource is imported and potentially read downstream. So
+>   the value is nil until transient/aliased graph resources exist; revisit it *with* them. Reverted to
+>   keep the renderer correct. (Lesson: a single capture is not sufficient validation for a
+>   graph-execution change — the validation-test suite is.)
 > - **Async PSO compilation** — threading the PSO cache off the present path risks races; a focused,
->   separately-validated change. Deferred.
+>   separately-validated change whose absence-of-races can't be shown by a screenshot. Deferred.
 
 ## Goal
 

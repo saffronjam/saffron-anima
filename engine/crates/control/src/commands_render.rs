@@ -213,6 +213,7 @@ fn render_stats_dto(renderer: &dyn ControlRenderer) -> RenderStatsDto {
         ssao: renderer.ssao_enabled(),
         contact_shadows: renderer.contact_shadows_enabled(),
         ssgi: renderer.ssgi_enabled(),
+        render_scale: renderer.render_scale(),
         quality: renderer.render_quality_tier(),
         tonemap: renderer.tonemap_mode(),
         idle: renderer.reactive_idle(),
@@ -603,6 +604,9 @@ pub fn register_render_commands(reg: &mut CommandRegistry) {
                 config.auto_quality = v;
             }
             ctx.renderer.set_perf_config(config);
+            if let Some(v) = params.render_scale {
+                ctx.renderer.set_render_scale(v);
+            }
             Ok(perf_config_dto(ctx.renderer.perf_config()))
         },
     );

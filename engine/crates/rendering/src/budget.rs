@@ -8,15 +8,18 @@
 //! cooldown after each switch) keeps it from oscillating, and it never auto-selects `Ultra` (a
 //! deliberate stills/screenshot tier) or drops below `Low`.
 //!
-//! It reuses the Phase-3 tier system as its actuator — a step is just a `set_render_quality` — so it
-//! adds no new render path. The dynamic-*resolution* variant (scaling the offscreen extent) is a
-//! deeper, separate change; this tier-stepping controller is the safe, self-contained core.
+//! It actuates two dials. The first is the Phase-3 quality tier — a step is just a
+//! `set_render_quality`. Below the tier floor (`Low`) it then steps **dynamic resolution**: the
+//! render targets shrink and the present blit upscales, so a frame that even `Low` GI can't hold
+//! drops resolution instead. The order is deliberate — going down it spends tier steps first
+//! (cheaper GI is less visible than fewer pixels), and coming back up it restores resolution before
+//! raising the tier.
 
 use crate::quality::QualityTier;
 
-/// Consecutive over-budget frames before stepping the tier down.
+/// Consecutive over-budget frames before stepping down.
 const OVER_BUDGET_STEP: u32 = 12;
-/// Consecutive comfortably-under-budget frames before stepping the tier up.
+/// Consecutive comfortably-under-budget frames before stepping up.
 const UNDER_BUDGET_STEP: u32 = 90;
 /// A single frame this many times the budget forces an immediate downstep (a "panic" hitch).
 const PANIC_MULTIPLE: f32 = 2.0;
@@ -28,6 +31,33 @@ const COOLDOWN_FRAMES: u32 = 30;
 /// The auto-quality tier ladder, cheapest first. `Ultra` is excluded — it is an explicit
 /// stills/screenshot tier, never auto-selected.
 const LADDER: [QualityTier; 3] = [QualityTier::Low, QualityTier::Medium, QualityTier::High];
+
+/// The dynamic-resolution ladder, cheapest first; `1.0` is native. Stepped only below the tier
+/// floor, so most scenes never leave native resolution.
+const SCALE_LADDER: [f32; 5] = [0.5, 0.59, 0.71, 0.83, 1.0];
+
+/// One budget adjustment: change the quality tier, or (below the tier floor) the render scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BudgetStep {
+    /// Switch to this render-quality tier.
+    Tier(QualityTier),
+    /// Switch to this dynamic-resolution factor (`(0, 1]`).
+    Scale(f32),
+}
+
+/// The `SCALE_LADDER` rung nearest `scale` (so a hand-set scale snaps onto the ladder).
+fn scale_rung(scale: f32) -> usize {
+    SCALE_LADDER
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            (*a - scale)
+                .abs()
+                .partial_cmp(&(*b - scale).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map_or(SCALE_LADDER.len() - 1, |(i, _)| i)
+}
 
 /// The rolling state of the frame-budget controller.
 #[derive(Clone, Copy, Debug, Default)]
@@ -44,27 +74,37 @@ impl BudgetController {
         Self::default()
     }
 
-    /// Folds one frame's work time (ms) against the budget (ms) and returns the tier to switch to,
-    /// or `None` to hold. `current` is the active tier. A non-positive `budget_ms` (uncapped) or a
-    /// `current` tier off the auto ladder (e.g. `Ultra`/`Custom`) holds.
+    /// Folds one frame's work time (ms) against the budget (ms) and returns the step to take, or
+    /// `None` to hold. `tier`/`scale` are the active dials. Going down it steps the tier first and
+    /// only drops resolution once at the `Low` floor; coming up it restores resolution before
+    /// raising the tier. A non-positive `budget_ms` (uncapped) or a `tier` off the auto ladder
+    /// (e.g. `Ultra`/`Custom`) holds.
     pub fn update(
         &mut self,
         frame_ms: f32,
         budget_ms: f32,
-        current: QualityTier,
-    ) -> Option<QualityTier> {
+        tier: QualityTier,
+        scale: f32,
+    ) -> Option<BudgetStep> {
         if budget_ms <= 0.0 {
             return None;
         }
-        let rung = LADDER.iter().position(|&t| t == current)?;
+        let rung = LADDER.iter().position(|&t| t == tier)?;
+        let srung = scale_rung(scale);
 
         if self.cooldown > 0 {
             self.cooldown -= 1;
         }
 
-        // Panic: a single very-late frame steps down at once (bypassing the streak + cooldown).
-        if frame_ms > budget_ms * PANIC_MULTIPLE && rung > 0 {
-            return Some(self.commit(LADDER[rung - 1]));
+        // Panic: a single very-late frame steps down at once (bypassing the streak + cooldown) —
+        // tier first, then resolution at the floor.
+        if frame_ms > budget_ms * PANIC_MULTIPLE {
+            if rung > 0 {
+                return Some(self.commit(BudgetStep::Tier(LADDER[rung - 1])));
+            }
+            if srung > 0 {
+                return Some(self.commit(BudgetStep::Scale(SCALE_LADDER[srung - 1])));
+            }
         }
 
         if frame_ms > budget_ms {
@@ -82,21 +122,31 @@ impl BudgetController {
         if self.cooldown > 0 {
             return None;
         }
-        if self.over >= OVER_BUDGET_STEP && rung > 0 {
-            return Some(self.commit(LADDER[rung - 1]));
+        if self.over >= OVER_BUDGET_STEP {
+            if rung > 0 {
+                return Some(self.commit(BudgetStep::Tier(LADDER[rung - 1])));
+            }
+            if srung > 0 {
+                return Some(self.commit(BudgetStep::Scale(SCALE_LADDER[srung - 1])));
+            }
         }
-        if self.under >= UNDER_BUDGET_STEP && rung + 1 < LADDER.len() {
-            return Some(self.commit(LADDER[rung + 1]));
+        if self.under >= UNDER_BUDGET_STEP {
+            if srung + 1 < SCALE_LADDER.len() {
+                return Some(self.commit(BudgetStep::Scale(SCALE_LADDER[srung + 1])));
+            }
+            if rung + 1 < LADDER.len() {
+                return Some(self.commit(BudgetStep::Tier(LADDER[rung + 1])));
+            }
         }
         None
     }
 
     /// Records a committed switch: reset the streaks and arm the cooldown.
-    fn commit(&mut self, tier: QualityTier) -> QualityTier {
+    fn commit(&mut self, step: BudgetStep) -> BudgetStep {
         self.over = 0;
         self.under = 0;
         self.cooldown = COOLDOWN_FRAMES;
-        tier
+        step
     }
 }
 
@@ -104,16 +154,19 @@ impl BudgetController {
 mod tests {
     use super::*;
 
+    // Native render scale (1.0) for the tier-only cases.
+    const NATIVE: f32 = 1.0;
+
     #[test]
     fn sustained_over_budget_steps_down_one_rung() {
         let mut c = BudgetController::new();
         // Just under the panic multiple, so it takes the streak path.
         for _ in 0..OVER_BUDGET_STEP - 1 {
-            assert_eq!(c.update(20.0, 16.0, QualityTier::High), None);
+            assert_eq!(c.update(20.0, 16.0, QualityTier::High, NATIVE), None);
         }
         assert_eq!(
-            c.update(20.0, 16.0, QualityTier::High),
-            Some(QualityTier::Medium),
+            c.update(20.0, 16.0, QualityTier::High, NATIVE),
+            Some(BudgetStep::Tier(QualityTier::Medium)),
             "steps High → Medium after the over-budget streak"
         );
     }
@@ -122,8 +175,8 @@ mod tests {
     fn a_panic_frame_steps_down_immediately() {
         let mut c = BudgetController::new();
         assert_eq!(
-            c.update(40.0, 16.0, QualityTier::Medium),
-            Some(QualityTier::Low),
+            c.update(40.0, 16.0, QualityTier::Medium, NATIVE),
+            Some(BudgetStep::Tier(QualityTier::Low)),
             "a >2× budget frame steps down at once"
         );
     }
@@ -133,30 +186,61 @@ mod tests {
         let mut c = BudgetController::new();
         // Comfortable headroom for the up-step streak.
         for _ in 0..UNDER_BUDGET_STEP - 1 {
-            assert_eq!(c.update(5.0, 16.0, QualityTier::Low), None);
+            assert_eq!(c.update(5.0, 16.0, QualityTier::Low, NATIVE), None);
         }
         assert_eq!(
-            c.update(5.0, 16.0, QualityTier::Low),
-            Some(QualityTier::Medium),
-            "steps Low → Medium after the headroom streak"
+            c.update(5.0, 16.0, QualityTier::Low, NATIVE),
+            Some(BudgetStep::Tier(QualityTier::Medium)),
+            "at native scale, steps Low → Medium after the headroom streak"
         );
         // The cooldown now holds even with continued headroom.
         assert_eq!(
-            c.update(5.0, 16.0, QualityTier::Medium),
+            c.update(5.0, 16.0, QualityTier::Medium, NATIVE),
             None,
             "cooldown holds"
         );
     }
 
     #[test]
-    fn never_steps_below_low_or_above_high() {
+    fn below_low_it_drops_resolution_then_floors() {
+        // At the Low tier floor + native scale, sustained over-budget drops resolution one rung.
         let mut c = BudgetController::new();
-        // Already at Low, panic frame: nothing below Low.
-        assert_eq!(c.update(100.0, 16.0, QualityTier::Low), None);
-        // At High with endless headroom: never auto-climbs to Ultra.
+        for _ in 0..OVER_BUDGET_STEP - 1 {
+            assert_eq!(c.update(20.0, 16.0, QualityTier::Low, NATIVE), None);
+        }
+        assert_eq!(
+            c.update(20.0, 16.0, QualityTier::Low, NATIVE),
+            Some(BudgetStep::Scale(0.83)),
+            "Low + native + over-budget steps the render scale down"
+        );
+        // At the scale floor, a panic frame has nothing left to give.
+        let mut c = BudgetController::new();
+        assert_eq!(
+            c.update(100.0, 16.0, QualityTier::Low, 0.5),
+            None,
+            "nothing below Low + minimum scale"
+        );
+    }
+
+    #[test]
+    fn coming_up_it_restores_resolution_before_raising_the_tier() {
+        let mut c = BudgetController::new();
+        for _ in 0..UNDER_BUDGET_STEP - 1 {
+            assert_eq!(c.update(5.0, 16.0, QualityTier::Low, 0.71), None);
+        }
+        assert_eq!(
+            c.update(5.0, 16.0, QualityTier::Low, 0.71),
+            Some(BudgetStep::Scale(0.83)),
+            "headroom restores resolution first, holding the tier at Low"
+        );
+    }
+
+    #[test]
+    fn never_climbs_above_high() {
+        // At High + native with endless headroom: never auto-climbs to Ultra or past native scale.
         let mut c = BudgetController::new();
         for _ in 0..UNDER_BUDGET_STEP * 2 {
-            assert_eq!(c.update(1.0, 16.0, QualityTier::High), None);
+            assert_eq!(c.update(1.0, 16.0, QualityTier::High, NATIVE), None);
         }
     }
 
@@ -164,17 +248,17 @@ mod tests {
     fn uncapped_or_off_ladder_holds() {
         let mut c = BudgetController::new();
         assert_eq!(
-            c.update(100.0, 0.0, QualityTier::High),
+            c.update(100.0, 0.0, QualityTier::High, NATIVE),
             None,
             "uncapped holds"
         );
         assert_eq!(
-            c.update(100.0, 16.0, QualityTier::Ultra),
+            c.update(100.0, 16.0, QualityTier::Ultra, NATIVE),
             None,
             "Ultra is off the auto ladder"
         );
         assert_eq!(
-            c.update(100.0, 16.0, QualityTier::Custom),
+            c.update(100.0, 16.0, QualityTier::Custom, NATIVE),
             None,
             "Custom is off the auto ladder"
         );

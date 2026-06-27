@@ -93,6 +93,14 @@ impl ControlRenderer for HostControlRenderer<'_> {
     fn render_quality_tier(&self) -> String {
         self.renderer.render_quality().tier.as_str().to_owned()
     }
+    fn render_scale(&self) -> f32 {
+        self.renderer.active_render_scale()
+    }
+    fn set_render_scale(&mut self, scale: f32) {
+        if let Err(err) = self.renderer.set_active_render_scale(scale) {
+            tracing::error!("set_render_scale failed: {err}");
+        }
+    }
     fn set_render_quality(&mut self, tier: &str) -> bool {
         match saffron_rendering::QualityTier::from_name(tier) {
             Some(tier) => {

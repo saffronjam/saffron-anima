@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use ash::vk;
 use saffron_geometry::glam::Mat4;
 
-use crate::budget::BudgetController;
-use crate::ddgi::{DDGI_PROBE_TOTAL, DDGI_RAYS_PER_PROBE, DDGI_VOXEL_RES};
+use crate::budget::{BudgetController, BudgetStep};
+use crate::ddgi::{DDGI_RAYS_PER_PROBE, DDGI_VOXEL_RES};
 use crate::descriptors::Descriptors;
 use crate::device::SurfaceSource;
 use crate::draw_list::{DrawItem, RenderStats, SceneDrawList};
@@ -227,6 +227,9 @@ struct FramePipelines {
     morph: Option<Arc<crate::Pipeline>>,
     shadow: Option<Arc<crate::Pipeline>>,
     point_shadow: Option<Arc<crate::Pipeline>>,
+    /// Whether the **static** point-shadow cube needs re-rendering this frame (its content key or
+    /// image changed). The dynamic cube always re-renders when `point_shadow` is `Some`.
+    static_point_shadow_dirty: bool,
     /// The thin G-buffer prepass + the screen-space compute PSOs, resolved when the
     /// screen-space chain runs this frame (any of GTAO / contact / SSGI on).
     gbuffer: Option<Arc<crate::Pipeline>>,
@@ -475,6 +478,9 @@ pub struct Renderer {
     /// The frame-budget controller that auto-steps `render_quality` to hold the budget when
     /// `PerfConfig::auto_quality` is on (off by default — then it never runs).
     budget_controller: BudgetController,
+    /// A render-scale change the budget controller requested, applied at the next frame's safe
+    /// resize point (a resize must not run from the post-submit telemetry hook).
+    pending_render_scale: Option<f32>,
 
     /// The active tonemap operator (default ACES), applied in the tonemap pass + reported in stats.
     tonemap_mode: TonemapMode,
@@ -812,6 +818,7 @@ impl Renderer {
             last_point_shadow_cube: vk::Image::null(),
             render_quality: RenderQuality::default(),
             budget_controller: BudgetController::new(),
+            pending_render_scale: None,
             tonemap_mode: TonemapMode::default(),
             reactive: ReactiveState::default(),
             stats: RenderStats::default(),
@@ -1357,19 +1364,70 @@ impl Renderer {
         let i = view.index();
         self.views[i].desired_width = width;
         self.views[i].desired_height = height;
+        self.apply_render_extent(i)
+    }
+
+    /// Sets the dynamic-resolution factor for a view and re-sizes its render targets to
+    /// `round(desired * scale)`, holding the published (native) size constant — the present
+    /// blit upscales. Clamped to `(0.1, 1.0]`. A no-op if unchanged or the view is unsized.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Vk`] if recreating the render targets fails.
+    pub fn set_render_scale(&mut self, view: ViewId, scale: f32) -> Result<()> {
+        let i = view.index();
+        let clamped = scale.clamp(0.1, 1.0);
+        if (self.views[i].render_scale - clamped).abs() < f32::EPSILON {
+            return Ok(());
+        }
+        self.views[i].render_scale = clamped;
+        if self.views[i].desired_width == 0 || self.views[i].desired_height == 0 {
+            return Ok(());
+        }
+        self.apply_render_extent(i)
+    }
+
+    /// The active view's dynamic-resolution factor.
+    #[must_use]
+    pub fn render_scale(&self, view: ViewId) -> f32 {
+        self.views[view.index()].render_scale
+    }
+
+    /// The dynamic-resolution factor of the currently-active view (the one `render-stats` reports).
+    #[must_use]
+    pub fn active_render_scale(&self) -> f32 {
+        self.views[self.active_view.index()].render_scale
+    }
+
+    /// Sets the dynamic-resolution factor of the currently-active view (the manual-override path;
+    /// `auto_quality` overrides it each frame when on).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Vk`] if recreating the render targets fails.
+    pub fn set_active_render_scale(&mut self, scale: f32) -> Result<()> {
+        let view = self.active_view;
+        self.set_render_scale(view, scale)
+    }
+
+    /// (Re)sizes view `i`'s render targets to its `scaled_render_extent` (desired × render
+    /// scale), rebuilding the screen-space + AA + ReSTIR targets. A no-op when the offscreen
+    /// is already at that extent.
+    fn apply_render_extent(&mut self, i: usize) -> Result<()> {
+        let target = self.views[i].scaled_render_extent();
         let extent = self.views[i].extent();
-        if extent.width == width && extent.height == height {
+        if extent.width == target.width && extent.height == target.height {
             return Ok(());
         }
         self.device.wait_idle()?;
-        self.views[i].resize(&self.device, width, height)?;
-        // The screen-space images are viewport-sized; rebuild them + rewrite the per-view
+        self.views[i].resize(&self.device, target.width, target.height)?;
+        // The screen-space images are render-extent-sized; rebuild them + rewrite the per-view
         // sets, which also resets the SSGI history validity (the reprojection is stale).
         self.views[i].build_screen_space(&self.device, &self.descriptors, &self.ssao)?;
         // The AA targets (motion / history / scratch / MSAA) follow the offscreen extent;
         // rebuild them too, which invalidates the temporal reprojection.
         self.views[i].build_aa_targets(&self.device, &self.descriptors, self.aa)?;
-        // The ReSTIR reservoirs + radiance are viewport-sized; rebuild them at the new
+        // The ReSTIR reservoirs + radiance are render-extent-sized; rebuild them at the new
         // extent (arming a temporal reset — the reservoir history is stale). A no-op on a
         // software device.
         let extent = self.views[i].extent();
@@ -1480,11 +1538,14 @@ impl Renderer {
     /// Returns [`Error::Vk`] if the blit format is unsupported or an allocation fails.
     fn record_shm_copy(&mut self, cmd: vk::CommandBuffer, slot: usize) -> Result<()> {
         let active = self.active_view.index();
-        let extent = self.views[active].offscreen.extent;
-        if extent.width == 0 || extent.height == 0 {
+        let render_extent = self.views[active].offscreen.extent;
+        let publish_extent = self.views[active].published_extent();
+        if render_extent.width == 0 || render_extent.height == 0 {
             return Ok(());
         }
-        self.views[active].ensure_shm_capture(&self.device, slot, extent)?;
+        // The shm capture is at the published (native) size; the blit upscales the
+        // possibly-smaller offscreen into it when dynamic resolution is active.
+        self.views[active].ensure_shm_capture(&self.device, slot, publish_extent)?;
 
         let raw = self.device.raw();
         let view = &self.views[active];
@@ -1528,8 +1589,8 @@ impl Renderer {
             .src_offsets([
                 vk::Offset3D { x: 0, y: 0, z: 0 },
                 vk::Offset3D {
-                    x: extent.width as i32,
-                    y: extent.height as i32,
+                    x: render_extent.width as i32,
+                    y: render_extent.height as i32,
                     z: 1,
                 },
             ])
@@ -1542,8 +1603,8 @@ impl Renderer {
             .dst_offsets([
                 vk::Offset3D { x: 0, y: 0, z: 0 },
                 vk::Offset3D {
-                    x: extent.width as i32,
-                    y: extent.height as i32,
+                    x: publish_extent.width as i32,
+                    y: publish_extent.height as i32,
                     z: 1,
                 },
             ]);
@@ -1555,8 +1616,8 @@ impl Renderer {
                 layer_count: 1,
             })
             .image_extent(vk::Extent3D {
-                width: extent.width,
-                height: extent.height,
+                width: publish_extent.width,
+                height: publish_extent.height,
                 depth: 1,
             });
 
@@ -1597,7 +1658,9 @@ impl Renderer {
                 dst_image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[blit],
-                vk::Filter::NEAREST,
+                // LINEAR so a dynamic-resolution upscale (render_extent < publish_extent) is
+                // smooth; identical to NEAREST when the extents match (native render).
+                vk::Filter::LINEAR,
             );
             // BGRA8 → TRANSFER_SRC for the buffer copy.
             capture_barrier(
@@ -2379,17 +2442,24 @@ impl Renderer {
         self.alarms
             .tick(&self.frame_history, &self.perf_config, &inputs);
 
-        // Auto-quality: when enabled, step the render-quality tier to hold the frame budget. The
-        // frame work time (busy + GPU-fence wait, before the loop's pacing sleep) is the signal.
-        // Off by default, so the controller never runs and the tier stays user-/project-set.
-        if self.perf_config.auto_quality
-            && let Some(tier) = self.budget_controller.update(
+        // Auto-quality: when enabled, step the render-quality tier (then, below the tier floor, the
+        // render scale) to hold the frame budget. The frame work time (busy + GPU-fence wait, before
+        // the loop's pacing sleep) is the signal. Off by default, so the controller never runs and
+        // the tier/scale stay user-/project-set.
+        if self.perf_config.auto_quality {
+            let active_scale = self.views[self.active_view.index()].render_scale;
+            match self.budget_controller.update(
                 frame_time_ms,
                 self.perf_config.budget_ms(),
                 self.render_quality.tier,
-            )
-        {
-            self.set_render_quality(tier.resolve());
+                active_scale,
+            ) {
+                Some(BudgetStep::Tier(tier)) => self.set_render_quality(tier.resolve()),
+                // A resolution change reallocates the render targets; defer it to the next frame's
+                // safe resize point — the just-submitted frame still references the current targets.
+                Some(BudgetStep::Scale(scale)) => self.pending_render_scale = Some(scale),
+                None => {}
+            }
         }
     }
 
@@ -2708,6 +2778,13 @@ impl Renderer {
     }
 
     pub fn render_scene_offscreen(&mut self) -> Result<()> {
+        // Apply a budget-controller render-scale change here — a safe frame boundary (it idles
+        // the GPU + reallocates the render targets), unlike the post-submit telemetry hook that
+        // requested it. Rare (hysteresis-gated), so the realloc cost is amortized.
+        if let Some(scale) = self.pending_render_scale.take() {
+            self.set_render_scale(self.active_view, scale)?;
+        }
+
         // Re-bake the IBL environment if the sky inputs changed (the directional light
         // moved). Deferred to here — a GPU-idle point — so the visible sky + IBL relight
         // together. The bake waits idle internally; an editor-time event, not per-frame hot
@@ -2774,22 +2851,29 @@ impl Renderer {
             } else {
                 None
             };
-        // Point-shadow cube cache: re-render only when the light or a caster moved (`content_key`)
-        // or the cube image was recreated. A static light + casters reuse the cached cube while the
-        // camera moves, so the ~0.55 ms 6-face render is skipped. The cube persists in
-        // `SHADER_READ_ONLY` between frames, so a skipped frame samples the cached shadow.
+        // Point-shadow cubes. The PSO is needed whenever a point light casts; the dynamic cube
+        // (skinned/morph casters) re-renders every active frame, while the **static** cube
+        // (everything else) re-renders only when its content key (light + static casters) or the
+        // cube image changed — a static light + static casters reuse the cached static cube while a
+        // character animates, so only the (few) dynamic casters re-render. Both persist in
+        // `SHADER_READ_ONLY` between frames, so a skipped pass samples its cached cube.
         let point_shadow_pipeline = if self.lighting.point_shadow_pending() {
+            self.pipelines.request_point_shadow()
+        } else {
+            None
+        };
+        let static_point_shadow_dirty = if point_shadow_pipeline.is_some() {
             let key = self.lighting.point_shadow_key();
             let cube = self.targets.point_shadow.image();
             if self.last_point_shadow_key == Some(key) && self.last_point_shadow_cube == cube {
-                None
+                false
             } else {
                 self.last_point_shadow_key = Some(key);
                 self.last_point_shadow_cube = cube;
-                self.pipelines.request_point_shadow()
+                true
             }
         } else {
-            None
+            false
         };
 
         // Screen-space effects ride a thin G-buffer prepass that runs when ANY of GTAO /
@@ -3016,6 +3100,7 @@ impl Renderer {
             morph: morph_pipeline,
             shadow: shadow_pipeline,
             point_shadow: point_shadow_pipeline,
+            static_point_shadow_dirty,
             gbuffer,
             gtao,
             ao_blur,
@@ -3394,28 +3479,61 @@ impl Renderer {
         // scopes + manages the cube's layout (the cube's 6 layers exceed the graph's
         // single-layer barrier).
         if let Some(point) = &pipelines.point_shadow {
-            let target = PointShadowTarget {
-                cube_image: self.targets.point_shadow.image(),
-                face_views: std::array::from_fn(|f| self.targets.point_shadow.face_view(f)),
-                depth_image: self.targets.point_shadow.depth_image(),
-                depth_view: self.targets.point_shadow.depth_view(),
-                extent: self.targets.point_shadow.extent,
-            };
             let faces = point_shadow_face_matrices(
                 self.lighting.point_shadow_pos(),
                 self.lighting.point_shadow_far(),
             );
             let light_pos = self.lighting.point_shadow_pos();
             let far_plane = self.lighting.point_shadow_far();
-            let list = self.scene_draw_list.shallow_clone();
-            let point = Arc::clone(point);
-            let raw_body = raw.clone();
             let point_pipeline = point.handle();
             let point_layout = point.layout();
-            // The cube was UNDEFINED until its first write; transition the entry layout
-            // from UNDEFINED on frame one, then ShaderReadOnly thereafter (the body's
-            // first barrier preserves contents — every face clears, so either is fine).
-            let mut pass = RgPass::compute("point-shadow").body(move |cmd| {
+
+            // Static cube: non-deformed casters, rendered only when its content key / image
+            // changed. Skipped frames sample the cached cube (it persists ShaderReadOnly).
+            if pipelines.static_point_shadow_dirty {
+                let target = PointShadowTarget {
+                    cube_image: self.targets.point_shadow.image(),
+                    face_views: std::array::from_fn(|f| self.targets.point_shadow.face_view(f)),
+                    depth_image: self.targets.point_shadow.depth_image(),
+                    depth_view: self.targets.point_shadow.depth_view(),
+                    extent: self.targets.point_shadow.extent,
+                };
+                let list = self.scene_draw_list.shallow_clone();
+                let point_static = Arc::clone(point);
+                let raw_body = raw.clone();
+                graph.add_pass(RgPass::compute("point-shadow-static").body(move |cmd| {
+                    record_point_shadow(
+                        &raw_body,
+                        cmd,
+                        &list,
+                        point_pipeline,
+                        point_layout,
+                        instance_set,
+                        &target,
+                        &faces,
+                        light_pos,
+                        far_plane,
+                        None, // static casters never read the deformed buffer
+                        false,
+                    );
+                    drop(point_static);
+                }));
+                self.targets.point_shadow.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            }
+
+            // Dynamic cube: deformed (skinned / morph) casters, re-rendered every active frame so a
+            // moving character's shadow tracks it against the cached static environment cube.
+            let dyn_target = PointShadowTarget {
+                cube_image: self.targets.point_shadow_dynamic.image(),
+                face_views: std::array::from_fn(|f| self.targets.point_shadow_dynamic.face_view(f)),
+                depth_image: self.targets.point_shadow_dynamic.depth_image(),
+                depth_view: self.targets.point_shadow_dynamic.depth_view(),
+                extent: self.targets.point_shadow_dynamic.extent,
+            };
+            let list = self.scene_draw_list.shallow_clone();
+            let point_dynamic = Arc::clone(point);
+            let raw_body = raw.clone();
+            let mut pass = RgPass::compute("point-shadow-dynamic").body(move |cmd| {
                 record_point_shadow(
                     &raw_body,
                     cmd,
@@ -3423,13 +3541,14 @@ impl Renderer {
                     point_pipeline,
                     point_layout,
                     instance_set,
-                    &target,
+                    &dyn_target,
                     &faces,
                     light_pos,
                     far_plane,
                     deformed_handle,
+                    true,
                 );
-                drop(point);
+                drop(point_dynamic);
             });
             // A skinned batch draws the deformed buffer into the cube faces; declare the
             // read so the graph orders it after the skin compute write.
@@ -3437,8 +3556,8 @@ impl Renderer {
                 pass = pass.access(deformed, RgUsage::VertexInputRead);
             }
             graph.add_pass(pass);
-            // The cube self-manages its layout, ending ShaderReadOnly for the scene sample.
-            self.targets.point_shadow.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            // Each cube self-manages its layout, ending ShaderReadOnly for the scene sample.
+            self.targets.point_shadow_dynamic.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         }
 
         // The offscreen color + 1× depth are always imported (the present blit samples the
@@ -4060,7 +4179,9 @@ impl Renderer {
                         trace_layout,
                         trace_set,
                         bytemuck::bytes_of(&trace_push),
-                        (trace_groups_x, DDGI_PROBE_TOTAL, 1),
+                        // Round-robin probe budget: trace a rolling slice per frame (the shader
+                        // offsets the probe index by trace_push's sky_color.w), not the whole volume.
+                        (trace_groups_x, crate::ddgi::DDGI_PROBE_BUDGET, 1),
                     );
                     drop(trace);
                 }),
@@ -4394,6 +4515,12 @@ impl Renderer {
         };
         let view = &self.views[self.active_view.index()];
         let extent = view.extent();
+        // SSGI + GTAO trace into half-resolution targets (matching `build_screen_space`), so their
+        // dispatch covers the half extent; the bilateral blur/upsample passes stay full-res.
+        let half_extent = vk::Extent2D {
+            width: extent.width.div_ceil(2).max(1),
+            height: extent.height.div_ceil(2).max(1),
+        };
         let raw = self.device.raw();
         let groups = |n: u32| n.div_ceil(8);
         result.mesh_set = view.mesh_set;
@@ -4470,8 +4597,8 @@ impl Renderer {
                     (ao_raw, RgUsage::StorageImageRwCompute),
                 ],
                 Some(bytemuck::bytes_of(&self.ssao.gtao_push()).to_vec()),
-                groups(extent.width),
-                groups(extent.height),
+                groups(half_extent.width),
+                groups(half_extent.height),
             );
             self.add_compute_pass(
                 graph,
@@ -4585,8 +4712,8 @@ impl Renderer {
                     (ssgi_map, RgUsage::StorageImageRwCompute),
                 ],
                 Some(bytemuck::bytes_of(&pipelines.ssgi_push).to_vec()),
-                groups(extent.width),
-                groups(extent.height),
+                groups(half_extent.width),
+                groups(half_extent.height),
             );
             self.add_compute_pass(
                 graph,

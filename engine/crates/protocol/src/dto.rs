@@ -393,6 +393,9 @@ pub struct RenderStatsDto {
     pub ssao: bool,
     pub contact_shadows: bool,
     pub ssgi: bool,
+    /// The active view's dynamic-resolution factor (`(0, 1]`; `1.0` = native). The frame-budget
+    /// controller lowers it below the `Low` tier floor to hold the budget; the present blit upscales.
+    pub render_scale: f32,
     /// The active render-quality tier (`low`/`medium`/`high`/`ultra`/`custom`) — the knob the
     /// `ssao`/`contact_shadows`/`ssgi` flags above derive from.
     pub quality: String,
@@ -623,6 +626,10 @@ pub struct SetPerfConfigParams {
     pub target_fps: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_quality: Option<bool>,
+    /// Manual dynamic-resolution override `(0, 1]` for the active view (`1.0` = native). When
+    /// `auto_quality` is on the budget controller resets it each frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub render_scale: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub green_budget_frac: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]

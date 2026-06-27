@@ -79,6 +79,11 @@ pub trait ControlRenderer {
     fn render_quality_tier(&self) -> String;
     /// Applies a render-quality tier by name; returns `false` for an unknown name (no change).
     fn set_render_quality(&mut self, tier: &str) -> bool;
+    /// The active view's dynamic-resolution factor (`(0, 1]`; `1.0` = native).
+    fn render_scale(&self) -> f32;
+    /// Sets the active view's dynamic-resolution factor (clamped to `(0, 1]`). A manual override;
+    /// when `auto_quality` is on the budget controller resets it each frame.
+    fn set_render_scale(&mut self, scale: f32);
     /// The active tonemap operator name (`reinhard`/`aces`/`agx`/`pbr-neutral`).
     fn tonemap_mode(&self) -> String;
     /// Selects the tonemap operator by name; returns `false` for an unknown name.

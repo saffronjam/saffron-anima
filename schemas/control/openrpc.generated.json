@@ -6932,6 +6932,9 @@
           "ssgi": {
             "type": "boolean"
           },
+          "renderScale": {
+            "type": "number"
+          },
           "quality": {
             "type": "string"
           },
@@ -7049,6 +7052,7 @@
           "ssao",
           "contactShadows",
           "ssgi",
+          "renderScale",
           "quality",
           "tonemap",
           "idle",
@@ -7982,6 +7986,9 @@
           },
           "autoQuality": {
             "type": "boolean"
+          },
+          "renderScale": {
+            "type": "number"
           },
           "greenBudgetFrac": {
             "type": "number"

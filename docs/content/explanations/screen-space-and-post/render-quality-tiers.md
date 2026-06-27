@@ -22,12 +22,12 @@ Each preset resolves to a [`RenderQuality`] the renderer applies to [`Ssao`]. Th
 drives are the ones already carried as runtime push-constants, so changing a tier costs nothing — no
 shader recompile, no target rebuild:
 
-| Tier | SSGI | GTAO | Contact shadows | SSGI steps |
-|---|---|---|---|---|
-| `low` | off | off | off | — |
-| `medium` | on | on | off | 4 |
-| `high` | on | on | on | 8 |
-| `ultra` | on | on | on | 12 |
+| Tier | SSGI | GTAO | Contact shadows | SSGI steps | SSGI rays |
+|---|---|---|---|---|---|
+| `low` | off | off | off | — | — |
+| `medium` | on | on | off | 4 | 3 |
+| `high` | on | on | on | 8 | 4 |
+| `ultra` | on | on | on | 12 | 6 |
 
 `low` disables the screen-space stack entirely (direct + image-based lighting only) — the cheapest
 interactive mode, mirroring how Unreal's Low scalability disables Lumen. `high` is the engine's
@@ -37,8 +37,10 @@ rather than a preset (resolving from `high` as its base).
 > [!NOTE]
 > The tier covers the **scalable** screen-space effects. Architectural on/off switches (clustered
 > lighting, IBL, DDGI, RT shadows, ReSTIR) stay as their own toggles — they are capability choices,
-> not quality dials. SSGI *ray count* and a half-resolution path are deeper (shader + target) changes
-> tracked separately; the tier dials the step counts and enable flags that are already push-constants.
+> not quality dials. The tier dials the SSGI step count, the SSGI ray count, the contact-shadow step
+> count, and the enable flags — all runtime push-constants. SSGI + GTAO additionally trace at
+> half-resolution and bilateral-upsample (see [SSGI](../ssgi/) / [GTAO](../gtao/)); that runs at every
+> tier rather than being a per-tier toggle.
 
 ## Driving it
 
@@ -62,10 +64,15 @@ frame-budget controller watches each frame's work time against the budget (`1000
 steps the tier to hold it: a sustained run of over-budget frames steps **down** (cheaper GI), a
 sustained run with comfortable headroom steps back **up**, and a single hitch ≥ 2× budget steps down
 at once. Hysteresis (consecutive-frame thresholds + a post-switch cooldown) stops it oscillating; it
-never auto-selects `ultra` (a deliberate stills tier) or drops below `low`. It reuses the tier as its
-only actuator — a step is just a `set-render-quality` — so it adds no new render path. This is the
-safe, self-contained form of a frame-budget controller; scaling the offscreen *resolution* to the
-budget is a deeper, separate change.
+never auto-selects `ultra` (a deliberate stills tier). It drives two dials. The first is the tier.
+Below the `low` floor it then steps **dynamic resolution**: the render targets shrink to
+`round(desired × renderScale)` while the published frame stays native (the present blit upscales,
+filtered linear), so a frame even `low` GI can't hold drops pixels instead of breaking. The order is
+deliberate — going down it spends tier steps first (cheaper GI is less visible than fewer pixels), and
+coming back up it restores resolution before raising the tier. Hysteresis (consecutive-frame
+thresholds + a post-switch cooldown) stops it oscillating, and a scale change reallocates targets at a
+safe frame boundary, never mid-frame. `renderScale` is reported in `render-stats` and can be set
+manually with `set-perf-config --renderScale` (when `auto_quality` is on the controller owns it).
 
 ## In the code
 
