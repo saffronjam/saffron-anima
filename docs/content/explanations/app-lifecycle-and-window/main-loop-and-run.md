@@ -94,7 +94,10 @@ one to a short poll interval. A layer-less app and the GPU-free test host defaul
 rendering every frame as before — only a host that opts in ever idles.
 
 The editor reports its window visibility over the control plane (`set-viewport-power-state`
-focused / unfocused / occluded); an **occluded** view suppresses rendering entirely. The whole
+focused / unfocused / occluded); an **occluded** view suppresses rendering entirely, and an
+**unfocused** (open but not focused) view still renders on demand but paces those frames down to a
+low background cap (`UNFOCUSED_FPS_CAP`, ~6 fps) so an animating viewport stops pinning the GPU while
+the user works elsewhere. The whole
 otherwise-invisible loop state — `idle`, `converged`, the active `redrawReasons`, and the
 `powerState` — surfaces in `render-stats`, so the CLI, the stats HUD, and the e2e suite can observe
 when the GPU is quiet and why.

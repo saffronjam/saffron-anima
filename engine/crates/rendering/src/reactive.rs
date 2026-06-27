@@ -14,7 +14,7 @@ pub enum PowerState {
     #[default]
     Focused,
     /// The editor window is open but unfocused — the editor may slow its polling; the engine still
-    /// renders on demand.
+    /// renders on demand, but paces those frames down to [`UNFOCUSED_FPS_CAP`] to save power.
     Unfocused,
     /// The viewport is occluded or the window minimized — the host suppresses rendering entirely.
     Occluded,
@@ -47,7 +47,24 @@ impl PowerState {
     pub fn suppresses_render(self) -> bool {
         matches!(self, PowerState::Occluded)
     }
+
+    /// The fps cap to apply to *rendered* frames in this state, or `None` for the full target.
+    /// `Unfocused` paces continuous render down to [`UNFOCUSED_FPS_CAP`] so a backgrounded viewport
+    /// stops pinning the GPU; `Focused` runs at the full target and `Occluded` renders nothing
+    /// (suppressed separately, so it has no rate of its own).
+    #[must_use]
+    pub fn pace_fps_cap(self) -> Option<f64> {
+        match self {
+            PowerState::Unfocused => Some(UNFOCUSED_FPS_CAP),
+            PowerState::Focused | PowerState::Occluded => None,
+        }
+    }
 }
+
+/// The fps an unfocused-but-visible editor viewport paces continuous render down to. Low enough to
+/// idle the GPU while the user works elsewhere, high enough that an animating preview still updates
+/// — the low single-digit background cap mature editors (Unreal, Unity) settle on.
+pub const UNFOCUSED_FPS_CAP: f64 = 6.0;
 
 /// The per-frame reactive-loop snapshot the host pushes into the renderer for `render-stats` to
 /// report: whether the loop is idling, whether the temporal effects have converged, and the named
@@ -62,4 +79,26 @@ pub struct ReactiveState {
     pub reasons: Vec<String>,
     /// Whether the editor viewport is focused / unfocused / occluded.
     pub power_state: PowerState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_unfocused_paces_down() {
+        assert_eq!(PowerState::Focused.pace_fps_cap(), None);
+        assert_eq!(PowerState::Occluded.pace_fps_cap(), None);
+        assert_eq!(
+            PowerState::Unfocused.pace_fps_cap(),
+            Some(UNFOCUSED_FPS_CAP)
+        );
+    }
+
+    #[test]
+    fn occluded_suppresses_others_do_not() {
+        assert!(PowerState::Occluded.suppresses_render());
+        assert!(!PowerState::Focused.suppresses_render());
+        assert!(!PowerState::Unfocused.suppresses_render());
+    }
 }

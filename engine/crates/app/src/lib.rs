@@ -236,7 +236,11 @@ impl FrameHost for Renderer {
     }
 
     fn pace_target_fps(&self) -> Option<f64> {
-        Some(f64::from(self.perf_config().target_fps))
+        let target = f64::from(self.perf_config().target_fps);
+        match self.power_state().pace_fps_cap() {
+            Some(cap) => Some(target.min(cap)),
+            None => Some(target),
+        }
     }
 }
 

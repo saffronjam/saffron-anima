@@ -1,6 +1,6 @@
 # Focus/occlusion throttling + idle/tier observability
 
-**Status:** CORE COMPLETE (observability + occlusion suppression); editor focus-events unverified live
+**Status:** COMPLETE (observability + occlusion suppression + unfocused fps cap); editor focus-events unverified live; HUD widget left to the editor pass
 **Scope:** Editor
 **Depends on:** Phase 1 (reactive loop + override stack), Phase 2 (shadow-cache state to report)
 
@@ -15,6 +15,13 @@
 >   `set-viewport-power-state`; the host reads it each frame and `RedrawController::set_suppressed`
 >   forces the loop to render nothing while **occluded**. **Live-validated**: occluded + a mutating
 >   command → host CPU stays 0% (suppressed); focused → renders again; a bogus state → typed error.
+> - **Unfocused fps cap:** `PowerState::pace_fps_cap` returns `UNFOCUSED_FPS_CAP` (~6 fps,
+>   `rendering/src/reactive.rs`) and the renderer's `pace_target_fps` (`app/src/lib.rs`) clamps a
+>   rendered frame's pace to `min(target_fps, cap)` while **unfocused** — so a backgrounded but visible
+>   viewport still renders on demand but stops pinning the GPU at the full rate; `focused`/`occluded`
+>   are unaffected. Unit-tested (`reactive.rs::only_unfocused_paces_down`); the command path is
+>   live-validated (focused→unfocused→focused round-trips, bogus rejected). The *rate under sustained
+>   animation* is best seen in a `just run` editor session (same caveat as the focus wiring below).
 > - **CLI:** `sa set-viewport-power-state` / `sa render-stats` expose both (auto from the manifest).
 > - **e2e:** `tests/e2e/reactive-loop.test.ts` asserts idle-on-static, re-arm-on-edit, and
 >   occlusion-suppression (the deferred Phase-1 idle assertion). `toggles.test.ts` updated for the
@@ -23,10 +30,8 @@
 > - **Editor:** `client.setViewportPowerState` + an `App.tsx` focus/blur/visibility listener send the
 >   power state. **Unverified live** (needs a `just run` Tauri session) — the engine side is validated.
 >
-> **Deferred:** the `unfocused` → low-fps *rate* throttle (UE's ~3 fps backgrounded) — currently
-> `unfocused` renders on demand like focused; only `occluded` suppresses. A rate cap needs the pacer
-> to take a per-state target; small follow-on. The HUD widget showing the readout is display-only and
-> left for the editor pass (the data is in `render-stats`).
+> **Deferred:** the HUD widget showing the readout is display-only and left for the editor pass (the
+> data is in `render-stats`).
 
 ## Goal
 
