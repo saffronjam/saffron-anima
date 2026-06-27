@@ -1,6 +1,6 @@
 # Converge-then-stop temporal GI
 
-**Status:** CORE COMPLETE (loop-side convergence); per-pixel disocclusion + DDGI budget deferred
+**Status:** COMPLETE (loop-side convergence + per-pixel disocclusion reset + DDGI per-frame probe budget)
 **Scope:** Editor-mostly (needs a static view); the probe-budget machinery is Both
 **Depends on:** Phase 1 (shared invalidation signal), Phase 3 (tier params)
 
@@ -21,14 +21,27 @@
 > met by the loop, no per-pixel shader gate needed. What remains is intra-frame optimization for the
 > *moving* case:
 >
-> **Deferred (documented), with rationale:**
-> - **Per-pixel disocclusion reset via motion vectors** — re-trace only newly-revealed pixels when the
->   camera nudges, instead of the whole frame. A deep SSGI-shader change (confidence buffer + motion-
->   vector reprojection); reduces cost *during motion*, which the loop-level convergence does not. The
->   larger sub-step, like Phase 2's static/dynamic split and Phase 3's half-res.
-> - **DDGI / voxel-GI per-frame probe budget (#13)** — spread probe updates across frames. DDGI is off
->   by default (`ddgi: false`), so this is low-priority; deferred with the disocclusion work (shares
->   the convergence machinery).
+> **Done — per-pixel disocclusion reset via motion vectors.** The original framing (re-trace only
+> newly-revealed pixels) was a *cost* play that half-res SSGI (Phase 3, the trace is now ~0.065 ms and
+> motion-only) plus the loop-level convergence already largely subsume. What genuinely remained was the
+> *quality* half: the temporal accumulation reprojected through the motion vector and neighborhood-
+> clamped, but never tested whether the reprojected history actually belonged to the same surface — so a
+> newly-revealed edge smeared the occluder's indirect light. `ssgi-blur` now carries each pixel's
+> **view-Z in the SSGI alpha channel** (the mesh samples only `.rgb`, so it's free) and `ssgi-accum`
+> reads the reprojected history's stored view-Z, resetting the blend (`weight = 0`) when it diverges
+> from the current pixel's — a true per-pixel disocclusion reset, **buffer-free** (no new target, no
+> descriptor-layout change). It propagates view-Z into the next-frame history so the test chains.
+> GPU-validated headless: orbiting the camera then settling renders a clean, artifact-free image and the
+> log is validation-clean; the converged static image is unchanged (`curZ == histZ`, so no extra reset).
+> **Done — DDGI per-frame probe budget.** The `ddgi-trace` pass re-rayed all `DDGI_PROBE_TOTAL` (256)
+> probes every frame; it now traces a rolling **`DDGI_PROBE_BUDGET`** (¼ = 64) slice, the offset
+> advancing each frame (carried in the trace push's `sky_color.w`, applied + wrapped in
+> `ddgi_trace.slang`), so the whole volume refreshes every 4 frames at ~¼ the trace cost. The cheap
+> blend + border passes stay full-volume; an untraced probe keeps its prior rays, which the blend
+> re-applies (stable on a static volume, a few frames of latency under fast relight). DDGI is off by
+> default, so this is zero-impact unless enabled. **GPU-validated headless** with `set-gi --mode ddgi`:
+> the multi-bounce GI lights the scene correctly with no probe holes or flicker after the round-robin
+> cycle, and the log is validation-clean.
 
 ## Goal
 

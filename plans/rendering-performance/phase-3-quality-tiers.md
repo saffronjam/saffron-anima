@@ -1,6 +1,6 @@
 # Quality tiers + half-resolution screen-space GI/AO
 
-**Status:** CORE COMPLETE (tier system end-to-end); half-res + SSGI ray-count deferred
+**Status:** COMPLETE (tier system + SSGI ray-count dial + half-res GI/AO with bilateral upsample); only an optional per-tier full-res toggle deferred
 **Scope:** Both / Game-first (this *is* the graphics-settings menu; the editor just picks a cheap tier)
 **Depends on:** — (self-contained; Phase 4 consumes its params)
 
@@ -22,14 +22,32 @@
 > The editor UI typechecks/lints but is **unverified live** — needs a `just run` to confirm the
 > dropdown drives the viewport.
 >
+> **Done — SSGI ray count is now a tier dial too.** The hardcoded `const uint rayCount = 4` in
+> `ssgi.slang` became a push-constant (`params2.x`, a second vec4 on the shared `SsgiPush`, bumping it
+> 144→160 bytes; the SSR pass shares the struct and ignores it). `RenderQuality::ssgi_rays` resolves
+> per tier (medium 3 / high 4 / ultra 6, preserving the historical 4-ray `high` look) and
+> `Ssao::apply_quality` feeds it through — no specialization-constant needed (simpler than this doc
+> first anticipated). Unit-tested (`quality.rs` ray-count monotonicity; the `SsgiPush` size assert is
+> now 160) and **GPU-validated headless**: High vs Ultra both render clean (no haloing/corruption from
+> the wider push), validation-log clean, `render-stats` reflects the tier.
+>
+> **Done — half-resolution SSGI + GTAO with bilateral upsample.** `ao_raw` and `ssgi_map` are now
+> allocated at half the viewport extent and the `gtao` / `ssgi` trace passes dispatch over that half
+> extent; the existing `ao-blur` / `ssgi-blur` bilateral passes double as the upsample — they bind the
+> half-res source through a **linear** sampler (bilinear 2× upsample) and write the full-res
+> `ao_map` / `ssgi_denoised`, with the view-Z depth weights keeping edges crisp. The trace shaders were
+> already resolution-agnostic (uv from the output's `GetDimensions`); only `gtao.slang` needed a one-line
+> fix to read its bounds from `aoOut` rather than the full-res G-buffer. The accumulation + history stay
+> full-res, so motion reprojection is unaffected. **GPU-validated headless on the RTX 3070 Ti**: gtao
+> 0.12→0.04 ms and ssgi 0.21→0.065 ms (~3× cheaper trace), the image is visually indistinguishable from
+> full-res (no haloing — indirect diffuse / AO are low-frequency), 161 rendering tests pass, and a
+> 12-frame headless run is validation-clean.
+>
 > **Deferred (documented), with rationale:**
-> - **Half-resolution SSGI + GTAO with bilateral upsample** — the biggest single GPU cut (~0.9 ms),
->   but it needs half-res target allocation + an upsample shader pass (deep GPU/shader work, like
->   Phase 2's static/dynamic split). The tier already dials SSGI *step count* (the cheap runtime win);
->   half-res is the next, larger sub-step.
-> - **SSGI ray count as a tier param** — the ray count is a compile-time loop bound in `ssgi.slang`
->   (not yet a push-constant), so dialing it needs a shader specialization-constant. Deferred with
->   half-res (same shader pass).
+> - **Per-tier full-vs-half toggle** — half-res runs at *every* tier today (it's a clean win with no
+>   visible cost). Making it a `RenderQuality` flag the `high`/`ultra` stills path can turn off would
+>   need the trace targets to reallocate when the flag flips at runtime (they are sized once at
+>   `build_screen_space`); a small follow-on if a full-res stills mode is ever wanted.
 > - **Editor default tier** left at `high` (no surprise look change). Switching the editor viewport to
 >   a cheaper default is a one-line policy change once the look is confirmed acceptable live.
 

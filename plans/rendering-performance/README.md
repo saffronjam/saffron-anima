@@ -1,9 +1,28 @@
 # Rendering performance — reactive idling, shadow caching, quality tiers, converge-then-stop
 
-**Status:** Phase 1 COMPLETED; Phases 2–6 CORE COMPLETE. The headline problem (static scene pinning
-the GPU) is fully solved by Phase 1; Phases 2–6 each landed their gate-able, high-value core with the
-deeper/visually-unverifiable sub-steps documented as deferred per phase. See each `phase-N-*.md` for
-the done/deferred split.
+**Status:** Phases 1–5 COMPLETED; Phase 6 CORE COMPLETE with two documented follow-ons.
+The headline problem (static scene pinning the GPU) is solved by Phase 1, and every broadly-applicable
+optimization is implemented and GPU-validated on the RTX 3070 Ti: reactive idle + keep-warm + unfocused
+fps cap (1, 5), the point-shadow cube cache + **static/dynamic caster split** (cached static cube +
+per-frame dynamic cube, `min()`-composited) (2), quality tiers + SSGI ray-count dial + **half-res
+SSGI/GTAO with bilateral upsample** (~3× cheaper trace) (3), converge-then-stop + **per-pixel
+disocclusion reset** + **DDGI probe budget** (4), focus/occlusion throttle + observability (5), and the
+auto-quality budget controller + **dynamic resolution** (whole-frame scale to budget) (6).
+
+Two sub-items remain as **focused follow-on tasks**, each with its rationale in the phase file:
+
+- **Phase 6 — render-graph pass culling.** Attempted and reverted: `external_layout` does not mark
+  *every* externally-consumed resource (some targets are imported with `None` yet read after the graph),
+  so reachability-from-external-roots culls live producers → validation errors (the GPU test suite
+  caught what a single capture missed). A safe cull needs explicit per-resource output marking, and even
+  then culls zero until the graph gains transient/aliased resources — revisit it with them.
+- **Phase 6 — async PSO compilation.** Threading the PSO cache off the present path risks races whose
+  *absence* a screenshot cannot prove; it needs a dedicated concurrency-validated change.
+
+(A minor *partial cube-face update* for point shadows — re-render only the faces a moving caster
+touches — is noted in the Phase 2 file as a small incremental follow-on.)
+
+See each `phase-N-*.md` for the per-phase done/deferred detail.
 
 A trivial static scene (one boulder, a commode, ~8 cubes, one point light, 532k tris) pins an RTX
 3070 Ti at **100% util, 80 °C, 281 W, ~232 fps**. The diagnosis: the per-frame cost is **~97%
