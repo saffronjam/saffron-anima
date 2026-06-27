@@ -101,16 +101,23 @@ struct ClusterParams
 // Directional + spot shadow maps: depth textures sampled with a comparison (PCF) sampler.
 [[vk::binding(4, 1)]] Sampler2DShadow shadowMap;
 [[vk::binding(5, 1)]] Sampler2DShadow spotShadowMap;
-// Point shadow: an omnidirectional cube of world distance-to-light (linear sampler).
+// Point shadow: two omnidirectional cubes of world distance-to-light (linear sampler) — a cached
+// STATIC cube (non-deformed casters) and a per-frame DYNAMIC cube (skinned / morph casters). The
+// nearest occluder is the min of the two, so a moving character composites over the cached
+// environment without re-rendering it.
 [[vk::binding(6, 1)]] SamplerCube pointShadowMap;
+[[vk::binding(7, 1)]] SamplerCube pointShadowMapDynamic;
 
-// Visibility for the shadowed point light: compare the fragment's distance to the light
-// against the nearest occluder distance stored in the cube (sampled by light->frag dir).
+// Visibility for the shadowed point light: compare the fragment's distance to the light against the
+// nearest occluder distance across both cubes (sampled by light->frag dir).
 float pointShadow(float3 worldPos)
 {
     float3 toFrag = worldPos - globals.pointShadow.xyz;
     float dist = length(toFrag);
-    float stored = pointShadowMap.SampleLevel(normalize(toFrag), 0.0).r;
+    float3 dir = normalize(toFrag);
+    float stored = min(
+        pointShadowMap.SampleLevel(dir, 0.0).r,
+        pointShadowMapDynamic.SampleLevel(dir, 0.0).r);
     const float bias = 0.08;  // matches PointShadowDistanceBias (renderer_detail.cppm)
     return dist - bias <= stored ? 1.0 : 0.0;
 }

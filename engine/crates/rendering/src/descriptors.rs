@@ -687,7 +687,8 @@ fn create_light_layout(raw: &ash::Device) -> Result<vk::DescriptorSetLayout> {
         light_binding(3, uniform), // cluster params UBO
         light_binding(4, sampler), // directional shadow map (compare sampler)
         light_binding(5, sampler), // spot shadow map (compare sampler)
-        light_binding(6, sampler), // point shadow distance cube (linear sampler)
+        light_binding(6, sampler), // point shadow STATIC distance cube (linear sampler)
+        light_binding(7, sampler), // point shadow DYNAMIC distance cube (linear sampler)
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     // SAFETY: the ash seam.

@@ -524,6 +524,13 @@ fn point_shadow_content_key(scene: &mut Scene, light_pos: Vec3, far_plane: f32) 
     let mut casters: Vec<(Entity, u64)> = Vec::new();
     scene.for_each::<&MeshComponent, _>(|entity, mesh| casters.push((entity, mesh.mesh.0)));
     for (entity, mesh_id) in casters {
+        // Skinned (deformed) casters are *dynamic* — they render into the per-frame dynamic cube,
+        // so they must not key the static cube (an animating skeleton would otherwise invalidate
+        // it every frame and defeat the cache). Their motion is captured by re-rendering the
+        // dynamic cube each frame, not by this key.
+        if scene.has_component::<SkinnedMesh>(entity) {
+            continue;
+        }
         for component in scene.world_matrix(entity).to_cols_array() {
             fold(&component.to_le_bytes());
         }

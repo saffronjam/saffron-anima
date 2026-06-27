@@ -28,8 +28,13 @@ pub struct Targets {
     pub directional_shadow: Image,
     /// First shadow-casting spot light's depth map (same compare sampler).
     pub spot_shadow: Image,
-    /// First shadow-casting point light's omnidirectional distance cube + depth scratch.
+    /// First shadow-casting point light's omnidirectional distance cube for **static**
+    /// (non-deformed) casters — re-rendered only when the static caster set or the light moves.
     pub point_shadow: PointShadowCube,
+    /// The same light's distance cube for **dynamic** (deformed: skinned / morph) casters —
+    /// re-rendered each active frame. The scene samples `min(static, dynamic)`, so a moving
+    /// character re-renders only itself against the cached static environment cube.
+    pub point_shadow_dynamic: PointShadowCube,
 }
 
 impl Targets {
@@ -47,20 +52,29 @@ impl Targets {
         let mut directional_shadow = shadow_depth_map(resources)?;
         let mut spot_shadow = shadow_depth_map(resources)?;
         let mut point_shadow = PointShadowCube::new(resources)?;
+        let mut point_shadow_dynamic = PointShadowCube::new(resources)?;
 
-        // Transition all three maps once to ShaderReadOnly so their descriptors are valid
-        // on frames where no shadow pass runs (the shader gates the sample), and so the
-        // point cube's first per-frame barrier (ShaderReadOnly → ColorAttachment) has a
-        // matching old layout. A one-time init transition.
+        // Transition all maps once to ShaderReadOnly so their descriptors are valid on frames
+        // where no shadow pass runs (the shader gates the sample), and so each point cube's first
+        // per-frame barrier (ShaderReadOnly → ColorAttachment) has a matching old layout. A
+        // one-time init transition.
         initialize_shadow_layouts(device, &directional_shadow, &spot_shadow, &point_shadow)?;
+        initialize_shadow_layouts(
+            device,
+            &directional_shadow,
+            &spot_shadow,
+            &point_shadow_dynamic,
+        )?;
         directional_shadow.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         spot_shadow.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         point_shadow.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        point_shadow_dynamic.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
 
         Ok(Self {
             directional_shadow,
             spot_shadow,
             point_shadow,
+            point_shadow_dynamic,
         })
     }
 
@@ -74,9 +88,14 @@ impl Targets {
         self.spot_shadow.view()
     }
 
-    /// The point distance cube's sampling view (linear sampler, cube view-type).
+    /// The static point distance cube's sampling view (linear sampler, cube view-type).
     pub fn point_shadow_view(&self) -> vk::ImageView {
         self.point_shadow.cube_view()
+    }
+
+    /// The dynamic point distance cube's sampling view (linear sampler, cube view-type).
+    pub fn point_shadow_dynamic_view(&self) -> vk::ImageView {
+        self.point_shadow_dynamic.cube_view()
     }
 }
 

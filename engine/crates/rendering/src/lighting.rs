@@ -724,6 +724,11 @@ fn write_shadow_samplers(
         image_view: targets.point_shadow_view(),
         image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     }];
+    let point_dynamic = [vk::DescriptorImageInfo {
+        sampler: linear,
+        image_view: targets.point_shadow_dynamic_view(),
+        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+    }];
     let writes = [
         vk::WriteDescriptorSet::default()
             .dst_set(light_set)
@@ -740,6 +745,11 @@ fn write_shadow_samplers(
             .dst_binding(6)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(&point),
+        vk::WriteDescriptorSet::default()
+            .dst_set(light_set)
+            .dst_binding(7)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&point_dynamic),
     ];
     // SAFETY: the ash seam. The set + views outlive the call; the writes target bindings
     // the light set's layout declares.

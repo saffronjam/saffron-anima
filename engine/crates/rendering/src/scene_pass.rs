@@ -405,6 +405,10 @@ pub struct PointShadowTarget {
 /// all 6 layers `ShaderReadOnly → ColorAttachment`, renders each face (clearing the depth
 /// scratch + the color to a beyond-far distance), then transitions back to
 /// `ShaderReadOnly` for the scene sample.
+///
+/// `deformed_only` selects which casters this cube holds: `false` renders the non-deformed (static)
+/// batches into the cached static cube, `true` renders the deformed (skinned / morph) batches into
+/// the per-frame dynamic cube. The scene samples `min(static, dynamic)`.
 #[allow(clippy::too_many_arguments)]
 pub fn record_point_shadow(
     raw: &ash::Device,
@@ -418,6 +422,7 @@ pub fn record_point_shadow(
     light_pos: Vec3,
     far_plane: f32,
     deformed: Option<vk::Buffer>,
+    deformed_only: bool,
 ) {
     if !list.valid || list.batches.is_empty() {
         return;
@@ -543,6 +548,11 @@ pub fn record_point_shadow(
             );
         }
         for batch in &list.batches {
+            // Static cube renders non-deformed casters; dynamic cube renders deformed (skinned /
+            // morph) ones. The scene samples `min(static, dynamic)`, so each cube holds its half.
+            if batch.deformed != deformed_only {
+                continue;
+            }
             bind_batch_vertices(raw, cmd, batch, deformed);
             record_batch_submeshes(raw, cmd, batch);
         }
@@ -881,6 +891,7 @@ mod tests {
                 G3::new(0.0, 0.0, 5.0),
                 50.0,
                 None,
+                false,
             );
 
             // SAFETY: the ash seam.

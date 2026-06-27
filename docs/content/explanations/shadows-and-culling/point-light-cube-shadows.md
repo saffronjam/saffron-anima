@@ -82,6 +82,19 @@ This pairs with the [reactive loop](../../app-lifecycle-and-window/main-loop-and
 viewport stops rendering entirely (so the cube isn't touched either), and the cache covers the case
 where *something else* moves the camera while the shadow inputs hold still.
 
+### Static and dynamic cubes
+
+A single cube has one weakness: if *one* caster moves — an animating character — its world matrix
+changes the content key and the whole six-face cube re-renders, including the static environment that
+did not move. So the light drives **two** cubes. The **static** cube renders only non-deformed casters
+and is keyed as above (the content key now folds only non-skinned casters, so an animating skeleton no
+longer dirties it). The **dynamic** cube renders the deformed (skinned / morph) casters and re-renders
+every active frame. The mesh fragment samples `min(static, dynamic)` — the nearest occluder across both
+— so a moving character composites over the cached environment cube without forcing it to re-render.
+The split is free for static scenes (the dynamic cube is empty, `min` reduces to the static cube) and
+needs no authored mobility tag: the draw list's `deformed` flag already marks the runtime-moving
+casters, and a physics-moved rigid body (non-deformed) simply falls back to dirtying the static cube.
+
 > The 2D directional/spot maps are **not** cached this way: cascaded directional shadows re-fit to the
 > camera frustum each frame, so they are camera-*dependent* — the reactive loop's full-static idle is
 > what spares them.

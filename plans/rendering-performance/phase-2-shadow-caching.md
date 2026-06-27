@@ -1,6 +1,6 @@
 # Shadow caching: per-light dirty-keyed cube/CSM, static/dynamic caster split
 
-**Status:** CORE COMPLETE (point-shadow cube cache); static/dynamic split deferred
+**Status:** COMPLETE (point-shadow cube cache + static/dynamic caster split); partial cube-face update left as a minor follow-on
 **Scope:** Both (pure waste removed from editor *and* exported game)
 **Depends on:** Phase 1 (the scene change-generation counter is the caster-moved signal)
 
@@ -22,11 +22,27 @@
 >   screen-space; neither can reuse a cube across camera motion. The Phase-1 full-static idle is what
 >   spares them, so a dirty-key cache buys nothing. (Spot-light shadows *are* camera-independent and
 >   could take the exact same cache; low frequency, left as a trivial follow-on.)
-> - **Static/dynamic caster split + `Mobility` component (#10)** and **partial cube-face update (#12)**
->   — genuinely large follow-ons (a new ECS component, two-layer shadow rendering + `min()` sampling;
->   per-face usage tagging). They optimize the *moving-character-over-static-environment* case the
->   point-shadow cache does not (a moving caster invalidates the whole cube). Deferred as their own
->   work; the point-shadow cache covers the common static-light/static-caster case today.
+> **Done — static/dynamic caster split (two cubes + `min()`).** The point light now drives **two**
+> distance cubes (`Targets::point_shadow` / `point_shadow_dynamic`). The split is by
+> `DrawBatch.deformed`: the **static** cube renders non-deformed casters and is re-rendered only when
+> its content key changes (`point_shadow_content_key` now folds only non-skinned casters, so an
+> animating skeleton no longer invalidates it); the **dynamic** cube renders the deformed (skinned /
+> morph) casters every active frame. `record_point_shadow` gained a `deformed_only` filter; the
+> renderer adds a `point-shadow-static` pass (gated by `static_point_shadow_dirty`) + a
+> `point-shadow-dynamic` pass (each frame), and `lighting.slang` samples
+> `min(pointShadowMap, pointShadowMapDynamic)` at the new set-1 binding 7. No serialized `Mobility`
+> component was needed — `deformed` already classifies the runtime-moving casters, and a physics-moved
+> rigid body (non-deformed) simply falls back to invalidating the static cube, exactly as today.
+>
+> **GPU-validated headless on the RTX 3070 Ti** (the dev scene has a casting point light):
+> - *Static path* — the split renders **pixel-identical** to the pre-split single cube (the dev casters
+>   are all static → static cube holds them, dynamic cube empty → `min` = static), validation-clean.
+> - *Dynamic path* — isolated by temporarily emptying the static cube and routing the dev casters
+>   through the **dynamic** cube: the result is again **pixel-identical**, proving the dynamic cube
+>   renders correct distances and `min()` composites them correctly. 163 rendering tests pass.
+>
+> **Left as a minor follow-on:** *partial cube-face update (#12)* — only re-render the cube faces a
+> moving caster actually appears in. A smaller incremental win on top of the dynamic cube; deferred.
 
 ## Goal
 
