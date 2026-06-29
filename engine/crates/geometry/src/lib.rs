@@ -39,7 +39,9 @@ pub use image_decode::{
     decode_image, decode_image_from_memory, decode_image_from_memory_hdr, decode_image_hdr,
 };
 pub use obj_import::import_obj_model;
-pub use picking::{generate_normals, ray_aabb_slab, ray_triangle, world_aabb_from_corners};
+pub use picking::{
+    MeshBvh, generate_normals, ray_aabb_slab, ray_triangle, world_aabb_from_corners,
+};
 pub use sanim::{
     ANIM_FORMAT_VERSION, load_animation, load_animation_from_bytes, save_animation,
     save_animation_to_buffer,
@@ -56,8 +58,9 @@ pub use smodel::{
 pub use sub_id::sub_id_for;
 pub use translate::translate_model;
 pub use types::{
-    AnimClip, AnimInterp, AnimPath, AnimTarget, AnimTrack, DecodedImage, DecodedImageFloat,
-    ImportedMaterial, ImportedModel, ImportedNode, ImportedSkin, MaterialMapRole, Mesh, MeshCounts,
+    AlphaMode, AnimClip, AnimInterp, AnimPath, AnimTarget, AnimTrack, DecodedImage,
+    DecodedImageFloat, ImportedMaterial, ImportedModel, ImportedNode, ImportedSkin, MaterialMapRole,
+    Mesh, MeshCounts,
     MorphData, MorphDelta, MorphTarget, Ray, SkinPayload, Submesh, TextureSource, Vertex,
     VertexSkin,
 };
