@@ -37,16 +37,18 @@ impl Default for AssetDragPayload {
     }
 }
 
-/// A model placement preview rendered in the scene view before the drop is committed.
+/// A model placement preview: a [`PreviewGhost`](saffron_scene::PreviewGhost)-tagged subtree
+/// instantiated once into the authored scene, then moved by a transform write on each drag-over.
+/// Committing untags it; clearing destroys the subtree.
 pub struct PlacementPreview {
     /// The model asset being previewed.
     pub asset: Uuid,
-    /// The transient scene spawned from the model asset.
-    pub scene: Scene,
-    /// The transient scene's root entity.
+    /// The ghost subtree's root entity, living in the authored scene.
     pub root: Entity,
-    /// The transform to apply when the preview is committed into the authored scene.
-    pub transform: Transform,
+    /// The rest-pose world AABB of the ghost subtree, measured once at instantiate (before any
+    /// placement transform). `None` until the mesh resolves (it may be uploading). Drives the
+    /// drop-point offset so the model's bottom-center lands under the cursor.
+    pub rest_bounds: Option<(Vec3, Vec3)>,
 }
 
 /// The editor's mutable state: the scene being edited, the component registry that drives
