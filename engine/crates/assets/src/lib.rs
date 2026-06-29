@@ -80,7 +80,7 @@ pub use project::{
 pub use render_material::{ResolvedMaterials, build_submesh_material};
 pub use render_scene::{
     RendererScene, SceneRenderer, SceneSurfaceHit, model_render_aabb, pick_entity,
-    pick_scene_surface, render_scene, render_scene_with_transient, scene_render_aabb, viewport_ray,
+    pick_scene_surface, render_scene, scene_render_aabb, viewport_ray,
 };
 pub use scan::detect_material_role;
 pub use spawn::{ModelSpawnInput, imported_nodes_from_json, imported_skin_from_json, spawn_model};
@@ -146,6 +146,9 @@ pub struct AssetServer {
     pub catalog: AssetCatalog,
     /// GPU mesh cache, keyed by mesh / sub-id. `None` = negative marker.
     pub mesh_by_uuid: AssetCache<GpuMesh>,
+    /// Per-mesh ray-pick BVH cache, keyed by mesh sub-id, built lazily from a mesh's CPU
+    /// geometry on first pick. `None` = a mesh with no pickable triangles.
+    pub mesh_bvh_by_uuid: AssetCache<saffron_geometry::MeshBvh>,
     /// GPU texture cache, keyed by texture / sub-id. `None` = negative marker.
     pub texture_by_uuid: AssetCache<GpuTexture>,
     /// Opened `.smodel` containers, keyed by model id. `None` = negative marker.
@@ -165,6 +168,7 @@ impl AssetServer {
             root: root.into(),
             catalog: AssetCatalog::default(),
             mesh_by_uuid: AssetCache::new(),
+            mesh_bvh_by_uuid: AssetCache::new(),
             texture_by_uuid: AssetCache::new(),
             model_by_uuid: AssetCache::new(),
             editor_camera_model: SystemMeshVisual::default(),
@@ -216,6 +220,7 @@ impl AssetServer {
     pub fn clear_asset_caches(&mut self) {
         self.clear_thumbnail_queue();
         self.mesh_by_uuid.clear();
+        self.mesh_bvh_by_uuid.clear();
         self.texture_by_uuid.clear();
         self.model_by_uuid.clear();
         // The editor-camera gizmo visual is a cached GPU `Ref` too (its `Arc<GpuMesh>` +

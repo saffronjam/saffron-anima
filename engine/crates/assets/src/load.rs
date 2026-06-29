@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use saffron_core::Uuid;
 use saffron_geometry::{
-    AnimClip, ChunkKind, Mesh, decode_image_from_memory, decode_image_from_memory_hdr,
+    AnimClip, ChunkKind, Mesh, MeshBvh, decode_image_from_memory, decode_image_from_memory_hdr,
     load_animation, load_animation_from_bytes, load_mesh_from_bytes, load_mesh_morph_from_bytes,
     load_mesh_skin_from_bytes, translate_model,
 };
@@ -215,6 +215,16 @@ impl AssetServer {
     /// cache miss. An embedded sub-asset routes through its container; a standalone file
     /// reads its path (with the `meshes/` → `models/` path fixup). Returns `None`
     /// (negative-cached) for an unregistered, wrong-type, or unreadable asset.
+    /// The cached ray-pick [`MeshBvh`] for a mesh sub-id, built from the resolved mesh's CPU
+    /// geometry on the first request and reused thereafter. `None` when the mesh has no pickable
+    /// triangles. Lets the placement/selection pick descend a hierarchy instead of scanning every
+    /// triangle of every scene mesh on each cursor move.
+    pub fn mesh_pick_bvh(&mut self, sub_id: Uuid, mesh: &GpuMesh) -> Option<Arc<MeshBvh>> {
+        crate::cache::resolve_cached(&mut self.mesh_bvh_by_uuid, sub_id.value(), || {
+            MeshBvh::build(&mesh.cpu_positions, &mesh.cpu_indices).map(Arc::new)
+        })
+    }
+
     pub fn load_mesh_asset(&mut self, gpu: &dyn GpuUploader, id: Uuid) -> Option<Arc<GpuMesh>> {
         if let Some(cached) = self.mesh_by_uuid.get(&id.value()) {
             return cached.clone();
