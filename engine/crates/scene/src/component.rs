@@ -121,6 +121,17 @@ pub struct Bone {
     pub tag: u8,
 }
 
+/// Tags an entity (and every node of an instantiated model's subtree) as a not-yet-committed
+/// asset-placement preview. Left unregistered: a ghost is never serialized, never listed in the
+/// outliner, and never hit by the placement pick — it only renders, so the user sees where the
+/// drop will land. Committing the placement removes the tag; the entity becomes ordinary.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PreviewGhost {
+    /// A single byte of storage so the generic component access can bind a non-empty type
+    /// (the ECS elides storage for zero-sized types).
+    pub tag: u8,
+}
+
 /// A skinned renderable: the mesh asset plus the ordered joint list by uuid.
 ///
 /// `bones[i]` drives `joint_matrices()[i]` through `inverse_bind[i]` — glTF joint order,

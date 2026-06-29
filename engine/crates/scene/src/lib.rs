@@ -28,6 +28,7 @@ pub use component::{
     Collider, ComponentOrder, DirectionalLight, FootChain, FootIk, IdComponent, Joint,
     KinematicBones, Material, MaterialAsset, MaterialSet, MaterialSlot, Mesh, ModelInstance,
     MorphComponent, MorphWeightOverride, Motion, Name, PhysicsMaterial, PointLight, PoseOverride,
+    PreviewGhost,
     ReflectionProbe, Relationship, Rigidbody, Script, ScriptSlot, Shape, SkinnedMesh, SpotLight,
     Transform, Transition, WorldTransform, Wrap,
 };
