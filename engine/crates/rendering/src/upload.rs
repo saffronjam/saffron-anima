@@ -328,10 +328,11 @@ impl Uploader {
             vk::BufferUsageFlags::empty()
         };
 
-        // A skinned mesh's vertex + skin streams are also read as storage buffers by
-        // the compute skinning prepass, so they carry STORAGE usage too.
+        // A skinned OR morph-target mesh's vertex stream is also read as a storage buffer by the
+        // compute skinning / morph prepass (the morph kernel reads the base positions + normals),
+        // so it carries STORAGE usage too.
         let mut vertex_usage = vk::BufferUsageFlags::VERTEX_BUFFER | rt_usage;
-        if !skin.is_empty() {
+        if !skin.is_empty() || morph.is_some() {
             vertex_usage |= vk::BufferUsageFlags::STORAGE_BUFFER;
         }
 
