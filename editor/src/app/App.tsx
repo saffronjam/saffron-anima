@@ -178,24 +178,53 @@ export function App() {
 
   // Report viewport visibility so the host idles a hidden/unfocused window (the engine suppresses
   // rendering when occluded). Fire-and-forget on focus/blur + tab visibility; gated on readiness.
+  //
+  // A native HTML5 drag (dragging an asset onto the viewport) fires a window `blur` and clears
+  // `document.hasFocus()`, which would otherwise report `unfocused` and pace the engine down to
+  // UNFOCUSED_FPS_CAP (6 fps) — making the drag preview crawl. But dragging an asset *into* the
+  // viewport is active use, not a backgrounded window, so we hold `focused` for the whole drag and
+  // re-evaluate the real state when it ends.
   useEffect(() => {
     if (phase !== "ready") {
       return;
     }
+    let dragActive = false;
     const send = (): void => {
-      const state = document.hidden ? "occluded" : document.hasFocus() ? "focused" : "unfocused";
+      const state = dragActive
+        ? "focused"
+        : document.hidden
+          ? "occluded"
+          : document.hasFocus()
+            ? "focused"
+            : "unfocused";
       void client.setViewportPowerState(state).catch(() => {
         // Transient (engine briefly busy); the next focus/visibility event re-sends.
       });
+    };
+    const onDragStart = (): void => {
+      dragActive = true;
+      send();
+    };
+    const onDragEnd = (): void => {
+      dragActive = false;
+      send();
     };
     send();
     window.addEventListener("focus", send);
     window.addEventListener("blur", send);
     document.addEventListener("visibilitychange", send);
+    // `dragstart` fires before the drag grab's blur, so the flag is set in time; `dragend`/`drop`
+    // both clear it (dragend on the source, drop on the target) and restore the real state.
+    document.addEventListener("dragstart", onDragStart);
+    document.addEventListener("dragend", onDragEnd);
+    document.addEventListener("drop", onDragEnd);
     return () => {
       window.removeEventListener("focus", send);
       window.removeEventListener("blur", send);
       document.removeEventListener("visibilitychange", send);
+      document.removeEventListener("dragstart", onDragStart);
+      document.removeEventListener("dragend", onDragEnd);
+      document.removeEventListener("drop", onDragEnd);
     };
   }, [phase]);
 
