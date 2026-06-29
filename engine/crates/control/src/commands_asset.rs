@@ -20,7 +20,7 @@ use saffron_assets::{
     default_display_name, default_material_asset, delete_unused, extract_sub_asset,
     import_material_folder, load_catalog_material_asset, load_catalog_material_asset_raw,
     load_material_asset, load_material_asset_raw, lower_graph_to_params, model_render_aabb,
-    pick_scene_surface, reimport_model, request_thumbnail, save_material_asset, scene_render_aabb,
+    pick_scene_surface, reimport_model, request_thumbnail, save_material_asset,
     update_material_asset, valid_project_name, viewport_ray,
 };
 use saffron_core::Uuid;
@@ -53,8 +53,8 @@ use saffron_protocol::{
 use saffron_rendering::{PngTransfer, ViewId};
 use saffron_scene::{
     AnimationPlayer, AssetEntry, AssetType, Attribution, Colorspace, DirectionalLight, Entity,
-    IdComponent, Material, MaterialAsset as MaterialAssetComponent, Mesh, Name, Scene, SkinnedMesh,
-    SkyMode, Transform,
+    IdComponent, Material, MaterialAsset as MaterialAssetComponent, Mesh, Name, PreviewGhost, Scene,
+    SkinnedMesh, SkyMode, Transform,
 };
 use saffron_sceneedit::{PlacementPreview, PlayState, SceneEditCamera};
 use serde_json::{Value, json};
@@ -194,39 +194,71 @@ fn preview_asset_placement(
     );
     let cam = ctx.scene_edit.render_camera_view();
     let name = entry.name.clone();
-    let mut preview_scene = Scene::new();
-    let root = ctx
-        .assets
-        .instantiate_model(&mut preview_scene, asset, &name)
-        .map_err(|e| Error::command(e.to_string()))?;
+
+    // Reuse the existing ghost if it already previews this asset; otherwise (re)instantiate one
+    // into the authored scene and tag its whole subtree so it is excluded from save / pick /
+    // outliner while it renders.
+    let reuse = ctx
+        .scene_edit
+        .placement_preview
+        .as_ref()
+        .filter(|p| p.asset == asset)
+        .map(|p| p.root)
+        .filter(|&root| ctx.scene_edit.scene.has_component::<IdComponent>(root));
+    let root = match reuse {
+        Some(root) => root,
+        None => {
+            clear_placement_ghost(ctx);
+            let root = ctx
+                .assets
+                .instantiate_model(&mut ctx.scene_edit.scene, asset, &name)
+                .map_err(|e| Error::command(e.to_string()))?;
+            for node in ctx.scene_edit.scene.subtree_entities(root) {
+                let _ = ctx.scene_edit.scene.add_component(node, PreviewGhost::default());
+            }
+            ctx.scene_edit.placement_preview = Some(PlacementPreview {
+                asset,
+                root,
+                rest_bounds: None,
+            });
+            root
+        }
+    };
 
     let mut placement = None;
     {
         let scene = &mut ctx.scene_edit.scene;
         let assets = &mut ctx.assets;
+        let preview_slot = &mut ctx.scene_edit.placement_preview;
         let renderer = &mut ctx.renderer;
         renderer.with_gpu_uploader(&mut |gpu| {
+            scene.update_world_transforms();
+            // Measure the rest-pose bounds once (before any placement transform skews them);
+            // a later resolve (Phase 2 async upload) fills them in if the mesh wasn't ready.
+            if let Some(preview) = preview_slot.as_mut()
+                && preview.rest_bounds.is_none()
+            {
+                preview.rest_bounds = model_render_aabb(gpu, scene, assets, root);
+            }
+            let bounds = preview_slot.as_ref().and_then(|p| p.rest_bounds);
             placement = Some(compute_asset_placement(
-                gpu,
-                viewport,
-                scene,
-                assets,
-                &mut preview_scene,
-                &cam,
-                ndc,
+                gpu, viewport, scene, assets, bounds, &cam, ndc,
             ));
         });
     }
-    let transform = placement
-        .ok_or_else(|| Error::command("upload seam unavailable"))?
-        .map_err(Error::command)?;
-    apply_transform(&mut preview_scene, root, transform);
-    ctx.scene_edit.placement_preview = Some(PlacementPreview {
-        asset,
-        scene: preview_scene,
-        root,
-        transform,
-    });
+    let transform = match placement.ok_or_else(|| Error::command("upload seam unavailable"))? {
+        Ok(transform) => transform,
+        Err(reason) => {
+            return Ok(AssetPlacementResult {
+                active: true,
+                valid: false,
+                transform: None,
+                entity: None,
+                reason: Some(reason),
+            });
+        }
+    };
+    apply_transform(&mut ctx.scene_edit.scene, root, transform);
 
     Ok(AssetPlacementResult {
         active: true,
@@ -237,16 +269,23 @@ fn preview_asset_placement(
     })
 }
 
+/// Destroys the current placement ghost subtree (if any) and clears the preview slot.
+fn clear_placement_ghost(ctx: &mut EngineContext<'_>) {
+    if let Some(preview) = ctx.scene_edit.placement_preview.take() {
+        ctx.scene_edit.scene.destroy_entity(preview.root);
+    }
+}
+
 fn commit_asset_placement(ctx: &mut EngineContext<'_>) -> Result<AssetPlacementResult> {
     require_project_loaded(ctx)?;
     if ctx.scene_edit.play_state != PlayState::Edit {
-        ctx.scene_edit.placement_preview = None;
+        clear_placement_ghost(ctx);
         return Err(Error::command(
             "asset placement is only available in Edit mode",
         ));
     }
     if ctx.scene_edit.preview_active_view {
-        ctx.scene_edit.placement_preview = None;
+        clear_placement_ghost(ctx);
         return Err(Error::command(
             "asset placement targets the scene view, not the asset preview",
         ));
@@ -260,17 +299,17 @@ fn commit_asset_placement(ctx: &mut EngineContext<'_>) -> Result<AssetPlacementR
             reason: Some("no active placement preview".to_owned()),
         });
     };
-    let entry_name = ctx
-        .assets
-        .catalog
-        .find(preview.asset)
-        .map(|e| e.name.clone())
+    // The ghost already sits in the scene at the placement transform with its geometry uploaded;
+    // committing is just dropping the tag from its subtree so it persists and selects.
+    let root = preview.root;
+    for node in ctx.scene_edit.scene.subtree_entities(root) {
+        ctx.scene_edit.scene.remove_component::<PreviewGhost>(node);
+    }
+    let transform = ctx
+        .scene_edit
+        .scene
+        .with_component::<Transform, _>(root, |t| *t)
         .unwrap_or_default();
-    let root = ctx
-        .assets
-        .instantiate_model(&mut ctx.scene_edit.scene, preview.asset, &entry_name)
-        .map_err(|e| Error::command(e.to_string()))?;
-    apply_transform(&mut ctx.scene_edit.scene, root, preview.transform);
     ctx.scene_edit.scene_version += 1;
     ctx.scene_edit.set_selection(root);
     let entity = {
@@ -280,33 +319,33 @@ fn commit_asset_placement(ctx: &mut EngineContext<'_>) -> Result<AssetPlacementR
     Ok(AssetPlacementResult {
         active: false,
         valid: true,
-        transform: Some(placement_transform_dto(&preview.transform)),
+        transform: Some(placement_transform_dto(&transform)),
         entity: Some(entity),
         reason: None,
     })
 }
 
+/// Computes the placement transform that drops a model with the given rest-pose world AABB
+/// `rest_bounds` onto the surface (or ground plane) under the cursor. The placement ray skips
+/// [`PreviewGhost`]-tagged geometry, so it sees only the authored scene, never the ghost itself.
 fn compute_asset_placement(
     gpu: &dyn saffron_assets::GpuUploader,
     viewport: (u32, u32),
     scene: &mut Scene,
     assets: &mut AssetServer,
-    preview: &mut Scene,
+    rest_bounds: Option<(MathVec3, MathVec3)>,
     cam: &saffron_scene::CameraView,
     ndc: Vec2,
 ) -> std::result::Result<Transform, String> {
     if viewport.0 == 0 || viewport.1 == 0 {
         return Err("viewport has zero size".to_owned());
     }
-    scene.update_world_transforms();
-    preview.update_world_transforms();
     let ray = viewport_ray(viewport, cam, ndc);
     let target = pick_scene_surface(gpu, viewport, scene, assets, cam, ndc)
         .map(|hit| hit.point)
         .or_else(|| ground_plane_hit(ray))
         .ok_or_else(|| "placement ray did not hit the scene or ground plane".to_owned())?;
-    let (min, max) = scene_render_bounds(gpu, preview, assets)
-        .ok_or_else(|| "model has no renderable bounds".to_owned())?;
+    let (min, max) = rest_bounds.ok_or_else(|| "model has no renderable bounds".to_owned())?;
     let bottom_center = MathVec3::new((min.x + max.x) * 0.5, min.y, (min.z + max.z) * 0.5);
     Ok(Transform {
         translation: target - bottom_center,
@@ -321,14 +360,6 @@ fn ground_plane_hit(ray: saffron_geometry::Ray) -> Option<MathVec3> {
     }
     let t = -ray.origin.y / ray.dir.y;
     (t >= 0.0).then_some(ray.origin + ray.dir * t)
-}
-
-fn scene_render_bounds(
-    gpu: &dyn saffron_assets::GpuUploader,
-    scene: &mut Scene,
-    assets: &mut AssetServer,
-) -> Option<(MathVec3, MathVec3)> {
-    scene_render_aabb(gpu, scene, assets)
 }
 
 fn apply_transform(scene: &mut Scene, entity: Entity, transform: Transform) {
@@ -1266,7 +1297,7 @@ pub fn register_asset_commands(reg: &mut CommandRegistry) {
             AssetPlacementPhaseDto::Preview => preview_asset_placement(ctx, params),
             AssetPlacementPhaseDto::Commit => commit_asset_placement(ctx),
             AssetPlacementPhaseDto::Clear => {
-                ctx.scene_edit.placement_preview = None;
+                clear_placement_ghost(ctx);
                 Ok(AssetPlacementResult {
                     active: false,
                     valid: true,
