@@ -65,6 +65,11 @@ impl Scene {
 
         let mut entities: Vec<Value> = Vec::with_capacity(ids.len());
         for (uuid, entity) in ids {
+            // Asset-placement preview ghosts live in the authored scene only to render; they
+            // are never persisted.
+            if self.has_component::<crate::PreviewGhost>(entity) {
+                continue;
+            }
             let components = reg.serialize_entity(self, entity);
             let order = reg.component_order(self, entity);
             let order_values: Vec<Value> = order.into_iter().map(Value::String).collect();
@@ -200,7 +205,8 @@ mod tests {
     use saffron_core::Uuid;
 
     use crate::component::{
-        Camera, IdComponent, Name, Relationship, SkinnedMesh, Transform, WorldTransform,
+        Camera, IdComponent, Name, PreviewGhost, Relationship, SkinnedMesh, Transform,
+        WorldTransform,
     };
     use crate::registry::register_builtin_components;
     use crate::scene::{Entity, Scene};
@@ -226,6 +232,51 @@ mod tests {
 
     fn id_of(scene: &Scene, e: Entity) -> Uuid {
         scene.component::<IdComponent>(e).unwrap().id
+    }
+
+    /// A `PreviewGhost`-tagged entity is an asset-placement preview: it renders, but is never
+    /// persisted. `scene_to_json` skips it (and only it), so a save taken mid-drag is identical to
+    /// one with no preview active.
+    #[test]
+    fn preview_ghost_is_excluded_from_serialization() {
+        let reg = registry();
+        let mut scene = Scene::new();
+        scene.create_entity("Keep");
+        let ghost = scene.create_entity("Ghost");
+        scene.add_component(ghost, PreviewGhost::default()).unwrap();
+
+        let doc = scene.scene_to_json(&reg);
+        let mut loaded = Scene::new();
+        loaded.scene_from_json(&reg, &doc).unwrap();
+
+        let mut names: Vec<String> = Vec::new();
+        loaded.for_each::<&Name, _>(|_, n| names.push(n.name.clone()));
+        assert!(names.contains(&"Keep".to_string()), "untagged entity persists");
+        assert!(
+            !names.contains(&"Ghost".to_string()),
+            "PreviewGhost entity must not persist"
+        );
+    }
+
+    /// `subtree_entities` returns the root plus every descendant, so the placement command can tag
+    /// (and the save/pick/outliner filters can skip) a whole instantiated model subtree.
+    #[test]
+    fn subtree_entities_walks_root_and_descendants() {
+        let mut scene = Scene::new();
+        let root = scene.create_entity("root");
+        let child = scene.create_entity("child");
+        let grandchild = scene.create_entity("grandchild");
+        scene.set_parent(child, Some(root), false).unwrap();
+        scene.set_parent(grandchild, Some(child), false).unwrap();
+
+        let subtree = scene.subtree_entities(root);
+        assert_eq!(subtree.len(), 3, "root + child + grandchild");
+        assert!(subtree.contains(&root));
+        assert!(subtree.contains(&child));
+        assert!(subtree.contains(&grandchild));
+
+        // A leaf's subtree is just itself.
+        assert_eq!(scene.subtree_entities(grandchild), vec![grandchild]);
     }
 
     /// Basic round-trip: a two-entity scene survives `scene_to_json` → `scene_from_json`
