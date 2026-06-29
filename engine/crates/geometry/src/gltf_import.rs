@@ -25,7 +25,8 @@ use gltf::mesh::Mode;
 use crate::error::{Error, Result};
 use crate::picking::generate_normals;
 use crate::types::{
-    AnimClip, AnimInterp, AnimPath, AnimTarget, AnimTrack, ImportedMaterial, ImportedModel,
+    AlphaMode, AnimClip, AnimInterp, AnimPath, AnimTarget, AnimTrack, ImportedMaterial,
+    ImportedModel,
     ImportedNode, ImportedSkin, Mesh, MorphData, MorphDelta, MorphTarget, SkinPayload, Submesh,
     TextureSource, Vertex, VertexSkin,
 };
@@ -565,10 +566,18 @@ fn extract_gltf_material(
     buffers: &[gltf::buffer::Data],
     path: &Path,
 ) -> ImportedMaterial {
+    let alpha_mode = match src.alpha_mode() {
+        gltf::material::AlphaMode::Mask => AlphaMode::Mask,
+        gltf::material::AlphaMode::Blend => AlphaMode::Blend,
+        gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
+    };
     let mut material = ImportedMaterial {
         name: src.name().map(str::to_owned).unwrap_or_default(),
         emissive: Vec3::from_array(src.emissive_factor()),
         emissive_strength: src.emissive_strength().unwrap_or(1.0),
+        alpha_mode,
+        alpha_cutoff: src.alpha_cutoff().unwrap_or(0.5),
+        double_sided: src.double_sided(),
         normal: src
             .normal_texture()
             .and_then(|t| read_texture_bytes(&t.texture(), buffers, "normal", path)),

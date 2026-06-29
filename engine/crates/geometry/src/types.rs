@@ -344,6 +344,19 @@ pub struct TextureSource {
     pub ext: String,
 }
 
+/// How a material's alpha channel resolves at raster time, mirroring the glTF
+/// `alphaMode`: blend opacity, cutout test, or fully opaque.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AlphaMode {
+    /// Alpha is ignored; the surface is fully opaque.
+    #[default]
+    Opaque,
+    /// Alpha-tested cutout: a texel below `alpha_cutoff` is discarded.
+    Mask,
+    /// Alpha-blended translucency.
+    Blend,
+}
+
 /// One material extracted from a model: the PBR factors and any optional textures.
 ///
 /// Each optional texture is an `Option<TextureSource>`, so a presence flag can never
@@ -372,6 +385,12 @@ pub struct ImportedMaterial {
     pub occlusion: Option<TextureSource>,
     /// The emissive texture, if any (sRGB).
     pub emissive_tex: Option<TextureSource>,
+    /// How the alpha channel resolves (glTF `alphaMode`).
+    pub alpha_mode: AlphaMode,
+    /// The cutout threshold for [`AlphaMode::Mask`] (glTF `alphaCutoff`).
+    pub alpha_cutoff: f32,
+    /// Whether both faces are rasterized (glTF `doubleSided`).
+    pub double_sided: bool,
 }
 
 impl Default for ImportedMaterial {
@@ -388,6 +407,9 @@ impl Default for ImportedMaterial {
             normal: None,
             occlusion: None,
             emissive_tex: None,
+            alpha_mode: AlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            double_sided: false,
         }
     }
 }

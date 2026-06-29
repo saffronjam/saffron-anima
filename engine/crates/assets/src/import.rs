@@ -16,7 +16,8 @@
 
 use saffron_core::Uuid;
 use saffron_geometry::{
-    ChunkKind, ContainerChunk, ImportedMaterial, ImportedModel, ImportedNode, ImportedSkin,
+    AlphaMode, ChunkKind, ContainerChunk, ImportedMaterial, ImportedModel, ImportedNode,
+    ImportedSkin,
     MaterialMapRole, MorphData, VertexSkin, save_animation_to_buffer, save_mesh_to_buffer,
     sub_id_for, translate_model, write_container,
 };
@@ -287,13 +288,18 @@ fn imported_skin_to_json(skin: &ImportedSkin) -> Value {
 fn material_chunk_json(material: &ImportedMaterial, textures: &MaterialTextureIds) -> Vec<u8> {
     let base = material.base_color;
     let emissive = material.emissive;
+    let blend = match material.alpha_mode {
+        AlphaMode::Opaque => "opaque",
+        AlphaMode::Mask => "masked",
+        AlphaMode::Blend => "translucent",
+    };
     let uuid = |id: Uuid| Value::String(id.value().to_string());
     let doc = serde_json::json!({
         "version": 1,
         "shader": "mesh",
-        "blend": "opaque",
+        "blend": blend,
         "unlit": false,
-        "doubleSided": false,
+        "doubleSided": material.double_sided,
         "normalConvention": "gl",
         "factors": {
             "baseColor": [base.x, base.y, base.z, base.w],
@@ -302,7 +308,7 @@ fn material_chunk_json(material: &ImportedMaterial, textures: &MaterialTextureId
             "emissive": [emissive.x, emissive.y, emissive.z],
             "emissiveStrength": material.emissive_strength,
             "normalStrength": 1.0,
-            "alphaCutoff": 0.5,
+            "alphaCutoff": material.alpha_cutoff,
             "heightScale": 0.05,
             "uvTiling": [1.0, 1.0],
             "uvOffset": [0.0, 0.0],
