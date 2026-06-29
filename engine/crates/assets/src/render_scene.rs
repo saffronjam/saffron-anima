@@ -33,8 +33,8 @@ use saffron_rendering::{
 };
 use saffron_scene::{
     Camera, CameraView, DirectionalLight, Entity, Mesh as MeshComponent, MorphComponent,
-    MorphWeightOverride, PointLight, ReflectionProbe, Scene, SkinnedMesh, SkyMode, SpotLight,
-    Transform, camera_projection,
+    MorphWeightOverride, PointLight, PreviewGhost, ReflectionProbe, Scene, SkinnedMesh, SkyMode,
+    SpotLight, Transform, camera_projection,
 };
 
 use crate::gpu::GpuUploader;
@@ -489,16 +489,6 @@ fn render_aabb_of(
     found.then_some((min, max))
 }
 
-pub fn render_scene<R: SceneRenderer>(
-    renderer: &mut R,
-    scene: &mut Scene,
-    assets: &mut AssetServer,
-    camera: &CameraView,
-    options: RenderSceneOptions,
-) {
-    render_scene_with_transient(renderer, scene, assets, camera, options, None);
-}
-
 /// A camera-independent hash of the inputs the point-shadow cube depends on: the light position +
 /// far plane and every mesh entity's world matrix + mesh asset id.
 ///
@@ -539,14 +529,15 @@ fn point_shadow_content_key(scene: &mut Scene, light_pos: Vec3, far_plane: f32) 
     hash
 }
 
-/// Renders the authored scene plus an optional transient scene into one frame draw list.
-pub fn render_scene_with_transient<R: SceneRenderer>(
+/// Renders the authored scene into one frame draw list. Asset-placement preview ghosts are
+/// ordinary [`PreviewGhost`](saffron_scene::PreviewGhost)-tagged entities in this scene, so they
+/// render through the normal gather; nothing else special-cases them.
+pub fn render_scene<R: SceneRenderer>(
     renderer: &mut R,
     scene: &mut Scene,
     assets: &mut AssetServer,
     camera: &CameraView,
     options: RenderSceneOptions,
-    transient: Option<&mut Scene>,
 ) {
     let width = renderer.viewport_width();
     let height = renderer.viewport_height();
@@ -563,10 +554,6 @@ pub fn render_scene_with_transient<R: SceneRenderer>(
     // (lights, meshes, probes) and the between-frame pick/gizmo paths read the world-
     // transform cache this writes.
     scene.update_world_transforms();
-    let mut transient = transient;
-    if let Some(preview) = &mut transient {
-        preview.update_world_transforms();
-    }
 
     let (light_dir, light_color, light_intensity, light_ambient) = gather_directional_light(scene);
     let (lights, point_shadow, spot_shadow) = gather_punctual_lights(scene);
@@ -598,18 +585,6 @@ pub fn render_scene_with_transient<R: SceneRenderer>(
     } else {
         Vec::new()
     };
-    let preview_joints = if let Some(preview) = transient {
-        gather_static_draw_list(renderer, preview, assets, &mut build);
-        if renderer.skinning_enabled() {
-            gather_skinned_draw_list(renderer, preview, assets, &mut build)
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
-    let mut frame_joints = frame_joints;
-    frame_joints.extend(preview_joints);
     let DrawListBuild {
         mut items,
         scene_min,
@@ -1111,6 +1086,10 @@ pub fn pick_scene_surface(
     let mut nearest = f32::MAX;
 
     for (entity, mesh) in statics {
+        // A placement ghost must never be its own placement target.
+        if scene.has_component::<PreviewGhost>(entity) {
+            continue;
+        }
         let Some(mesh_ref) = assets.load_mesh_asset(gpu, mesh.mesh) else {
             continue;
         };
@@ -1130,24 +1109,36 @@ pub fn pick_scene_surface(
         if ray_aabb_slab(&ray, world_min, world_max).is_none() {
             continue;
         }
-        let world: Vec<Vec3> = mesh_ref
-            .cpu_positions
-            .iter()
-            .map(|&p| model.transform_point3(p))
-            .collect();
-        if let Some(t) = nearest_triangle(&ray, &world, &mesh_ref.cpu_indices)
-            && t < nearest
-        {
-            nearest = t;
-            hit = Some(SceneSurfaceHit {
-                entity,
-                point: ray.origin + ray.dir * t,
-                distance: t,
-            });
+        // Narrowphase via the cached per-mesh BVH, traversed in mesh-local space (transform the
+        // world ray by the inverse world matrix, then map the hit point back to world). This is
+        // sublinear in the mesh's triangle count, unlike transforming and scanning every triangle.
+        let Some(bvh) = assets.mesh_pick_bvh(mesh.mesh, &mesh_ref) else {
+            continue;
+        };
+        let inv = model.inverse();
+        let local_ray = Ray {
+            origin: inv.transform_point3(ray.origin),
+            dir: inv.transform_vector3(ray.dir),
+        };
+        if let Some(t_local) = bvh.raycast(&local_ray) {
+            let world_hit = model.transform_point3(local_ray.origin + local_ray.dir * t_local);
+            // `ray.dir` is unit-length in world space, so the projection is the world distance.
+            let world_t = (world_hit - ray.origin).dot(ray.dir);
+            if world_t > 0.0 && world_t < nearest {
+                nearest = world_t;
+                hit = Some(SceneSurfaceHit {
+                    entity,
+                    point: world_hit,
+                    distance: world_t,
+                });
+            }
         }
     }
 
     for (entity, skin) in skins {
+        if scene.has_component::<PreviewGhost>(entity) {
+            continue;
+        }
         let Some(mesh_ref) = assets.load_mesh_asset(gpu, skin.mesh) else {
             continue;
         };
