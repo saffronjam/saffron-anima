@@ -13,6 +13,10 @@ export interface Coalescer<T> {
   /// Record the latest value; sends it once the in-flight send (if any) completes
   /// and the throttle window has elapsed. Overwrites any prior pending value.
   push(value: T): void;
+  /// Drop any buffered value and cancel the pending throttle timer, so nothing further
+  /// is sent (an already in-flight send still completes). Use when a stream ends and a
+  /// late send would be stale — e.g. a drag drop/leave that supersedes the preview.
+  reset(): void;
   /// Counters for diagnostics (sent/completed since process start, current in-flight).
   stats(): CoalescerStats;
 }
@@ -95,6 +99,13 @@ export function makeCoalescer<T>(options: CoalescerOptions<T>): Coalescer<T> {
     push(value: T): void {
       pending = { value };
       maybeSend();
+    },
+    reset(): void {
+      pending = null;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
     },
     stats(): CoalescerStats {
       return { sent, completed, inFlight: inFlight ? 1 : 0 };
