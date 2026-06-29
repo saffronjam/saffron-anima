@@ -33,7 +33,7 @@ use saffron_protocol::{
 };
 use saffron_scene::{
     Bone, Camera, CameraView, ComponentTraits, DirectionalLight, Entity, IdComponent, Mesh, Name,
-    PointLight, Relationship, Script, SpotLight, Transform, environment_from_json,
+    PointLight, PreviewGhost, Relationship, Script, SpotLight, Transform, environment_from_json,
     environment_to_json,
 };
 use saffron_sceneedit::{
@@ -248,6 +248,9 @@ pub fn register_scene_commands(reg: &mut CommandRegistry) {
             scene.for_each::<(&IdComponent, &Name), _>(|entity, (id, name)| {
                 rows.push((entity, id.id.value(), name.name.clone()));
             });
+            // Asset-placement preview ghosts render in the viewport but are not authored
+            // entities, so they never appear in the outliner.
+            rows.retain(|&(entity, _, _)| !scene.has_component::<PreviewGhost>(entity));
             let mut entities = Vec::with_capacity(rows.len());
             for (entity, id, name) in rows {
                 let mut entry = EntityListEntry {
