@@ -221,6 +221,14 @@ impl Scene {
         }
     }
 
+    /// All entities in `entity`'s subtree (pre-order), including `entity` itself.
+    #[must_use]
+    pub fn subtree_entities(&self, entity: Entity) -> Vec<Entity> {
+        let mut out = Vec::new();
+        self.gather_subtree(entity, &mut out);
+        out
+    }
+
     /// Appends `entity` and every descendant (via the children caches) to `doomed`,
     /// pre-order, for [`Scene::destroy_entity`].
     fn gather_subtree(&self, entity: Entity, doomed: &mut Vec<Entity>) {
