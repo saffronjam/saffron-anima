@@ -82,10 +82,6 @@ function targetOwnsTextInput(target: EventTarget | null): boolean {
 export function ViewportPanel() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const attachedRef = useRef(false);
-  const placementDragRef = useRef<{ asset: string | null; lastSent: number }>({
-    asset: null,
-    lastSent: 0,
-  });
   const setPhase = useEditorStore((s) => s.setPhase);
   const setSelectedId = useEditorStore((s) => s.setSelectedId);
   const setDragActive = useEditorStore((s) => s.setDragActive);
@@ -108,6 +104,17 @@ export function ViewportPanel() {
       makeCoalescer<Uv>({
         throttleMs: GIZMO_STREAM_MS,
         send: ({ u, v }) => client.gizmoPointer("drag", u * 2 - 1, v * 2 - 1),
+      }),
+    [],
+  );
+  // Streams the asset-placement preview while dragging an asset over the viewport. Coalesced
+  // (one round-trip in flight, latest position wins) so a 60 Hz drag-over burst can't pile up
+  // behind the serialized control bridge and starve camera/gizmo input.
+  const placementCoalescer = useMemo(
+    () =>
+      makeCoalescer<{ model: string; u: number; v: number }>({
+        throttleMs: GIZMO_STREAM_MS,
+        send: ({ model, u, v }) => client.previewAssetPlacement(model, u, v),
       }),
     [],
   );
@@ -149,9 +156,9 @@ export function ViewportPanel() {
   );
 
   const clearPlacementPreview = useCallback((): void => {
-    placementDragRef.current = { asset: null, lastSent: 0 };
+    placementCoalescer.reset();
     void client.clearAssetPlacement().catch(() => {});
-  }, []);
+  }, [placementCoalescer]);
 
   useEffect(() => clearPlacementPreview, [clearPlacementPreview]);
 
@@ -594,16 +601,8 @@ export function ViewportPanel() {
         if (!model) {
           return;
         }
-        const now = performance.now();
-        const drag = placementDragRef.current;
-        if (drag.asset === model && now - drag.lastSent < GIZMO_STREAM_MS) {
-          return;
-        }
-        placementDragRef.current = { asset: model, lastSent: now };
         const uv = clientPointToUv(e.currentTarget, e.clientX, e.clientY);
-        void client.previewAssetPlacement(model, uv.u, uv.v).catch(() => {
-          clearPlacementPreview();
-        });
+        placementCoalescer.push({ model, u: uv.u, v: uv.v });
       }}
       onDragLeave={(e) => {
         const next = e.relatedTarget;
@@ -619,8 +618,10 @@ export function ViewportPanel() {
           return;
         }
         e.preventDefault();
+        // Stop the coalesced stream so no late preview fires after the commit, then place the
+        // final position and commit as one ordered chain.
+        placementCoalescer.reset();
         const uv = clientPointToUv(e.currentTarget, e.clientX, e.clientY);
-        placementDragRef.current = { asset: model, lastSent: performance.now() };
         void client
           .previewAssetPlacement(model, uv.u, uv.v)
           .then(() => client.commitAssetPlacement())
