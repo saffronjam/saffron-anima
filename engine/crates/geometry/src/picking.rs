@@ -141,6 +141,159 @@ pub fn generate_normals(mesh: &mut Mesh) {
     }
 }
 
+/// A leaf holds at most this many triangles; above it the node splits.
+const BVH_LEAF_MAX: usize = 4;
+
+/// One BVH node: a bounding box plus either a triangle range (leaf) or two child indices.
+#[derive(Clone, Copy)]
+struct BvhNode {
+    min: Vec3,
+    max: Vec3,
+    /// Leaf: index of the first triangle. Internal: index of the left child node.
+    first: u32,
+    /// Triangle count (`> 0` ⇒ leaf). `0` ⇒ internal node.
+    count: u32,
+    /// Internal only: index of the right child node.
+    right: u32,
+}
+
+/// A binary bounding-volume hierarchy over a mesh's triangles, in the mesh's own coordinate
+/// space, for sublinear ray picking.
+///
+/// Built once per mesh (then cached) so the placement/selection pick descends only into boxes
+/// the ray crosses — reaching the few candidate triangles in ~log(N) steps instead of scanning
+/// all N. Traversal happens in mesh-local space: transform the world ray by the entity's inverse
+/// world matrix, [`raycast`](MeshBvh::raycast), then map the hit point back to world.
+pub struct MeshBvh {
+    nodes: Vec<BvhNode>,
+    /// Triangle vertices, reordered by the build so each leaf names a contiguous range.
+    tris: Vec<[Vec3; 3]>,
+}
+
+impl MeshBvh {
+    /// Builds a BVH from a mesh's positions + triangle indices. `None` when there are no
+    /// triangles (or the indices are degenerate), matching "nothing to pick".
+    #[must_use]
+    pub fn build(positions: &[Vec3], indices: &[u32]) -> Option<MeshBvh> {
+        let mut tris: Vec<[Vec3; 3]> = Vec::with_capacity(indices.len() / 3);
+        for tri in indices.chunks_exact(3) {
+            let a = *positions.get(tri[0] as usize)?;
+            let b = *positions.get(tri[1] as usize)?;
+            let c = *positions.get(tri[2] as usize)?;
+            tris.push([a, b, c]);
+        }
+        if tris.is_empty() {
+            return None;
+        }
+        let centroids: Vec<Vec3> = tris.iter().map(|t| (t[0] + t[1] + t[2]) / 3.0).collect();
+        let mut order: Vec<u32> = (0..tris.len() as u32).collect();
+        let mut nodes: Vec<BvhNode> = Vec::new();
+        build_node(&mut nodes, &tris, &centroids, &mut order, 0, tris.len());
+        let tris = order.iter().map(|&i| tris[i as usize]).collect();
+        Some(MeshBvh { nodes, tris })
+    }
+
+    /// The nearest forward triangle hit along `ray`, as the ray parameter `t` (the hit point is
+    /// `ray.origin + t * ray.dir`), or `None` for a miss. `ray` is in the same space the BVH was
+    /// built in (mesh-local).
+    #[must_use]
+    pub fn raycast(&self, ray: &Ray) -> Option<f32> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let mut best = f32::INFINITY;
+        let mut stack: Vec<u32> = vec![0];
+        while let Some(idx) = stack.pop() {
+            let node = self.nodes[idx as usize];
+            // Skip a box the ray misses, or whose entry is already farther than the best hit.
+            match ray_aabb_slab(ray, node.min, node.max) {
+                Some((t_enter, _)) if t_enter <= best => {}
+                _ => continue,
+            }
+            if node.count > 0 {
+                for tri in &self.tris[node.first as usize..(node.first + node.count) as usize] {
+                    if let Some(t) = ray_triangle(ray, tri[0], tri[1], tri[2])
+                        && t < best
+                    {
+                        best = t;
+                    }
+                }
+            } else {
+                stack.push(node.first);
+                stack.push(node.right);
+            }
+        }
+        best.is_finite().then_some(best)
+    }
+}
+
+/// Recursively builds BVH nodes over `order[start..end]` (a permutation of triangle indices),
+/// returning the index of the node it pushes. Median-split on the axis of greatest centroid
+/// spread; a degenerate split falls back to the midpoint so the recursion always shrinks.
+fn build_node(
+    nodes: &mut Vec<BvhNode>,
+    tris: &[[Vec3; 3]],
+    centroids: &[Vec3],
+    order: &mut [u32],
+    start: usize,
+    end: usize,
+) -> u32 {
+    let mut min = Vec3::splat(f32::MAX);
+    let mut max = Vec3::splat(f32::MIN);
+    for &t in &order[start..end] {
+        for v in tris[t as usize] {
+            min = min.min(v);
+            max = max.max(v);
+        }
+    }
+    let idx = nodes.len() as u32;
+    nodes.push(BvhNode {
+        min,
+        max,
+        first: start as u32,
+        count: (end - start) as u32,
+        right: 0,
+    });
+    if end - start <= BVH_LEAF_MAX {
+        return idx;
+    }
+
+    let mut cmin = Vec3::splat(f32::MAX);
+    let mut cmax = Vec3::splat(f32::MIN);
+    for &t in &order[start..end] {
+        cmin = cmin.min(centroids[t as usize]);
+        cmax = cmax.max(centroids[t as usize]);
+    }
+    let ext = cmax - cmin;
+    let axis = if ext.x >= ext.y && ext.x >= ext.z {
+        0
+    } else if ext.y >= ext.z {
+        1
+    } else {
+        2
+    };
+    let pivot = (cmin[axis] + cmax[axis]) * 0.5;
+
+    // Partition `order[start..end]` so centroids below the pivot come first.
+    let mut mid = start;
+    for i in start..end {
+        if centroids[order[i] as usize][axis] < pivot {
+            order.swap(i, mid);
+            mid += 1;
+        }
+    }
+    if mid == start || mid == end {
+        mid = start + (end - start) / 2; // degenerate spread → split by count
+    }
+
+    let left = build_node(nodes, tris, centroids, order, start, mid);
+    let right = build_node(nodes, tris, centroids, order, mid, end);
+    nodes[idx as usize].count = 0;
+    nodes[idx as usize].first = left;
+    nodes[idx as usize].right = right;
+    idx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,5 +535,78 @@ mod tests {
         for vertex in &mesh.vertices {
             assert_eq!(vertex.normal, Vec3::new(0.0, 1.0, 0.0));
         }
+    }
+
+    /// Brute-force nearest forward hit: the reference the BVH must match.
+    fn brute_nearest(ray: &Ray, positions: &[Vec3], indices: &[u32]) -> Option<f32> {
+        let mut best = f32::INFINITY;
+        for tri in indices.chunks_exact(3) {
+            let (a, b, c) = (
+                positions[tri[0] as usize],
+                positions[tri[1] as usize],
+                positions[tri[2] as usize],
+            );
+            if let Some(t) = ray_triangle(ray, a, b, c) {
+                best = best.min(t);
+            }
+        }
+        best.is_finite().then_some(best)
+    }
+
+    /// A grid of stacked quads at varying depths, so a downward ray crosses several triangles and
+    /// the nearest is non-trivial — exercises real BVH descent + the depth-ordered `best` prune.
+    fn grid_mesh() -> (Vec<Vec3>, Vec<u32>) {
+        let mut positions = Vec::new();
+        let mut indices = Vec::new();
+        let n = 8;
+        for gx in 0..n {
+            for gy in 0..n {
+                let z = ((gx * 13 + gy * 7) % 5) as f32; // 0..4, deterministic spread
+                let base = positions.len() as u32;
+                let (x, y) = (gx as f32, gy as f32);
+                positions.push(Vec3::new(x, y, z));
+                positions.push(Vec3::new(x + 1.0, y, z));
+                positions.push(Vec3::new(x, y + 1.0, z));
+                positions.push(Vec3::new(x + 1.0, y + 1.0, z));
+                indices.extend([base, base + 1, base + 2, base + 1, base + 3, base + 2]);
+            }
+        }
+        (positions, indices)
+    }
+
+    /// The BVH returns the same nearest hit as the brute-force scan, across many rays — the parity
+    /// that lets the pick replace the O(triangles) narrowphase with the BVH.
+    #[test]
+    fn bvh_raycast_matches_brute_force() {
+        let (positions, indices) = grid_mesh();
+        let bvh = MeshBvh::build(&positions, &indices).expect("non-empty mesh builds");
+        for gx in 0..8 {
+            for gy in 0..8 {
+                let ray = Ray {
+                    origin: Vec3::new(gx as f32 + 0.25, gy as f32 + 0.25, 100.0),
+                    dir: DOWN,
+                };
+                let brute = brute_nearest(&ray, &positions, &indices);
+                let fast = bvh.raycast(&ray);
+                match (brute, fast) {
+                    (Some(a), Some(b)) => assert!(close(a, b, 1e-4), "ray ({gx},{gy}): {a} vs {b}"),
+                    (None, None) => {}
+                    (a, b) => panic!("ray ({gx},{gy}) disagree: brute={a:?} bvh={b:?}"),
+                }
+            }
+        }
+        // A ray that misses every triangle agrees on the miss.
+        let miss = Ray {
+            origin: Vec3::new(-5.0, -5.0, 100.0),
+            dir: DOWN,
+        };
+        assert_eq!(bvh.raycast(&miss), brute_nearest(&miss, &positions, &indices));
+    }
+
+    /// An empty (or index-degenerate) mesh has no BVH — "nothing to pick".
+    #[test]
+    fn bvh_build_rejects_empty() {
+        assert!(MeshBvh::build(&[], &[]).is_none());
+        assert!(MeshBvh::build(&[Vec3::ZERO, Vec3::X], &[]).is_none());
     }
 }
