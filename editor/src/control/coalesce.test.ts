@@ -309,4 +309,59 @@ describe("makeCoalescer throttle + single-in-flight", () => {
     await flushMicrotasks();
     expect(c.stats()).toEqual({ sent: 1, completed: 1, inFlight: 0 });
   });
+
+  test("reset drops the buffered value and cancels the pending timer (no further send)", async () => {
+    const sent: number[] = [];
+    const gate = deferred();
+    const send = mock((v: number) => {
+      sent.push(v);
+      return gate.promise;
+    });
+    const c = makeCoalescer<number>({ throttleMs: 16, send });
+
+    // A push at t=0 only arms the throttle timer (elapsed 0 < 16); nothing sent yet.
+    c.push(1);
+    expect(send).toHaveBeenCalledTimes(0);
+
+    // Reset before the timer fires: the buffered value is dropped and the timer cancelled.
+    c.reset();
+    advanceTo(100);
+    await flushMicrotasks();
+    expect(send).toHaveBeenCalledTimes(0);
+    expect(sent).toEqual([]);
+
+    // The coalescer is still usable afterwards — a fresh push sends normally.
+    c.push(2);
+    advanceTo(200);
+    await flushMicrotasks();
+    expect(sent).toEqual([2]);
+  });
+
+  test("reset while a send is in flight stops the buffered follow-up from sending", async () => {
+    const sent: number[] = [];
+    const gates: ReturnType<typeof deferred>[] = [];
+    const send = mock((v: number) => {
+      sent.push(v);
+      const g = deferred();
+      gates.push(g);
+      return g.promise;
+    });
+    const c = makeCoalescer<number>({ throttleMs: 16, send });
+
+    // Get one send in flight.
+    c.push(1);
+    advanceTo(16);
+    await flushMicrotasks();
+    expect(sent).toEqual([1]);
+    expect(c.stats().inFlight).toBe(1);
+
+    // Buffer a follow-up, then reset: the in-flight send still completes, but the buffered
+    // value must not be sent when it resolves.
+    c.push(2);
+    c.reset();
+    gates[0]!.resolve();
+    advanceTo(100);
+    await flushMicrotasks();
+    expect(sent).toEqual([1]);
+  });
 });
