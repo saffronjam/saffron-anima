@@ -20,7 +20,7 @@ use glam::Vec2;
 use saffron_animation::{AnimMode, AnimationRuntime};
 use saffron_app::{App, Layer};
 use saffron_assets::{
-    AssetServer, RenderSceneOptions, RendererScene, RendererUploader, render_scene_with_transient,
+    AssetServer, RenderSceneOptions, RendererScene, RendererUploader, render_scene,
 };
 use saffron_control::ControlContext;
 use saffron_runtime::RuntimeSession;
@@ -400,6 +400,12 @@ impl HostLayer {
         if self.editor.camera.controlling || self.editor.camera.look_pending != Vec2::ZERO {
             reasons.push("camera");
         }
+        // An active asset-placement preview drags a ghost that tracks the cursor; hold continuous
+        // render so each drag-over command is serviced at frame rate instead of the idle wake-up
+        // latency (otherwise previews queue behind the serialized control bridge and starve input).
+        if self.editor.placement_preview.is_some() {
+            reasons.push("placement-preview");
+        }
         // A clip actively advancing (any rig in Play, or the preview-selected rig in Edit) changes
         // the image even with no new command.
         if self.any_animation_active() {
@@ -566,32 +572,8 @@ impl HostLayer {
         self.ensure_uploader(renderer);
         if let Some(uploader) = self.uploader.as_ref() {
             let mut driver = RendererScene::new(renderer, uploader, skinning);
-            if self.editor.play_state == PlayState::Edit && !self.editor.preview_active_view {
-                let scene = &mut self.editor.scene;
-                let placement_preview = self
-                    .editor
-                    .placement_preview
-                    .as_mut()
-                    .map(|preview| &mut preview.scene);
-                render_scene_with_transient(
-                    &mut driver,
-                    scene,
-                    &mut self.assets,
-                    &cam,
-                    options,
-                    placement_preview,
-                );
-            } else {
-                let scene: &mut Scene = self.editor.active_scene();
-                render_scene_with_transient(
-                    &mut driver,
-                    scene,
-                    &mut self.assets,
-                    &cam,
-                    options,
-                    None,
-                );
-            }
+            let scene: &mut Scene = self.editor.active_scene();
+            render_scene(&mut driver, scene, &mut self.assets, &cam, options);
         }
 
         self.submit_scene_edit_overlay(renderer, &cam, view_width, view_height);
