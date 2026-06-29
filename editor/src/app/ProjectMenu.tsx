@@ -1,9 +1,10 @@
 /// Project-level file operations exposed from the topbar project selector.
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ChevronDown } from "lucide-react";
-import { client } from "../control/client";
+import { client, type RecentProject } from "../control/client";
 import { useEditorStore, withNativeDialog } from "../state/store";
 import { errorText, notify } from "../lib/flash";
 import { rememberProject } from "../lib/recentProjects";
@@ -13,6 +14,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
@@ -28,6 +32,7 @@ export function ProjectMenu() {
   const playState = useEditorStore((s) => s.playState);
   const setProjectModalOpen = useEditorStore((s) => s.setProjectModalOpen);
   const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
+  const [recents, setRecents] = useState<RecentProject[]>([]);
 
   const ready = phase === "ready";
   // Saving/loading/reloading are locked during play: open/reload swap the scene out
@@ -76,13 +81,11 @@ export function ProjectMenu() {
     }
   };
 
-  const openProject = async (): Promise<void> => {
-    const selection = await withNativeDialog(() => open({ directory: true, multiple: false }));
-    if (typeof selection !== "string") {
-      return;
-    }
+  // The shared open path: swap the engine to `path`, reset the editor scene state, and stamp it
+  // most-recently-used. Used by "Open Project..." and every "Open Recent" entry.
+  const loadProjectPath = async (path: string): Promise<void> => {
     try {
-      const res = await client.openProject(selection);
+      const res = await client.openProject(path);
       setProject(res);
       resetSceneState();
       await rememberProject(res);
@@ -90,6 +93,27 @@ export function ProjectMenu() {
     } catch (err) {
       notify(`Load project failed: ${errorText(err)}`);
     }
+  };
+
+  const openProject = async (): Promise<void> => {
+    const selection = await withNativeDialog(() => open({ directory: true, multiple: false }));
+    if (typeof selection !== "string") {
+      return;
+    }
+    await loadProjectPath(selection);
+  };
+
+  // Refresh the recent-project list when the menu opens (cheap; reflects saves/opens since last
+  // time). The currently-open project is filtered out — reopening it is a no-op.
+  const refreshRecents = (): void => {
+    void client
+      .listRecentProjects()
+      .then((res) => {
+        setRecents(res.projects.filter((p) => p.path !== project?.path));
+      })
+      .catch(() => {
+        // Recents are a convenience; a failed read just leaves the submenu empty.
+      });
   };
 
   // Opens the project root (project.json, src/ scripts, assets/) in VS Code via the
@@ -118,7 +142,13 @@ export function ProjectMenu() {
 
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <DropdownMenu>
+      <DropdownMenu
+        onOpenChange={(isOpen) => {
+          if (isOpen) {
+            refreshRecents();
+          }
+        }}
+      >
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
@@ -145,6 +175,28 @@ export function ProjectMenu() {
           <DropdownMenuItem onSelect={() => void openProject()} disabled={!editing}>
             Open Project...
           </DropdownMenuItem>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger disabled={!editing || recents.length === 0}>
+              Open Recent
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="max-w-80">
+              {recents.length === 0 ? (
+                <DropdownMenuItem disabled>No recent projects</DropdownMenuItem>
+              ) : (
+                recents.map((recent) => (
+                  <DropdownMenuItem
+                    key={recent.path}
+                    onSelect={() => void loadProjectPath(recent.path)}
+                  >
+                    <div className="flex min-w-0 flex-col">
+                      <span className="truncate">{recent.displayName}</span>
+                      <span className="truncate text-xs text-muted-foreground">{recent.path}</span>
+                    </div>
+                  </DropdownMenuItem>
+                ))
+              )}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
           <DropdownMenuItem onSelect={() => void openInVsCode()} disabled={!project}>
             <span>Open in VS Code</span>
             <VsCodeIcon className="size-4" />
